@@ -144,7 +144,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ✓ Have a name-hasher, from name and available-parts and part-size to Float32Array, possibly written-to in-place.
             - ✓ To not waste space, numbers fill up their cells (and all no-string cells) with fractally-folded versions of themselves; each fold turns the line `{ 0: -1, 1: 1 }` into `{ 0: -1, .5: 1, 1: -1 }`, so, `x → 1-2*abs(x)`. (The listener can then make out details more easily.)
             - ✓ Data should also do that if unused, with feedback adding up the details too so that the reported feedback is nudged appropriately. No holes, only more detail.
-        - ⋯ Decide whether we handle `NaN | -1…1` or `-1…1`. Verdict: `-1…1`, because what even are holes in sensors.
+        - ✓ Decide whether we handle `NaN | -1…1` or `-1…1`. Verdict: `-1…1`, because what even are holes in sensors.
         - ⋯ `.Sensor`, used as `new Sensor({ name:['keyboard', 'a'], values:1, onValues(feedback) {console.log(feedback[0])} })`:
             - ⋯ `.constructor({ name, values=0, channel=null, noFeedback=false, onValues=null })`.
                 - ⋯ The options object can be modified after construction.

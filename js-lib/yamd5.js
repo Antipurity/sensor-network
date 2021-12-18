@@ -43,4 +43,4 @@ var r=this._buffer8;r[q]=128;r[q+1]=r[q+2]=r[q+3]=0;var k=this._buffer32;var m=(
 k.set(h)}var j=this._dataLength*8;if(j<=4294967295){k[14]=j}else{var n=j.toString(16).match(/(.*?)(.{0,8})$/);var o=parseInt(n[2],16);
 var l=parseInt(n[1],16)||0;k[14]=o;k[15]=l}b(this._state,k);return !!p?this._state:c(this._state)};var f=new i();i.hashStr=function(k,j){return f.start().appendStr(k).end(j)
 };i.hashAsciiStr=function(k,j){return f.start().appendAsciiStr(k).end(j)};if(i.hashStr("hello")!=="5d41402abc4b2a76b9719d911017c592"){console.error("YaMD5> this javascript engine does not support YaMD5. Sorry.")
-}if(typeof g==="object"){g.YaMD5=i}return i})(this);
+}if(typeof g==="object"){g.YaMD5=i}return i})(self);
