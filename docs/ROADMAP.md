@@ -29,7 +29,7 @@ The functioning of the Sensor Network proceeds as such:
 - Each step: first, NaN|-1..1 numbers are collected into named cells of a fixed size by *senders*, then all *handlers* of the environment receive those cells and create feedback (of the same size), then feedback is fed back to the *senders*. This composable architecture is made possible by *order invariance* of cells.
 - Each cell has structure: first 1 number for the reward (because prediction of what others did is *not* enough to distinguish preferable solutions) (always 0 in no-action senders), then the name (split into equally-sized parts), then data. By default, `64` numbers in data, and `63` numbers in the name, `16` numbers per name part.
     - The name (positional embedding) can be specified as an array, where strings are hashed and turned into basically-unpredictable number sequences and put into parts in-order, and numbers are put wherever. At least 1 part is always for numbers. The first part is always for the user ID, the same per machine, `"self"` by default; allows to compose many machines into a network.
-    - ⋯ Nail down some simple string-hashing strategy.
+    - ✓ Nail down some simple string-hashing strategy. Such as putting MD5 byte-by-byte, rescaling to `-1`..`1`, fractally folding each part if needed.
     - ⋯ Allow specifying user ID (a string), or telling that it should be re-generated each time, or a place where it is stored.
 
 This allows pretty much any interaction to happen, from simple observation of data, through actions in the environment, to corrections of observations [if they can change some](https://arxiv.org/abs/2006.12057)[how](https://powerlisting.fandom.com/wiki/Mind_Link).
@@ -141,9 +141,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
 
 - ⋯ One library that puts everything into the global `sn`, populated as variables:
     - ⋯ The basics:
-        - ⋯ Have a name-hasher, from name and available-parts and part-size to Float32Array, possibly written-to in-place.
-            - ⋯ To not waste space, numbers fill up their cells (and all no-string cells) with fractally-folded versions of themselves; each fold turns the line `{ 0: -1, 1: 1 }` into `{ 0: -1, .5: 1, 1: -1 }`, so, `x → 1-2*abs(x)`. (The listener can then make out details more easily.)
-            - ⋯ Data should also do that if unused, with feedback adding up the details too so that the reported feedback is nudged appropriately. No holes, only more detail.
+        - ✓ Have a name-hasher, from name and available-parts and part-size to Float32Array, possibly written-to in-place.
+            - ✓ To not waste space, numbers fill up their cells (and all no-string cells) with fractally-folded versions of themselves; each fold turns the line `{ 0: -1, 1: 1 }` into `{ 0: -1, .5: 1, 1: -1 }`, so, `x → 1-2*abs(x)`. (The listener can then make out details more easily.)
+            - ✓ Data should also do that if unused, with feedback adding up the details too so that the reported feedback is nudged appropriately. No holes, only more detail.
         - ⋯ `.Sensor`, used as `new Sensor({ name:['keyboard', 'a'], values:1, onValues(feedback) {console.log(feedback[0])} })`:
             - ⋯ `.constructor({ name, values=0, channel=null, noFeedback=false, onValues=null })`.
                 - ⋯ The options object can be modified after construction.
