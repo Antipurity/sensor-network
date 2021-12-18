@@ -26,7 +26,7 @@ It has to be efficient, and easily accessible.
 The OS ecosystem, where communication happens through IPC. Each extra module should have its own crate, prefixed with `sensor-network-`.
 
 The functioning of the Sensor Network proceeds as such:
-- Each step: first, NaN|-1..1 numbers are collected into named cells of a fixed size by *senders*, then all *handlers* of the environment receive those cells and create feedback (of the same size), then feedback is fed back to the *senders*. This composable architecture is made possible by *order invariance* of cells.
+- Each step: first, `-1`…`1` numbers are collected into named cells of a fixed size by *senders*, then all *handlers* of the environment receive those cells and create feedback (of the same size), then feedback is fed back to the *senders*. This composable architecture is made possible by *order invariance* of cells.
 - Each cell has structure: first 1 number for the reward (because prediction of what others did is *not* enough to distinguish preferable solutions) (always 0 in no-action senders), then the name (split into equally-sized parts), then data. By default, `64` numbers in data, and `63` numbers in the name, `16` numbers per name part.
     - The name (positional embedding) can be specified as an array, where strings are hashed and turned into basically-unpredictable number sequences and put into parts in-order, and numbers are put wherever. At least 1 part is always for numbers. The first part is always for the user ID, the same per machine, `"self"` by default; allows to compose many machines into a network.
     - ✓ Nail down some simple string-hashing strategy. Such as putting MD5 byte-by-byte, rescaling to `-1`..`1`, fractally folding each part if needed.
@@ -37,11 +37,11 @@ This allows pretty much any interaction to happen, from simple observation of da
 - ⋯ Per-machine named [IPC](https://docs.rs/interprocess/latest/interprocess/) broadcasting, in this repo.
     - ⋯ The trait `Sensor`, which specifies a sensor:
         - ⋯ `new(name:&[&StringOrNumberOrClosure], data_size: u64, channel: Option<String>)`.
-            - ⋯ Each closure in `name` is called with start & end indices, and returns a NaN|-1..1 number to put. This allows individual blocks to have different metadata, so that models can adapt easily.
+            - ⋯ Each closure in `name` is called with start & end indices, and returns a `-1`…`1` number to put. This allows individual blocks to have different metadata, so that models can adapt easily.
         - ⋯ `data_size(&self)->u32`. `0` by default.
-        - ⋯ `on_data(&self, feedback: Vec<f32>, reward_feedback: Option<f32>)->Future<(data:Vec<f32>, reward:Option<f32>)>`: if implemented, this will be called automatically whenever handlers are ready.
-        - ⋯ Pre-implemented `send(&self, data: Vec<f32>, reward: Option<f32>)->Future<(feedback: Vec<f32>, reward_feedback: Option<f32>)>`: send data, receive feedback, [eventually](https://crates.io/crates/futures).
-        - ⋯ Implement `std::io::Write` (sending data) and `std::io::Read` (getting feedback) on top of `send`, which make the reward `NaN`. (Unless Rust complains about conflicting implementations.)
+        - ⋯ `on_data(&self, feedback: Vec<f32>, reward_feedback: f32)->Future<(data:Vec<f32>, reward:f32)>`: if implemented, this will be called automatically whenever handlers are ready.
+        - ⋯ Pre-implemented `send(&self, data: Vec<f32>, reward: f32)->Future<(feedback: Vec<f32>, reward_feedback: f32)>`: send data, receive feedback, [eventually](https://crates.io/crates/futures).
+        - ⋯ Implement `std::io::Write` (sending data) and `std::io::Read` (getting feedback) on top of `send`, which make the reward `0`. (Unless Rust complains about conflicting implementations.)
         - ⋯ `no_feedback(&self)->bool`, `true` by default, for no-action things. Handlers shouldn't bother giving feedback on these.
     - ⋯ The trait `Accumulator`, which changes a frame's data (post-sending pre-handling):
         - ⋯ For efficiency, accumulators are not IPC (which would have needed at least one IPC copy per accumulator per message), but have to be created in the same process as the main `Handler`.
@@ -53,7 +53,7 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ `new(channel: Option<String>)`.
         - ⋯ `on_data(&self, data: Vec<f32>, error: Vec<f32>, cellShape: &[f32], feedback: Option<Vec<f32>>) -> Future<Option<Vec<f32>>>`: give feedback to data, or observe another handler's data+feedback.
             - ⋯ On each step, turn observations into corrections:
-                - ⋯ A periodic loop of fulfilling corrections to smooth network latency, released in the order that they were requested, `NaN`-filled if not arrived when needed. Try to match the latency of observation-correction things.
+                - ⋯ A periodic loop of fulfilling corrections to smooth network latency, released in the order that they were requested, sending back data if not handled when needed. Try to match the latency of observation-correction things.
                     - ⋯ Benchmark the latency deviation, mean & stdev. Both when messages are sent evenly, and in bursts of 2/4/8/16/32/64/128.
                     - ⋯ Give per-number max error along with data.
             - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders accumulated, avg per step.)
@@ -63,7 +63,7 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ `data_size(&self) -> u32`, `64` by default.
         - ⋯ `name_size(&self) -> u32`, `64` by default.
         - ⋯ `name_part_size(&self) -> u32`, `16` by default.
-    - ⋯ Sensors first request cell shapes from handlers, then for each unique shape, allocate the actual positions. On step, limit f32 numbers to NaN|-1..1, put them in places, fill in reward (`NaN`) & name, compress if specified, then send to handlers.
+    - ⋯ Sensors first request cell shapes from handlers, then for each unique shape, allocate the actual positions. On step, limit f32 numbers to `-1`…`1`, put them in places, fill in reward (`0`) & name, compress if specified, then send to handlers.
     - ⋯ Test that all data is indeed accumulated correctly, via bogus senders/accumulators.
     - ⋯ Benchmark throughput and latency with bogus data, in time-per-cell.
 
@@ -87,19 +87,19 @@ This allows pretty much any interaction to happen, from simple observation of da
     - ⋯ Time, as sines-of-time-multiples, with 100FPS as the most-frequent-wave-period.
     - ⋯ Read from Internet, through WebRTC. Many machines can thus gather into one sensor network.
         - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
-        - ⋯ Discourage disengagements: on user disconnect, hold its last block (possibly `NaN` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
+        - ⋯ Discourage disengagements: on user disconnect, hold its last block (`0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
         - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
     - ⋯ Read from file/s.
-    - ⋯ Launched-by-another-process STDIO. Model's outputs are sent, and model inputs are received as feedback (`NaN` in the first frame, or random noise); inputs and outputs have separate cells, separated by type if possible. (With prediction & compute, one brain/model can download any knowledge and intuition for free, in the background. All models can gather in one.)
+    - ⋯ Launched-by-another-process STDIO. Model's outputs are sent, and model inputs are received as feedback (`0` or random noise in the first frame); inputs and outputs have separate cells, separated by type if possible. (With prediction & compute, one brain/model can download any knowledge and intuition for free, in the background. All models can gather in one.)
         - ⋯ Connect CPU-side GPT-2, which acts word-per-word, or even letter-per-letter and integrates like the keyboard sensor, by sharing parts of the name.
         - ⋯ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding.
     - ⋯ A [Puppeteer](https://pptr.dev/)ed browser, where the JS extension is installed, and we make it inject interfaces and collect data by calling a Puppeteer-injected function (from base64 data, to a promise of base64 feedback) for us.
 
 - ⋯ Accumulators:
     - ⋯ Shuffle cells, to make models/brains that are not fully order-independent become such.
-    - ⋯ Reward sender, which replaces `NaN` in all cells' first number with the reward. To specify per-user reward in one place. (The idealized job: you give it your situation, it makes your number go up.)
-        - ⋯ Configurable reward, via a closure that's called each frame. By default, F11 is -1 reward, F12 is +1 reward, otherwise NaN.
-    - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send NaNs as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably).
+    - ⋯ Reward sender, which replaces `0`s in all cells' first number with the reward. To specify per-user reward in one place. (The idealized job: you give it your situation, it makes your number go up.)
+        - ⋯ Configurable reward, via a closure that's called each frame. By default, F11 is `-1` reward, F12 is `+1` reward, otherwise `0`.
+    - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send `0`s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably).
 
 - ⋯ Handlers (launch the main handler first, the rest will not give feedback):
     - ⋯ Sound output (speakers), no feedback: like machine-to-brain Neuralink, but everyone already has it. (Can even listen to what an AI model predicts and decides, for zero-effort human-AI merging.)
@@ -115,7 +115,7 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ Max byte-count of a file; when specified, store to a directory of named files. Also allow limiting the file count, to act as a circular buffer.
         - ⋯ Possibly, each stream should have a vector label, and we should allow nearest-neighbor lookups. Possibly separately from the actual data. (Indirectly allows things like priority queues and filter-by-creation-date.)
     - ⋯ Launched-by-another-process STDIO.
-        - ⋯ Communicate in packets: cell-count and 1+value-size (so that names can be resized if needed) and cell-size and all-cell-data (NaN|-1..1). Uncompressed for simplicity of integration.
+        - ⋯ Communicate in packets: cell-count and 1+value-size (so that names can be resized if needed) and cell-size and all-cell-data (`-1`…`1`). Uncompressed for simplicity of integration.
             - ⋯ Benchmark actual throughput.
         - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model to do next-frame prediction and first-cell-number maximization.
     - ⋯ A Neuralink device. Once it, you know, exists. (Maybe it would be a [HID](https://web.dev/hid/).)
@@ -144,12 +144,13 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ✓ Have a name-hasher, from name and available-parts and part-size to Float32Array, possibly written-to in-place.
             - ✓ To not waste space, numbers fill up their cells (and all no-string cells) with fractally-folded versions of themselves; each fold turns the line `{ 0: -1, 1: 1 }` into `{ 0: -1, .5: 1, 1: -1 }`, so, `x → 1-2*abs(x)`. (The listener can then make out details more easily.)
             - ✓ Data should also do that if unused, with feedback adding up the details too so that the reported feedback is nudged appropriately. No holes, only more detail.
+        - ⋯ Decide whether we handle `NaN | -1…1` or `-1…1`. Verdict: `-1…1`, because what even are holes in sensors.
         - ⋯ `.Sensor`, used as `new Sensor({ name:['keyboard', 'a'], values:1, onValues(feedback) {console.log(feedback[0])} })`:
             - ⋯ `.constructor({ name, values=0, channel=null, noFeedback=false, onValues=null })`.
                 - ⋯ The options object can be modified after construction.
-                - ⋯ `onValues(feedback: Float32Array|null, rewardFeedback: number) -> Promise<Float32Array|null|[data, reward=NaN]>`: send data & receive feedback, as often as possible, possibly async. The first feedback is always `null`, and all steps always get feedback in the order that they were sent in, `null` if packets are dropped.
+                - ⋯ `onValues(feedback: Float32Array|null, rewardFeedback: number) -> Promise<Float32Array|null|[data, reward=0]>`: send data & receive feedback, as often as possible, possibly async. The first feedback is always `null`, and all steps always get feedback in the order that they were sent in, `null` if packets are dropped.
                     - ⋯ Send at most 16 at once. Measure the average time between the main handler's feedbacks (even `noFeedback` empty feedback is feedback for this), and match it as exactly as we can.
-            - ⋯ `.send(values: Float32Array|null, reward=NaN) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
+            - ⋯ `.send(values: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ⋯ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
         - ⋯ `.Accumulator`:
@@ -165,6 +166,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ `onValues(data: Float32Array, error: Float32Array, cellShape: [reward=1, user, name, data], feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
             - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders accumulated, avg per step.)
         - ⋯ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `runTests` method.
+            - ⋯ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
         - ⋯ A function that runs all benchmarks, `.bench()`, once, and accumulates results in localStorage or indexedDB or file, keyed by path (erasing previous results if the source-code hash doesn't match): traverses `sn` (not through prototypes) and calls every `runBench` method, which return promises of numbers or arrays of numbers.
         - ⋯ `.docs()`, which traverses `sn` and accumulates all `docs` strings into a Markdown string.
             - ⋯ Parents should become sections, into which their children belong.
@@ -219,21 +221,22 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Time, as sines exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
                 - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
-                - ⋯ Discourage disengagements: on user disconnect, hold its last block (possibly `NaN` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
+                - ⋯ Discourage disengagements: on user disconnect, hold its last block (`0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
             - ⋯ Read from file.
             - ⋯ In extension, read from tabs.
         - ⋯ `.Accumulator`:
             - ⋯ Shuffle blocks.
-            - ⋯ Reward, filling `NaN`s of 0th numbers of cells with the numeric result of calling a function unless it's `NaN` too.
+            - ⋯ Reward, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
                 - ⋯ By default, make F11/F12 give +1/-1 reward.
-            - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send NaNs as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably). May need UI integration, though.
-            - ⋯ Once we have something that sounds recognizable, try an echo-state network, and see whether that makes it better or worse. (If a data point is non-`NaN`, add to it, else set it.)
+            - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send 0s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably). May need UI integration, though.
+                - ⋯ Nearest-neighbor lookup by names, to extract more from less.
+            - ⋯ Once we have something that sounds recognizable, try an echo-state network, and see whether that makes it better or worse.
                 - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)
                 - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
                 - (This would have been so much easier if we just had a Neuralink device or an equivalent.)
             - ⋯ Extension-oriented, mainly-for-visualization things:
-                - ⋯ Name calibration, where each sensor's name can participate, and on `NaN` feedback (which is for all uncalibrated sensors) collect suggestions of what it is, as long as it's opened in this UI.
+                - ⋯ Name calibration, where each sensor's name can participate, and on uncalibrated `0`-data feedback collect suggestions of what it is, as long as it's opened in this UI.
                 - ⋯ Ability to hold a cell's button to only route its feedback, since it looks like we'll really need to scrounge for human-to-machine bandwidth, and labels won't be enough.
                     - ⋯ And the ability to use in-page keybindings. (Might even be *usable*.)
         - ⋯ `.Handler`:
