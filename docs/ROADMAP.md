@@ -4,7 +4,8 @@ No deleting, only adding (at the end) and keeping track of progress.
 
 - ✓ Track completion with Unicode characters: ⋯ to-do, ✓ complete, ❌ canceled.
 
-- ⋯ Have directories `/rs`, `/js-lib`, `/js-ext`. Init the Git repo.
+- ✓ Have directories `/rs`, `/js-lib`, `/js-ext`. Init the Git repo.
+    - ✓ In `/js-lib`, `npm init`.
 
 ---
 
