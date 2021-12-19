@@ -1,8 +1,6 @@
-// Creates the global `sn`, through which to access the sensor network.
-
 import "./yamd5.js"
 
-;(function(exports) {
+export default (function(exports) {
     // Browser compatibility (import):
     //   Chrome  61
     //   Edge    16
@@ -17,7 +15,10 @@ import "./yamd5.js"
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
 
-    A(E, {
+    return A(E, {
+        // TODO: Do we have Sensor and Accumulator and Handler as props, then?
+        //   Should they be proper `class`es? Let me check browser compatibility...
+        // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
         namedData: A(function namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E.namedData.hasher }) {
             assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
             assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
@@ -193,4 +194,4 @@ Makes only the sign matter for low-frequency numbers.` }),
     function assertCounts(msg, ...xs) { assert(xs.every(x => typeof x == 'number' && x >= 0 && x === x>>>0), msg || 'Must be a non-negative integer') }
     function assert(bool, msg) { if (!bool) error(msg || 'Assertion failed') }
     function error(...msg) { throw new Error(msg.join(' ')) }
-})(self.sn = Object.create(null))
+})(Object.create(null))

@@ -7,7 +7,9 @@
   <title>Sensor Network Testing</title>
 </head>
 <body>
-  <script src=main.js type=module></script>
-  <script>const id = setInterval(() => typeof sn != 'undefined' && (clearInterval(id), console.log(sn.namedData.tests())), 50)</script>
+  <script type=module>
+    import sn from './main.js'
+    console.log(sn.namedData.tests())
+  </script>
 </body>
 </html>
