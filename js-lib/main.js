@@ -17,21 +17,41 @@ export default (function(exports) {
 
     const S = Object.create(null)
     // [channel]:
+    //   sensors: Array<Sensor>, but only those that are called automatically.
     //   accumulators: Array<Accumulator>, sorted by priority.
     //   mainHandler: Handler, with max priority.
+    //   handlerShapeString: Array<String>, for enumeration.
     //   [handlerShapeAsString]:
     //     looping: bool
+    //     cellShape: [reward=1, user, name, data]
     //     handlers: Array<Handler>, sorted by priority.
     //     nextPacket: _Packet
 
     return A(E, {
-        // TODO: Do we have Sensor and Accumulator and Handler props as classes, then? Ye.
-        //   TODO: Write the interfaces down.
+        // TODO: The class Sensor:
+        //   TODO: `.constructor({ name, values=0, channel='', noFeedback=false, onValues=null })`
+        //     TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
+        //     TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
+        //   TODO: `.send(values: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
+        //   TODO: `.deinit()`
+        //   TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
+        // TODO: The class Accumulator:
+        //   TODO: `.constructor({ channel='', priority=0, onValues=null, onFeedback=null })`
+        //     TODO: `S[channel].accumulators.push(this)`, and sort by priority.
+        //     TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
+        //   TODO: `.deinit()`, which removes it from channels. (Note that packets that are already sent may still call functions.)
+        //   TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
+        // TODO: The class Handler:
+        //   TODO: `.constructor({ channel='', priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`
+        //     TODO: Set `.cellShape` = [reward=1, user, name, data].
+        //     TODO: Write out the shape as a string.
+        //     TODO: `S[channel][shapeAsString].handlers.push(this)` and sort and `_Packet.loopHandle(shapeAsString)`.
+        //     TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
         // TODO: The class _Packet, with:
         //   TODO: Props:
         //     (sensor → accumulator):
         //       cells: int
-        //       dataToSend: Array<f32a>, where each sensor allocates its own f32 array and gives its ownership to this.
+        //       dataToSend: Array<f32a>, where each sensor allocates its own f32 array and gives up its ownership.
         //       sensorIndices: Array<int>
         //       sensorCallbacks: Array<function(data, feedback, fbOffset)>, where each sensor should mark `data` for re-use.
         //     (accumulator → handler):
@@ -44,9 +64,11 @@ export default (function(exports) {
         //   TODO: .data(data: f32a), adding already-named info before handling.
         //   TODO: .handle(): sensors → accumulators → handlers → accumulators → sensors.
         //   TODO: .deinit(), marking the object for re-use, called by `.handle()`.
-        //   TODO: _Packet.loopHandle(handlerShapeAsString, maxSimultaneousPackets = 4), which estimates the max speed it could call itself at, and repeatedly does handling.
-        //     TODO: Stop when the last handler is stopped.
-        //     TODO: Be called when there are new handlers, and do nothing if a loop is already in progress.
+        //   TODO: _Packet.loopHandle(handlerShapeAsString, maxSimultaneousPackets = 4), which estimates the max speed it could call itself at, and repeatedly does sensing → accumulating → handling.
+        //     TODO: If the main handler shape, call `onValues` of all sensors to get data (for all loops). If not the main, don't have feedback at all.
+        //     TODO: In any case, call & store all accumulators in turn, then call all handlers.
+        //     TODO: Stop when the last handler/sensor is stopped.
+        //     TODO: Be called when there are new handlers or sensors, and do nothing if a loop is already in progress.
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
         namedData: A(function namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E.namedData.hasher }) {
             assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
