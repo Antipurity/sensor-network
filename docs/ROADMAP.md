@@ -46,8 +46,8 @@ This allows pretty much any interaction to happen, from simple observation of da
     - ⋯ The trait `Accumulator`, which changes a frame's data (post-sending pre-handling):
         - ⋯ For efficiency, accumulators are not IPC (which would have needed at least one IPC copy per accumulator per message), but have to be created in the same process as the main `Handler`.
         - ⋯ `new(channel: Option<String>)`.
-        - ⋯ `on_data(&self, data: Vec<f32>, cell_shape:&[u32])->Future<Vec<f32>>` returns a value [eventually](https://crates.io/crates/futures).
-        - ⋯ `on_feedback(&self, feedback: Vec<f32>, cell_shape:&[u32])->Future<Vec<f32>>`.
+        - ⋯ `on_data(&self, data: Vec<f32>, cell_shape:&[u32])->Future<(Vec<f32>, Extra)>` returns a value [eventually](https://crates.io/crates/futures).
+        - ⋯ `on_feedback(&self, feedback: Vec<f32>, cell_shape:&[u32], extra: Extra)->Future<Vec<f32>>`.
         - ⋯ `priority(&self) -> f64`: all accumulators are called in a chain, highest-priority-first. `0` by default.
     - ⋯ The trait `Handler`, which gives feedback to sensors:
         - ⋯ `new(channel: Option<String>)`.
@@ -157,8 +157,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
                 - ⋯ The options object can be modified after construction.
                 - ⋯ Accumulators run highest-priority-first.
-                - ⋯ `onValues(data: Float32Array, cellShape: [reward=1, user, name, data]) -> Promise<void>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
-                - ⋯ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data]) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
+                - ⋯ `onValues(data: Float32Array, cellShape: [reward=1, user, name, data]) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
+                - ⋯ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
         - ⋯ `.Handler`:
             - ⋯ `.constructor({ channel=null, priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`.

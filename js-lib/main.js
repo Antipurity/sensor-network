@@ -15,9 +15,38 @@ export default (function(exports) {
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
 
+    const S = Object.create(null)
+    // [channel]:
+    //   accumulators: Array<Accumulator>, sorted by priority.
+    //   mainHandler: Handler, with max priority.
+    //   [handlerShapeAsString]:
+    //     looping: bool
+    //     handlers: Array<Handler>, sorted by priority.
+    //     nextPacket: _Packet
+
     return A(E, {
-        // TODO: Do we have Sensor and Accumulator and Handler as props, then?
-        //   Should they be proper `class`es? Let me check browser compatibility...
+        // TODO: Do we have Sensor and Accumulator and Handler props as classes, then? Ye.
+        //   TODO: Write the interfaces down.
+        // TODO: The class _Packet, with:
+        //   TODO: Props:
+        //     (sensor → accumulator):
+        //       cells: int
+        //       dataToSend: Array<f32a>, where each sensor allocates its own f32 array and gives its ownership to this.
+        //       sensorIndices: Array<int>
+        //       sensorCallbacks: Array<function(data, feedback, fbOffset)>, where each sensor should mark `data` for re-use.
+        //     (accumulator → handler):
+        //       dataToHandle: f32a, updated destructively by accumulators then passed to handlers.
+        //       accumulatorExtra: Array<Any>
+        //       accumulatorCallback: Array<null | function>
+        //     (handler → accumulator → sensor):
+        //       feedback: f32a, updated destructively by accumulators.
+        //   TODO: _Packet.init({ nameSize=64, namePartSize=16, dataSize=64 }).
+        //   TODO: .data(data: f32a), adding already-named info before handling.
+        //   TODO: .handle(): sensors → accumulators → handlers → accumulators → sensors.
+        //   TODO: .deinit(), marking the object for re-use, called by `.handle()`.
+        //   TODO: _Packet.loopHandle(handlerShapeAsString, maxSimultaneousPackets = 4), which estimates the max speed it could call itself at, and repeatedly does handling.
+        //     TODO: Stop when the last handler is stopped.
+        //     TODO: Be called when there are new handlers, and do nothing if a loop is already in progress.
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
         namedData: A(function namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E.namedData.hasher }) {
             assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
