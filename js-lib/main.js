@@ -120,7 +120,9 @@ export default (function(exports) {
                 }
                 this.paused = false
             }
-        }, {}), // TODO: Docs.
+        }, {
+            docs:``, // TODO:
+        }),
         Accumulator: A(class Accumulator {
             constructor({ onValues=null, onFeedback=null, priority=0, channel='' }) {
                 assert(typeof priority == 'number' && priority === priority)
@@ -146,7 +148,9 @@ export default (function(exports) {
                 E._state(this.channel).accumulators.sort((a,b) => b.priority - a.priority)
                 this.paused = false
             }
-        }, {}), // TODO: Docs.
+        }, {
+            docs:``, // TODO:
+        }),
         Handler: A(class Handler {
             constructor({ onValues, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
                 assert(typeof onValues == 'function', "Handlers must have listeners")
@@ -184,7 +188,9 @@ export default (function(exports) {
                 if (this.onValues) _Packet.handleLoop(this.channel, this.cellShape)
                 this.paused = false
             }
-        }, {}), // TODO: Docs.
+        }, {
+            docs:``, // TODO:
+        }),
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
             if (!S[channel])
@@ -251,8 +257,14 @@ export default (function(exports) {
                 this.sensorIndices.push(this.cells)
                 this.cells += point.length / this.cellSize | 0
             }
-            static allocF32(len) { return new Float32Array(len) }
-            static deallocF32(a) {} // TODO: Reuse same-length arrays via a cache from len to an array of free arrays, unless we already have 16.
+            static allocF32(len) { return _Packet._f32 && _Packet._f32[len] && _Packet._f32[len].length ? _Packet._f32[len].pop() : new Float32Array(len) }
+            static deallocF32(a) {
+                // Makes `E._Packet.allocF32` re-use `a` when allocating an array of the same size. Usually.
+                if (!_Packet._f32) _Packet._f32 = Object.create(null)
+                if (!_Packet._f32[len]) _Packet._f32[len] = []
+                if (_Packet._f32[len].length > 16) return
+                _Packet._f32[len].push(a)
+            }
             static updateMean(a, value, maxHorizon = 1000) {
                 const n1 = a[0], n2 = n1+1
                 a[0] = Math.min(n2, maxHorizon)
@@ -450,7 +462,7 @@ Extra parameters:
                         const part = parts[p]
                         for (let i = 0; i < part.length; ++i) {
                             let x = part[i]
-                            if (typeof x == 'function') { // TODO: Functions should be called not once but each time (to be able to simulate moving body parts); here, just remember the index. And `E._dataNamer.fill` should be able to accept the indices array to fill numbers from.
+                            if (typeof x == 'function') {
                                 x = x(...args)
                                 if (typeof x != 'number' || (x !== x || x < -1 || x > 1))
                                     error("Name parts must be -1..1, got", x)
