@@ -30,18 +30,45 @@ export default (function(exports) {
     //     handlers: Array<Handler>, sorted by priority.
     //     nextPacket: _Packet
     // TODO: ...Wait, who's responsible for setting up S[channel] and others?
+    //   Should we have a function E._state(channel, cellShape)?
 
     return A(E, {
         Sensor: A(class Sensor {
-            // TODO: `.constructor({ name, values=0, channel='', noFeedback=false, onValues=null })`
-            //   TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
+            constructor({ name, values, onValues=null, channel='', noFeedback=false, user='self', emptyValues=0, hasher=undefined, reward=0 }) {
+                assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
+                assertCounts('Must have the value-count', values)
+                assert(onValues == null || typeof onValues == 'function')
+                assert(typeof channel == 'string')
+                assert(typeof user == 'string' || Array.isArray(user))
+                assertCounts('', emptyValues)
+                assert(hasher === undefined || typeof hasher == 'function')
+                assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
+                Object.assign(this, {
+                    name,
+                    values,
+                    onValues,
+                    channel,
+                    noFeedback: !!noFeedback,
+                    user,
+                    emptyValues,
+                    hasher,
+                    reward,
+                    dataNamers: Object.create(null), // cellShape → _dataNamer({ reward, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher })
+                    nameSize: null,
+                    namePartSize: null,
+                    dataSize: null,
+                }).resume
+            }
             // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
             //   TODO: ...How do we do this, exactly?...
-            //     (Enumerating all shapes, and naming into all via `E._namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._namedData.hasher }).name(src, dst, dstOffset)`. Caching un/namers on the sensor object.)
+            //     (Enumerating all shapes, and naming into all via `E._dataNamer({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }).name(src, dst, dstOffset)`. Caching un/namers on the sensor object.)
             //     (Using `S[channel][cellShape].nextPacket.data(sensor, point, error, noFeedback)`.)
             // TODO: `._gotFeedback(data, error, feedback, fbOffset)`
-            // TODO: `.deinit()`
-            // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
+            //   TODO: Fulfill the promise first returned from `send`. (We only need an array, because there are few simultaneous steps.)
+            // TODO: `.pause()`
+            // TODO: `.resume()`
+            //   TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
+            // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed.
         }, {}),
         Accumulator: A(class Accumulator {
             // TODO: `.constructor({ channel='', priority=0, onValues=null, onFeedback=null })`
@@ -178,12 +205,8 @@ export default (function(exports) {
             }
         },
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
-        _namedData: A(function _namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._namedData.hasher }) {
-            assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
-            assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
-            assert(typeof user == 'string' || Array.isArray(user))
-            assertCounts('Must have the value-count', values)
-            assertCounts('', emptyValues, nameSize, namePartSize, dataSize)
+        _dataNamer: A(function _dataNamer({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }) {
+            assertCounts('', nameSize, namePartSize, dataSize)
             assert(namePartSize < nameSize && nameSize % namePartSize === 0, 'Cell name must consist of an integer number of parts')
             const namePartCount = nameSize / namePartSize | 0
             const hasherMaker = hasher(name, namePartCount-1, namePartSize)
@@ -212,14 +235,14 @@ export default (function(exports) {
                         // Data.
                         const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
                         for (let s = srcStart, d = start + nameSize; s < srcEnd; ++s, ++d) dst[d] = src[s]
-                        E._namedData.fill(dst, start + nameSize, valuesPerCell, dataSize)
+                        E._dataNamer.fill(dst, start + nameSize, valuesPerCell, dataSize)
                     }
                     return dstOffset + cells * (nameSize + dataSize) // Return the next `dstOffset`.
                 },
                 unname(src, srcOffset, dst) { // named → flat; `named` is consumed.
                     for (let i = 0; i < cells; ++i) { // Extract data from the whole cell.
                         const start = srcOffset + i * (nameSize + dataSize)
-                        E._namedData.unfill(src, start + nameSize, valuesPerCell, dataSize)
+                        E._dataNamer.unfill(src, start + nameSize, valuesPerCell, dataSize)
                         const dstStart = i * valuesPerCell, dstEnd = Math.min(dstStart + valuesPerCell, dst.length)
                         for (let s = start + nameSize, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
                     }
@@ -234,17 +257,17 @@ Prepares to go between flat number arrays and named ones.
 The result is \`{ name(src, dst, dstOffset)→dstOffset, unname(src, srcOffset, dst)→srcOffset }\`. \`name\` goes from flat to named, \`unname\` reverses this.
 
 Main parameters, in the one object that serves as arguments:
-- \`name\`: describes this interface to handlers, such as with a string. See \`._namedData.hasher\`.
+- \`name\`: describes this interface to handlers, such as with a string. See \`._dataNamer.hasher\`.
 - \`values\`: how many flat numbers there will be.
 
 Extra parameters:
 - \`reward = 0\`: can be a function that will be called without arguments to get the cell's reward.
 - \`user = 'self'\`: describes the current user/source/machine to handlers, mainly for when the sensor network encompasses multiple devices across the Internet.
-- \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._namedData.fill\`.
+- \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._dataNamer.fill\`.
 - \`nameSize = 64\`: each cell is \`nameSize + dataSize\`.
 - \`namePartSize = 16\`: the \`name\` can have many parts, and this determines how many parts there are.
 - \`dataSize = 64\`: data in a cell.
-- \`hasher = ._namedData.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
+- \`hasher = ._dataNamer.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
 `,
             tests() {
                 const F32 = Float32Array
@@ -253,7 +276,7 @@ Extra parameters:
                     [
                         new F32([0, 0.96, -0.5, -0.25, 0, 0.5, 0, 0.96, 0.25, 0.5, 0.5, 0]),
                         test(
-                            opts => (E._namedData(opts).name(new Float32Array([-.5, -.25, .25, .5]), r1, 0), r1.map(round)),
+                            opts => (E._dataNamer(opts).name(new Float32Array([-.5, -.25, .25, .5]), r1, 0), r1.map(round)),
                             { name:'z', values:4, emptyValues:1, dataSize:4, nameSize:2, namePartSize:1 },
                         ),
                     ],
@@ -265,7 +288,7 @@ Extra parameters:
                     const src = new F32(n), dst = new F32(n)
                     for (let i=0; i < n; ++i) src[i] = Math.random() * 2 - 1
                     const opts = { name:'matters not', values:n, dataSize:64, nameSize:64, namePartSize:16 }
-                    const namer = E._namedData(opts)
+                    const namer = E._dataNamer(opts)
                     const cells = new F32(namer.cells * (64+64))
                     namer.name(src, cells, 0), namer.unname(cells, 0, dst)
                     return [src.map(round), dst.map(round)]
@@ -302,16 +325,16 @@ Extra parameters:
                         const part = parts[p]
                         for (let i = 0; i < part.length; ++i) {
                             let x = part[i]
-                            if (typeof x == 'function') {
+                            if (typeof x == 'function') { // TODO: Functions should be called not once but each time; here, just remember the index. And `E._dataNamer.fill` should be able to accept the indices array to fill numbers from.
                                 x = x(...args)
                                 if (typeof x != 'number' || (x !== x || x < -1 || x > 1))
                                     error("Name parts must be -1..1, got", x)
                             }
                             numbers[p * partSize + i] = x
                         }
-                        E._namedData.fill(numbers, p * partSize, part.length, partSize)
+                        E._dataNamer.fill(numbers, p * partSize, part.length, partSize)
                     }
-                    E._namedData.fill(numbers, 0, end, numbers.length)
+                    E._dataNamer.fill(numbers, 0, end, numbers.length)
                     return numbers
                 }
             }, {
@@ -334,14 +357,14 @@ The result takes \`dataStart, dataEnd, dataLen\` (for filling function values) a
 
 Increases sensitivity to variations, by fractally folding available values onto free space via \`x → 1-2*abs(x)\`.
 
-Even if your AI model can only accept and return ±1 bits, it can still use the Sensor Network by having lots of free space (\`emptyValues\` in \`._namedData\`).`,
+Even if your AI model can only accept and return ±1 bits, it can still use the Sensor Network by having lots of free space (\`emptyValues\` in \`._dataNamer\`).`,
             }),
             unfill: A(function unfill(dst, offset, haveNumbers, needNumbers) {
                 if (haveNumbers >= needNumbers || !haveNumbers) return
                 for (let i = offset + needNumbers - haveNumbers - 1; i >= offset; --i)
                     dst[i] = Math.sign(dst[i]) * Math.abs(dst[i + haveNumbers] - 1) * .5
                 return dst
-            }, { docs:`Reverses \`._namedData.fill\`, enhancing low-frequency numbers with best guesses from high-frequency numbers.
+            }, { docs:`Reverses \`._dataNamer.fill\`, enhancing low-frequency numbers with best guesses from high-frequency numbers.
 
 Makes only the sign matter for low-frequency numbers.` }),
         }),

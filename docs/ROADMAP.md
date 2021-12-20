@@ -175,7 +175,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Make `npm doc` import the library and call this and write its result to `docs/DOCS.md`.
         - ⋯ Ability to de/serialize senders/accumulators/handlers, so that users can pick up power-ups at the press of a button. (Top-level is an array, where the last item is the actual object, and the rest are the function dependencies. JSON is fine.)
             - ⋯ Some way to specify which parts are done in-extension and which are in-content-script and which are in-page-JS, here.
-    - ⋯ Reasonable defaults, decided by the user and not the handler:
+    - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files:
         - ⋯ `.Sensor`:
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
                 - ⋯ Keyboard. Variants:
