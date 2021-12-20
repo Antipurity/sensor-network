@@ -20,7 +20,7 @@ export default (function(exports) {
     //   sensors: Array<Sensor>, but only those that are called automatically.
     //   accumulators: Array<Accumulator>, sorted by priority.
     //   mainHandler: Handler, with max priority.
-    //   handlerShapeStrings: Array<String>, for enumeration.
+    //   cellShapes: Array<String>, for enumeration.
     //   stepsNow: int
     //   waitingSinceTooManySteps: Array<function>, called when a step is finished.
     //   shaped:
@@ -68,10 +68,20 @@ export default (function(exports) {
             // TODO: `._gotFeedback(data, error, feedback, fbOffset)`
             //   TODO: Fulfill the promise first returned from `send`: `this.feedbackCallbacks.shift()(feedback.subarray(fbOffset, fbOffset + data.length))`.
             //   TODO: Dealloc data & error.
-            // TODO: `.pause()`
-            // TODO: `.resume()`
-            //   TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
-            //     Use `E._state(channel)`.
+            pause() {
+                if (this.paused) return
+                E._state(this.channel).sensors = E._state(this.channel).sensors.filter(v => v !== this)
+                this.paused = true
+            }
+            resume() {
+                if (!this.paused) return
+                if (typeof this.onValues == 'function') {
+                    E._state(this.channel).sensors.push(this)
+                    for (let cellShape of E._state(this.channel).cellShapes)
+                        _Packet.handleLoop(this.channel, cellShape)
+                }
+                this.paused = false
+            }
         }, {}), // TODO: Docs.
         Accumulator: A(class Accumulator {
             constructor({ onValues=null, onFeedback=null, priority=0, channel='' }) {
@@ -104,17 +114,35 @@ export default (function(exports) {
             constructor({ onValues=null, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
                 // TODO: Assert.
                 Object.assign(this, {
+                    paused: true,
                     cellShape: [1, namePartSize-1, nameSize-namePartSize, dataSize],
                     onValues,
-                    noFeedback,
+                    noFeedback: !!noFeedback,
                     priority,
                     channel,
                 }).resume()
             }
-            // TODO: `.pause()`
-            //   TODO: Remove this from handlers. That's it. ...No, that's not it: should also re-compute the main handler.
-            // TODO: `.resume()`
-            //   TODO: `E._state(this.channel, this.cellShape).handlers.push(this)` and sort and set this as the main handler if !noFeedback and either was null or priority is more and `_Packet.loopHandle(shapeAsString)`.
+            pause() {
+                if (this.paused) return
+                const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
+                dst.handlers = dst.handlers.filter(v => v !== this)
+                if (ch.mainHandler === this) {
+                    ch.mainHandler = null
+                    for (let cellShape of ch.cellShapes)
+                        for (let h of ch.shaped[cellShape].handlers)
+                            if (!h.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < h.priority)) ch.mainHandler = h
+                }
+                this.paused = true
+            }
+            resume() {
+                if (!this.paused) return
+                const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
+                dst.handlers.push(this)
+                dst.handlers.sort((a,b) => b.priority - a.priority)
+                if (!this.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < this.priority)) ch.mainHandler = this
+                if (this.onValues) _Packet.handleLoop(this.channel, this.cellShape)
+                this.paused = false
+            }
         }, {}), // TODO: Docs.
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
@@ -123,7 +151,7 @@ export default (function(exports) {
                     sensors: [],
                     accumulators: [],
                     mainHandler: null,
-                    handlerShapeStrings: [],
+                    cellShapes: [],
                     stepsNow: 0,
                     waitingSinceTooManySteps: [],
                     shaped: Object.create(null),
@@ -137,7 +165,7 @@ export default (function(exports) {
                     cellShape: cellShape,
                     handlers: [],
                     nextPacket: new _Packet(channel, cellShape),
-                }
+                }, ch.cellShapes.push(cellShape)
             return ch.shaped[cellShape]
         },
         _Packet: class _Packet {
@@ -382,7 +410,7 @@ Extra parameters:
                         const part = parts[p]
                         for (let i = 0; i < part.length; ++i) {
                             let x = part[i]
-                            if (typeof x == 'function') { // TODO: Functions should be called not once but each time; here, just remember the index. And `E._dataNamer.fill` should be able to accept the indices array to fill numbers from.
+                            if (typeof x == 'function') { // TODO: Functions should be called not once but each time (to be able to simulate moving body parts); here, just remember the index. And `E._dataNamer.fill` should be able to accept the indices array to fill numbers from.
                                 x = x(...args)
                                 if (typeof x != 'number' || (x !== x || x < -1 || x > 1))
                                     error("Name parts must be -1..1, got", x)
