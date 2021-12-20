@@ -125,14 +125,15 @@ export default (function(exports) {
 - \`constructor({ name, values, onValues=null, channel='', noFeedback=false, user='self', emptyValues=0, hasher=undefined })\`
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
     - \`values\`: how many values each packet will have. To mitigate misalignment, try to stick to powers-of-2.
-    - \`onValues\`: the regularly-executed function that reports data, from \`sensor\` to nothing, possibly a promise. Call \`sensor.send\` inside.
+    - \`onValues(sensor)\`: the regularly-executed function that reports data, by calling \`sensor.send\` inside.
+        - Can return a promise.
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
         - \`user\`: the name of the machine that sources data. Makes it easy to distinguish sources.
         - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
-        - \`hasher\`: see \`._dataNamer.hasher\`. The default hashes strings in \`user\`/\`name\` with MD5 and rescales bytes into -1…1.
-    - To change any of this, \`pause()\` and recreate the sensor.
+        - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default hashes strings in \`user\`/\`name\` with MD5 and rescales bytes into -1…1.
+    - To change any of this, \`pause()\` and recreate.
 
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
     - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
@@ -167,7 +168,22 @@ export default (function(exports) {
                 this.paused = false
             }
         }, {
-            docs:``, // TODO:
+            docs:`Modifies data/feedback, after sensors and before handlers.
+
+- \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
+    - Needs one or both:
+        - \`onValues(data, error, cellShape) → extra\`: can modify \`data\` and the optional \`error\` in-place.
+            - \`cellShape: [reward=1, user, name, data]\`
+            - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
+            - Can return a promise.
+        - \`onFeedback(feedback, cellShape, extra)\`: can modify \`feedback\` in-place.
+            - Can return a promise.
+    - Extra flexibility:
+        - \`priority\`: accumulators run in order, highest priority first.
+        - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
+    - To change any of this, \`pause()\` and recreate.
+
+- \`pause()\`, \`resume()\``,
         }),
         Handler: A(class Handler {
             constructor({ onValues, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
@@ -310,18 +326,14 @@ export default (function(exports) {
                     // Accumulators.
                     for (let a of ch.accumulators)
                         if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? a.onValues(T.data, T.error, T.cellShape) : undefined)
+                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined)
                             T.accumulatorCallback.push(a.onFeedback)
                         }
-                    for (let i = 0; i < T.accumulatorExtra.length; ++i)
-                        if (T.accumulatorExtra[i] instanceof Promise)
-                            T.accumulatorExtra[i] = await T.accumulatorExtra[i]
                     // Handlers.
                     if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
                         T.feedback = _Packet.allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
                     else
                         T.feedback = null
-                    //   What does "no feedback" when sending a data piece do? Should it turn off whole-feedback?
                     await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
                     let tmp
                     for (let h of dst.handlers)
