@@ -26,6 +26,7 @@ export default (function(exports) {
     //   shaped:
     //     [handlerShapeAsString]:
     //       looping: bool
+    //       lastUsed: performance.now()
     //       msPerStep: [n, mean]
     //       cellShape: [reward=1, user, name, data]
     //       handlers: Array<Handler>, sorted by priority.
@@ -59,20 +60,29 @@ export default (function(exports) {
                     dataSize: 0,
                     feedbackCallbacks: [], // A queue of promise-fulfilling callbacks. Very small, so an array is the fastest option.
                 }).resume()
-                // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed.
             }
             send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
                 // Name+send to all handler shapes.
+                // Also forget about shapes that are more than 60 seconds old.
                 const ch = E._state(this.channel)
+                const removed = Sensor._removed || (Sensor._removed = new Set)
                 for (let cellShape of ch.cellShapes) {
                     const dst = ch.shaped[cellShape]
-                    if (!dst.handlers.length) continue
+                    if (!dst.handlers.length) {
+                        if (performance.now() - dst.lastUsed > 60000) removed.add(cellShape)
+                        continue
+                    }
                     const namer = this._namer(cellShape)
                     const flatV = _Packet.allocF32(namer.namedSize)
                     const flatE = error ? _Packet.allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, reward, -1.)
                     dst.nextPacket.data(this, flatV, flatE, this.noFeedback)
+                }
+                if (removed.size) {
+                    ch.cellShapes = ch.cellShapes.filter(sh => !removed.has(sh))
+                    removed.forEach(sh => delete ch[sh])
+                    removed.clear()
                 }
             }
             _gotFeedback(data, error, feedback, fbOffset, cellShape) {
@@ -124,7 +134,6 @@ export default (function(exports) {
                     priority,
                     channel,
                 }).resume()
-                // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the accumulator is no longer needed (else, set `onValues` to `null`).
             }
             pause() {
                 if (this.paused) return
@@ -193,6 +202,7 @@ export default (function(exports) {
             if (!ch.shaped[cellShape])
                 ch.shaped[cellShape] = {
                     looping: false,
+                    lastUsed: performance.now(),
                     msPerStep: [0,0],
                     cellShape: cellShape,
                     handlers: [],
@@ -270,7 +280,7 @@ export default (function(exports) {
                     // Accumulators.
                     for (let a of ch.accumulators)
                         if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.cellShape) : undefined)
+                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined)
                             T.accumulatorCallback.push(a.onFeedback)
                         }
                     // Handlers.
@@ -292,7 +302,7 @@ export default (function(exports) {
                 } finally {
                     // Self-reporting.
                     --ch.stepsNow
-                    _Packet.updateMean(dst.msPerStep, performance.now() - start)
+                    _Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
                 }
             }
@@ -318,7 +328,6 @@ export default (function(exports) {
                     if (performance.now() < end)
                         await new Promise(then => setTimeout(then, end - performance.now()))
                 }
-                // TODO: Be called when there are new handlers or sensors or sensor data.
             }
         },
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
