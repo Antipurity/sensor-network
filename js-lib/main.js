@@ -20,55 +20,108 @@ export default (function(exports) {
     //   sensors: Array<Sensor>, but only those that are called automatically.
     //   accumulators: Array<Accumulator>, sorted by priority.
     //   mainHandler: Handler, with max priority.
-    //   handlerShapeString: Array<String>, for enumeration.
+    //   handlerShapeStrings: Array<String>, for enumeration.
+    //   stepsNow: int
+    //   waitingOnSteps: Array<function>, called when a step is finished.
     //   [handlerShapeAsString]:
     //     looping: bool
+    //     msPerStep: number
     //     cellShape: [reward=1, user, name, data]
     //     handlers: Array<Handler>, sorted by priority.
     //     nextPacket: _Packet
 
     return A(E, {
-        // TODO: The class Sensor:
-        //   TODO: `.constructor({ name, values=0, channel='', noFeedback=false, onValues=null })`
-        //     TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
-        //     TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
-        //   TODO: `.send(values: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
-        //   TODO: `.deinit()`
-        //   TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
-        // TODO: The class Accumulator:
-        //   TODO: `.constructor({ channel='', priority=0, onValues=null, onFeedback=null })`
-        //     TODO: `S[channel].accumulators.push(this)`, and sort by priority.
-        //     TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
-        //   TODO: `.deinit()`, which removes it from channels. (Note that packets that are already sent may still call functions.)
-        //   TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
-        // TODO: The class Handler:
-        //   TODO: `.constructor({ channel='', priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`
-        //     TODO: Set `.cellShape` = [reward=1, user, name, data].
-        //     TODO: Write out the shape as a string.
-        //     TODO: `S[channel][shapeAsString].handlers.push(this)` and sort and `_Packet.loopHandle(shapeAsString)`.
-        //     TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
-        // TODO: The class _Packet, with:
-        //   TODO: Props:
-        //     (sensor → accumulator):
-        //       cells: int
-        //       dataToSend: Array<f32a>, where each sensor allocates its own f32 array and gives up its ownership.
-        //       sensorIndices: Array<int>
-        //       sensorCallbacks: Array<function(data, feedback, fbOffset)>, where each sensor should mark `data` for re-use.
-        //     (accumulator → handler):
-        //       dataToHandle: f32a, updated destructively by accumulators then passed to handlers.
-        //       accumulatorExtra: Array<Any>
-        //       accumulatorCallback: Array<null | function>
-        //     (handler → accumulator → sensor):
-        //       feedback: f32a, updated destructively by accumulators.
-        //   TODO: _Packet.init({ nameSize=64, namePartSize=16, dataSize=64 }).
-        //   TODO: .data(data: f32a), adding already-named info before handling.
-        //   TODO: .handle(): sensors → accumulators → handlers → accumulators → sensors.
-        //   TODO: .deinit(), marking the object for re-use, called by `.handle()`.
-        //   TODO: _Packet.loopHandle(handlerShapeAsString, maxSimultaneousPackets = 4), which estimates the max speed it could call itself at, and repeatedly does sensing → accumulating → handling.
-        //     TODO: If the main handler shape, call `onValues` of all sensors to get data (for all loops). If not the main, don't have feedback at all.
-        //     TODO: In any case, call & store all accumulators in turn, then call all handlers.
-        //     TODO: Stop when the last handler/sensor is stopped.
-        //     TODO: Be called when there are new handlers or sensors, and do nothing if a loop is already in progress.
+        Sensor: A(class Sensor {
+            // TODO: `.constructor({ name, values=0, channel='', noFeedback=false, onValues=null })`
+            //   TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
+            //   TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
+            // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
+            // TODO: `.deinit()`
+            // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
+        }, {}),
+        Accumulator: A(class Accumulator {
+            // TODO: `.constructor({ channel='', priority=0, onValues=null, onFeedback=null })`
+            //   TODO: `S[channel].accumulators.push(this)`, and sort by priority.
+            //   TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
+            // TODO: `.deinit()`, which removes it from channels. (Note that packets that are already sent may still call functions.)
+            // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
+        }, {}),
+        Handler: A(class Handler {
+            // TODO: `.constructor({ channel='', priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`
+            //   TODO: Set `.cellShape` = [reward=1, user, name, data].
+            //   TODO: Write out the shape as a string.
+            //   TODO: `S[channel][shapeAsString].handlers.push(this)` and sort and `_Packet.loopHandle(shapeAsString)`.
+            //   TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
+        }, {}),
+        _Packet: class _Packet {
+            constructor(channel, cellShape) {
+                Object.assign(this, {
+                    channel,
+                    cellShape,
+                    cellSize: cellShape.reduce((a,b) => a+b),
+                    // sensor → accumulator:
+                    cells: 0,
+                    sensorData: [], // Owns f32a (Float32Array), given to `.data(…)`.
+                    sensorError: [], // Owns f32a (Float32Array), given to `.data(…)`.
+                    sensorIndices: [], // ints
+                    sensorCallbacks: [], // function(data, error, feedback, fbOffset)
+                    // accumulator → handler:
+                    data: null, // Owned f32a.
+                    error: null, // Owned f32a.
+                    accumulatorExtra: [], // ints
+                    accumulatorCallback: [], // function(feedback, cellShape, extra)
+                    // handler → accumulator → sensor:
+                    feedback: null, // null | owned f32a.
+                })
+            }
+            data(point, error, callback) {
+                // `point` is a named Float32Array of named cells, and this function takes ownership of it.
+                // `error` is its error (max abs(true - measurement) - 1) or null.
+                // `callback` is a function, from `point` (owned) & `allFeedback` (not owned) & `fbOffset` (int).
+                //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
+                //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
+                assert(point.length instanceof Float32Array, "Data must be float32")
+                assert(point.length % this.cellSize === 0, "Data must be divided into cells")
+                assert(error == null || error instanceof Float32Array, "Error must be null or float32")
+                assert(error == null || point.length === error.length, "Error must be per-data-point")
+                this.sensorData.push(point)
+                this.sensorError.push(error)
+                this.sensorIndices.push(this.cells)
+                this.sensorCallbacks.push(callback)
+                this.cells += point.length / this.cellSize | 0
+            }
+            // TODO: Have a function for de/allocating float32 arrays of a given size. Reuse same-length arrays, and purge cache often.
+            // TODO: Have a function for estimating the moving mean of a number stream online, for time-per-step.
+            async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors
+                if (!mainHandler) return
+                const T = this
+                // TODO: Prepare `this.data` by concatenating `sensorData`.
+                // TODO: Prepare `this.error` by concatenating `sensorError`, -1-initializing where null. Unless everything is null.
+                // TODO: For each `a` in `S[channel].accumulators`:
+                //   TODO: this.accumulatorExtra.push(await a.onValues(this.data, this.cellShape))
+                //   TODO: this.accumulatorCallback.push(a.onFeedback)
+                // TODO: Prepare `this.feedback`, `this.data`-initializing it.
+                // TODO: Call the main handler to fill `this.feedback`, given this.data and this.error and this.cellShape and this.feedback and feedbackIsWritable=true.
+                // TODO: Call all the non-main handlers in `S[this.channel][this.cellShape].handlers`.
+                // TODO: Reverse accumulators: while not empty:
+                //   TODO: this.accumulatorCallback.pop().call(undefined, this.feedback, this.cellShape, this.accumulatorExtra.pop())
+                // TODO: For each remembered sensor:
+                //   TODO: this.sensorCallbacks.pop().call(undefined, this.sensorData.pop(), this.sensorError.pop(), this.feedback, this.sensorIndices.pop() * this.cellSize)
+                // TODO: Update time-per-step `S[channel][cellShape].msPerStep`.
+                // TODO: Notify end-of-step waiters `S[channel].waitingOnSteps.forEach(f => f())`.
+            }
+            // TODO: _Packet.loopHandle(handlerShapeAsString, maxSimultaneousPackets = 4), which estimates the max speed it could call itself at, and repeatedly does sensing → accumulating → handling.
+            //   TODO: If `S[channel][cellShape].looping`, return, else set it to true.
+            //   TODO: Infinitely:
+            //     TODO: If there are no handlers or sensors, return (and set `looping` to `false`).
+            //     TODO: If we are under our time budget, wait until time-per-step ms have expired.
+            //     TODO: If we have too many packets, wait until we have enough, being notified via `S[channel].waitingOnSteps`.
+            //     TODO: If there are no handlers or sensors, return (and set `looping` to `false`).
+            //     TODO: If the main handler shape, call `onValues` of all sensors to get data (for all loops). If not the main, don't have feedback at all.
+            //     TODO: Ensure that the nextPacket is replaced with a new one and is only accessible to us.
+            //     TODO: nextPacket.handle()
+            //   TODO: Be called when there are new handlers or sensors.
+        },
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
         namedData: A(function namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E.namedData.hasher }) {
             assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
@@ -238,6 +291,7 @@ Even if your AI model can only accept and return ±1 bits, it can still use the 
 Makes only the sign matter for low-frequency numbers.` }),
         }),
     })
+    // TODO: All these must be in `E`, so that save/load can be aware of them.
     function test(func, ...args) {
         try { return func(...args) }
         catch (err) { return err instanceof Error ? [err.message, err.stack] : err }

@@ -150,20 +150,20 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ The options object can be modified after construction.
                 - ⋯ `onValues(sensor) -> Promise<void>`: send data & receive feedback via `sensor.send(…)`, as often as possible, possibly async.
                     - ⋯ Send at most 16 at once. Measure the average time between the main handler's feedbacks (even `noFeedback` empty feedback is feedback for this), and match it as exactly as we can.
-            - ⋯ `.send(values: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
+            - ⋯ `.send(values: Float32Array|null, error: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ⋯ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
         - ⋯ `.Accumulator`:
             - ⋯ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
                 - ⋯ The options object can be modified after construction.
                 - ⋯ Accumulators run highest-priority-first.
-                - ⋯ `onValues(data: Float32Array, cellShape: [reward=1, user, name, data]) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
+                - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data]) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
                 - ⋯ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
         - ⋯ `.Handler`:
             - ⋯ `.constructor({ channel=null, priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`.
                 - ⋯ `dataSize` is how many data numbers each cell can hold, `nameSize` is how many numbers the cell is identified with, split into `namePartSize`-sized blocks. First name then data; the first name part is used for the reward (always the first number) and the user ID, the rest are taken up be senders' string hashes and numbers.
-                - ⋯ `onValues(data: Float32Array, error: Float32Array, cellShape: [reward=1, user, name, data], feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
+                - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], feedback: null|Float32Array, feedbackIsWritable: bool)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
             - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders accumulated, avg per step.)
         - ⋯ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `runTests` method.
             - ⋯ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
@@ -176,7 +176,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Some way to specify which parts are done in-extension and which are in-content-script and which are in-page-JS, here.
     - ⋯ Reasonable defaults, decided by the user and not the handler:
         - ⋯ `.Sensor`:
-            - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback) modes, and UI visualization where possible:
+            - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
                 - ⋯ Keyboard. Variants:
                     - ⋯ Put all keys in one strip, in lexicographically-first order.
                     - ⋯ Spatially-grouped QWERTY key layout.
@@ -197,11 +197,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                             - ⋯ Full stream, resized to a target resolution, to see the whole picture.
                             - ⋯ Around-mouse rect.
                             - ⋯ Around-mouse fovea.
-                            - ⋯ Around-mouse progressively coarser grids, each zoomed out 2×. So if starting at 8×8 cells, only need 7 more levels to go to 1024×1024, which with default cell-sizes and 44.1kHz sound-output is 43FPS for grayscale or 14FPS for full-color. (May act the same as a zooming data augmentation.)
+                            - ⋯ Around-mouse progressively coarser grids, each zoomed out 2×. So if starting at 8×8 cells, only need 7 more levels to go to 1024×1024, which with default cell-sizes and 44.1kHz sound-output is at most 43FPS for grayscale or 14FPS for full-color. (May act the same as a zooming data augmentation.)
                         - ⋯ Coalesce chunks spatially wherever possible, with x/y coords of the center in the name.
                         - ⋯ Expose `.points()->Array` and `.sendPointsRGB(data: Uint8Array)=>Promise<feedback>`, in case someone really wants to render only what is strictly necessary, and not have to prod the user for access.
                         - ⋯ Allow passing the mouse object as an option, which is any object that has `{x:…,y:…}` with 0…1 client coordinates.
-                        - ⋯ In-page per-pixel feedback to DOM elements, through something like `sn.video.on(elem, imageData=>void)`. (Differentiable rendering boys, even though JS doesn't have libraries for that.)
+                        - ⋯ In-page per-pixel feedback to DOM elements, through something like `sn.video.on(elem, imageData=>void)` and/or a hidden canvas. (Differentiable rendering boys, even though JS doesn't have libraries for that.)
                         - ⋯ Internally, for efficiency, render images to a WebGL texture, and download data from there.
                             - ⋯ Make each result a separate buffer, downloaded after some delay (say, 4 results max).
                             - ⋯ For efficiency in certain cases, expose methods that receive data from a WebGL texture & context at 1+ coordinates.
@@ -243,7 +243,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ No-feedback sound output (speakers).
             - ⋯ Sound input (microphone). Probably terrible.
             - ⋯ Write to Internet.
+                - ⋯ Make sure that at least `error=1` ("no data") is preserved.
             - ⋯ Write to file.
+                - ⋯ Replace `error=1` ("no data") with feedback, leave the rest as-is.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
         - ⋯ `.defaults()`.
 
