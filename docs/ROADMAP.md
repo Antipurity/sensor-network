@@ -146,22 +146,23 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ Data should also do that if unused, with feedback adding up the details too so that the reported feedback is nudged appropriately. No holes, only more detail.
         - ✓ Decide whether we handle `NaN | -1…1` or `-1…1`. Verdict: `-1…1`, because what even are holes in sensors.
         - ⋯ `.Sensor`, used as `new Sensor({ name:['keyboard', 'a'], values:1, async onValues(s) { console.log((await s.send([1]))[0]) } })`:
-            - ⋯ `.constructor({ name, values=0, channel=null, noFeedback=false, onValues=null })`.
-                - ⋯ The options object can be modified after construction.
+            - ⋯ `.constructor({ name, values=0, channel=null, onValues=null })`.
+                - ❌ The options object can be modified after construction. (No, users should just destroy and recreate, emphasizing that this should be rare.)
                 - ⋯ `onValues(sensor) -> Promise<void>`: send data & receive feedback via `sensor.send(…)`, as often as possible, possibly async.
                     - ⋯ Send at most 16 at once. Measure the average time between the main handler's feedbacks (even `noFeedback` empty feedback is feedback for this), and match it as exactly as we can.
-            - ⋯ `.send(values: Float32Array|null, error: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
+            - ⋯ `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ⋯ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
         - ⋯ `.Accumulator`:
             - ⋯ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
-                - ⋯ The options object can be modified after construction.
+                - ❌ The options object can be modified after construction.
                 - ⋯ Accumulators run highest-priority-first.
                 - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data]) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
                 - ⋯ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
         - ⋯ `.Handler`:
             - ⋯ `.constructor({ channel=null, priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`.
+                - ❌ The options object can be modified after construction.
                 - ⋯ `dataSize` is how many data numbers each cell can hold, `nameSize` is how many numbers the cell is identified with, split into `namePartSize`-sized blocks. First name then data; the first name part is used for the reward (always the first number) and the user ID, the rest are taken up be senders' string hashes and numbers.
                 - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
             - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders accumulated, avg per step.)

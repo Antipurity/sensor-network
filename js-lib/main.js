@@ -25,7 +25,7 @@ export default (function(exports) {
     //   waitingSinceTooManySteps: Array<function>, called when a step is finished.
     //   [handlerShapeAsString]:
     //     looping: bool
-    //     msPerStep: number
+    //     msPerStep: [n, mean]
     //     cellShape: [reward=1, user, name, data]
     //     handlers: Array<Handler>, sorted by priority.
     //     nextPacket: _Packet
@@ -35,15 +35,15 @@ export default (function(exports) {
         Sensor: A(class Sensor {
             // TODO: `.constructor({ name, values=0, channel='', noFeedback=false, onValues=null })`
             //   TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
-            //   TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
-            // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
+            // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
+            //   TODO: ...How do we do this, exactly?...
+            //     (Using `S[channel][cellShape].nextPacket.data(point, error, callback, noFeedback)`.)
             // TODO: `.deinit()`
             // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
         }, {}),
         Accumulator: A(class Accumulator {
             // TODO: `.constructor({ channel='', priority=0, onValues=null, onFeedback=null })`
             //   TODO: `S[channel].accumulators.push(this)`, and sort by priority.
-            //   TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
             // TODO: `.deinit()`, which removes it from channels. (Note that packets that are already sent may still call functions.)
             // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
         }, {}),
@@ -52,7 +52,6 @@ export default (function(exports) {
             //   TODO: Set `.cellShape` = [reward=1, user, name, data].
             //   TODO: Write out the shape as a string.
             //   TODO: `S[channel][shapeAsString].handlers.push(this)` and sort and `_Packet.loopHandle(shapeAsString)`.
-            //   TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
         }, {}),
         maxSimultaneousPackets: 4,
         _Packet: class _Packet {
@@ -63,6 +62,7 @@ export default (function(exports) {
                     cellSize: cellShape.reduce((a,b) => a+b),
                     // sensor → accumulator:
                     cells: 0,
+                    sensorNeedsFeedback: false,
                     sensorData: [], // Owns f32a (Float32Array), given to `.data(…)`.
                     sensorError: [], // Owns f32a (Float32Array), given to `.data(…)`.
                     sensorIndices: [], // ints
@@ -76,16 +76,18 @@ export default (function(exports) {
                     feedback: null, // null | owned f32a.
                 })
             }
-            data(point, error, callback) {
+            data(point, error, callback, noFeedback) {
                 // `point` is a named Float32Array of named cells, and this function takes ownership of it.
                 // `error` is its error (max abs(true - measurement) - 1) or null.
                 // `callback` is a function, from `point` (owned) & `allFeedback` (not owned) & `fbOffset` (int).
                 //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
                 //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
+                // `noFeedback`: bool. If true, `callback` is still called, possibly even with non-null `allFeedback`.
                 assert(point.length instanceof Float32Array, "Data must be float32")
                 assert(point.length % this.cellSize === 0, "Data must be divided into cells")
                 assert(error == null || error instanceof Float32Array, "Error must be null or float32")
                 assert(error == null || point.length === error.length, "Error must be per-data-point")
+                if (!noFeedback) this.sensorNeedsFeedback = true
                 this.sensorData.push(point)
                 if (error)
                     (this.sensorError || (this.sensorError = []))[this.sensorError.length-1] = error
@@ -95,10 +97,17 @@ export default (function(exports) {
             }
             static allocF32(len) { return new Float32Array(len) }
             static deallocF32(a) {} // TODO: Reuse same-length arrays via a cache from len to an array of free arrays, unless we already have 16.
-            // TODO: Have a function for estimating the moving mean of a number stream online, for time-per-step.
+            static updateMean(a, value, maxHorizon = 1000) {
+                const n1 = a[0], n2 = n1+1
+                a[0] = Math.min(n2, maxHorizon)
+                a[1] += (value - a[1]) / n2
+                if (!isFinite(a[1])) a[0] = a[1] = 0
+                return a
+            }
             async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors
-                const T = this
-                ++S[channel].stepsNow
+                const T = this, ch = S[T.channel], dst = ch[T.cellShape]
+                const start = performance.now()
+                ++ch.stepsNow
                 try {
                     // Concat sensors into `.data` and `.error`.
                     T.data = _Packet.allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : _Packet.allocF32(T.cells * T.cellSize)
@@ -113,18 +122,19 @@ export default (function(exports) {
                         }
                     }
                     // Accumulators.
-                    for (let a of S[channel].accumulators)
+                    for (let a of ch.accumulators)
                         if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
                             T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.cellShape) : undefined)
                             T.accumulatorCallback.push(a.onFeedback)
                         }
                     // Handlers.
-                    if (mainHandler)
+                    if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
                         T.feedback = _Packet.allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
                     else
                         T.feedback = null
-                    await mainHandler.onValues(T.data, T.error, T.cellShape, true, T.feedback)
-                    for (let h of S[T.channel][T.cellShape].handlers)
+                    //   What does "no feedback" when sending a data piece do? Should it turn off whole-feedback?
+                    await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
+                    for (let h of dst.handlers)
                         if (typeof h.onValues == 'function')
                             await h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
                     // Accumulators.
@@ -135,26 +145,32 @@ export default (function(exports) {
                         T.sensorCallbacks.pop().call(undefined, T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize)
                 } finally {
                     // Self-reporting.
-                    --S[channel].stepsNow
-                    // TODO: Update time-per-step `S[channel][cellShape].msPerStep`.
-                    S[channel].waitingSinceTooManySteps.length && S[channel].waitingSinceTooManySteps.shift()()
+                    --ch.stepsNow
+                    _Packet.updateMean(dst.msPerStep, performance.now() - start)
+                    ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
                 }
             }
             async static handleLoop(channel, cellShape) {
-                const dst = S[channel][cellShape]
+                const ch = S[channel], dst = ch[cellShape]
                 if (dst.looping) return;  else dst.looping = true
                 while (true) {
-                    // TODO: If we are under our time budget, wait until time-per-step ms have expired.
-                    // TODO: If we have too many packets (> E.maxSimultaneousPackets), wait until we have enough, being notified via `S[channel].waitingSinceTooManySteps`.
+                    const start = performance.now(), end = start + dst.msPerStep[1]
+                    // Don't do too much at once.
+                    while (ch.stepsNow > E.maxSimultaneousPackets)
+                        await new Promise(then => ch.waitingSinceTooManySteps.push(then))
                     // Pause if no destinations, or no sources & no data to send.
-                    if (!dst.handlers.length || !S[channel].sensors.length && !dst.nextPacket.cells) return dst.looping = false
+                    if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.cells) return dst.looping = false
                     // Get sensor data.
-                    const mainHandler = S[channel].mainHandler && S[channel].mainHandler.cellShape+'' === cellShape+'' ? S[channel].mainHandler : null
+                    const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
                     if (mainHandler)
-                        for (let s of S[channel].sensors)
+                        for (let s of ch.sensors)
                             await s.onValues(s)
-                    // TODO: Ensure that the nextPacket is replaced with a new one and is only accessible to us.
-                    // TODO: nextPacket.handle(mainHandler)
+                    // Send it off.
+                    const nextPacket = dst.nextPacket;  dst.nextPacket = new _Packet(channel, cellShape)
+                    nextPacket.handle(mainHandler)
+                    // Don't do it too often.
+                    if (performance.now() < end)
+                        await new Promise(then => setTimeout(then, end - performance.now()))
                 }
                 // TODO: Be called when there are new handlers or sensors or sensor data.
             }
