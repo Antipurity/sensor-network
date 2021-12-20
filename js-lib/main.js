@@ -31,7 +31,6 @@ export default (function(exports) {
     //       cellShape: [reward=1, user, name, data]
     //       handlers: Array<Handler>, sorted by priority.
     //       nextPacket: _Packet
-    // To maybe-first read from `S`, use `E._state(channel, cellShape)`.
 
     return A(E, {
         Sensor: A(class Sensor {
@@ -121,7 +120,26 @@ export default (function(exports) {
                 this.paused = false
             }
         }, {
-            docs:``, // TODO:
+            docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
+
+- \`constructor({ name, values, onValues=null, channel='', noFeedback=false, user='self', emptyValues=0, hasher=undefined })\`
+    - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
+    - \`values\`: how many values each packet will have. To mitigate misalignment, try to stick to powers-of-2.
+    - \`onValues\`: the regularly-executed function that reports data, from \`sensor\` to nothing, possibly a promise. Call \`sensor.send\` inside.
+    - Extra flexibility:
+        - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
+        - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
+        - \`user\`: the name of the machine that sources data. Makes it easy to distinguish sources.
+        - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
+        - \`hasher\`: see \`._dataNamer.hasher\`. The default hashes strings in \`user\`/\`name\` with MD5 and rescales bytes into -1…1.
+    - To change any of this, \`pause()\` and recreate the sensor.
+
+- \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
+    - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
+    - \`error\`: can be owned flat data, -1…1 \`Float32Array\` of length \`values\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
+    - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money?)
+
+- \`pause()\`, \`resume()\``,
         }),
         Accumulator: A(class Accumulator {
             constructor({ onValues=null, onFeedback=null, priority=0, channel='' }) {
@@ -292,7 +310,7 @@ export default (function(exports) {
                     // Accumulators.
                     for (let a of ch.accumulators)
                         if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined)
+                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined) // TODO: Run all promises in parallel!
                             T.accumulatorCallback.push(a.onFeedback)
                         }
                     // Handlers.
@@ -304,7 +322,7 @@ export default (function(exports) {
                     await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
                     for (let h of dst.handlers)
                         if (typeof h.onValues == 'function')
-                            await h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
+                            await h.onValues(T.data, T.error, T.cellShape, false, T.feedback) // TODO: Run all promises in parallel!
                     // Accumulators.
                     while (T.accumulatorCallbacks.length)
                         T.accumulatorCallbacks.pop().call(undefined, T.feedback, T.cellShape, T.accumulatorExtras.pop())
@@ -332,7 +350,7 @@ export default (function(exports) {
                     const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
                     if (mainHandler)
                         for (let s of ch.sensors)
-                            await s.onValues(s)
+                            await s.onValues(s) // TODO: Run all these in parallel!
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = new _Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
