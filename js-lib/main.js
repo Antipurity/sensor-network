@@ -23,18 +23,18 @@ export default (function(exports) {
     //   handlerShapeStrings: Array<String>, for enumeration.
     //   stepsNow: int
     //   waitingSinceTooManySteps: Array<function>, called when a step is finished.
-    //   [handlerShapeAsString]:
-    //     looping: bool
-    //     msPerStep: [n, mean]
-    //     cellShape: [reward=1, user, name, data]
-    //     handlers: Array<Handler>, sorted by priority.
-    //     nextPacket: _Packet
-    // TODO: ...Wait, who's responsible for setting up S[channel] and others?
-    //   Should we have a function E._state(channel, cellShape)?
+    //   shaped:
+    //     [handlerShapeAsString]:
+    //       looping: bool
+    //       msPerStep: [n, mean]
+    //       cellShape: [reward=1, user, name, data]
+    //       handlers: Array<Handler>, sorted by priority.
+    //       nextPacket: _Packet
+    // To maybe-first read from `S`, use `E._state(channel, cellShape)`.
 
     return A(E, {
         Sensor: A(class Sensor {
-            constructor({ name, values, onValues=null, channel='', noFeedback=false, user='self', emptyValues=0, hasher=undefined, reward=0 }) {
+            constructor({ name, values, onValues=null, channel='', noFeedback=false, user='self', emptyValues=0, hasher=undefined }) {
                 assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
                 assertCounts('Must have the value-count', values)
                 assert(onValues == null || typeof onValues == 'function')
@@ -42,8 +42,8 @@ export default (function(exports) {
                 assert(typeof user == 'string' || Array.isArray(user))
                 assertCounts('', emptyValues)
                 assert(hasher === undefined || typeof hasher == 'function')
-                assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
                 Object.assign(this, {
+                    paused: true,
                     name,
                     values,
                     onValues,
@@ -57,32 +57,81 @@ export default (function(exports) {
                     nameSize: null,
                     namePartSize: null,
                     dataSize: null,
-                }).resume
+                    feedbackCallbacks: [], // A queue of promise-fulfilling callbacks. Very small, so an array is the fastest option.
+                }).resume()
+                // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed.
             }
-            // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
+            // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
             //   TODO: ...How do we do this, exactly?...
             //     (Enumerating all shapes, and naming into all via `E._dataNamer({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }).name(src, dst, dstOffset)`. Caching un/namers on the sensor object.)
-            //     (Using `S[channel][cellShape].nextPacket.data(sensor, point, error, noFeedback)`.)
+            //     (Using `S[channel].shaped[cellShape].nextPacket.data(sensor, point, error, this.noFeedback)`.)
             // TODO: `._gotFeedback(data, error, feedback, fbOffset)`
-            //   TODO: Fulfill the promise first returned from `send`. (We only need an array, because there are few simultaneous steps.)
+            //   TODO: Fulfill the promise first returned from `send`: `this.feedbackCallbacks.shift()(feedback.subarray(fbOffset, fbOffset + data.length))`.
+            //   TODO: Dealloc data & error.
             // TODO: `.pause()`
             // TODO: `.resume()`
             //   TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
-            // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed.
-        }, {}),
+            //     Use `E._state(channel)`.
+        }, {}), // TODO: Docs.
         Accumulator: A(class Accumulator {
-            // TODO: `.constructor({ channel='', priority=0, onValues=null, onFeedback=null })`
-            //   TODO: `S[channel].accumulators.push(this)`, and sort by priority.
-            // TODO: `.deinit()`, which removes it from channels. (Note that packets that are already sent may still call functions.)
-            // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
-        }, {}),
+            constructor({ onValues=null, onFeedback=null, priority=0, channel='' }) {
+                assert(typeof priority == 'number')
+                assert(onValues == null || typeof onValues == 'function')
+                assert(onFeedback == null || typeof onFeedback == 'function')
+                assert(onValues || onFeedback, "Why have an accumulator if it does nothing")
+                Object.assign(this, {
+                    paused: true,
+                    onValues,
+                    onFeedback,
+                    priority,
+                    channel,
+                }).resume()
+                // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the accumulator is no longer needed (else, set `onValues` to `null`).
+            }
+            // TODO: `.pause()`, which removes it from channels. (Note that packets that are already sent may still call functions.)
+            // TODO: `.resume()`.
+            //   TODO: `E._state(this.channel).accumulators.push(this)`, and sort by priority.
+        }, {}), // TODO: Docs.
         Handler: A(class Handler {
-            // TODO: `.constructor({ channel='', priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`
-            //   TODO: Set `.cellShape` = [reward=1, user, name, data].
-            //   TODO: Write out the shape as a string.
-            //   TODO: `S[channel][shapeAsString].handlers.push(this)` and sort and `_Packet.loopHandle(shapeAsString)`.
-        }, {}),
+            constructor({ onValues=null, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
+                // TODO: Assert.
+                Object.assign(this, {
+                    cellShape: [1, namePartSize-1, nameSize-namePartSize, dataSize],
+                    onValues,
+                    noFeedback,
+                    priority,
+                    channel,
+                }).resume()
+            }
+            // TODO: `.pause()`
+            //   TODO: Remove this from handlers. That's it. ...No, that's not it: should also re-compute the main handler.
+            // TODO: `.resume()`
+            //   TODO: `E._state(this.channel, this.cellShape).handlers.push(this)` and sort and set this as the main handler if !noFeedback and either was null or priority is more and `_Packet.loopHandle(shapeAsString)`.
+        }, {}), // TODO: Docs.
         maxSimultaneousPackets: 4,
+        _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
+            if (!S[channel])
+                S[channel] = Object.assign(Object.create(null), {
+                    sensors: [],
+                    accumulators: [],
+                    mainHandler: null,
+                    handlerShapeStrings: [],
+                    stepsNow: 0,
+                    waitingSinceTooManySteps: [],
+                    shaped: Object.create(null),
+                })
+            const ch = S[channel]
+            if (cellShape == null) return ch
+            if (!ch.shaped[cellShape])
+                ch.shaped[cellShape] = {
+                    looping: false,
+                    msPerStep: [0,0],
+                    cellShape: cellShape,
+                    handlers: [],
+                    nextPacket: new _Packet(channel, cellShape),
+                }
+            return ch.shaped[cellShape]
+        },
         _Packet: class _Packet {
             constructor(channel, cellShape) {
                 Object.assign(this, {
@@ -180,7 +229,7 @@ export default (function(exports) {
                 }
             }
             async static handleLoop(channel, cellShape) {
-                const ch = S[channel], dst = ch[cellShape]
+                const ch = S[channel], dst = ch.shaped[cellShape]
                 if (dst.looping) return;  else dst.looping = true
                 while (true) {
                     const start = performance.now(), end = start + dst.msPerStep[1]

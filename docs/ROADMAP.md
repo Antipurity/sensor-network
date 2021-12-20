@@ -150,6 +150,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ❌ The options object can be modified after construction. (No, users should just destroy and recreate, emphasizing that this should be rare.)
                 - ⋯ `onValues(sensor) -> Promise<void>`: send data & receive feedback via `sensor.send(…)`, as often as possible, possibly async.
                     - ⋯ Send at most 16 at once. Measure the average time between the main handler's feedbacks (even `noFeedback` empty feedback is feedback for this), and match it as exactly as we can.
+            - ⋯ `.pause()`, `.resume()`
             - ⋯ `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ⋯ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
@@ -159,12 +160,14 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Accumulators run highest-priority-first.
                 - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data]) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
                 - ⋯ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
-            - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed (else, set `onValues` to `null`).
+            - ⋯ `.pause()`, `.resume()`
+            - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed.
         - ⋯ `.Handler`:
-            - ⋯ `.constructor({ channel=null, priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`.
+            - ⋯ `.constructor({ channel=null, priority=0, noFeedback=false, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`.
                 - ❌ The options object can be modified after construction.
                 - ⋯ `dataSize` is how many data numbers each cell can hold, `nameSize` is how many numbers the cell is identified with, split into `namePartSize`-sized blocks. First name then data; the first name part is used for the reward (always the first number) and the user ID, the rest are taken up be senders' string hashes and numbers.
                 - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
+            - ⋯ `.pause()`, `.resume()`
             - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders accumulated, avg per step.)
         - ⋯ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `runTests` method.
             - ⋯ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
