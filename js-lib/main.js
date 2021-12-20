@@ -54,9 +54,9 @@ export default (function(exports) {
                     hasher,
                     reward,
                     dataNamers: Object.create(null), // cellShape → _dataNamer({ reward, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher })
-                    nameSize: null,
-                    namePartSize: null,
-                    dataSize: null,
+                    nameSize: 0,
+                    namePartSize: 0,
+                    dataSize: 0,
                     feedbackCallbacks: [], // A queue of promise-fulfilling callbacks. Very small, so an array is the fastest option.
                 }).resume()
                 // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed.
@@ -65,9 +65,27 @@ export default (function(exports) {
             //   TODO: ...How do we do this, exactly?...
             //     (Enumerating all shapes, and naming into all via `E._dataNamer({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }).name(src, dst, dstOffset)`. Caching un/namers on the sensor object.)
             //     (Using `S[channel].shaped[cellShape].nextPacket.data(sensor, point, error, this.noFeedback)`.)
-            // TODO: `._gotFeedback(data, error, feedback, fbOffset)`
-            //   TODO: Fulfill the promise first returned from `send`: `this.feedbackCallbacks.shift()(feedback.subarray(fbOffset, fbOffset + data.length))`.
-            //   TODO: Dealloc data & error via `_Packet.deallocF32(?)`.
+            _gotFeedback(data, error, feedback, fbOffset, cellShape) {
+                // Fulfill the promise of `.send`.
+                if (feedback && !this.noFeedback) {
+                    const flat = _Packet.allocF32(this.values)
+                    this._namer(cellShape).unname(feedback, fbOffset, flat)
+                    this.feedbackCallbacks.shift()(flat)
+                    _Packet.deallocF32(flat)
+                } else
+                    this.feedbackCallbacks.shift()(null)
+                _Packet.deallocF32(data), _Packet.deallocF32(error)
+            }
+            _namer(cellShape) {
+                const s = ''+cellShape
+                if (!this.dataNames[s]) {
+                    this.nameSize = this.cellShape[0] + this.cellShape[1] + this.cellShape[2]
+                    this.namePartSize = this.cellShape[0] + this.cellShape[1]
+                    this.dataSize = this.cellShape[3]
+                    this.dataNames[s] = E._dataNamer(this)
+                }
+                return this.dataNames[s]
+            }
             pause() {
                 if (this.paused) return
                 E._state(this.channel).sensors = E._state(this.channel).sensors.filter(v => v !== this)
@@ -195,7 +213,7 @@ export default (function(exports) {
                 })
             }
             data(sensor, point, error, noFeedback) {
-                // `sensor` is a `E.Sensor` with `._gotFeedback(…)`, from `point` (owned) & `allFeedback` (not owned) & `fbOffset` (int).
+                // `sensor` is a `E.Sensor` with `._gotFeedback(…)`, from `point` (owned) & `error` (owned) & `allFeedback` (not owned) & `fbOffset` (int) & `cellShape`.
                 //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
                 //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
                 // `point` is a named Float32Array of named cells, and this function takes ownership of it.
@@ -260,7 +278,7 @@ export default (function(exports) {
                         T.accumulatorCallbacks.pop().call(undefined, T.feedback, T.cellShape, T.accumulatorExtras.pop())
                     // Sensors.
                     while (T.sensor.length)
-                        T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize)
+                        T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
                 } finally {
                     // Self-reporting.
                     --ch.stepsNow
@@ -459,6 +477,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         }),
     })
     // TODO: All these must be in `E`, so that save/load can be aware of them.
+    //   ...Then again, would we ever really use save/load for non-interface things? I don't think so, right?
     function test(func, ...args) {
         try { return func(...args) }
         catch (err) { return err instanceof Error ? [err.message, err.stack] : err }
