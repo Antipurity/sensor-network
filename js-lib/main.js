@@ -22,13 +22,14 @@ export default (function(exports) {
     //   mainHandler: Handler, with max priority.
     //   handlerShapeStrings: Array<String>, for enumeration.
     //   stepsNow: int
-    //   waitingOnSteps: Array<function>, called when a step is finished.
+    //   waitingSinceTooManySteps: Array<function>, called when a step is finished.
     //   [handlerShapeAsString]:
     //     looping: bool
     //     msPerStep: number
     //     cellShape: [reward=1, user, name, data]
     //     handlers: Array<Handler>, sorted by priority.
     //     nextPacket: _Packet
+    // TODO: ...Wait, who's responsible for setting up S[channel] and others?
 
     return A(E, {
         Sensor: A(class Sensor {
@@ -53,6 +54,7 @@ export default (function(exports) {
             //   TODO: `S[channel][shapeAsString].handlers.push(this)` and sort and `_Packet.loopHandle(shapeAsString)`.
             //   TODO: Install getters/setters on the options object, and when anything changes, reinstall it.
         }, {}),
+        maxSimultaneousPackets: 4,
         _Packet: class _Packet {
             constructor(channel, cellShape) {
                 Object.assign(this, {
@@ -68,8 +70,8 @@ export default (function(exports) {
                     // accumulator → handler:
                     data: null, // Owned f32a.
                     error: null, // Owned f32a.
-                    accumulatorExtra: [], // ints
-                    accumulatorCallback: [], // function(feedback, cellShape, extra)
+                    accumulatorExtras: [], // ints
+                    accumulatorCallbacks: [], // function(feedback, cellShape, extra)
                     // handler → accumulator → sensor:
                     feedback: null, // null | owned f32a.
                 })
@@ -85,45 +87,80 @@ export default (function(exports) {
                 assert(error == null || error instanceof Float32Array, "Error must be null or float32")
                 assert(error == null || point.length === error.length, "Error must be per-data-point")
                 this.sensorData.push(point)
-                this.sensorError.push(error)
+                if (error)
+                    (this.sensorError || (this.sensorError = []))[this.sensorError.length-1] = error
                 this.sensorIndices.push(this.cells)
                 this.sensorCallbacks.push(callback)
                 this.cells += point.length / this.cellSize | 0
             }
-            // TODO: Have a function for de/allocating float32 arrays of a given size. Reuse same-length arrays, and purge cache often.
+            static allocF32(len) { return new Float32Array(len) }
+            static deallocF32(a) {} // TODO: Reuse same-length arrays via a cache from len to an array of free arrays, unless we already have 16.
             // TODO: Have a function for estimating the moving mean of a number stream online, for time-per-step.
             async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors
-                if (!mainHandler) return
                 const T = this
-                // TODO: Prepare `this.data` by concatenating `sensorData`.
-                // TODO: Prepare `this.error` by concatenating `sensorError`, -1-initializing where null. Unless everything is null.
-                // TODO: For each `a` in `S[channel].accumulators`:
-                //   TODO: this.accumulatorExtra.push(await a.onValues(this.data, this.cellShape))
-                //   TODO: this.accumulatorCallback.push(a.onFeedback)
-                // TODO: Prepare `this.feedback`, `this.data`-initializing it.
-                // TODO: Call the main handler to fill `this.feedback`, given this.data and this.error and this.cellShape and this.feedback and feedbackIsWritable=true.
-                // TODO: Call all the non-main handlers in `S[this.channel][this.cellShape].handlers`.
-                // TODO: Reverse accumulators: while not empty:
-                //   TODO: this.accumulatorCallback.pop().call(undefined, this.feedback, this.cellShape, this.accumulatorExtra.pop())
-                // TODO: For each remembered sensor:
-                //   TODO: this.sensorCallbacks.pop().call(undefined, this.sensorData.pop(), this.sensorError.pop(), this.feedback, this.sensorIndices.pop() * this.cellSize)
-                // TODO: Update time-per-step `S[channel][cellShape].msPerStep`.
-                // TODO: Notify end-of-step waiters `S[channel].waitingOnSteps.forEach(f => f())`.
+                ++S[channel].stepsNow
+                try {
+                    // Concat sensors into `.data` and `.error`.
+                    T.data = _Packet.allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : _Packet.allocF32(T.cells * T.cellSize)
+                    for (let i = 0; i < T.sensorData.length; ++i) {
+                        const at = T.sensorIndices[i] * T.cellSize
+                        T.data.set(T.sensorData[i], at)
+                        if (T.error) {
+                            if (T.sensorError[i])
+                                T.error.set(T.sensorError[i], at)
+                            else
+                                T.error.fill(-1, at, at + T.sensorData[i].length)
+                        }
+                    }
+                    // Accumulators.
+                    for (let a of S[channel].accumulators)
+                        if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
+                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.cellShape) : undefined)
+                            T.accumulatorCallback.push(a.onFeedback)
+                        }
+                    // Handlers.
+                    if (mainHandler)
+                        T.feedback = _Packet.allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
+                    else
+                        T.feedback = null
+                    await mainHandler.onValues(T.data, T.error, T.cellShape, true, T.feedback)
+                    for (let h of S[T.channel][T.cellShape].handlers)
+                        if (typeof h.onValues == 'function')
+                            await h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
+                    // Accumulators.
+                    while (T.accumulatorCallbacks.length)
+                        T.accumulatorCallbacks.pop().call(undefined, T.feedback, T.cellShape, T.accumulatorExtras.pop())
+                    // Sensors.
+                    while (T.sensorCallbacks.length)
+                        T.sensorCallbacks.pop().call(undefined, T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize)
+                } finally {
+                    // Self-reporting.
+                    --S[channel].stepsNow
+                    // TODO: Update time-per-step `S[channel][cellShape].msPerStep`.
+                    S[channel].waitingSinceTooManySteps.length && S[channel].waitingSinceTooManySteps.shift()()
+                }
             }
-            // TODO: _Packet.loopHandle(handlerShapeAsString, maxSimultaneousPackets = 4), which estimates the max speed it could call itself at, and repeatedly does sensing → accumulating → handling.
-            //   TODO: If `S[channel][cellShape].looping`, return, else set it to true.
-            //   TODO: Infinitely:
-            //     TODO: If there are no handlers or sensors, return (and set `looping` to `false`).
-            //     TODO: If we are under our time budget, wait until time-per-step ms have expired.
-            //     TODO: If we have too many packets, wait until we have enough, being notified via `S[channel].waitingOnSteps`.
-            //     TODO: If there are no handlers or sensors, return (and set `looping` to `false`).
-            //     TODO: If the main handler shape, call `onValues` of all sensors to get data (for all loops). If not the main, don't have feedback at all.
-            //     TODO: Ensure that the nextPacket is replaced with a new one and is only accessible to us.
-            //     TODO: nextPacket.handle()
-            //   TODO: Be called when there are new handlers or sensors.
+            async static handleLoop(channel, cellShape) {
+                const dst = S[channel][cellShape]
+                if (dst.looping) return;  else dst.looping = true
+                while (true) {
+                    // TODO: If we are under our time budget, wait until time-per-step ms have expired.
+                    // TODO: If we have too many packets (> E.maxSimultaneousPackets), wait until we have enough, being notified via `S[channel].waitingSinceTooManySteps`.
+                    // Pause if no destinations, or no sources & no data to send.
+                    if (!dst.handlers.length || !S[channel].sensors.length && !dst.nextPacket.cells) return dst.looping = false
+                    // Get sensor data.
+                    const mainHandler = S[channel].mainHandler && S[channel].mainHandler.cellShape+'' === cellShape+'' ? S[channel].mainHandler : null
+                    if (mainHandler)
+                        for (let s of S[channel].sensors)
+                            await s.onValues(s)
+                    // TODO: Ensure that the nextPacket is replaced with a new one and is only accessible to us.
+                    // TODO: nextPacket.handle(mainHandler)
+                }
+                // TODO: Be called when there are new handlers or sensors or sensor data.
+            }
         },
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
-        namedData: A(function namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E.namedData.hasher }) {
+        _namedData: A(function namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._namedData.hasher }) {
             assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
             assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
             assert(typeof user == 'string' || Array.isArray(user))
@@ -157,14 +194,14 @@ export default (function(exports) {
                         // Data.
                         const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
                         for (let s = srcStart, d = start + nameSize; s < srcEnd; ++s, ++d) dst[d] = src[s]
-                        E.namedData.fill(dst, start + nameSize, valuesPerCell, dataSize)
+                        E._namedData.fill(dst, start + nameSize, valuesPerCell, dataSize)
                     }
                     return dstOffset + cells * (nameSize + dataSize) // Return the next `dstOffset`.
                 },
                 unname(src, srcOffset, dst) { // named → flat; `named` is consumed.
                     for (let i = 0; i < cells; ++i) { // Extract data from the whole cell.
                         const start = srcOffset + i * (nameSize + dataSize)
-                        E.namedData.unfill(src, start + nameSize, valuesPerCell, dataSize)
+                        E._namedData.unfill(src, start + nameSize, valuesPerCell, dataSize)
                         const dstStart = i * valuesPerCell, dstEnd = Math.min(dstStart + valuesPerCell, dst.length)
                         for (let s = start + nameSize, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
                     }
@@ -179,17 +216,17 @@ Prepares to go between flat number arrays and named ones.
 The result is \`{ name(src, dst, dstOffset)→dstOffset, unname(src, srcOffset, dst)→srcOffset }\`. \`name\` goes from flat to named, \`unname\` reverses this.
 
 Main parameters, in the one object that serves as arguments:
-- \`name\`: describes this interface to handlers, such as with a string. See \`.namedData.hasher\`.
+- \`name\`: describes this interface to handlers, such as with a string. See \`._namedData.hasher\`.
 - \`values\`: how many flat numbers there will be.
 
 Extra parameters:
 - \`reward = 0\`: can be a function that will be called without arguments to get the cell's reward.
 - \`user = 'self'\`: describes the current user/source/machine to handlers, mainly for when the sensor network encompasses multiple devices across the Internet.
-- \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`.namedData.fill\`.
+- \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._namedData.fill\`.
 - \`nameSize = 64\`: each cell is \`nameSize + dataSize\`.
 - \`namePartSize = 16\`: the \`name\` can have many parts, and this determines how many parts there are.
 - \`dataSize = 64\`: data in a cell.
-- \`hasher = .namedData.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
+- \`hasher = ._namedData.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
 `,
             tests() {
                 const F32 = Float32Array
@@ -198,7 +235,7 @@ Extra parameters:
                     [
                         new F32([0, 0.96, -0.5, -0.25, 0, 0.5, 0, 0.96, 0.25, 0.5, 0.5, 0]),
                         test(
-                            opts => (E.namedData(opts).name(new Float32Array([-.5, -.25, .25, .5]), r1, 0), r1.map(round)),
+                            opts => (E._namedData(opts).name(new Float32Array([-.5, -.25, .25, .5]), r1, 0), r1.map(round)),
                             { name:'z', values:4, emptyValues:1, dataSize:4, nameSize:2, namePartSize:1 },
                         ),
                     ],
@@ -210,7 +247,7 @@ Extra parameters:
                     const src = new F32(n), dst = new F32(n)
                     for (let i=0; i < n; ++i) src[i] = Math.random() * 2 - 1
                     const opts = { name:'matters not', values:n, dataSize:64, nameSize:64, namePartSize:16 }
-                    const namer = E.namedData(opts)
+                    const namer = E._namedData(opts)
                     const cells = new F32(namer.cells * (64+64))
                     namer.name(src, cells, 0), namer.unname(cells, 0, dst)
                     return [src.map(round), dst.map(round)]
@@ -254,9 +291,9 @@ Extra parameters:
                             }
                             numbers[p * partSize + i] = x
                         }
-                        E.namedData.fill(numbers, p * partSize, part.length, partSize)
+                        E._namedData.fill(numbers, p * partSize, part.length, partSize)
                     }
-                    E.namedData.fill(numbers, 0, end, numbers.length)
+                    E._namedData.fill(numbers, 0, end, numbers.length)
                     return numbers
                 }
             }, {
@@ -279,14 +316,14 @@ The result takes \`dataStart, dataEnd, dataLen\` (for filling function values) a
 
 Increases sensitivity to variations, by fractally folding available values onto free space via \`x → 1-2*abs(x)\`.
 
-Even if your AI model can only accept and return ±1 bits, it can still use the Sensor Network by having lots of free space (\`emptyValues\` in \`.namedData\`).`,
+Even if your AI model can only accept and return ±1 bits, it can still use the Sensor Network by having lots of free space (\`emptyValues\` in \`._namedData\`).`,
             }),
             unfill: A(function unfill(dst, offset, haveNumbers, needNumbers) {
                 if (haveNumbers >= needNumbers || !haveNumbers) return
                 for (let i = offset + needNumbers - haveNumbers - 1; i >= offset; --i)
                     dst[i] = Math.sign(dst[i]) * Math.abs(dst[i + haveNumbers] - 1) * .5
                 return dst
-            }, { docs:`Reverses \`.namedData.fill\`, enhancing low-frequency numbers with best guesses from high-frequency numbers.
+            }, { docs:`Reverses \`._namedData.fill\`, enhancing low-frequency numbers with best guesses from high-frequency numbers.
 
 Makes only the sign matter for low-frequency numbers.` }),
         }),

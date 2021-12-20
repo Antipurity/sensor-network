@@ -163,7 +163,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - ⋯ `.constructor({ channel=null, priority=0, noFeedback=true, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`.
                 - ⋯ `dataSize` is how many data numbers each cell can hold, `nameSize` is how many numbers the cell is identified with, split into `namePartSize`-sized blocks. First name then data; the first name part is used for the reward (always the first number) and the user ID, the rest are taken up be senders' string hashes and numbers.
-                - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], feedback: null|Float32Array, feedbackIsWritable: bool)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
+                - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
             - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders accumulated, avg per step.)
         - ⋯ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `runTests` method.
             - ⋯ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
