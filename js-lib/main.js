@@ -37,7 +37,9 @@ export default (function(exports) {
             //   TODO: If `onValues` is not `null`, `S[channel].sensors.push(this)`.
             // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
             //   TODO: ...How do we do this, exactly?...
-            //     (Using `S[channel][cellShape].nextPacket.data(point, error, callback, noFeedback)`.)
+            //     (Enumerating all shapes, and naming into all via `E._namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._namedData.hasher }).name(src, dst, dstOffset)`. Caching un/namers on the sensor object.)
+            //     (Using `S[channel][cellShape].nextPacket.data(sensor, point, error, noFeedback)`.)
+            // TODO: `._gotFeedback(data, error, feedback, fbOffset)`
             // TODO: `.deinit()`
             // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the sender is no longer needed (else, set `onValues` to `null`).
         }, {}),
@@ -63,10 +65,10 @@ export default (function(exports) {
                     // sensor → accumulator:
                     cells: 0,
                     sensorNeedsFeedback: false,
+                    sensor: [], // Sensor
                     sensorData: [], // Owns f32a (Float32Array), given to `.data(…)`.
                     sensorError: [], // Owns f32a (Float32Array), given to `.data(…)`.
                     sensorIndices: [], // ints
-                    sensorCallbacks: [], // function(data, error, feedback, fbOffset)
                     // accumulator → handler:
                     data: null, // Owned f32a.
                     error: null, // Owned f32a.
@@ -76,23 +78,23 @@ export default (function(exports) {
                     feedback: null, // null | owned f32a.
                 })
             }
-            data(point, error, callback, noFeedback) {
-                // `point` is a named Float32Array of named cells, and this function takes ownership of it.
-                // `error` is its error (max abs(true - measurement) - 1) or null.
-                // `callback` is a function, from `point` (owned) & `allFeedback` (not owned) & `fbOffset` (int).
+            data(sensor, point, error, noFeedback) {
+                // `sensor` is a `E.Sensor` with `._gotFeedback(…)`, from `point` (owned) & `allFeedback` (not owned) & `fbOffset` (int).
                 //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
                 //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
+                // `point` is a named Float32Array of named cells, and this function takes ownership of it.
+                // `error` is its error (max abs(true - measurement) - 1) or null.
                 // `noFeedback`: bool. If true, `callback` is still called, possibly even with non-null `allFeedback`.
                 assert(point.length instanceof Float32Array, "Data must be float32")
                 assert(point.length % this.cellSize === 0, "Data must be divided into cells")
                 assert(error == null || error instanceof Float32Array, "Error must be null or float32")
                 assert(error == null || point.length === error.length, "Error must be per-data-point")
                 if (!noFeedback) this.sensorNeedsFeedback = true
+                this.sensor.push(sensor)
                 this.sensorData.push(point)
                 if (error)
                     (this.sensorError || (this.sensorError = []))[this.sensorError.length-1] = error
                 this.sensorIndices.push(this.cells)
-                this.sensorCallbacks.push(callback)
                 this.cells += point.length / this.cellSize | 0
             }
             static allocF32(len) { return new Float32Array(len) }
@@ -141,8 +143,8 @@ export default (function(exports) {
                     while (T.accumulatorCallbacks.length)
                         T.accumulatorCallbacks.pop().call(undefined, T.feedback, T.cellShape, T.accumulatorExtras.pop())
                     // Sensors.
-                    while (T.sensorCallbacks.length)
-                        T.sensorCallbacks.pop().call(undefined, T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize)
+                    while (T.sensor.length)
+                        T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize)
                 } finally {
                     // Self-reporting.
                     --ch.stepsNow
@@ -176,7 +178,7 @@ export default (function(exports) {
             }
         },
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
-        _namedData: A(function namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._namedData.hasher }) {
+        _namedData: A(function _namedData({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._namedData.hasher }) {
             assert(typeof reward == 'number' && reward >= -1 && reward <= 1 || typeof reward == 'function')
             assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
             assert(typeof user == 'string' || Array.isArray(user))
