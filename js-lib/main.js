@@ -186,7 +186,7 @@ export default (function(exports) {
 - \`pause()\`, \`resume()\``,
         }),
         Handler: A(class Handler {
-            constructor({ onValues, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
+            constructor({ onValues, dataSize=64, nameSize=64, namePartSize=16, noFeedback=false, priority=0, channel='' }) {
                 assert(typeof onValues == 'function', "Handlers must have listeners")
                 assertCounts('', dataSize, nameSize, namePartSize)
                 assert(namePartSize < nameSize && nameSize % namePartSize === 0, 'Cell name must consist of an integer number of parts')
@@ -223,7 +223,23 @@ export default (function(exports) {
                 this.paused = false
             }
         }, {
-            docs:``, // TODO:
+            docs:`Given data, gives feedback: human or AI model.
+
+- \`constructor({ onValues, dataSize=64, nameSize=64, namePartSize=16, noFeedback=false, priority=0, channel='' })\`
+    - \`onValues(data, error, cellShape, writeFeedback, feedback)\`: process.
+        - \`error\` and \`feedback\` can be \`null\`s.
+        - If \`writeFeedback\`, write something to \`feedback\`, else read \`feedback\`.
+        - At any time, there is only one *main* handler, and only that can write feedback.
+    - Cell sizes:
+        - \`dataSize\`: numbers in the data segment.
+        - \`nameSize\`: numbers in the cell-ID segment.
+            - \`namePartSize\`: divides \`nameSize\` into parts. Each string in a name takes up a whole part.
+    - Extra flexibility:
+        - \`noFeedback\`: can't provide feedback if \`true\`, only observe it.
+        - \`priority\`: the highest-priority handler without \`noFeedback\` will be the *main* handler, and give feedback.
+        - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
+
+- \`pause()\`, \`resume()\``,
         }),
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
@@ -334,7 +350,7 @@ export default (function(exports) {
                         T.feedback = _Packet.allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
                     else
                         T.feedback = null
-                    await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
+                    if (mainHandler) await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
                     let tmp
                     for (let h of dst.handlers)
                         if (typeof h.onValues == 'function') {
@@ -388,7 +404,7 @@ export default (function(exports) {
             const namePartCount = nameSize / namePartSize | 0
             const hasherMaker = hasher(name, namePartCount-1, namePartSize)
             // Values are distributed evenly per-cell, to maximize the benefit of fractal-folding.
-            //   (The last cell may end up with less values than others. This slight inefficiency is worth the consistency.)
+            //   (The last cell may end up with less values than others. This slight inefficiency is made worth by the consistency.)
             const cells = Math.ceil((emptyValues + values) / dataSize), valuesPerCell = Math.ceil(values / cells)
             // (This re-hashes the user for each new sensor.)
             const userHasher = hasher(user, 1, namePartSize-1)(0, namePartSize-1, namePartSize-1)
