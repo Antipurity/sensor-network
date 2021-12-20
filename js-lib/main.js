@@ -75,7 +75,7 @@ export default (function(exports) {
         }, {}), // TODO: Docs.
         Accumulator: A(class Accumulator {
             constructor({ onValues=null, onFeedback=null, priority=0, channel='' }) {
-                assert(typeof priority == 'number')
+                assert(typeof priority == 'number' && priority === priority)
                 assert(onValues == null || typeof onValues == 'function')
                 assert(onFeedback == null || typeof onFeedback == 'function')
                 assert(onValues || onFeedback, "Why have an accumulator if it does nothing")
@@ -88,9 +88,17 @@ export default (function(exports) {
                 }).resume()
                 // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the accumulator is no longer needed (else, set `onValues` to `null`).
             }
-            // TODO: `.pause()`, which removes it from channels. (Note that packets that are already sent may still call functions.)
-            // TODO: `.resume()`.
-            //   TODO: `E._state(this.channel).accumulators.push(this)`, and sort by priority.
+            pause() {
+                if (this.paused) return
+                E._state(this.channel).accumulators = E._state(this.channel).accumulators.filter(v => v !== this)
+                this.paused = true
+            }
+            resume() {
+                if (!this.paused) return
+                E._state(this.channel).accumulators.push(this)
+                E._state(this.channel).accumulators.sort((a,b) => b.priority - a.priority)
+                this.paused = false
+            }
         }, {}), // TODO: Docs.
         Handler: A(class Handler {
             constructor({ onValues=null, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
