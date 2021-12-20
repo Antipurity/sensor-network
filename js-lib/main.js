@@ -44,6 +44,7 @@ export default (function(exports) {
                 assert(hasher === undefined || typeof hasher == 'function')
                 Object.assign(this, {
                     paused: true,
+                    reward: 0,
                     name,
                     values,
                     onValues,
@@ -52,8 +53,7 @@ export default (function(exports) {
                     user,
                     emptyValues,
                     hasher,
-                    reward,
-                    dataNamers: Object.create(null), // cellShape → _dataNamer({ reward, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher })
+                    dataNamers: Object.create(null), // cellShape → _dataNamer({ user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher })
                     nameSize: 0,
                     namePartSize: 0,
                     dataSize: 0,
@@ -61,17 +61,27 @@ export default (function(exports) {
                 }).resume()
                 // TODO: For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed.
             }
-            // TODO: `.send(values: Float32Array|null, error: Float32Array|null, reward=0) -> Promise<Float32Array|null>`: send data, receive feedback, once, to all handler shapes. (Reward is not fed back.)
-            //   TODO: ...How do we do this, exactly?...
-            //     (Enumerating all shapes, and naming into all via `E._dataNamer({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }).name(src, dst, dstOffset)`. Caching un/namers on the sensor object.)
-            //     (Using `S[channel].shaped[cellShape].nextPacket.data(sensor, point, error, this.noFeedback)`.)
+            send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
+                // Name+send to all handler shapes.
+                const ch = E._state(this.channel)
+                for (let cellShape of ch.cellShapes) {
+                    const dst = ch.shaped[cellShape]
+                    if (!dst.handlers.length) continue
+                    const namer = this._namer(cellShape)
+                    const flatV = _Packet.allocF32(namer.namedSize)
+                    const flatE = error ? _Packet.allocF32(namer.namedSize) : null
+                    namer.name(values, flatV, 0, reward)
+                    flatE && namer.name(error, flatE, 0, reward, -1.)
+                    dst.nextPacket.data(this, flatV, flatE, this.noFeedback)
+                }
+            }
             _gotFeedback(data, error, feedback, fbOffset, cellShape) {
                 // Fulfill the promise of `.send`.
                 if (feedback && !this.noFeedback) {
-                    const flat = _Packet.allocF32(this.values)
-                    this._namer(cellShape).unname(feedback, fbOffset, flat)
-                    this.feedbackCallbacks.shift()(flat)
-                    _Packet.deallocF32(flat)
+                    const flatV = _Packet.allocF32(this.values)
+                    this._namer(cellShape).unname(feedback, fbOffset, flatV)
+                    this.feedbackCallbacks.shift()(flatV)
+                    _Packet.deallocF32(flatV)
                 } else
                     this.feedbackCallbacks.shift()(null)
                 _Packet.deallocF32(data), _Packet.deallocF32(error)
@@ -312,7 +322,7 @@ export default (function(exports) {
             }
         },
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
-        _dataNamer: A(function _dataNamer({ reward=0, user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }) {
+        _dataNamer: A(function _dataNamer({ user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }) {
             assertCounts('', nameSize, namePartSize, dataSize)
             assert(namePartSize < nameSize && nameSize % namePartSize === 0, 'Cell name must consist of an integer number of parts')
             const namePartCount = nameSize / namePartSize | 0
@@ -325,20 +335,20 @@ export default (function(exports) {
             const nameHashers = new Array(cells).fill().map((_,i) => hasherMaker(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values))
             return {
                 cells,
+                namedSize: cells * valuesPerCell,
                 cellShape: [1, namePartSize-1, nameSize - namePartSize, dataSize], // [reward=1, user, name, data]
-                name(src, dst, dstOffset) { // flat → named
+                name(src, dst, dstOffset, reward = 0, skipNonData = null) { // flat → named
+                    assert(reward >= -1 && reward <= 1)
                     for (let i = 0; i < cells; ++i) { // Fill out the whole cell.
                         const start = dstOffset + i * (nameSize + dataSize)
-                        // Reward.
-                        if (typeof reward == 'function') {
-                            const r = reward()
-                            assert(r >= -1 && r <= 1)
-                            dst[start] = r
-                        } else dst[start] = reward
-                        // User.
-                        userHasher(dst, start + 1)
-                        // Name.
-                        nameHashers[i](dst, start + namePartSize)
+                        if (skipNonData == null) {
+                            // Reward.
+                            dst[start] = reward
+                            // User.
+                            userHasher(dst, start + 1)
+                            // Name.
+                            nameHashers[i](dst, start + namePartSize)
+                        } else dst.fill(skipNonData, start, start + nameSize)
                         // Data.
                         const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
                         for (let s = srcStart, d = start + nameSize; s < srcEnd; ++s, ++d) dst[d] = src[s]
@@ -361,14 +371,13 @@ export default (function(exports) {
 
 Prepares to go between flat number arrays and named ones.
 
-The result is \`{ name(src, dst, dstOffset)→dstOffset, unname(src, srcOffset, dst)→srcOffset }\`. \`name\` goes from flat to named, \`unname\` reverses this.
+The result is \`{ name(src, dst, dstOffset, reward=0, skipNonData=null)→dstOffset, unname(src, srcOffset, dst)→srcOffset }\`. \`name\` goes from flat to named, \`unname\` reverses this.
 
 Main parameters, in the one object that serves as arguments:
 - \`name\`: describes this interface to handlers, such as with a string. See \`._dataNamer.hasher\`.
 - \`values\`: how many flat numbers there will be.
 
 Extra parameters:
-- \`reward = 0\`: can be a function that will be called without arguments to get the cell's reward.
 - \`user = 'self'\`: describes the current user/source/machine to handlers, mainly for when the sensor network encompasses multiple devices across the Internet.
 - \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._dataNamer.fill\`.
 - \`nameSize = 64\`: each cell is \`nameSize + dataSize\`.
@@ -476,8 +485,6 @@ Even if your AI model can only accept and return ±1 bits, it can still use the 
 Makes only the sign matter for low-frequency numbers.` }),
         }),
     })
-    // TODO: All these must be in `E`, so that save/load can be aware of them.
-    //   ...Then again, would we ever really use save/load for non-interface things? I don't think so, right?
     function test(func, ...args) {
         try { return func(...args) }
         catch (err) { return err instanceof Error ? [err.message, err.stack] : err }
