@@ -310,9 +310,12 @@ export default (function(exports) {
                     // Accumulators.
                     for (let a of ch.accumulators)
                         if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined) // TODO: Run all promises in parallel!
+                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? a.onValues(T.data, T.error, T.cellShape) : undefined)
                             T.accumulatorCallback.push(a.onFeedback)
                         }
+                    for (let i = 0; i < T.accumulatorExtra.length; ++i)
+                        if (T.accumulatorExtra[i] instanceof Promise)
+                            T.accumulatorExtra[i] = await T.accumulatorExtra[i]
                     // Handlers.
                     if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
                         T.feedback = _Packet.allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
@@ -320,9 +323,13 @@ export default (function(exports) {
                         T.feedback = null
                     //   What does "no feedback" when sending a data piece do? Should it turn off whole-feedback?
                     await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
+                    let tmp
                     for (let h of dst.handlers)
-                        if (typeof h.onValues == 'function')
-                            await h.onValues(T.data, T.error, T.cellShape, false, T.feedback) // TODO: Run all promises in parallel!
+                        if (typeof h.onValues == 'function') {
+                            const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
+                            if (r instanceof Promise) (tmp || (tmp = [])).push(r)
+                        }
+                    if (r) await Promise.all(tmp)
                     // Accumulators.
                     while (T.accumulatorCallbacks.length)
                         T.accumulatorCallbacks.pop().call(undefined, T.feedback, T.cellShape, T.accumulatorExtras.pop())
@@ -339,6 +346,7 @@ export default (function(exports) {
             async static handleLoop(channel, cellShape) {
                 const ch = S[channel], dst = ch.shaped[cellShape]
                 if (dst.looping) return;  else dst.looping = true
+                const tmp = []
                 while (true) {
                     const start = performance.now(), end = start + dst.msPerStep[1]
                     // Don't do too much at once.
@@ -350,7 +358,8 @@ export default (function(exports) {
                     const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
                     if (mainHandler)
                         for (let s of ch.sensors)
-                            await s.onValues(s) // TODO: Run all these in parallel!
+                            tmp.push(s.onValues(s))
+                    await Promise.all(tmp), tmp.length = 0
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = new _Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
