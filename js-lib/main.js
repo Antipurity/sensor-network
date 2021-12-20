@@ -67,7 +67,7 @@ export default (function(exports) {
             //     (Using `S[channel].shaped[cellShape].nextPacket.data(sensor, point, error, this.noFeedback)`.)
             // TODO: `._gotFeedback(data, error, feedback, fbOffset)`
             //   TODO: Fulfill the promise first returned from `send`: `this.feedbackCallbacks.shift()(feedback.subarray(fbOffset, fbOffset + data.length))`.
-            //   TODO: Dealloc data & error.
+            //   TODO: Dealloc data & error via `_Packet.deallocF32(?)`.
             pause() {
                 if (this.paused) return
                 E._state(this.channel).sensors = E._state(this.channel).sensors.filter(v => v !== this)
@@ -111,8 +111,12 @@ export default (function(exports) {
             }
         }, {}), // TODO: Docs.
         Handler: A(class Handler {
-            constructor({ onValues=null, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
-                // TODO: Assert.
+            constructor({ onValues, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16, priority=0, channel='' }) {
+                assert(typeof onValues == 'function', "Handlers must have listeners")
+                assertCounts('', dataSize, nameSize, namePartSize)
+                assert(namePartSize < nameSize && nameSize % namePartSize === 0, 'Cell name must consist of an integer number of parts')
+                assert(typeof priority == 'number')
+                assert(typeof channel == 'number')
                 Object.assign(this, {
                     paused: true,
                     cellShape: [1, namePartSize-1, nameSize-namePartSize, dataSize],

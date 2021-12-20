@@ -163,7 +163,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.pause()`, `.resume()`
             - ⋯ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed.
         - ⋯ `.Handler`:
-            - ⋯ `.constructor({ channel=null, priority=0, noFeedback=false, onValues=null, dataSize=64, nameSize=64, namePartSize=16 })`.
+            - ⋯ `.constructor({ onValues, channel=null, priority=0, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16 })`.
                 - ❌ The options object can be modified after construction.
                 - ⋯ `dataSize` is how many data numbers each cell can hold, `nameSize` is how many numbers the cell is identified with, split into `namePartSize`-sized blocks. First name then data; the first name part is used for the reward (always the first number) and the user ID, the rest are taken up be senders' string hashes and numbers.
                 - ⋯ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
