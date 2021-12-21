@@ -75,8 +75,8 @@ export default (function(exports) {
                         continue
                     }
                     const namer = this._namer(cellShape)
-                    const flatV = _Packet.allocF32(namer.namedSize)
-                    const flatE = error ? _Packet.allocF32(namer.namedSize) : null
+                    const flatV = E._allocF32(namer.namedSize)
+                    const flatE = error ? E._allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
                     dst.nextPacket.data(this, flatV, flatE, this.noFeedback)
@@ -90,13 +90,13 @@ export default (function(exports) {
             _gotFeedback(data, error, feedback, fbOffset, cellShape) {
                 // Fulfill the promise of `.send`.
                 if (feedback && !this.noFeedback) {
-                    const flatV = _Packet.allocF32(this.values)
+                    const flatV = E._allocF32(this.values)
                     this._namer(cellShape).unname(feedback, fbOffset, flatV)
                     this.feedbackCallbacks.shift()(flatV)
-                    _Packet.deallocF32(flatV)
+                    E._deallocF32(flatV)
                 } else
                     this.feedbackCallbacks.shift()(null)
-                _Packet.deallocF32(data), _Packet.deallocF32(error)
+                E._deallocF32(data), E._deallocF32(error)
             }
             _namer(cellShape) {
                 const s = ''+cellShape
@@ -276,6 +276,14 @@ export default (function(exports) {
                 }, ch.cellShapes.push(cellShape)
             return ch.shaped[cellShape]
         },
+        _allocF32(len) { return _Packet._f32 && _Packet._f32[len] && _Packet._f32[len].length ? _Packet._f32[len].pop() : new Float32Array(len) },
+        _deallocF32(a) {
+            // Makes `E._allocF32` re-use `a` when allocating an array of the same size. Usually.
+            if (!_Packet._f32) _Packet._f32 = Object.create(null)
+            if (!_Packet._f32[len]) _Packet._f32[len] = []
+            if (_Packet._f32[len].length > 16) return
+            _Packet._f32[len].push(a)
+        },
         _Packet: class _Packet {
             constructor(channel, cellShape) {
                 Object.assign(this, {
@@ -317,14 +325,6 @@ export default (function(exports) {
                 this.sensorIndices.push(this.cells)
                 this.cells += point.length / this.cellSize | 0
             }
-            static allocF32(len) { return _Packet._f32 && _Packet._f32[len] && _Packet._f32[len].length ? _Packet._f32[len].pop() : new Float32Array(len) }
-            static deallocF32(a) {
-                // Makes `E._Packet.allocF32` re-use `a` when allocating an array of the same size. Usually.
-                if (!_Packet._f32) _Packet._f32 = Object.create(null)
-                if (!_Packet._f32[len]) _Packet._f32[len] = []
-                if (_Packet._f32[len].length > 16) return
-                _Packet._f32[len].push(a)
-            }
             static updateMean(a, value, maxHorizon = 1000) {
                 const n1 = a[0], n2 = n1+1
                 a[0] = Math.min(n2, maxHorizon)
@@ -338,7 +338,7 @@ export default (function(exports) {
                 ++ch.stepsNow
                 try {
                     // Concat sensors into `.data` and `.error`.
-                    T.data = _Packet.allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : _Packet.allocF32(T.cells * T.cellSize)
+                    T.data = E._allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : E._allocF32(T.cells * T.cellSize)
                     for (let i = 0; i < T.sensorData.length; ++i) {
                         const at = T.sensorIndices[i] * T.cellSize
                         T.data.set(T.sensorData[i], at)
@@ -357,7 +357,7 @@ export default (function(exports) {
                         }
                     // Handlers.
                     if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
-                        T.feedback = _Packet.allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
+                        T.feedback = E._allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
                     else
                         T.feedback = null
                     if (mainHandler) await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
@@ -407,7 +407,43 @@ export default (function(exports) {
                 }
             }
         },
-        // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (all non-imported props are not saved, the rest form a transitive closure).)
+        meta:{
+            docs: A(function docs() {
+                // TODO: ...How to go over the whole `E`, but only the non-`_` parts?...
+                // TODO: ...How to format everything, exactly?...
+                //   TODO: Special-case `E.meta`: "???".
+            }, {
+                docs:`Returns the Markdown string containing all the sensor network's documentation.`,
+            }),
+            tests: A(async function tests() {
+                const reports = []
+                await walk(E)
+                return reports.length ? reports : null
+                async function walk(x) {
+                    if (!x || typeof x != 'object' && typeof x != 'function') return
+                    if (typeof x.tests == 'function' && x.tests !== tests) {
+                        try {
+                            for (let [name, a, b] of await x.tests())
+                                if (''+a !== ''+b)
+                                    reports.push([name, a, b])
+                        } catch (err) { reports.push(err instanceof Error ? ['—', err.message, err.stack] : ['—', ''+x.tests]) }
+                    }
+                    return Promise.all(Object.values(x).map(walk))
+                }
+            }, {
+                docs:`Asynchronously, runs all sensor-network tests, and returns \`null\` if OK, else an array of \`[failedTestName, value1, value2]\`.
+
+If not \`null\`, things are very wrong.
+
+Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2], …]\`. String representations must match exactly to succeed.`,
+            }),
+            // TODO: `bench`, async, which... uh... what do bench funcs do anyway?...
+            // TODO: `save(f)`:
+            //   TODO: Recursively put `save`d dependencies before the last bracket wherever `f` defines `save: […dependencies]`, else return `''+f` locally.
+            //   TODO: Turn classes into funcs first, which just forward args to the constructor, and replace the `extends <…>` part with the correct SN class.
+            //   (To load, `new Function('sn', result)(sn)`.)
+            //   ("Though including all dependencies with every entry point may seem to lead to code duplication, having too many entry points is impossible to learn, so SN inherently discourages the situation from getting too out of hand.")
+        },
         _dataNamer: A(function _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) {
             assertCounts('', rewardParts, userParts, nameParts, partSize)
             const hasherMaker = hasher(name, nameParts, partSize)
@@ -485,28 +521,28 @@ Extra parameters:
                 const buf = new F32(12)
                 return [
                     [
+                        "Fractal-filling values",
                         new F32([0,  0.97,  -0.5, -0.25, 0, 0.5,     0,  0.97,  0.25, 0.5, 0.5, 0]),
                         get(
                             new F32([-.5, -.25, .25, .5]),
                             { name:'z', values:4, emptyValues:1, dataSize:4, partSize:1, userParts:1, nameParts:1 },
                         ),
-                        "Fractal-filling values",
                     ],
                     [
+                        "Fractal-filling names",
                         new F32([0, 0, 0, 0,    .13, .74, -.48, .04,    -.5, -.25, .25, .5]),
                         get(
                             new F32([-.5, -.25, .25, .5]),
                             { name:[.13], values:4, dataSize:4, partSize:4, userParts:1, nameParts:1 },
                         ),
-                        "Fractal-filling names",
                     ],
                     [
+                        "Filling names, but there are too many strings so `.14` numbers move in",
                         new F32([0,  -.91, .14,  .5, .25, 0]),
                         get(
                             new F32([.5, .25, 0]),
                             { name:['a', 'b', 'c', .14], values:3, dataSize:3, partSize:1, userParts:1, nameParts:2 },
                         ),
-                        "Filling names, but there are too many strings so `.14` numbers move in",
                     ],
                     same(1023),
                     same(1024),
@@ -525,7 +561,7 @@ Extra parameters:
                     const namer = E._dataNamer(opts)
                     const cells = new F32(namer.cells * (16*(1+3)+64))
                     namer.name(src, cells, 0), namer.unname(cells, 0, dst)
-                    return [src.map(round), dst.map(round), "Name+unname for "+n]
+                    return ["Name+unname for "+n, src.map(round), dst.map(round)]
                 }
                 function round(x) { return Math.round(x*100) / 100 }
             },

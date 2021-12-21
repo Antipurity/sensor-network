@@ -9,8 +9,7 @@
 <body>
   <script type=module>
     import sn from './main.js'
-    const results = sn._dataNamer.tests()
-    console.log(results.map(([a,b]) => ''+a === ''+b ? 'OK' : ['unequal', a, b]))
+    sn.meta.tests().then(r => r || 'All tests are OK').then(console.log)
   </script>
 </body>
 </html>
