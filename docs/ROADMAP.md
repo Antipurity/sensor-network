@@ -174,14 +174,15 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
         - ✓ A function that runs all benchmarks, `.bench()`: traverses `sn` (not through prototypes) and calls every `bench` method.
             - ✓ Ability to log arbitrary metrics at arbitrary points, with the final report being the average metric per log.
-            - ⋯ Auto-save in `localStorage`, keyed by source-code-hash, only running no-results benchmarks or those explicitly requested. (Better to invalidate all dependents too, which is quite hard to do in JS.)
             - ⋯ Allow benchmarking in `test.html`.
-            - ⋯ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over █ minutes of running. Preferably with plots, from cell-count (1…256) to the metric: copy plotting code from Conceptual.
+                - ⋯ Auto-save in `localStorage`, keyed by source-code-hash, only running no-results benchmarks or those explicitly requested. (Better to invalidate all dependents too, which is quite hard to do in JS.)
+                - ⋯ Display each object's benchmark results in `<details>`, containing all per-metric plots (copy plotting code from Conceptual).
+            - ⋯ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over █ minutes of running.
         - ⋯ `.docs()`, which traverses `sn` and accumulates all `docs` strings into a Markdown string.
             - ⋯ Parents should become sections, into which their children belong.
             - ⋯ Make a table of contents at the top, with refs to the top at every section heading.
             - ⋯ Make `npm doc` import the library and call this and write its result to `docs/DOCS.md`.
-        - ⋯ Ability to de/serialize senders/accumulators/handlers, so that users can pick up power-ups at the press of a button. (Top-level is an array, where the last item is the actual object, and the rest are the function dependencies. JSON is fine.)
+        - ⋯ Ability to de/serialize sensors/accumulators/handlers, so that users can pick up power-ups at the press of a button.
             - ⋯ Some way to specify which parts are done in-extension and which are in-content-script and which are in-page-JS, here.
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files:
         - ⋯ `.Sensor`:

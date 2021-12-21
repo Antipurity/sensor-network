@@ -125,14 +125,16 @@ export default (function(exports) {
         - \`rewardName\`: the name of the currently-optimized task, in case accumulators want to change it and inform handlers.
         - \`userName\`: the name of the machine that sources data. Makes it possible to reliably distinguish sources.
         - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
-        - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default hashes strings in \`rewardName\`/\`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
+        - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default mainly hashes strings in \`rewardName\`/\`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
     - To change any of this, \`pause()\` and recreate.
 
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
     - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
+        - (Can use \`._allocF32(length)\` and fill that to reduce allocations via reuse.)
     - \`error\`: can be owned flat data, -1…1 \`Float32Array\` of length \`values\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
     - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Close enough.)
         - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
+    - (Result: \`feedback\` is NOT owned by you. Do NOT deallocate with \`._deallocF32(feedback)\`.)
 
 - \`pause()\`, \`resume()\``,
         }),
@@ -220,6 +222,7 @@ export default (function(exports) {
 
 - \`constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
     - \`onValues(data, error, cellShape, writeFeedback, feedback)\`: process.
+        - (\`data\` and \`error\` are not owned; do not write.)
         - \`error\` and \`feedback\` can be \`null\`s.
         - If \`writeFeedback\`, write something to \`feedback\`, else read \`feedback\`.
         - At any time, there is only one *main* handler, and only that can write feedback.
@@ -235,7 +238,30 @@ export default (function(exports) {
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
 
 - \`pause()\`, \`resume()\``,
-            // TODO: `bench()`, which creates a `1`-filling sensor and a `-1`-filling handler, with default params and 0…256 cells (so, that*64 values).
+            bench() { // TODO: Make `test.html` do `await sn.meta.bench()`. And run it.
+                const cellCounts = new Array(256).fill().map((_,i) => i)
+                return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
+                function river(cells) { // 1-filled data → -1-filled feedback
+                    const dataSize = 64
+                    const from = new Sensor({
+                        values: cells*dataSize,
+                        async onValues(sensor) {
+                            const data = E._allocF32(cells*dataSize)
+                            data.fill(1)
+                            const feedback = await sensor.send(data)
+                            feedback && feedback.fill(.5439828952837)
+                        },
+                    })
+                    const to = new Handler({
+                        dataSize,
+                        async onValues(data, error, cellShape, writeFeedback, feedback) {
+                            data.fill(.489018922485)
+                            if (writeFeedback) feedback.fill(-1)
+                        },
+                    })
+                    return function stop() { from.pause(), to.pause() }
+                }
+            },
         }),
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
@@ -382,7 +408,6 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
             static async handleLoop(channel, cellShape) {
                 const ch = S[channel], dst = ch.shaped[cellShape]
                 if (dst.looping) return;  else dst.looping = true
-                const tmp = []
                 while (true) {
                     const start = performance.now(), end = start + dst.msPerStep[1]
                     // Don't do too much at once.
@@ -394,8 +419,8 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
                     if (mainHandler)
                         for (let s of ch.sensors)
-                            tmp.push(s.onValues(s))
-                    await Promise.all(tmp), tmp.length = 0
+                            s.onValues(s)
+                    await Promise.resolve() // Wait a bit. If sensors are too slow, their data will have to wait until the next step.
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = new _Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
@@ -526,7 +551,11 @@ Those methods return objects (such as arrays) that contain start functions, whic
             }, {
                 docs:`Preserves closed-over dependencies, so that code can be loaded, via \`const [...funcs] = new Function('sn', result)(sensorNetwork)\`.
 
-Those dependencies do have to be explicitly preserved, such as via \`a => Object.assign(b => a+b, { save:{a} })\`.`,
+Those dependencies do have to be explicitly preserved, such as via \`a => Object.assign(b => a+b, { save:{a} })\`.
+
+Note that directly-referenced methods (\`{ f(){} }\`) have to be written out fully (\`{ f: function(){} }\`), and sensor-network dependencies should not be specified.
+
+Safe to save+load if \`.toString\` is not overriden by any dependency, though not safe to use the loaded functions.`,
                 tests() {
                     const fMaker = a => Object.assign(b => a+b, { save:{a} }), f = fMaker(13)
                     return [
