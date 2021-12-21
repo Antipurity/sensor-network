@@ -237,10 +237,6 @@ export default (function(exports) {
 - \`pause()\`, \`resume()\``,
             // TODO: `bench()`, which creates a `1`-filling sensor and a `-1`-filling handler, with default params and 0…256 cells (so, that*64 values).
         }),
-        // TODO: Report time-per-step in `_Packet.prototype.handle`.
-        // TODO: Have `E._memory()`, which only works in Chrome.
-        //   Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).
-        // TODO: Report memory-differential in `_Packet.prototype.handle`.
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
             if (!S[channel])
@@ -266,6 +262,11 @@ export default (function(exports) {
                 }, ch.cellShapes.push(cellShape)
             return ch.shaped[cellShape]
         },
+        _memory: A(function() { return performance.memory ? performance.memory.usedJSHeapSize : 0 }, {
+            docs:`Reports the size of the currently active segment of JS heap in bytes, or 0.
+
+Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).`,
+        }),
         _allocF32(len) { return _Packet._f32 && _Packet._f32[len] && _Packet._f32[len].length ? _Packet._f32[len].pop() : new Float32Array(len) },
         _deallocF32(a) {
             // Makes `E._allocF32` re-use `a` when allocating an array of the same size. Usually.
@@ -290,8 +291,8 @@ export default (function(exports) {
                     // accumulator → handler:
                     data: null, // Owned f32a.
                     error: null, // Owned f32a.
-                    accumulatorExtras: [], // ints
-                    accumulatorCallbacks: [], // function(feedback, cellShape, extra)
+                    accumulatorExtra: [], // ints
+                    accumulatorCallback: [], // function(feedback, cellShape, extra)
                     // handler → accumulator → sensor:
                     feedback: null, // null | owned f32a.
                 })
@@ -324,7 +325,7 @@ export default (function(exports) {
             }
             async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors
                 const T = this, ch = S[T.channel], dst = ch[T.cellShape]
-                const start = performance.now()
+                const start = performance.now(), startMemory = E._memory()
                 ++ch.stepsNow
                 try {
                     // Concat sensors into `.data` and `.error`.
@@ -359,14 +360,21 @@ export default (function(exports) {
                         }
                     if (r) await Promise.all(tmp)
                     // Accumulators.
-                    while (T.accumulatorCallbacks.length)
-                        T.accumulatorCallbacks.pop().call(undefined, T.feedback, T.cellShape, T.accumulatorExtras.pop())
+                    while (T.accumulatorCallback.length) {
+                        const f = T.accumulatorCallback.pop()
+                        if (typeof f == 'function') await f(T.feedback, T.cellShape, T.accumulatorExtra.pop())
+                    }
                     // Sensors.
                     while (T.sensor.length)
                         T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
+                    _Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                 } finally {
                     // Self-reporting.
                     --ch.stepsNow
+                    const duration = (dst.lastUsed = performance.now()) - start
+                    E.meta.metric('Step duration, ms', duration)
+                    E.meta.metric('Step memory, bytes', E._memory() - startMemory)
+                    E.meta.metric('Step processed data, values', T.cells * T.cellSize)
                     _Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
                 }
@@ -391,6 +399,9 @@ export default (function(exports) {
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = new _Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
+                    // Benchmark throughput if needed.
+                    E.meta.metric('Throughput, bytes/s', (_Packet._handledBytes || 0) / ((performance.now() - start) / 1000))
+                    _Packet._handledBytes = 0
                     // Don't do it too often.
                     if (performance.now() < end)
                         await new Promise(then => setTimeout(then, end - performance.now()))
@@ -493,11 +504,14 @@ Benchmarks are contained in \`.bench()\` near to code that they benchmark. Repor
 Those methods return objects (such as arrays) that contain start functions, which return stop functions.
 `,
             }),
-            // TODO: `save(f)`:
-            //   TODO: Recursively put `save`d dependencies before the last bracket wherever `f` defines `save: […dependencies]`, else return `''+f` locally.
-            //   TODO: Turn classes into funcs first, which just forward args to the constructor, and replace the `extends <…>` part with the correct SN class.
-            //   (To load, `new Function('sn', result)(sn)`.)
-            //   ("Though including all dependencies with every entry point may seem to lead to code duplication, having too many entry points is impossible to learn, so SN inherently discourages the situation from getting too out of hand.")
+            save: A(function save(f) {
+                // TODO: Recursively put `save`d dependencies before the last bracket wherever `f` defines `save: […dependencies]`, else return `''+f` locally.
+                // TODO: Turn classes into funcs first, which just forward args to the constructor, and replace the `extends <…>` part with the correct SN class.
+            }, {
+                docs:``, // TODO:
+                //   (To load, `new Function('sn', result)(sn)`.)
+                //   ("Though including all dependencies with every entry point may seem to lead to code duplication, having too many entry points is impossible to learn, so SN inherently discourages the situation from getting too out of hand.")
+            }),
         },
         _dataNamer: A(function _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) {
             assertCounts('', rewardParts, userParts, nameParts, partSize)
