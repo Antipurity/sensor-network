@@ -504,13 +504,39 @@ Benchmarks are contained in \`.bench()\` near to code that they benchmark. Repor
 Those methods return objects (such as arrays) that contain start functions, which return stop functions.
 `,
             }),
-            save: A(function save(f) {
-                // TODO: Recursively put `save`d dependencies before the last bracket wherever `f` defines `save: […dependencies]`, else return `''+f` locally.
-                // TODO: Turn classes into funcs first, which just forward args to the constructor, and replace the `extends <…>` part with the correct SN class.
+            save: A(function save(...fs) {
+                const entry = fs.map((_,i) => '_mainF'+i)
+                const dependencies = Object.create(null)
+                fs.forEach((f,i) => walk(entry[i], f))
+                const code = Object.keys(dependencies).map(k => `const ${k}=${dependencies[k]}`)
+                return code.join('\n') + `\nreturn [${entry}]`
+                function walk(k, v) {
+                    const s = typeof v == 'string' ? JSON.stringify(v) : ''+v
+                    if (typeof v == 'function' && s.slice(0,6) === 'class ') { // Bring classes into our `sn` fold.
+                        assert(v instanceof E.Sensor || v instanceof E.Accumulator || v instanceof E.Handler, "Unrecognized class prototype")
+                        const become = 'sn.' + (v instanceof E.Sensor ? 'Sensor' : v instanceof E.Accumulator ? 'Accumulator' : 'Handler')
+                        s = s.replace(/\s+extends\s+.+\s+{/, become)
+                    }
+                    const alreadyPresent = dependencies[k] !== undefined
+                    if (alreadyPresent) assert(dependencies[k] === s, "Same-name dependencies collide: "+k)
+                    dependencies[k] = s
+                    if (!alreadyPresent && v.save && typeof v.save == 'object')
+                        Object.keys(v.save).forEach(k => walk(k, v.save[k]))
+                }
             }, {
-                docs:``, // TODO:
-                //   (To load, `new Function('sn', result)(sn)`.)
-                //   ("Though including all dependencies with every entry point may seem to lead to code duplication, having too many entry points is impossible to learn, so SN inherently discourages the situation from getting too out of hand.")
+                docs:`Preserves closed-over dependencies, so that code can be loaded, via \`const [...funcs] = new Function('sn', result)(sensorNetwork)\`.
+
+Those dependencies do have to be explicitly preserved, such as via \`a => Object.assign(b => a+b, { save:{a} })\`.`,
+                tests() {
+                    const fMaker = a => Object.assign(b => a+b, { save:{a} }), f = fMaker(13)
+                    return [
+                        [
+                            "Save-and-load a simple function",
+                            42,
+                            new Function('sn', E.meta.save(f))(E)[0](29),
+                        ],
+                    ]
+                },
             }),
         },
         _dataNamer: A(function _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) {
