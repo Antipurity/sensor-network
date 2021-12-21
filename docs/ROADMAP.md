@@ -258,7 +258,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
 
-Doesn't sound too difficult. I've done a lot of this before.
+An attempt to make the playing field even for humans and AI, based on the best of the best considerations. An attempt to bring about fairness, even though nothing would let it happen. Straying from beaten paths only to make a better one that no one wants to travel, most likely. Only when humanity is swimming in compute can it be desirable. Toys in the meantime.
 
 ### Extension UI
 

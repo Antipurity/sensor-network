@@ -28,18 +28,19 @@ export default (function(exports) {
     //       looping: bool
     //       lastUsed: performance.now()
     //       msPerStep: [n, mean]
-    //       cellShape: [reward=1, user, name, data]
+    //       cellShape: [reward, user, name, data]
     //       handlers: Array<Handler>, sorted by priority.
     //       nextPacket: _Packet
 
     return A(E, {
         Sensor: A(class Sensor {
-            constructor({ name, values, onValues=null, channel='', noFeedback=false, user='self', emptyValues=0, hasher=undefined }) {
+            constructor({ name, values, onValues=null, channel='', noFeedback=false, rewardName=[], userName=[], emptyValues=0, hasher=undefined }) {
                 assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
                 assertCounts('Must have the value-count', values)
                 assert(onValues == null || typeof onValues == 'function')
                 assert(typeof channel == 'string')
-                assert(typeof user == 'string' || Array.isArray(user))
+                assert(typeof rewardName == 'string' || Array.isArray(rewardName))
+                assert(typeof userName == 'string' || Array.isArray(userName))
                 assertCounts('', emptyValues)
                 assert(hasher === undefined || typeof hasher == 'function')
                 Object.assign(this, {
@@ -50,11 +51,12 @@ export default (function(exports) {
                     onValues,
                     channel,
                     noFeedback: !!noFeedback,
-                    user,
+                    rewardName,
+                    userName,
                     emptyValues,
                     hasher,
-                    dataNamers: Object.create(null), // cellShape → _dataNamer({ user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher })
-                    nameSize: 0,
+                    dataNamers: Object.create(null), // cellShape → _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher })
+                    nameSize: 0, // TODO: Don't pass *these* in, but pass in partSize, rewardParts, userParts, nameParts.
                     namePartSize: 0,
                     dataSize: 0,
                     feedbackCallbacks: [], // A queue of promise-fulfilling callbacks. Very small, so an array is the fastest option.
@@ -122,7 +124,7 @@ export default (function(exports) {
         }, {
             docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
 
-- \`constructor({ name, values, onValues=null, channel='', noFeedback=false, user='self', emptyValues=0, hasher=undefined })\`
+- \`constructor({ name, values, onValues=null, channel='', noFeedback=false, rewardName=[], userName=[], emptyValues=0, hasher=undefined })\`
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
     - \`values\`: how many values each packet will have. To mitigate misalignment, try to stick to powers-of-2.
     - \`onValues(sensor)\`: the regularly-executed function that reports data, by calling \`sensor.send\` inside.
@@ -130,9 +132,10 @@ export default (function(exports) {
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
-        - \`user\`: the name of the machine that sources data. Makes it easy to distinguish sources.
+        - \`rewardName\`: the name of the currently-optimized task, in case accumulators want to change it and inform handlers.
+        - \`userName\`: the name of the machine that sources data. Makes it possible to reliably distinguish sources.
         - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
-        - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default hashes strings in \`user\`/\`name\` with MD5 and rescales bytes into -1…1.
+        - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default hashes strings in \`rewardName\`/\`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
     - To change any of this, \`pause()\` and recreate.
 
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
@@ -173,7 +176,7 @@ export default (function(exports) {
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
         - \`onValues(data, error, cellShape) → extra\`: can modify \`data\` and the optional \`error\` in-place.
-            - \`cellShape: [reward=1, user, name, data]\`
+            - \`cellShape: [reward, user, name, data]\`
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
             - Can return a promise.
         - \`onFeedback(feedback, cellShape, extra)\`: can modify \`feedback\` in-place.
@@ -186,15 +189,14 @@ export default (function(exports) {
 - \`pause()\`, \`resume()\``,
         }),
         Handler: A(class Handler {
-            constructor({ onValues, dataSize=64, nameSize=64, namePartSize=16, noFeedback=false, priority=0, channel='' }) {
+            constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' }) {
                 assert(typeof onValues == 'function', "Handlers must have listeners")
-                assertCounts('', dataSize, nameSize, namePartSize)
-                assert(namePartSize < nameSize && nameSize % namePartSize === 0, 'Cell name must consist of an integer number of parts')
+                assertCounts('', partSize, rewardParts, userParts, nameParts, dataSize)
                 assert(typeof priority == 'number')
                 assert(typeof channel == 'number')
                 Object.assign(this, {
                     paused: true,
-                    cellShape: [1, namePartSize-1, nameSize-namePartSize, dataSize],
+                    cellShape: [rewardParts * partSize, userParts * partSize, nameParts * partSize, dataSize],
                     onValues,
                     noFeedback: !!noFeedback,
                     priority,
@@ -225,15 +227,17 @@ export default (function(exports) {
         }, {
             docs:`Given data, gives feedback: human or AI model.
 
-- \`constructor({ onValues, dataSize=64, nameSize=64, namePartSize=16, noFeedback=false, priority=0, channel='' })\`
+- \`constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
     - \`onValues(data, error, cellShape, writeFeedback, feedback)\`: process.
         - \`error\` and \`feedback\` can be \`null\`s.
         - If \`writeFeedback\`, write something to \`feedback\`, else read \`feedback\`.
         - At any time, there is only one *main* handler, and only that can write feedback.
     - Cell sizes:
+        - \`partSize\`: how many numbers each part in the cell ID takes up, where each string in a name takes up a whole part:
+            - \`rewardParts\`
+            - \`userParts\`
+            - \`nameParts\`
         - \`dataSize\`: numbers in the data segment.
-        - \`nameSize\`: numbers in the cell-ID segment.
-            - \`namePartSize\`: divides \`nameSize\` into parts. Each string in a name takes up a whole part.
     - Extra flexibility:
         - \`noFeedback\`: can't provide feedback if \`true\`, only observe it.
         - \`priority\`: the highest-priority handler without \`noFeedback\` will be the *main* handler, and give feedback.
@@ -241,6 +245,7 @@ export default (function(exports) {
 
 - \`pause()\`, \`resume()\``,
         }),
+        // TODO: Allow 0-cells sensors to still receive feedback from handlers, mainly to query the main handler's cellShape. (So that send-over-Internet can work, and communicate cell shape to sensor machines before data is sent.)
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
             if (!S[channel])
@@ -397,49 +402,51 @@ export default (function(exports) {
                 }
             }
         },
-        // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (when a prop is in `self`, it is not `save`d unless instructed to, to save space while saving code).)
-        _dataNamer: A(function _dataNamer({ user='self', name, values, emptyValues=0, nameSize=64, namePartSize=16, dataSize=64, hasher=E._dataNamer.hasher }) {
-            assertCounts('', nameSize, namePartSize, dataSize)
-            assert(namePartSize < nameSize && nameSize % namePartSize === 0, 'Cell name must consist of an integer number of parts')
-            const namePartCount = nameSize / namePartSize | 0
-            const hasherMaker = hasher(name, namePartCount-1, namePartSize)
+        // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (all non-imported props are not saved, the rest form a transitive closure).)
+        _dataNamer: A(function _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) { // TODO: Update docs & users.
+            assertCounts('', rewardParts, userParts, nameParts, partSize)
+            const hasherMaker = hasher(name, nameParts, partSize)
             // Values are distributed evenly per-cell, to maximize the benefit of fractal-folding.
             //   (The last cell may end up with less values than others. This slight inefficiency is made worth by the consistency.)
             const cells = Math.ceil((emptyValues + values) / dataSize), valuesPerCell = Math.ceil(values / cells)
+            const cellSize = (rewardParts + userParts + nameParts) * partSize + dataSize
             // (This re-hashes the user for each new sensor.)
-            const userHasher = hasher(user, 1, namePartSize-1)(0, namePartSize-1, namePartSize-1)
+            const rewardHasher = hasher(rewardName, rewardParts, partSize)(0, rewardParts * partSize, rewardParts * partSize)
+            const userHasher = hasher(userName, userParts, partSize)(0, userParts * partSize, userParts * partSize)
             const nameHashers = new Array(cells).fill().map((_,i) => hasherMaker(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values))
             return {
                 cells,
-                namedSize: cells * valuesPerCell,
-                cellShape: [1, namePartSize-1, nameSize - namePartSize, dataSize], // [reward=1, user, name, data]
+                namedSize: cells * cellSize,
+                cellShape: [rewardParts * partSize, userParts * partSize, nameParts * partSize, dataSize], // [reward, user, name, data]
                 name(src, dst, dstOffset, reward = 0, skipNonData = null) { // flat → named
                     assert(reward >= -1 && reward <= 1)
                     for (let i = 0; i < cells; ++i) { // Fill out the whole cell.
-                        const start = dstOffset + i * (nameSize + dataSize)
+                        const start = dstOffset + i * cellSize, dataStart = start + (rewardParts + userParts + nameParts) * partSize
                         if (skipNonData == null) {
-                            // Reward.
-                            dst[start] = reward
+                            // Reward name.
+                            rewardHasher(dst, start)
                             // User.
-                            userHasher(dst, start + 1)
+                            userHasher(dst, start + rewardParts * partSize)
                             // Name.
-                            nameHashers[i](dst, start + namePartSize)
-                        } else dst.fill(skipNonData, start, start + nameSize)
+                            nameHashers[i](dst, start + (rewardParts + userParts) * partSize)
+                            // Reward, overwriting the beginning.
+                            dst[start] = reward
+                        } else dst.fill(skipNonData, start, dataStart)
                         // Data.
                         const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
-                        for (let s = srcStart, d = start + nameSize; s < srcEnd; ++s, ++d) dst[d] = src[s]
-                        E._dataNamer.fill(dst, start + nameSize, valuesPerCell, dataSize)
+                        for (let s = srcStart, d = dataStart; s < srcEnd; ++s, ++d) dst[d] = src[s]
+                        E._dataNamer.fill(dst, dataStart, valuesPerCell, dataSize)
                     }
-                    return dstOffset + cells * (nameSize + dataSize) // Return the next `dstOffset`.
+                    return dstOffset + cells * cellSize // Return the next `dstOffset`.
                 },
                 unname(src, srcOffset, dst) { // named → flat; `named` is consumed.
                     for (let i = 0; i < cells; ++i) { // Extract data from the whole cell.
-                        const start = srcOffset + i * (nameSize + dataSize)
-                        E._dataNamer.unfill(src, start + nameSize, valuesPerCell, dataSize)
+                        const start = srcOffset + i * cellSize, dataStart = start + (rewardParts + userParts + nameParts) * partSize
+                        E._dataNamer.unfill(src, dataStart, valuesPerCell, dataSize)
                         const dstStart = i * valuesPerCell, dstEnd = Math.min(dstStart + valuesPerCell, dst.length)
-                        for (let s = start + nameSize, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
+                        for (let s = dataStart, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
                     }
-                    return srcOffset + cells * (nameSize + dataSize) // Return the next `srcOffset`.
+                    return srcOffset + cells * cellSize // Return the next `srcOffset`.
                 },
             }
         }, {
@@ -454,14 +461,15 @@ Main parameters, in the one object that serves as arguments:
 - \`values\`: how many flat numbers there will be.
 
 Extra parameters:
-- \`user = 'self'\`: describes the current user/source/machine to handlers, mainly for when the sensor network encompasses multiple devices across the Internet.
+- TODO: { rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }
+- \`userName = []\`: describes the current user/source/machine to handlers, mainly for when the sensor network encompasses multiple devices across the Internet.
 - \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._dataNamer.fill\`.
 - \`nameSize = 64\`: each cell is \`nameSize + dataSize\`.
 - \`namePartSize = 16\`: the \`name\` can have many parts, and this determines how many parts there are.
 - \`dataSize = 64\`: data in a cell.
 - \`hasher = ._dataNamer.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
 `,
-            tests() {
+            tests() { // TODO: Re-test, since user-naming changed.
                 const F32 = Float32Array
                 const r1 = new F32(12)
                 return [
@@ -469,7 +477,7 @@ Extra parameters:
                         new F32([0, 0.96, -0.5, -0.25, 0, 0.5, 0, 0.96, 0.25, 0.5, 0.5, 0]),
                         test(
                             opts => (E._dataNamer(opts).name(new Float32Array([-.5, -.25, .25, .5]), r1, 0), r1.map(round)),
-                            { name:'z', values:4, emptyValues:1, dataSize:4, nameSize:2, namePartSize:1 },
+                            { name:'z', values:4, emptyValues:1, dataSize:4, nameSize:2, namePartSize:1 }, // TODO: Re-do these tests, with `nameParts` and `partSize`.
                         ),
                     ],
                     same(1023),
@@ -479,7 +487,7 @@ Extra parameters:
                 function same(n) { // Assert x = unname(name(x))
                     const src = new F32(n), dst = new F32(n)
                     for (let i=0; i < n; ++i) src[i] = Math.random() * 2 - 1
-                    const opts = { name:'matters not', values:n, dataSize:64, nameSize:64, namePartSize:16 }
+                    const opts = { name:'matters not', values:n, dataSize:64, nameSize:64, namePartSize:16 } // TODO: Re-do these tests, with `nameParts` and `partSize`.
                     const namer = E._dataNamer(opts)
                     const cells = new F32(namer.cells * (64+64))
                     namer.name(src, cells, 0), namer.unname(cells, 0, dst)
@@ -513,6 +521,7 @@ Extra parameters:
                 }
                 function fillParts(numbers, ...args) {
                     const end = Math.min(parts.length, partCount)
+                    // TODO: If we had too many strings and no numbers, move some originally-number-only cell to replace the last string-cell. (Need to remember the first-non-string index.)
                     for (let p = 0; p < end; ++p) {
                         const part = parts[p]
                         for (let i = 0; i < part.length; ++i) {
@@ -526,7 +535,9 @@ Extra parameters:
                         }
                         E._dataNamer.fill(numbers, p * partSize, part.length, partSize)
                     }
-                    E._dataNamer.fill(numbers, 0, end, numbers.length)
+                    if (parts.length) E._dataNamer.fill(numbers, 0, end, numbers.length)
+                    else numbers.fill(0, numbers.length)
+                    parts.length = 0
                     return numbers
                 }
             }, {
