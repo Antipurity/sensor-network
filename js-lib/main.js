@@ -434,12 +434,47 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
             }
         },
         meta:{
-            docs: A(function docs() {
-                // TODO: ...How to go over the whole `E`, but only the non-`_` parts?...
-                // TODO: ...How to format everything, exactly?...
-                //   TODO: Special-case `E.meta`: "???".
+            docs: A(function docs() { // TODO: Test this, by making `npm doc` output its result to a file, and viewing it.
+                const markdown = []
+                const hierarchy = walk(E, 0)
+                markdown.unshift('# Table of contents', 'Sensor network:', ...TOC(hierarchy))
+                return markdown.join('\n\n')
+                function walk(x, depth, path = ['sn']) {
+                    if (!x || typeof x != 'object' && typeof x != 'function') return
+                    let haveOwnDocs = false
+                    if (typeof x.docs == 'string' || typeof x.docs == 'function' && x.docs !== docs) {
+                        const md = typeof x.docs == 'function' ? x.docs() : x.docs
+                        const sign = funcSignature(x)
+                        markdown.push('#'.repeat(depth+1))
+                        if (sign) markdown.push("```js\n" + path.join('.') + "\n" + sign + "\n```")
+                        markdown.push(md)
+                        haveOwnDocs = true
+                    }
+                    let result = null
+                    for (let k of Object.keys(x)) {
+                        if (k[0] === '_') continue
+                        const sub = walk(x[k], depth+1, [...path, k])
+                        if (sub) (result || (result = Object.create(null)))[k] = sub
+                    }
+                    return result || haveOwnDocs
+                }
+                function funcSignature(f) { // A bit janky. Watch out for breakage.
+                    if (typeof f != 'function' || f.slice(0,6) === 'class ') return
+                    const i = f.indexOf(' {')
+                    return i<0 ? undefined : f.slice(0, i-1)
+                }
+                function TOC(x, depth = 0, into = []) {
+                    if (x && x !== true)
+                        for (let k of Object.keys(x)) {
+                            into.push('    '.repeat(depth) + `- [${k}](#${k.toLowerCase().replace(/^[a-zA-Z0-9]/g, '_')})`)
+                            TOC(x[k], depth+1, into)
+                        }
+                    return into
+                }
             }, {
-                docs:`Returns the Markdown string containing all the sensor network's documentation.`,
+                docs:`Returns the Markdown string containing all the sensor network's documentation.
+
+Objects need to define \`.docs\` to be either a string or a function to that.`,
             }),
             tests: A(async function tests() {
                 const reports = []
