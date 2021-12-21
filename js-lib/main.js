@@ -381,7 +381,7 @@ export default (function(exports) {
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
                 }
             }
-            async static handleLoop(channel, cellShape) {
+            static async handleLoop(channel, cellShape) {
                 const ch = S[channel], dst = ch.shaped[cellShape]
                 if (dst.looping) return;  else dst.looping = true
                 const tmp = []
@@ -480,22 +480,44 @@ Extra parameters:
 - \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._dataNamer.fill\`.
 - \`hasher = ._dataNamer.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
 `,
-            tests() { // TODO: Re-test, since user-naming changed.
+            tests() {
                 const F32 = Float32Array
-                const r1 = new F32(12)
+                const buf = new F32(12)
                 return [
                     [
-                        new F32([0, 0.96, -0.5, -0.25, 0, 0.5, 0, 0.96, 0.25, 0.5, 0.5, 0]),
-                        test(
-                            opts => (E._dataNamer(opts).name(new Float32Array([-.5, -.25, .25, .5]), r1, 0), r1.map(round)),
+                        new F32([0,  0.97,  -0.5, -0.25, 0, 0.5,     0,  0.97,  0.25, 0.5, 0.5, 0]),
+                        get(
+                            new F32([-.5, -.25, .25, .5]),
                             { name:'z', values:4, emptyValues:1, dataSize:4, partSize:1, userParts:1, nameParts:1 },
                         ),
+                        "Fractal-filling values",
                     ],
-                    // TODO: Test what happens when the name has too many strings, and only 1 number part.
+                    [
+                        new F32([0, 0, 0, 0,    .13, .74, -.48, .04,    -.5, -.25, .25, .5]),
+                        get(
+                            new F32([-.5, -.25, .25, .5]),
+                            { name:[.13], values:4, dataSize:4, partSize:4, userParts:1, nameParts:1 },
+                        ),
+                        "Fractal-filling names",
+                    ],
+                    [
+                        new F32([0,  -.91, .14,  .5, .25, 0]),
+                        get(
+                            new F32([.5, .25, 0]),
+                            { name:['a', 'b', 'c', .14], values:3, dataSize:3, partSize:1, userParts:1, nameParts:2 },
+                        ),
+                        "Filling names, but there are too many strings so `.14` numbers move in",
+                    ],
                     same(1023),
                     same(1024),
                     same(1025),
                 ]
+                function get(f32, opts) {
+                    return test(
+                        opts => { const nm = E._dataNamer(opts);  return nm.name(f32, buf, 0), buf.subarray(0, nm.namedSize).map(round) },
+                        opts,
+                    )
+                }
                 function same(n) { // Assert x = unname(name(x))
                     const src = new F32(n), dst = new F32(n)
                     for (let i=0; i < n; ++i) src[i] = Math.random() * 2 - 1
@@ -503,9 +525,9 @@ Extra parameters:
                     const namer = E._dataNamer(opts)
                     const cells = new F32(namer.cells * (16*(1+3)+64))
                     namer.name(src, cells, 0), namer.unname(cells, 0, dst)
-                    return [src.map(round), dst.map(round)]
+                    return [src.map(round), dst.map(round), "Name+unname for "+n]
                 }
-                function round(x) { return (x*100|0) / 100 }
+                function round(x) { return Math.round(x*100) / 100 }
             },
             hasher: A(function hasher(name, partCount, partSize) {
                 let parts = [], lastPartWasNumber = false, firstNumberIndex = null
@@ -533,11 +555,12 @@ Extra parameters:
                     } else error("Unrecognized name part:", part)
                 }
                 function fillParts(numbers, ...args) {
-                    const end = Math.min(parts.length, partCount)
+                    let ps = parts.slice()
+                    const end = Math.min(ps.length, partCount)
                     if (firstNumberIndex != null && firstNumberIndex >= end) // Ensure that numbers are always included.
-                        parts.splice(end-1, firstNumberIndex - (end-1))
+                        ps.splice(end-1, firstNumberIndex - (end-1))
                     for (let p = 0; p < end; ++p) {
-                        const part = parts[p]
+                        const part = ps[p]
                         for (let i = 0; i < part.length; ++i) {
                             let x = part[i]
                             if (typeof x == 'function') {
@@ -549,9 +572,8 @@ Extra parameters:
                         }
                         E._dataNamer.fill(numbers, p * partSize, part.length, partSize)
                     }
-                    if (parts.length) E._dataNamer.fill(numbers, 0, end, numbers.length)
+                    if (ps.length) E._dataNamer.fill(numbers, 0, end * partSize, numbers.length)
                     else numbers.fill(0, numbers.length)
-                    parts.length = 0
                     return numbers
                 }
             }, {

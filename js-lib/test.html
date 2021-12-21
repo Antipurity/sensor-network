@@ -9,7 +9,8 @@
 <body>
   <script type=module>
     import sn from './main.js'
-    console.log(sn._namedData.tests())
+    const results = sn._dataNamer.tests()
+    console.log(results.map(([a,b]) => ''+a === ''+b ? 'OK' : ['unequal', a, b]))
   </script>
 </body>
 </html>
