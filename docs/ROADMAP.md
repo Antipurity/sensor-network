@@ -170,11 +170,12 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.pause()`, `.resume()`
             - ✓ On each sent message, wait a bit before handling messages, to make inputs more coherent.
                 - ⋯ Benchmark the coherence, as the cell-count accumulated at each step.
-        - ⋯ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `runTests` method.
-            - ⋯ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
-        - ⋯ A function that runs all benchmarks, `.bench()`, once, and accumulates results in localStorage or indexedDB or file, keyed by path (erasing previous results if the source-code hash doesn't match): traverses `sn` (not through prototypes) and calls every `runBench` method, which return promises of numbers or arrays of numbers.
+        - ✓ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `tests` method.
+            - ✓ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
+        - ⋯ A function that runs all benchmarks, `.bench()`: traverses `sn` (not through prototypes) and calls every `bench` method.
+            - ⋯ Auto-save in `localStorage`, keyed by source-code-hash, only running no-results benchmarks or those explicitly requested.
             - ⋯ Ability to log arbitrary metrics at arbitrary points, with the final report being the average metric per log.
-            - ⋯ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over 2 minutes of running. Preferably with plots, from cell-count (1…256) to the metric: copy plotting code from Conceptual.
+            - ⋯ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over █ minutes of running. Preferably with plots, from cell-count (1…256) to the metric: copy plotting code from Conceptual.
         - ⋯ `.docs()`, which traverses `sn` and accumulates all `docs` strings into a Markdown string.
             - ⋯ Parents should become sections, into which their children belong.
             - ⋯ Make a table of contents at the top, with refs to the top at every section heading.

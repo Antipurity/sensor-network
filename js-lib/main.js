@@ -14,23 +14,8 @@ export default (function(exports) {
     //   Safari on iOS       10.3
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
-
-    const S = Object.create(null)
-    // [channel]:
-    //   sensors: Array<Sensor>, but only those that are called automatically.
-    //   accumulators: Array<Accumulator>, sorted by priority.
-    //   mainHandler: Handler, with max priority.
-    //   cellShapes: Array<String>, for enumeration.
-    //   stepsNow: int
-    //   waitingSinceTooManySteps: Array<function>, called when a step is finished.
-    //   shaped:
-    //     [handlerShapeAsString]:
-    //       looping: bool
-    //       lastUsed: performance.now()
-    //       msPerStep: [n, mean]
-    //       cellShape: [reward, user, name, data]
-    //       handlers: Array<Handler>, sorted by priority.
-    //       nextPacket: _Packet
+    const S = Object.create(null) // See `E._state(channel, cellShape)`.
+    let currentBenchmark = null
 
     return A(E, {
         Sensor: A(class Sensor {
@@ -250,18 +235,23 @@ export default (function(exports) {
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
 
 - \`pause()\`, \`resume()\``,
+            // TODO: `bench()`, which creates a `1`-filling sensor and a `-1`-filling handler, with default params and 0…256 cells (so, that*64 values).
         }),
+        // TODO: Report time-per-step in `_Packet.prototype.handle`.
+        // TODO: Have `E._memory()`, which only works in Chrome.
+        //   Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).
+        // TODO: Report memory-differential in `_Packet.prototype.handle`.
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
             if (!S[channel])
                 S[channel] = Object.assign(Object.create(null), {
-                    sensors: [],
-                    accumulators: [],
-                    mainHandler: null,
-                    cellShapes: [],
-                    stepsNow: 0,
-                    waitingSinceTooManySteps: [],
-                    shaped: Object.create(null),
+                    sensors: [], // Array<Sensor>, but only those that are called automatically.
+                    accumulators: [], // Array<Accumulator>, sorted by priority.
+                    mainHandler: null, // Handler, with max priority.
+                    stepsNow: 0, // int
+                    waitingSinceTooManySteps: [], // Array<function>, called when a step is finished.
+                    cellShapes: [], // Array<String>, for enumeration of `.shaped` just below.
+                    shaped: Object.create(null), // { [handlerShapeAsString] }
                 })
             const ch = S[channel]
             if (cellShape == null) return ch
@@ -269,9 +259,9 @@ export default (function(exports) {
                 ch.shaped[cellShape] = {
                     looping: false,
                     lastUsed: performance.now(),
-                    msPerStep: [0,0],
-                    cellShape: cellShape,
-                    handlers: [],
+                    msPerStep: [0,0], // [n, mean]
+                    cellShape: cellShape, // [reward, user, name, data]
+                    handlers: [], // Array<Handler>, sorted by priority.
                     nextPacket: new _Packet(channel, cellShape),
                 }, ch.cellShapes.push(cellShape)
             return ch.shaped[cellShape]
@@ -426,7 +416,7 @@ export default (function(exports) {
                             for (let [name, a, b] of await x.tests())
                                 if (''+a !== ''+b)
                                     reports.push([name, a, b])
-                        } catch (err) { reports.push(err instanceof Error ? ['—', err.message, err.stack] : ['—', ''+x.tests]) }
+                        } catch (err) { reports.push(err instanceof Error ? [x.name || '—', err.message, err.stack] : [x.name || '—', !x || typeof x != 'object' && typeof x != 'function' ? ''+x : '<Error>']) }
                     }
                     return Promise.all(Object.values(x).map(walk))
                 }
@@ -437,7 +427,72 @@ If not \`null\`, things are very wrong.
 
 Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2], …]\`. String representations must match exactly to succeed.`,
             }),
-            // TODO: `bench`, async, which... uh... what do bench funcs do anyway?...
+            metric: A(function (key, value) {
+                if (typeof value == 'string')
+                    currentBenchmark[key] = value
+                else if (typeof value == 'number')
+                    !Array.isArray(currentBenchmark[key]) && (currentBenchmark[key] = []), currentBenchmark[key].push(value)
+                else
+                    error("what this: " + value)
+            }, {
+                docs:`Call this with a string key & string/number value to display/measure something, if \`E.meta.bench\` controls execution.`,
+            }),
+            bench: A(async function bench(secPerBenchmark = 30, benchFilter=null, onBenchFinished=null) {
+                const result = Object.create(null)
+                if (typeof onBenchFinished != 'function') onBenchFinished = (obj, id, got, progress) => {
+                    // got[key] → result[name][key][id]
+                    const name = obj.name || '—'
+                    const into = result[name] || (result[name] = Object.create(null))
+                    for (let key of Object.keys(got)) {
+                        let v = got[key]
+                        if (Array.isArray(v)) // Calc the mean.
+                            v = v.reduce((a,b) => a+b) / v.length
+                        into[key][id] = v
+                    }
+                }
+                const bench = []
+                const benchIndex = []
+                const benchOwner = []
+                walk(E) // Get benchmarks.
+                for (let i = 0; i < bench.length; ++i) { // Benchmark.
+                    currentBenchmark = Object.create(null)
+                    if (typeof benchFilter != 'function' || benchFilter(bench[i]))
+                        try {
+                            const stop = bench[i].call()
+                            await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
+                            onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, i / (bench.length-1))
+                        } catch (err) { console.error(err) }
+                }
+                currentBenchmark = null
+                return Object.keys(result).length ? result : undefined
+                function walk(x) {
+                    if (!x || typeof x != 'object' && typeof x != 'function') return
+                    if (typeof x.bench == 'function' && x.bench !== bench) {
+                        const bs = x.bench()
+                        for (let id of Object.keys(bs)) {
+                            bench.push(bs[id])
+                            benchIndex.push(id)
+                            benchOwner.push(x)
+                        }
+                    }
+                    return Object.values(x).map(walk)
+                }
+            }, {
+                docs:`Asynchronously & very slowly, runs all sensor-network benchmarks.
+
+Can \`JSON.stringify\` the result: \`{ …, .name:{ …, key:[...values], … }, … }\`.
+
+Arguments:
+- \`secPerBenchmark = 30\`: how many seconds each step should last.
+- \`benchFilter(obj) = null\`: return \`true\` to process a benchmark, else skip it.
+- \`onBenchFinished(obj, id, { …, key: String | [...values], …}, progress) = null\`: the optional callback. If specified, there is no result.
+
+Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).
+
+Benchmarks are contained in \`.bench()\` near to code that they benchmark. Report metrics via \`E.meta.metric(key, value)\`.
+Those methods return objects (such as arrays) that contain start functions, which return stop functions.
+`,
+            }),
             // TODO: `save(f)`:
             //   TODO: Recursively put `save`d dependencies before the last bracket wherever `f` defines `save: […dependencies]`, else return `''+f` locally.
             //   TODO: Turn classes into funcs first, which just forward args to the constructor, and replace the `extends <…>` part with the correct SN class.
