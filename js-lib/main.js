@@ -434,15 +434,15 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
             }
         },
         meta:{
-            docs: A(function docs() { // TODO: Test this, by making `npm doc` output its result to a file, and viewing it.
+            docs: A(function docs() {
                 const markdown = []
                 const hierarchy = walk(E, 0)
-                markdown.unshift('# Table of contents', 'Sensor network:', ...TOC(hierarchy))
+                markdown.unshift(`<a id=toc></a>` + '\n# Table of contents', 'Sensor network:', ...TOC(hierarchy))
                 return markdown.filter(x => x).join('\n\n')
                 function walk(x, depth, path = 'sn') {
                     if (!x || typeof x != 'object' && typeof x != 'function') return
                     let haveOwnDocs = false
-                    const backpatchHeading = markdown.push('#'.repeat(depth+1) + " `" + path + "`")-1
+                    const backpatchHeading = markdown.push(`<a id="${toLinkHash(path)}"></a>` + "\n" + '#'.repeat(depth+1) + " `" + path + "`[ ↑](#toc)")-1
                     if (typeof x.docs == 'string' || typeof x.docs == 'function' && x.docs !== docs) {
                         const md = typeof x.docs == 'function' ? x.docs() : x.docs
                         const sign = funcSignature(x)
@@ -460,11 +460,11 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     if (!result && !haveOwnDocs) markdown[backpatchHeading] = ''
                     return result || haveOwnDocs
                 }
-                function toLinkHash(s) { return s.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_') }
+                function toLinkHash(s) { return s.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-') }
                 function funcSignature(f) { // A bit janky. Watch out for breakage.
                     if (typeof f != 'function' || String(f).slice(0,6) === 'class ') return
                     const i = String(f).indexOf(' {')
-                    return i<0 ? undefined : String(f).slice(0, i-1)
+                    return i<0 ? undefined : String(f).slice(0, i)
                 }
                 function TOC(x, depth = 0, into = []) {
                     if (x && x !== true)
@@ -495,13 +495,13 @@ Objects need to define \`.docs\` to be either a string or a function to that.`,
                     return Promise.all(Object.values(x).map(walk))
                 }
             }, {
-                docs:`Asynchronously, runs all sensor-network tests, and returns \`null\` if OK, else an array of \`[failedTestName, value1, value2]\`.
+                docs:`Runs all sensor-network tests, and returns \`null\` if OK, else an array of \`[failedTestName, value1, value2]\`.
 
 If not \`null\`, things are very wrong.
 
 Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2], …]\`. String representations must match exactly to succeed.`,
             }),
-            metric: A(function (key, value) {
+            metric: A(function metric(key, value) {
                 if (typeof value == 'string')
                     currentBenchmark[key] = value
                 else if (typeof value == 'number')
@@ -552,7 +552,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                     return Object.values(x).map(walk)
                 }
             }, {
-                docs:`Asynchronously & very slowly, runs all sensor-network benchmarks.
+                docs:`Very slowly, runs all sensor-network benchmarks.
 
 Can \`JSON.stringify\` the result: \`{ …, .name:{ …, key:[...values], … }, … }\`.
 
