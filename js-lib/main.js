@@ -438,35 +438,38 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 const markdown = []
                 const hierarchy = walk(E, 0)
                 markdown.unshift('# Table of contents', 'Sensor network:', ...TOC(hierarchy))
-                return markdown.join('\n\n')
-                function walk(x, depth, path = ['sn']) {
+                return markdown.filter(x => x).join('\n\n')
+                function walk(x, depth, path = 'sn') {
                     if (!x || typeof x != 'object' && typeof x != 'function') return
                     let haveOwnDocs = false
+                    const backpatchHeading = markdown.push('#'.repeat(depth+1) + " `" + path + "`")-1
                     if (typeof x.docs == 'string' || typeof x.docs == 'function' && x.docs !== docs) {
                         const md = typeof x.docs == 'function' ? x.docs() : x.docs
                         const sign = funcSignature(x)
-                        markdown.push('#'.repeat(depth+1))
-                        if (sign) markdown.push("```js\n" + path.join('.') + "\n" + sign + "\n```")
+                        if (sign) markdown.push("```js\n" + sign + "\n```")
                         markdown.push(md)
                         haveOwnDocs = true
                     }
                     let result = null
                     for (let k of Object.keys(x)) {
                         if (k[0] === '_') continue
-                        const sub = walk(x[k], depth+1, [...path, k])
-                        if (sub) (result || (result = Object.create(null)))[k] = sub
+                        const subPath = path + "." + k
+                        const sub = walk(x[k], depth+1, subPath)
+                        if (sub) (result || (result = Object.create(null)))[subPath] = sub
                     }
+                    if (!result && !haveOwnDocs) markdown[backpatchHeading] = ''
                     return result || haveOwnDocs
                 }
+                function toLinkHash(s) { return s.toLowerCase().replace(/[^a-zA-Z0-9]/g, '_') }
                 function funcSignature(f) { // A bit janky. Watch out for breakage.
-                    if (typeof f != 'function' || f.slice(0,6) === 'class ') return
-                    const i = f.indexOf(' {')
-                    return i<0 ? undefined : f.slice(0, i-1)
+                    if (typeof f != 'function' || String(f).slice(0,6) === 'class ') return
+                    const i = String(f).indexOf(' {')
+                    return i<0 ? undefined : String(f).slice(0, i-1)
                 }
                 function TOC(x, depth = 0, into = []) {
                     if (x && x !== true)
                         for (let k of Object.keys(x)) {
-                            into.push('    '.repeat(depth) + `- [${k}](#${k.toLowerCase().replace(/^[a-zA-Z0-9]/g, '_')})`)
+                            into.push('    '.repeat(depth) + `- [${k}](#${toLinkHash(k)})`)
                             TOC(x[k], depth+1, into)
                         }
                     return into
