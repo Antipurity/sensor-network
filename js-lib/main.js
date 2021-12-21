@@ -56,15 +56,16 @@ export default (function(exports) {
                     emptyValues,
                     hasher,
                     dataNamers: Object.create(null), // cellShape → _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher })
-                    nameSize: 0, // TODO: Don't pass *these* in, but pass in partSize, rewardParts, userParts, nameParts.
-                    namePartSize: 0,
-                    dataSize: 0,
+                    partSize: 0,
+                    rewardParts: 0,
+                    userParts: 0,
+                    nameParts: 0,
                     feedbackCallbacks: [], // A queue of promise-fulfilling callbacks. Very small, so an array is the fastest option.
                 }).resume()
             }
             send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
                 // Name+send to all handler shapes.
-                // Also forget about shapes that are more than 60 seconds old.
+                // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
                 const ch = E._state(this.channel)
                 const removed = Sensor._removed || (Sensor._removed = new Set)
                 for (let cellShape of ch.cellShapes) {
@@ -77,7 +78,7 @@ export default (function(exports) {
                     const flatV = _Packet.allocF32(namer.namedSize)
                     const flatE = error ? _Packet.allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
-                    flatE && namer.name(error, flatE, 0, reward, -1.)
+                    flatE && namer.name(error, flatE, 0, 0, -1.)
                     dst.nextPacket.data(this, flatV, flatE, this.noFeedback)
                 }
                 if (removed.size) {
@@ -100,10 +101,14 @@ export default (function(exports) {
             _namer(cellShape) {
                 const s = ''+cellShape
                 if (!this.dataNames[s]) {
-                    this.nameSize = this.cellShape[0] + this.cellShape[1] + this.cellShape[2]
-                    this.namePartSize = this.cellShape[0] + this.cellShape[1]
-                    this.dataSize = this.cellShape[3]
+                    // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
+                    const metaSize = this.cellShape[0] + this.cellShape[1] + this.cellShape[2]
+                    this.partSize = gcd(gcd(this.cellShape[0], this.cellShape[1]), this.cellShape[2])
+                    this.rewardParts = this.cellShape[0] / this.partSize | 0
+                    this.userParts = this.cellShape[0] / this.partSize | 0
+                    this.nameParts = this.cellShape[0] / this.partSize | 0
                     this.dataNames[s] = E._dataNamer(this)
+                    function gcd(a,b) { return !b ? a : gcd(b, a % b) }
                 }
                 return this.dataNames[s]
             }
@@ -141,7 +146,8 @@ export default (function(exports) {
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
     - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
     - \`error\`: can be owned flat data, -1…1 \`Float32Array\` of length \`values\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
-    - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money?)
+    - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Close enough.)
+        - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
 
 - \`pause()\`, \`resume()\``,
         }),
@@ -245,7 +251,6 @@ export default (function(exports) {
 
 - \`pause()\`, \`resume()\``,
         }),
-        // TODO: Allow 0-cells sensors to still receive feedback from handlers, mainly to query the main handler's cellShape. (So that send-over-Internet can work, and communicate cell shape to sensor machines before data is sent.)
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
             if (!S[channel])
@@ -386,7 +391,7 @@ export default (function(exports) {
                     while (ch.stepsNow > E.maxSimultaneousPackets)
                         await new Promise(then => ch.waitingSinceTooManySteps.push(then))
                     // Pause if no destinations, or no sources & no data to send.
-                    if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.cells) return dst.looping = false
+                    if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length) return dst.looping = false
                     // Get sensor data.
                     const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
                     if (mainHandler)
@@ -403,7 +408,7 @@ export default (function(exports) {
             }
         },
         // (TODO: Also have `self` with `tests` and `bench` and `docs`, and `save` and `load` (all non-imported props are not saved, the rest form a transitive closure).)
-        _dataNamer: A(function _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) { // TODO: Update docs & users.
+        _dataNamer: A(function _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) {
             assertCounts('', rewardParts, userParts, nameParts, partSize)
             const hasherMaker = hasher(name, nameParts, partSize)
             // Values are distributed evenly per-cell, to maximize the benefit of fractal-folding.
@@ -419,7 +424,6 @@ export default (function(exports) {
                 namedSize: cells * cellSize,
                 cellShape: [rewardParts * partSize, userParts * partSize, nameParts * partSize, dataSize], // [reward, user, name, data]
                 name(src, dst, dstOffset, reward = 0, skipNonData = null) { // flat → named
-                    assert(reward >= -1 && reward <= 1)
                     for (let i = 0; i < cells; ++i) { // Fill out the whole cell.
                         const start = dstOffset + i * cellSize, dataStart = start + (rewardParts + userParts + nameParts) * partSize
                         if (skipNonData == null) {
@@ -430,7 +434,9 @@ export default (function(exports) {
                             // Name.
                             nameHashers[i](dst, start + (rewardParts + userParts) * partSize)
                             // Reward, overwriting the beginning.
-                            dst[start] = reward
+                            const r = typeof reward == 'number' ? reward : reward(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values)
+                            assert(r >= -1 && r <= 1)
+                            dst[start] = r
                         } else dst.fill(skipNonData, start, dataStart)
                         // Data.
                         const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
@@ -454,19 +460,24 @@ export default (function(exports) {
 
 Prepares to go between flat number arrays and named ones.
 
-The result is \`{ name(src, dst, dstOffset, reward=0, skipNonData=null)→dstOffset, unname(src, srcOffset, dst)→srcOffset }\`. \`name\` goes from flat to named, \`unname\` reverses this.
+- The result is \`{ name(src, dst, dstOffset, reward=0, skipNonData=null)→dstOffset, unname(src, srcOffset, dst)→srcOffset }\`. \`name\` goes from flat to named, \`unname\` reverses this.
+    - \`reward\` is either a -1…1 number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
+    - If \`skipNonData\` is a -1…1 number, the non-data portions of each cell are replaced with that. (This is for "naming" data error with "no errors here".)
 
 Main parameters, in the one object that serves as arguments:
 - \`name\`: describes this interface to handlers, such as with a string. See \`._dataNamer.hasher\`.
 - \`values\`: how many flat numbers there will be.
 
 Extra parameters:
-- TODO: { rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }
+- \`rewardName = []\`: what each cell's first number represents, for if you have extra tasks that you want your AI model to learn, such as next-frame prediction.
 - \`userName = []\`: describes the current user/source/machine to handlers, mainly for when the sensor network encompasses multiple devices across the Internet.
+- Cell sizes:
+    - \`partSize = 8\`:
+        - \`rewardParts = 0\`
+        - \`userParts = 1\`
+        - \`nameParts = 3\`
+    - \`dataSize = 64\`
 - \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._dataNamer.fill\`.
-- \`nameSize = 64\`: each cell is \`nameSize + dataSize\`.
-- \`namePartSize = 16\`: the \`name\` can have many parts, and this determines how many parts there are.
-- \`dataSize = 64\`: data in a cell.
 - \`hasher = ._dataNamer.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
 `,
             tests() { // TODO: Re-test, since user-naming changed.
@@ -477,9 +488,10 @@ Extra parameters:
                         new F32([0, 0.96, -0.5, -0.25, 0, 0.5, 0, 0.96, 0.25, 0.5, 0.5, 0]),
                         test(
                             opts => (E._dataNamer(opts).name(new Float32Array([-.5, -.25, .25, .5]), r1, 0), r1.map(round)),
-                            { name:'z', values:4, emptyValues:1, dataSize:4, nameSize:2, namePartSize:1 }, // TODO: Re-do these tests, with `nameParts` and `partSize`.
+                            { name:'z', values:4, emptyValues:1, dataSize:4, partSize:1, userParts:1, nameParts:1 },
                         ),
                     ],
+                    // TODO: Test what happens when the name has too many strings, and only 1 number part.
                     same(1023),
                     same(1024),
                     same(1025),
@@ -487,16 +499,16 @@ Extra parameters:
                 function same(n) { // Assert x = unname(name(x))
                     const src = new F32(n), dst = new F32(n)
                     for (let i=0; i < n; ++i) src[i] = Math.random() * 2 - 1
-                    const opts = { name:'matters not', values:n, dataSize:64, nameSize:64, namePartSize:16 } // TODO: Re-do these tests, with `nameParts` and `partSize`.
+                    const opts = { name:'matters not', values:n, dataSize:64, partSize:16, userParts:1, nameParts:3 }
                     const namer = E._dataNamer(opts)
-                    const cells = new F32(namer.cells * (64+64))
+                    const cells = new F32(namer.cells * (16*(1+3)+64))
                     namer.name(src, cells, 0), namer.unname(cells, 0, dst)
                     return [src.map(round), dst.map(round)]
                 }
                 function round(x) { return (x*100|0) / 100 }
             },
             hasher: A(function hasher(name, partCount, partSize) {
-                let parts = [], lastPartWasNumber = false
+                let parts = [], lastPartWasNumber = false, firstNumberIndex = null
                 flattenName(name), name = null
                 return function specifyCell(...args) {
                     const numbers = fillParts(new Float32Array(partCount * partSize), ...args)
@@ -516,12 +528,14 @@ Extra parameters:
                             error("Name parts must be -1..1, got", part)
                         if (!lastPartWasNumber || parts[parts.length-1].length >= partSize)
                             parts.push([]), lastPartWasNumber = true
+                        if (firstNumberIndex == null) firstNumberIndex = parts.length-1
                         parts[parts.length-1].push(part)
                     } else error("Unrecognized name part:", part)
                 }
                 function fillParts(numbers, ...args) {
                     const end = Math.min(parts.length, partCount)
-                    // TODO: If we had too many strings and no numbers, move some originally-number-only cell to replace the last string-cell. (Need to remember the first-non-string index.)
+                    if (firstNumberIndex != null && firstNumberIndex >= end) // Ensure that numbers are always included.
+                        parts.splice(end-1, firstNumberIndex - (end-1))
                     for (let p = 0; p < end; ++p) {
                         const part = parts[p]
                         for (let i = 0; i < part.length; ++i) {
@@ -529,7 +543,7 @@ Extra parameters:
                             if (typeof x == 'function') {
                                 x = x(...args)
                                 if (typeof x != 'number' || (x !== x || x < -1 || x > 1))
-                                    error("Name parts must be -1..1, got", x)
+                                    error("Name parts must be -1…1, got", x)
                             }
                             numbers[p * partSize + i] = x
                         }

@@ -228,6 +228,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Time, as sines exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
                 - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
+                - ⋯ To communicate rewardName/userName/name, fill them with closures, that read from received data.
                 - ⋯ Discourage disengagements: on user disconnect, hold its last block (`0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
             - ⋯ Read from file.
