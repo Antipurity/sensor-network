@@ -512,6 +512,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 docs:`Call this with a string key & string/number value to display/measure something, if \`E.meta.bench\` controls execution.`,
             }),
             bench: A(async function bench(secPerBenchmark = 30, benchFilter=null, onBenchFinished=null) {
+                assert(typeof secPerBenchmark == 'number')
                 const result = Object.create(null)
                 if (typeof onBenchFinished != 'function') onBenchFinished = (obj, id, got, progress) => {
                     // got[key] → result[name][key][id]

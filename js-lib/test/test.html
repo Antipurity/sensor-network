@@ -1,0 +1,63 @@
+
+<!DOCTYPE html>
+<html lang=en>
+<head>
+  <meta charset=utf-8>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sensor Network Testing</title>
+  <style>
+    .hiding, .hidable, .hidingMarker, .hidingSurface { transition: .3s }
+    .hidable { overflow: hidden }
+    .hidingMarker { display: inline-block; position: relative; z-index: 0 }
+    .isHiding>.hidingMarker { transform: rotate(90deg) }
+
+    .hiding { position: relative }
+    .hidingSurface { position:absolute; left:0; right:0; top:0; bottom:0; z-index: 1 }
+    .hidingSurface:hover { box-shadow: 0 0 .2em black }
+    .hidable { margin-left: 2em; box-shadow: -3px 0 1px black; position: relative; z-index: 2 }
+
+    code { font-family: monospace, monospace }
+  </style>
+</head>
+<body>
+  <div>
+    <div class="hiding isHiding">
+      <div class=hidingSurface></div>
+      <span class=hidingMarker>▶</span>
+      Documentation
+      <div class="hidable" style="height:0px" id=docs>···</div>
+    </div>
+  </div>
+  <div class="hiding">
+    <div class=hidingSurface></div>
+    <span class=hidingMarker>▶</span>
+    Tests
+    <div class="hidable" id=tests>···</div>
+  </div>
+  <div class="hiding isHiding">
+    <div class=hidingSurface></div>
+    <span class=hidingMarker>▶</span>
+    Benchmarks
+    <div class="hidable" style="height:0px" id=bench>···</div>
+  </div>
+  <script type=module>
+    import sn from '../main.js'
+    import './smooth-collapse.js'
+    import 'https://cdn.jsdelivr.net/npm/marked/marked.min.js'
+    document.getElementById('docs').innerHTML = marked.parse(sn.meta.docs())
+    sn.meta.tests().then(r => {
+      const el = document.getElementById('tests')
+      if (!r) el.textContent = 'OK'
+      else {
+        let html = `Failing:<br>`
+        for (let [name, a, b] of r)
+          html += `<div class="hiding isHiding"><div class=hidingSurface></div><span class=hidingMarker>▶</span>${name}<div class=hidable style="height:0px"><div></div><code>${a}</code><div> must equal</div><code>${b}</code></div></div>`
+        el.innerHTML = html
+      }
+    })
+    // TODO: Display tests in DOM.
+    // TODO: Display each object's benchmark results in `<details>`, containing all per-metric plots (copy plotting code from Conceptual).
+    // TODO: Auto-save in `localStorage`, keyed by source-code-hash, only running no-results benchmarks or those explicitly requested. (Better to invalidate all dependents too, which is quite hard to do in JS.)
+  </script>
+</body>
+</html>
