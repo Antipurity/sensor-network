@@ -333,7 +333,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 // `point` is a named Float32Array of named cells, and this function takes ownership of it.
                 // `error` is its error (max abs(true - measurement) - 1) or null.
                 // `noFeedback`: bool. If true, `callback` is still called, possibly even with non-null `allFeedback`.
-                assert(point.length instanceof Float32Array, "Data must be float32") // TODO: Why is this triggered?
+                assert(point instanceof Float32Array, "Data must be float32")
                 assert(point.length % this.cellSize === 0, "Data must be divided into cells")
                 assert(error == null || error instanceof Float32Array, "Error must be null or float32")
                 assert(error == null || point.length === error.length, "Error must be per-data-point")
