@@ -45,7 +45,7 @@ export default Object.assign(function display(into, lbl, vle, stepSize = 1) {
         if (!_updatePlots.cells) _updatePlots.cells = new Set, _updatePlots.fn = _throttled(_updatePlots, .1)
         if (!L.has(lbl)) {
             // Create a table row with the label and the plot.
-            const data = _isNumericArray(vle) ? [...vle] : typeof vle == 'number' ? [vle] : []
+            const data = _isNumericArray(vle) ? vle.slice() : typeof vle == 'number' ? [vle] : []
             const row = elem('tr', [elem('td', [lbl]), elem('td')])
             const cell = row.lastChild
 
