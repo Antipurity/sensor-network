@@ -82,7 +82,7 @@ export default (function(exports) {
                     E._deallocF32(flatV)
                 } else
                     this.feedbackCallbacks.shift()(null)
-                E._deallocF32(data), E._deallocF32(error)
+                E._deallocF32(data), error && E._deallocF32(error)
             }
             _namer(cellShape) {
                 const s = ''+cellShape
