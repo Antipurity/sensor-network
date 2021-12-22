@@ -101,7 +101,6 @@
 
     document.getElementById('bench-button').onclick = runBenchmarks
     async function runBenchmarks() {
-      // TODO: Why are plots stupidly-big initially? Why are they not display:none?
       this.disabled = true
       const plots = document.getElementById('bench')
       const progressElem = document.getElementById('bench-progress')

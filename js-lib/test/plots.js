@@ -67,8 +67,8 @@ export default Object.assign(function display(into, lbl, vle, stepSize = 1) {
             stepSizes.set(data, stepSize || 1)
             L.get(display).append(row)
 
-            cell.lastChild.style.width = sizes.width + 'px'
-            cell.lastChild.style.height = sizes.height + 'px'
+            cell.lastChild.firstChild.style.width = sizes.width + 'px'
+            cell.lastChild.firstChild.style.height = sizes.height + 'px'
 
             if (typeof ResizeObserver != ''+void 0)
                 (function(L, lbl, dv) {
