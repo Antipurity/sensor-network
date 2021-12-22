@@ -522,6 +522,7 @@ If not \`null\`, things are very wrong.
 Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2], …]\`. String representations must match exactly to succeed.`,
             }),
             metric: A(function metric(key, value) {
+                if (!currentBenchmark) return
                 if (typeof value == 'string')
                     currentBenchmark[key] = value
                 else if (typeof value == 'number')
@@ -555,6 +556,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                     if (typeof benchFilter != 'function' || benchFilter(bench[i]))
                         try {
                             const stop = bench[i].call()
+                            assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
                             console.log('A', secPerBenchmark * 1000) // TODO: Why is it not stopping?
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
                             console.log('B') // TODO: Okay, who's entering the infinite loop *now*?
