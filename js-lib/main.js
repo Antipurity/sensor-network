@@ -300,9 +300,11 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
         _allocF32(len) { return E._Packet._f32 && E._Packet._f32[len] && E._Packet._f32[len].length ? E._Packet._f32[len].pop() : new Float32Array(len) },
         _deallocF32(a) {
             // Makes `E._allocF32` re-use `a` when allocating an array of the same size. Usually.
-            if (!_Packet._f32) E._Packet._f32 = Object.create(null)
-            if (!_Packet._f32[len]) E._Packet._f32[len] = []
-            if (_Packet._f32[len].length > 16) return
+            assert(a instanceof Float32Array)
+            if (!E._Packet._f32) E._Packet._f32 = Object.create(null)
+            const len = a.len
+            if (!E._Packet._f32[len]) E._Packet._f32[len] = []
+            if (E._Packet._f32[len].length > 16) return
             E._Packet._f32[len].push(a)
         },
         _Packet: class _Packet {
@@ -399,7 +401,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     // Sensors.
                     while (T.sensor.length)
                         T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
-                    E._Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
+                    E._Packet._handledBytes = (E._Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                 } finally {
                     // Self-reporting.
                     // console.log('handle exiting') // TODO: ...Why always "handle exiting" but never "handle exit"...
@@ -443,7 +445,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     nextPacket.handle(mainHandler)
                     // console.log('handleLoop C') // TODO:
                     // Benchmark throughput if needed.
-                    E.meta.metric('Throughput, bytes/s', (_Packet._handledBytes || 0) / ((performance.now() - start) / 1000))
+                    E.meta.metric('Throughput, bytes/s', (E._Packet._handledBytes || 0) / ((performance.now() - start) / 1000))
                     E._Packet._handledBytes = 0
                     // Don't do it too often.
                     if (performance.now() < end)
