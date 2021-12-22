@@ -77,7 +77,7 @@ export default Object.assign(function display(into, lbl, vle, stepSize = 1) {
                     }).observe(dv)
                 })(L, lbl, dv)
         } else if (_isNumericArray(vle))
-            L.get(lbl).to.push(...vle)
+            vle.forEach(v => L.get(lbl).to.push(v))
         else if (typeof vle == 'number')
             L.get(lbl).to.push(vle)
         else if (vle === 'empty')

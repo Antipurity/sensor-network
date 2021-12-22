@@ -242,7 +242,7 @@ export default (function(exports) {
 
 - \`pause()\`, \`resume()\``,
             bench() {
-                const cellCounts = new Array(256).fill().map((_,i) => i+1)
+                const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
                 return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
                 function river(cells) { // 1-filled data → -1-filled feedback
                     const dataSize = 64
