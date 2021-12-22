@@ -71,6 +71,7 @@ export default (function(exports) {
                     removed.forEach(sh => delete ch[sh])
                     removed.clear()
                 }
+                return new Promise(then => this.feedbackCallbacks.push(then))
             }
             _gotFeedback(data, error, feedback, fbOffset, cellShape) {
                 // Fulfill the promise of `.send`.
