@@ -241,7 +241,7 @@ export default (function(exports) {
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
 
 - \`pause()\`, \`resume()\``,
-            bench() { // TODO: Make `test.html` do `await sn.meta.bench()`. And run it.
+            bench() {
                 const cellCounts = new Array(256).fill().map((_,i) => i+1)
                 return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
                 function river(cells) { // 1-filled data → -1-filled feedback
@@ -264,7 +264,7 @@ export default (function(exports) {
                                 if (writeFeedback) feedback.fill(-1)
                             },
                         })
-                        return function stop() { console.log('Stopping'), from.pause(), to.pause() } // TODO:
+                        return function stop() { from.pause(), to.pause() }
                     }
                 }
             },
@@ -294,8 +294,8 @@ export default (function(exports) {
                 }, ch.cellShapes.push(cellShape)
             return ch.shaped[cellShape]
         },
-        _memory: A(function() { return performance.memory ? performance.memory.usedJSHeapSize : 0 }, {
-            docs:`Reports the size of the currently active segment of JS heap in bytes, or 0.
+        _memory: A(function() { return performance.memory ? performance.memory.usedJSHeapSize : NaN }, {
+            docs:`Reports the size of the currently active segment of JS heap in bytes, or NaN.
 
 Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).`,
         }),
@@ -362,7 +362,6 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 if (!dst) return
                 const start = performance.now(), startMemory = E._memory()
                 ++ch.stepsNow
-                // console.log('handle enter') // TODO:
                 try {
                     // Concat sensors into `.data` and `.error`.
                     T.data = E._allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : E._allocF32(T.cells * T.cellSize)
@@ -406,33 +405,27 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     E._Packet._handledBytes = (E._Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                 } finally {
                     // Self-reporting.
-                    // console.log('handle exiting') // TODO: ...Why always "handle exiting" but never "handle exit"...
                     --ch.stepsNow
-                    // console.log('handle exit 0') // TODO: Why this but not A...
+                    E._Packet.stepsEnded = E._Packet.stepsEnded + 1 || 1
                     const duration = (dst.lastUsed = performance.now()) - start
-                    // console.log('handle exit A') // TODO:
                     E.meta.metric('Step duration, ms', duration)
                     E.meta.metric('Step memory, bytes', E._memory() - startMemory)
                     E.meta.metric('Step processed data, values', T.cells * T.cellSize)
-                    // console.log('handle exit B') // TODO:
-                    E._Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
-                    // console.log('handle exit C') // TODO:
+                    E._Packet.updateMean(dst.msPerStep, duration)
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
-                    // console.log('handle exit') // TODO:
                 }
             }
             static async handleLoop(channel, cellShape) {
                 const cellShapeStr = cellShape+''
                 const ch = S[channel], dst = ch.shaped[cellShapeStr]
                 if (dst.looping) return;  else dst.looping = true
+                let lastMeasuredThroughput = performance.now()
                 while (true) {
                     if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
-                    // console.log('handleLoop enter') // TODO: WHY DOES IT KEEP GOING
                     const start = performance.now(), end = start + dst.msPerStep[1]
                     // Don't do too much at once.
                     while (ch.stepsNow > E.maxSimultaneousPackets)
                         await new Promise(then => ch.waitingSinceTooManySteps.push(then))
-                    // console.log('handleLoop A') // TODO:
                     // Pause if no destinations, or no sources & no data to send.
                     if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length) return dst.looping = false
                     // Get sensor data.
@@ -440,18 +433,34 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     if (mainHandler)
                         for (let s of ch.sensors)
                             s.onValues(s)
-                    // console.log('handleLoop B') // TODO:
                     await Promise.resolve() // Wait a bit. If sensors are too slow, their data will have to wait until the next step.
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = new E._Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
-                    // console.log('handleLoop C') // TODO:
+                    const now = performance.now()
                     // Benchmark throughput if needed.
-                    E.meta.metric('Throughput, bytes/s', (E._Packet._handledBytes || 0) / ((performance.now() - start) / 1000))
-                    E._Packet._handledBytes = 0
+                    E._Packet.measureThroughput()
                     // Don't do it too often.
-                    if (performance.now() < end)
-                        await new Promise(then => setTimeout(then, end - performance.now()))
+                    if (now < end) {
+                        const A = performance.now(), B = A + end - now // TODO:
+                        // TODO: Maybe, also measure how long it takes for this callback to return? ...Yeah, a very long time...
+                        await new Promise(then => setTimeout(then, end - now))
+                        E.meta.metric('Need to wait for, ms', Math.abs(end - now))
+                        E.meta.metric('Waiting error, ms', Math.abs(performance.now() - B)) // TODO: Why is this such a big error? And, how to not wait so long in background tabs?
+                    }
+                }
+            }
+            static measureThroughput() {
+                const now = performance.now()
+                if (!E._Packet.lastMeasuredThroughput) E._Packet.lastMeasuredThroughput = now
+                if (now - E._Packet.lastMeasuredThroughput > 500) { // Filter out noise.
+                    // TODO: With Chrome's .1ms timer precision, we need a better way to measure this.
+                    const s = Math.max(now - E._Packet.lastMeasuredThroughput, .01) / 1000
+                    E.meta.metric('Throughput, bytes/s', (E._Packet._handledBytes || 0) / s),
+                    E.meta.metric('Steps/s', (E._Packet.stepsEnded || 0) / s),
+                    E._Packet.lastMeasuredThroughput = now
+                    E._Packet._handledBytes = 0
+                    // TODO: Why can't we find a good balance between obviously-overreporting and most-likely-underreporting?
                 }
             }
         },
@@ -527,14 +536,15 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 if (!currentBenchmark) return
                 if (typeof value == 'string')
                     currentBenchmark[key] = value
-                else if (typeof value == 'number')
+                else if (typeof value == 'number') {
+                    if (value !== value || !isFinite(value)) return
                     !Array.isArray(currentBenchmark[key]) && (currentBenchmark[key] = []), currentBenchmark[key].push(value)
-                else
+                } else
                     error("what this: " + value)
             }, {
                 docs:`Call this with a string key & string/number value to display/measure something, if \`E.meta.bench\` controls execution.`,
             }),
-            bench: A(async function bench(secPerBenchmark = 30, benchFilter=null, onBenchFinished=null) { // TODO: Who entered the infinite loop?
+            bench: A(async function bench(secPerBenchmark = 30, benchFilter=null, onBenchFinished=null) {
                 assert(typeof secPerBenchmark == 'number')
                 const result = Object.create(null)
                 if (typeof onBenchFinished != 'function') onBenchFinished = (obj, id, got, progress) => {
@@ -559,7 +569,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                             const stop = bench[i].call()
                             assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
-                            onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, (i+1) / (bench.length-1))
+                            onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, (i+1) / bench.length)
                         } catch (err) { console.error(err) }
                 }
                 currentBenchmark = null

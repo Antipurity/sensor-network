@@ -21,6 +21,7 @@
 
     textarea, div.resizable { transition: none !important }
     div.resizable { resize:both; overflow:hidden; display:block }
+    button { padding: .6em }
   </style>
 </head>
 <body>
@@ -54,7 +55,14 @@
       <br>
       <button style="width:100%" id=bench-button>Run all benchmarks (slow)</button>
       <br>
-      (The mean per a global's sub-benchmark is displayed.)
+      Before running, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/now">disable reduced time precision</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory">and don't use Firefox to measure memory</a>.<br>
+      When running, this reports:
+      <select id=bench-reporting>
+        <option value="mean" selected>Mean</option>
+        <option value="meanMedian">Mean of 25%…75%</option>
+        <option value="median">Median</option>
+        <option value="all">All (the distribution)</option>
+      </select>
       <div id=bench>
       </div>
       <div id=bench-progress></div>
@@ -68,7 +76,14 @@
 
     const secPerBenchmark = 10
 
+
+
+    // Docs.
     document.getElementById('docs').innerHTML = marked.parse(sn.meta.docs())
+
+
+
+    // Tests.
     sn.meta.tests().then(r => {
       const el = document.getElementById('tests')
       if (!r) el.textContent = 'OK'
@@ -82,6 +97,7 @@
 
 
 
+    // JSON.
     function updateJSON() {
       let obj
       try { obj = JSON.parse(this.value) }
@@ -99,34 +115,52 @@
 
 
 
+    // Benchmarks.
+    const reporting = { // Summarize a sorted array.
+      mean(a) { return a.reduce((a,b) => a+b) / a.length },
+      median(a) { return a[a.length / 2 | 0] },
+      meanMedian(a) {
+        a = a.length < 16 ? a : a.slice(a.length * .25 | 0, a.length * .75 | 0)
+        return a.reduce((a,b) => a+b) / a.length
+      },
+      all(a) { return a },
+    }
+    let benchProgressStream = { start:performance.now(), events:[] }
     document.getElementById('bench-button').onclick = runBenchmarks
-    async function runBenchmarks() {
-      this.disabled = true
+    document.getElementById('bench-reporting').oninput = function() { // Clear & re-plot.
+      const plots = document.getElementById('bench')
+      const prev = { start:benchProgressStream.start, events:benchProgressStream.events };  benchProgressStream.events = []
+      for (let lbl of display(plots)) display(plots, lbl, undefined)
+      for (let a of prev.events) onBenchProgress(...a)
+    }
+    function onBenchProgress(obj, id, got, progress) { // Remember & plot.
+      benchProgressStream.events.push([obj, id, got, progress])
       const plots = document.getElementById('bench')
       const progressElem = document.getElementById('bench-progress')
-      for (let lbl of display(plots))
-        display(plots, lbl, undefined)
-      progressElem.textContent = '0% done'
-      const start = performance.now()
-      await sn.meta.bench(secPerBenchmark, obj => {
-        return true
-      }, (obj, id, got, progress) => {
-        const elapsed = performance.now() - start
-        const remainingMs = elapsed / progress - elapsed
-        progressElem.textContent = round(progress * 100) + '% done; ETA: ' + round(remainingMs / 1000) + 's'
-        for (let key of Object.keys(got))
-          if (Array.isArray(got[key])) {
-            // Compute a kind of mean-of-medians, for a bit more stability than a mean.
-            const lbl = (obj.name || '—') + ': ' + key
-            let v = got[key]
-            v.sort((a,b) => a-b)
-            if (v.length > 16) v = v.slice(v.length * .25 | 0, v.length * .75 | 0)
-            display(plots, lbl, round(v.reduce((a,b) => a+b) / v.length))
-          }
-      })
-      this.disabled = false
-      function round(x) { return Math.round(x*100) / 100 }
+      const elapsed = performance.now() - benchProgressStream.start
+      const remainingMs = elapsed / progress - elapsed
+      progressElem.textContent = round(progress * 100) + '% done; ETA: ' + round(remainingMs / 1000) + 's'
+      const report = reporting[document.getElementById('bench-reporting').value]
+      for (let key of Object.keys(got))
+        if (Array.isArray(got[key])) {
+          // Compute a kind of mean-of-medians, for a bit more stability than a mean.
+          const lbl = (obj.name || '—') + ': ' + key, v = got[key]
+          v.sort((a,b) => a-b)
+          const result = report(v)
+          display(plots, lbl, typeof result == 'number' ? round(result) : result)
+        }
     }
+    async function runBenchmarks() {
+      const plots = document.getElementById('bench')
+      const progressElem = document.getElementById('bench-progress')
+      for (let lbl of display(plots)) display(plots, lbl, undefined)
+      progressElem.textContent = '0% done'
+      benchProgressStream = { start:performance.now(), events:[] }
+      this.disabled = true
+      await sn.meta.bench(secPerBenchmark, obj => true, onBenchProgress)
+      this.disabled = false
+    }
+    function round(x) { return Math.round(x*100) / 100 }
   </script>
 </body>
 </html>

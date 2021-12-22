@@ -162,28 +162,30 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
             - ✓ `.pause()`, `.resume()`
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed.
-        - ⋯ `.Handler`:
+        - ✓ `.Handler`:
             - ✓ `.constructor({ onValues, channel=null, priority=0, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16 })`.
                 - ❌ The options object can be modified after construction.
                 - ✓ `dataSize` is how many data numbers each cell can hold, `nameSize` is how many numbers the cell is identified with, split into `namePartSize`-sized blocks. First name then data; the first name part is used for the reward (always the first number) and the user ID, the rest are taken up be senders' string hashes and numbers.
                 - ✓ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
             - ✓ `.pause()`, `.resume()`
             - ✓ On each sent message, wait a bit before handling messages, to make inputs more coherent.
-                - ⋯ Benchmark the coherence, as the cell-count accumulated at each step.
+                - ✓ Benchmark the coherence, as the cell-count accumulated at each step. (Seems fully coherent.)
         - ✓ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `tests` method.
             - ✓ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
         - ✓ A function that runs all benchmarks, `.bench()`: traverses `sn` (not through prototypes) and calls every `bench` method.
             - ✓ Ability to log arbitrary metrics at arbitrary points, with the final report being the average metric per log.
-            - ⋯ Allow benchmarking in `test.html`.
-                - ⋯ Auto-save in `localStorage`, keyed by source-code-hash, only running no-results benchmarks or those explicitly requested. (Better to invalidate all dependents too, which is quite hard to do in JS.)
-                - ⋯ Display each object's benchmark results in `<details>`, containing all per-metric plots (copy plotting code from Conceptual).
-            - ⋯ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over █ minutes of running.
+            - ✓ Allow benchmarking in `test.html`.
+                - ❌ Auto-save in `localStorage`, keyed by source-code-hash, only running no-results benchmarks or those explicitly requested. (Better to invalidate all dependents too, which is quite hard to do in JS.)
+                - ✓ Display each object's benchmark results, with all per-metric plots (copy plotting code from Conceptual).
+                - ✓ Allow switching between mean/median/all views for a fuller view of performance.
+            - ✓ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over █ minutes of running.
         - ✓ `.docs()`, which traverses `sn` and accumulates all `docs` strings into a Markdown string.
             - ✓ Parents should become sections, into which their children belong.
             - ✓ Make a table of contents at the top, with refs to the top at every section heading.
             - ✓ Make `npm run doc` import the library and call this and write its result to `docs/DOCS.md`.
         - ✓ Ability to de/serialize sensors/accumulators/handlers, so that users can pick up power-ups at the press of a button.
             - ⋯ Some way to specify which parts are done in-extension and which are in-content-script and which are in-page-JS, here.
+                - …How exactly would we specify the interface that splits & aggregates code, though… Should we start on `/js-ext` now, just to force it?…
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files:
         - ⋯ `.Sensor`:
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
