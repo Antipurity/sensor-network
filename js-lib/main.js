@@ -64,7 +64,7 @@ export default (function(exports) {
                     const flatE = error ? E._allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
-                    dst.nextPacket.data(this, flatV, flatE, this.noFeedback)
+                    dst.nextPacket.data(this, flatV, flatE, this.noFeedback) // TODO: ...Why is there nothing there...
                 }
                 if (removed.size) {
                     ch.cellShapes = ch.cellShapes.filter(sh => !removed.has(sh))
@@ -85,17 +85,18 @@ export default (function(exports) {
             }
             _namer(cellShape) {
                 const s = ''+cellShape
-                if (!this.dataNames[s]) {
+                if (!this.dataNamers[s]) {
                     // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
-                    const metaSize = this.cellShape[0] + this.cellShape[1] + this.cellShape[2]
-                    this.partSize = gcd(gcd(this.cellShape[0], this.cellShape[1]), this.cellShape[2])
-                    this.rewardParts = this.cellShape[0] / this.partSize | 0
-                    this.userParts = this.cellShape[0] / this.partSize | 0
-                    this.nameParts = this.cellShape[0] / this.partSize | 0
-                    this.dataNames[s] = E._dataNamer(this)
+                    const [reward, user, name, data] = cellShape
+                    const metaSize = reward + user + name
+                    this.partSize = gcd(gcd(reward, user), name)
+                    this.rewardParts = reward / this.partSize | 0
+                    this.userParts = user / this.partSize | 0
+                    this.nameParts = name / this.partSize | 0
+                    this.dataNamers[s] = E._dataNamer(this)
                     function gcd(a,b) { return !b ? a : gcd(b, a % b) }
                 }
-                return this.dataNames[s]
+                return this.dataNamers[s]
             }
             pause() {
                 if (this.paused) return
@@ -352,9 +353,11 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 return a
             }
             async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors
-                const T = this, ch = S[T.channel], dst = ch[T.cellShape]
+                const T = this, ch = S[T.channel], dst = ch.shaped[T.cellShape]
+                if (!dst) return
                 const start = performance.now(), startMemory = E._memory()
                 ++ch.stepsNow
+                // console.log('handle enter') // TODO:
                 try {
                     // Concat sensors into `.data` and `.error`.
                     T.data = E._allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : E._allocF32(T.cells * T.cellSize)
@@ -398,23 +401,33 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     E._Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                 } finally {
                     // Self-reporting.
+                    // console.log('handle exiting') // TODO: ...Why always "handle exiting" but never "handle exit"...
                     --ch.stepsNow
+                    // console.log('handle exit 0') // TODO: Why this but not A...
                     const duration = (dst.lastUsed = performance.now()) - start
+                    // console.log('handle exit A') // TODO:
                     E.meta.metric('Step duration, ms', duration)
                     E.meta.metric('Step memory, bytes', E._memory() - startMemory)
                     E.meta.metric('Step processed data, values', T.cells * T.cellSize)
+                    // console.log('handle exit B') // TODO:
                     E._Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
+                    // console.log('handle exit C') // TODO:
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
+                    // console.log('handle exit') // TODO:
                 }
             }
             static async handleLoop(channel, cellShape) {
-                const ch = S[channel], dst = ch.shaped[cellShape]
+                const cellShapeStr = cellShape+''
+                const ch = S[channel], dst = ch.shaped[cellShapeStr]
                 if (dst.looping) return;  else dst.looping = true
                 while (true) {
+                    if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
+                    console.log('handleLoop enter') // TODO: WHY DOES IT KEEP GOING
                     const start = performance.now(), end = start + dst.msPerStep[1]
                     // Don't do too much at once.
                     while (ch.stepsNow > E.maxSimultaneousPackets)
                         await new Promise(then => ch.waitingSinceTooManySteps.push(then))
+                    // console.log('handleLoop A') // TODO:
                     // Pause if no destinations, or no sources & no data to send.
                     if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length) return dst.looping = false
                     // Get sensor data.
@@ -422,10 +435,12 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     if (mainHandler)
                         for (let s of ch.sensors)
                             s.onValues(s)
+                    // console.log('handleLoop B') // TODO:
                     await Promise.resolve() // Wait a bit. If sensors are too slow, their data will have to wait until the next step.
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = new E._Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
+                    // console.log('handleLoop C') // TODO:
                     // Benchmark throughput if needed.
                     E.meta.metric('Throughput, bytes/s', (_Packet._handledBytes || 0) / ((performance.now() - start) / 1000))
                     E._Packet._handledBytes = 0
@@ -537,7 +552,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                     if (typeof benchFilter != 'function' || benchFilter(bench[i]))
                         try {
                             const stop = bench[i].call()
-                            console.log('A') // TODO:
+                            console.log('A', secPerBenchmark * 1000) // TODO: Why is it not stopping?
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
                             console.log('B') // TODO: Okay, who's entering the infinite loop *now*?
                             onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, i / (bench.length-1))
