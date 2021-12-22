@@ -246,24 +246,26 @@ export default (function(exports) {
                 return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
                 function river(cells) { // 1-filled data → -1-filled feedback
                     const dataSize = 64
-                    const from = new E.Sensor({
-                        name: ['some', 'kinda', 'name'],
-                        values: cells*dataSize,
-                        async onValues(sensor) {
-                            const data = E._allocF32(cells*dataSize)
-                            data.fill(1)
-                            const feedback = await sensor.send(data)
-                            feedback && feedback.fill(.5439828952837)
-                        },
-                    })
-                    const to = new E.Handler({
-                        dataSize,
-                        async onValues(data, error, cellShape, writeFeedback, feedback) {
-                            data.fill(.489018922485)
-                            if (writeFeedback) feedback.fill(-1)
-                        },
-                    })
-                    return function stop() { console.log('Stopping'), from.pause(), to.pause() } // TODO:
+                    return function start() {
+                        const from = new E.Sensor({
+                            name: ['some', 'kinda', 'name'],
+                            values: cells*dataSize,
+                            async onValues(sensor) {
+                                const data = E._allocF32(cells*dataSize)
+                                data.fill(1)
+                                const feedback = await sensor.send(data)
+                                feedback && feedback.fill(.5439828952837)
+                            },
+                        })
+                        const to = new E.Handler({
+                            dataSize,
+                            async onValues(data, error, cellShape, writeFeedback, feedback) {
+                                data.fill(.489018922485)
+                                if (writeFeedback) feedback.fill(-1)
+                            },
+                        })
+                        return function stop() { console.log('Stopping'), from.pause(), to.pause() } // TODO:
+                    }
                 }
             },
         }),
