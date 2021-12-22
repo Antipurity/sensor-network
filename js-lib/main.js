@@ -64,7 +64,7 @@ export default (function(exports) {
                     const flatE = error ? E._allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
-                    dst.nextPacket.data(this, flatV, flatE, this.noFeedback) // TODO: ...Why is there nothing there...
+                    dst.nextPacket.send(this, flatV, flatE, this.noFeedback)
                 }
                 if (removed.size) {
                     ch.cellShapes = ch.cellShapes.filter(sh => !removed.has(sh))
@@ -326,14 +326,14 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     feedback: null, // null | owned f32a.
                 })
             }
-            data(sensor, point, error, noFeedback) {
+            send(sensor, point, error, noFeedback) {
                 // `sensor` is a `E.Sensor` with `._gotFeedback(…)`, from `point` (owned) & `error` (owned) & `allFeedback` (not owned) & `fbOffset` (int) & `cellShape`.
                 //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
                 //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
                 // `point` is a named Float32Array of named cells, and this function takes ownership of it.
                 // `error` is its error (max abs(true - measurement) - 1) or null.
                 // `noFeedback`: bool. If true, `callback` is still called, possibly even with non-null `allFeedback`.
-                assert(point.length instanceof Float32Array, "Data must be float32")
+                assert(point.length instanceof Float32Array, "Data must be float32") // TODO: Why is this triggered?
                 assert(point.length % this.cellSize === 0, "Data must be divided into cells")
                 assert(error == null || error instanceof Float32Array, "Error must be null or float32")
                 assert(error == null || point.length === error.length, "Error must be per-data-point")
