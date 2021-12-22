@@ -13,10 +13,14 @@
 
     .hiding { position: relative }
     .hidingSurface { position:absolute; left:0; right:0; top:0; bottom:0; z-index: 1 }
-    .hidingSurface:hover { box-shadow: 0 0 .2em black }
+    .hidingSurface:hover { box-shadow: 0 0 .1em black, 0 0 .1em inset black }
     .hidable { margin-left: 2em; box-shadow: -3px 0 1px black; position: relative; z-index: 2 }
 
     code { font-family: monospace, monospace }
+    body { font-family: sans-serif }
+
+    textarea, div.resizable { transition: none !important }
+    div.resizable { resize:both; overflow:hidden; display:block }
   </style>
 </head>
 <body>
@@ -38,12 +42,27 @@
     <div class=hidingSurface></div>
     <span class=hidingMarker>▶</span>
     Benchmarks
-    <div class="hidable" style="height:0px" id=bench>···</div>
+    <div class="hidable" style="height:0px">
+      <div class="hiding isHiding">
+        <div class=hidingSurface></div>
+        <span class=hidingMarker>▶</span>
+        Paste JSON
+        <div class="hidable" style="height:0px" id=json>
+          <textarea rows=1 id=json-textarea></textarea>
+        </div>
+      </div>
+      <button id=bench-button>Run all benchmarks (slow)</button>
+      <div id=bench></div>
+    </div>
   </div>
   <script type=module>
     import sn from '../main.js'
     import './smooth-collapse.js'
+    import display from './plots.js'
     import 'https://cdn.jsdelivr.net/npm/marked/marked.min.js'
+
+    const secPerBenchmark = 10
+
     document.getElementById('docs').innerHTML = marked.parse(sn.meta.docs())
     sn.meta.tests().then(r => {
       const el = document.getElementById('tests')
@@ -55,9 +74,39 @@
         el.innerHTML = html
       }
     })
-    // TODO: Display tests in DOM.
-    // TODO: Display each object's benchmark results in `<details>`, containing all per-metric plots (copy plotting code from Conceptual).
-    // TODO: Auto-save in `localStorage`, keyed by source-code-hash, only running no-results benchmarks or those explicitly requested. (Better to invalidate all dependents too, which is quite hard to do in JS.)
+
+
+
+    function updateJSON() {
+      let obj
+      try { obj = JSON.parse(this.value) }
+      catch (err) { return }
+      const json = document.getElementById('json')
+      for (let lbl of display(json))
+        display(json, lbl, undefined)
+      for (let lbl of Object.keys(obj))
+        try { display(json, lbl, obj[lbl]) }
+        catch (err) { console.error(err) }
+    }
+    ;(document.getElementById('json-textarea').oninput = updateJSON).call(document.getElementById('json-textarea'))
+
+
+
+    document.getElementById('bench-button').onclick = runBenchmarks
+    async function runBenchmarks() {
+      const plots = document.getElementById('bench')
+      for (let lbl of display(plots))
+        display(plots, lbl, undefined)
+      await sn.meta.bench(secPerBenchmark, obj => {
+        return true
+      }, (obj, id, got, progress) => {
+        for (let key of Object.keys(got))
+          if (typeof got[key] == 'number') {
+            const lbl = (obj.name || '—') + ': ' + key
+            display(plots, lbl, got[key])
+          }
+      })
+    }
   </script>
 </body>
 </html>

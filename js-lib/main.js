@@ -239,7 +239,7 @@ export default (function(exports) {
 
 - \`pause()\`, \`resume()\``,
             bench() { // TODO: Make `test.html` do `await sn.meta.bench()`. And run it.
-                const cellCounts = new Array(256).fill().map((_,i) => i)
+                const cellCounts = new Array(256).fill().map((_,i) => i+1)
                 return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
                 function river(cells) { // 1-filled data → -1-filled feedback
                     const dataSize = 64
