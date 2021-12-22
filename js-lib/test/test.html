@@ -9,7 +9,7 @@
     .hiding, .hidable, .hidingMarker, .hidingSurface { transition: .3s }
     .hidable { overflow: hidden }
     .hidingMarker { display: inline-block; position: relative; z-index: 0 }
-    .isHiding>.hidingMarker { transform: rotate(90deg) }
+    .hiding:not(.isHiding)>.hidingMarker { transform: rotate(90deg) }
 
     .hiding { position: relative }
     .hidingSurface { position:absolute; left:0; right:0; top:0; bottom:0; z-index: 1 }
@@ -47,7 +47,7 @@
       <div class="hiding isHiding">
         <div class=hidingSurface></div>
         <span class=hidingMarker>▶</span>
-        Paste JSON
+        Paste JSON to view plots
         <div class="hidable" style="height:0px" id=json>
           <textarea rows=1 id=json-textarea></textarea>
         </div>
@@ -55,7 +55,7 @@
       <br>
       <button style="width:100%" id=bench-button>Run all benchmarks (slow)</button>
       <br>
-      Before running, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/now">disable reduced time precision</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory">and don't use Firefox to measure memory</a>.<br>
+      Before running, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/now">disable reduced time precision</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory">don't use Firefox to measure memory</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/setTimeout">and keep the tab open (in Chromium, must not be obscured by a full-screen window)</a>.<br>
       When running, this reports:
       <select id=bench-reporting>
         <option value="mean" selected>Mean</option>

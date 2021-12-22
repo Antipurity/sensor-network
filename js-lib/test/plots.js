@@ -127,14 +127,14 @@ function _throttled(fun, cpu = .5, everyTime) {
     let lastRun = _timeSince()
     let arg1, arg2
     function throttled(x,y) {
-      if (everyTime) everyTime(x,y)
-      arg1 = x, arg2 = y
-      let requiredRest = cpu === .5 ? lastDur : typeof cpu == 'number' ? lastDur * (1/cpu - 1) : cpu(lastDur)
-      if (scheduledId) clearTimeout(scheduledId), requiredRest -= _timeSince(scheduledTime)
-      else requiredRest -= Math.min(_timeSince(lastRun), 2000), lastRun = _timeSince()
-      if (requiredRest > 2)
-        scheduledId == null && (scheduledTime = _timeSince()), scheduledId = setTimeout(runThrottled, Math.max(0, requiredRest))
-      else runThrottled(), scheduledTime = _timeSince()
+        if (everyTime) everyTime(x,y)
+        arg1 = x, arg2 = y
+        let requiredRest = cpu === .5 ? lastDur : typeof cpu == 'number' ? lastDur * (1/cpu - 1) : cpu(lastDur)
+        if (scheduledId) clearTimeout(scheduledId), requiredRest -= _timeSince(scheduledTime)
+        else requiredRest -= Math.min(_timeSince(lastRun), 2000), lastRun = _timeSince()
+        if (requiredRest > 2)
+            scheduledId == null && (scheduledTime = _timeSince()), scheduledId = setTimeout(runThrottled, Math.max(0, requiredRest))
+        else runThrottled(), scheduledTime = _timeSince()
     }
     function runThrottled() {
       scheduledId = null
@@ -143,8 +143,8 @@ function _throttled(fun, cpu = .5, everyTime) {
       arg1 = arg2 = undefined
       if (r instanceof Promise)
         r.then(userTimePassed => {
-          if (typeof userTimePassed != 'number') userTimePassed = _timeSince(start)
-          lastDur = blend * userTimePassed + (1-blend) * userTimePassed, lastRun = _timeSince()
+            if (typeof userTimePassed != 'number') userTimePassed = _timeSince(start)
+            lastDur = blend * userTimePassed + (1-blend) * userTimePassed, lastRun = _timeSince()
         })
       else
         lastDur = blend * _timeSince(start) + (1-blend) * _timeSince(start), lastRun = _timeSince()

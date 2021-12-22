@@ -360,7 +360,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
             async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors
                 const T = this, ch = S[T.channel], dst = ch.shaped[T.cellShape]
                 if (!dst) return
-                const start = performance.now(), startMemory = E._memory()
+                const start = performance.now()
                 ++ch.stepsNow
                 try {
                     // Concat sensors into `.data` and `.error`.
@@ -405,12 +405,11 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     E._Packet._handledBytes = (E._Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                 } finally {
                     // Self-reporting.
+                    E.meta.metric('simultaneous steps', ch.stepsNow)
+                    E.meta.metric('step processed data, values', T.cells * T.cellSize)
                     --ch.stepsNow
                     E._Packet.stepsEnded = E._Packet.stepsEnded + 1 || 1
                     const duration = (dst.lastUsed = performance.now()) - start
-                    E.meta.metric('Step duration, ms', duration)
-                    E.meta.metric('Step memory, bytes', E._memory() - startMemory)
-                    E.meta.metric('Step processed data, values', T.cells * T.cellSize)
                     E._Packet.updateMean(dst.msPerStep, duration)
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
                 }
@@ -419,7 +418,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 const cellShapeStr = cellShape+''
                 const ch = S[channel], dst = ch.shaped[cellShapeStr]
                 if (dst.looping) return;  else dst.looping = true
-                let lastMeasuredThroughput = performance.now()
+                let prevEnd = performance.now()
                 while (true) {
                     if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
                     const start = performance.now(), end = start + dst.msPerStep[1]
@@ -437,30 +436,27 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = new E._Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
-                    const now = performance.now()
                     // Benchmark throughput if needed.
-                    E._Packet.measureThroughput()
+                    E._Packet._measureThroughput()
                     // Don't do it too often.
-                    if (now < end) {
-                        const A = performance.now(), B = A + end - now // TODO:
-                        // TODO: Maybe, also measure how long it takes for this callback to return? ...Yeah, a very long time...
-                        await new Promise(then => setTimeout(then, end - now))
-                        E.meta.metric('Need to wait for, ms', Math.abs(end - now))
-                        E.meta.metric('Waiting error, ms', Math.abs(performance.now() - B)) // TODO: Why is this such a big error? And, how to not wait so long in background tabs?
-                    }
+                    const now = performance.now(), needToWait = prevEnd - now
+                    prevEnd += dst.msPerStep[1]
+                    if (prevEnd < now - 1000) prevEnd = now - 1000 // Don't get too eager after being stalled.
+                    if (needToWait > 0)
+                        await new Promise(then => setTimeout(then, needToWait))
                 }
             }
-            static measureThroughput() {
+            static _measureThroughput() {
                 const now = performance.now()
-                if (!E._Packet.lastMeasuredThroughput) E._Packet.lastMeasuredThroughput = now
-                if (now - E._Packet.lastMeasuredThroughput > 500) { // Filter out noise.
-                    // TODO: With Chrome's .1ms timer precision, we need a better way to measure this.
-                    const s = Math.max(now - E._Packet.lastMeasuredThroughput, .01) / 1000
-                    E.meta.metric('Throughput, bytes/s', (E._Packet._handledBytes || 0) / s),
-                    E.meta.metric('Steps/s', (E._Packet.stepsEnded || 0) / s),
-                    E._Packet.lastMeasuredThroughput = now
-                    E._Packet._handledBytes = 0
-                    // TODO: Why can't we find a good balance between obviously-overreporting and most-likely-underreporting?
+                if (!E._Packet.lastMeasuredThroughputAt)
+                    E._Packet.lastMeasuredThroughputAt = now, E._Packet.lastMemory = E._memory()
+                if (now - E._Packet.lastMeasuredThroughputAt > 500) { // Filter out noise.
+                    const s = Math.max(now - E._Packet.lastMeasuredThroughputAt, .01) / 1000
+                    E.meta.metric('throughput, bytes/s', (E._Packet._handledBytes || 0) / s)
+                    E.meta.metric('allocations, bytes/s', Math.max(E._memory() - E._Packet.lastMemory, 0) / s)
+                    E._Packet.lastMeasuredThroughputAt = now
+                    E._Packet._handledBytes = 0, E._Packet.stepsEnded = 0
+                    E._Packet.lastMemory = E._memory()
                 }
             }
         },
