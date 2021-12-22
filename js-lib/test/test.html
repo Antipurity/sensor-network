@@ -107,13 +107,14 @@
       const progressElem = document.getElementById('bench-progress')
       for (let lbl of display(plots))
         display(plots, lbl, undefined)
-      progressElem.textContent = '0%'
+      progressElem.textContent = '0% done'
       const start = performance.now()
       await sn.meta.bench(secPerBenchmark, obj => {
         return true
       }, (obj, id, got, progress) => {
         const elapsed = performance.now() - start
-        progressElem.textContent = round(progress * 100) + '%; ETA: ' + (elapsed / progress - elapsed) + 's'
+        const remainingMs = elapsed / progress - elapsed
+        progressElem.textContent = round(progress * 100) + '% done; ETA: ' + round(remainingMs / 1000) + 's'
         for (let key of Object.keys(got))
           if (Array.isArray(got[key])) {
             // Compute a kind of mean-of-medians, for a bit more stability than a mean.

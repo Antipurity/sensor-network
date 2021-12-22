@@ -559,7 +559,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                             const stop = bench[i].call()
                             assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
-                            onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, i / (bench.length-1))
+                            onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, (i+1) / (bench.length-1))
                         } catch (err) { console.error(err) }
                 }
                 currentBenchmark = null
