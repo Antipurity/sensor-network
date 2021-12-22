@@ -262,7 +262,7 @@ export default (function(exports) {
                             if (writeFeedback) feedback.fill(-1)
                         },
                     })
-                    return function stop() { from.pause(), to.pause() }
+                    return function stop() { console.log('Stopping'), from.pause(), to.pause() } // TODO:
                 }
             },
         }),
@@ -357,7 +357,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 if (!dst) return
                 const start = performance.now(), startMemory = E._memory()
                 ++ch.stepsNow
-                // console.log('handle enter') // TODO:
+                console.log('handle enter') // TODO:
                 try {
                     // Concat sensors into `.data` and `.error`.
                     T.data = E._allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : E._allocF32(T.cells * T.cellSize)
@@ -389,7 +389,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                             const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
                             if (r instanceof Promise) (tmp || (tmp = [])).push(r)
                         }
-                    if (r) await Promise.all(tmp)
+                    if (tmp) await Promise.all(tmp)
                     // Accumulators.
                     while (T.accumulatorCallback.length) {
                         const f = T.accumulatorCallback.pop()
@@ -413,7 +413,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     E._Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
                     // console.log('handle exit C') // TODO:
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
-                    // console.log('handle exit') // TODO:
+                    console.log('handle exit') // TODO:
                 }
             }
             static async handleLoop(channel, cellShape) {
@@ -422,7 +422,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 if (dst.looping) return;  else dst.looping = true
                 while (true) {
                     if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
-                    console.log('handleLoop enter') // TODO: WHY DOES IT KEEP GOING
+                    // console.log('handleLoop enter') // TODO: WHY DOES IT KEEP GOING
                     const start = performance.now(), end = start + dst.msPerStep[1]
                     // Don't do too much at once.
                     while (ch.stepsNow > E.maxSimultaneousPackets)
