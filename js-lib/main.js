@@ -107,7 +107,7 @@ export default (function(exports) {
                 if (typeof this.onValues == 'function') {
                     E._state(this.channel).sensors.push(this)
                     for (let cellShape of E._state(this.channel).cellShapes)
-                        _Packet.handleLoop(this.channel, cellShape)
+                        E._Packet.handleLoop(this.channel, cellShape)
                 }
                 this.paused = false
             }
@@ -144,6 +144,7 @@ export default (function(exports) {
                 assert(onValues == null || typeof onValues == 'function')
                 assert(onFeedback == null || typeof onFeedback == 'function')
                 assert(onValues || onFeedback, "Why have an accumulator if it does nothing")
+                assert(typeof channel == 'string')
                 Object.assign(this, {
                     paused: true,
                     onValues,
@@ -186,7 +187,7 @@ export default (function(exports) {
                 assert(typeof onValues == 'function', "Handlers must have listeners")
                 assertCounts('', partSize, rewardParts, userParts, nameParts, dataSize)
                 assert(typeof priority == 'number')
-                assert(typeof channel == 'number')
+                assert(typeof channel == 'string')
                 Object.assign(this, {
                     paused: true,
                     cellShape: [rewardParts * partSize, userParts * partSize, nameParts * partSize, dataSize],
@@ -214,7 +215,7 @@ export default (function(exports) {
                 dst.handlers.push(this)
                 dst.handlers.sort((a,b) => b.priority - a.priority)
                 if (!this.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < this.priority)) ch.mainHandler = this
-                if (this.onValues) _Packet.handleLoop(this.channel, this.cellShape)
+                if (this.onValues) E._Packet.handleLoop(this.channel, this.cellShape)
                 this.paused = false
             }
         }, {
@@ -243,7 +244,8 @@ export default (function(exports) {
                 return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
                 function river(cells) { // 1-filled data → -1-filled feedback
                     const dataSize = 64
-                    const from = new Sensor({
+                    const from = new E.Sensor({
+                        name: ['some', 'kinda', 'name'],
                         values: cells*dataSize,
                         async onValues(sensor) {
                             const data = E._allocF32(cells*dataSize)
@@ -252,7 +254,7 @@ export default (function(exports) {
                             feedback && feedback.fill(.5439828952837)
                         },
                     })
-                    const to = new Handler({
+                    const to = new E.Handler({
                         dataSize,
                         async onValues(data, error, cellShape, writeFeedback, feedback) {
                             data.fill(.489018922485)
@@ -284,7 +286,7 @@ export default (function(exports) {
                     msPerStep: [0,0], // [n, mean]
                     cellShape: cellShape, // [reward, user, name, data]
                     handlers: [], // Array<Handler>, sorted by priority.
-                    nextPacket: new _Packet(channel, cellShape),
+                    nextPacket: new E._Packet(channel, cellShape),
                 }, ch.cellShapes.push(cellShape)
             return ch.shaped[cellShape]
         },
@@ -293,13 +295,13 @@ export default (function(exports) {
 
 Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).`,
         }),
-        _allocF32(len) { return _Packet._f32 && _Packet._f32[len] && _Packet._f32[len].length ? _Packet._f32[len].pop() : new Float32Array(len) },
+        _allocF32(len) { return E._Packet._f32 && E._Packet._f32[len] && E._Packet._f32[len].length ? E._Packet._f32[len].pop() : new Float32Array(len) },
         _deallocF32(a) {
             // Makes `E._allocF32` re-use `a` when allocating an array of the same size. Usually.
-            if (!_Packet._f32) _Packet._f32 = Object.create(null)
-            if (!_Packet._f32[len]) _Packet._f32[len] = []
+            if (!_Packet._f32) E._Packet._f32 = Object.create(null)
+            if (!_Packet._f32[len]) E._Packet._f32[len] = []
             if (_Packet._f32[len].length > 16) return
-            _Packet._f32[len].push(a)
+            E._Packet._f32[len].push(a)
         },
         _Packet: class _Packet {
             constructor(channel, cellShape) {
@@ -393,7 +395,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     // Sensors.
                     while (T.sensor.length)
                         T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
-                    _Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
+                    E._Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                 } finally {
                     // Self-reporting.
                     --ch.stepsNow
@@ -401,7 +403,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     E.meta.metric('Step duration, ms', duration)
                     E.meta.metric('Step memory, bytes', E._memory() - startMemory)
                     E.meta.metric('Step processed data, values', T.cells * T.cellSize)
-                    _Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
+                    E._Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
                 }
             }
@@ -422,11 +424,11 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                             s.onValues(s)
                     await Promise.resolve() // Wait a bit. If sensors are too slow, their data will have to wait until the next step.
                     // Send it off.
-                    const nextPacket = dst.nextPacket;  dst.nextPacket = new _Packet(channel, cellShape)
+                    const nextPacket = dst.nextPacket;  dst.nextPacket = new E._Packet(channel, cellShape)
                     nextPacket.handle(mainHandler)
                     // Benchmark throughput if needed.
                     E.meta.metric('Throughput, bytes/s', (_Packet._handledBytes || 0) / ((performance.now() - start) / 1000))
-                    _Packet._handledBytes = 0
+                    E._Packet._handledBytes = 0
                     // Don't do it too often.
                     if (performance.now() < end)
                         await new Promise(then => setTimeout(then, end - performance.now()))
@@ -511,7 +513,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
             }, {
                 docs:`Call this with a string key & string/number value to display/measure something, if \`E.meta.bench\` controls execution.`,
             }),
-            bench: A(async function bench(secPerBenchmark = 30, benchFilter=null, onBenchFinished=null) {
+            bench: A(async function bench(secPerBenchmark = 30, benchFilter=null, onBenchFinished=null) { // TODO: Who entered the infinite loop?
                 assert(typeof secPerBenchmark == 'number')
                 const result = Object.create(null)
                 if (typeof onBenchFinished != 'function') onBenchFinished = (obj, id, got, progress) => {
@@ -530,11 +532,14 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 const benchOwner = []
                 walk(E) // Get benchmarks.
                 for (let i = 0; i < bench.length; ++i) { // Benchmark.
+                    console.log('bench', i, 'owner', benchOwner[i].name) // TODO:
                     currentBenchmark = Object.create(null)
                     if (typeof benchFilter != 'function' || benchFilter(bench[i]))
                         try {
                             const stop = bench[i].call()
+                            console.log('A') // TODO:
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
+                            console.log('B') // TODO: Okay, who's entering the infinite loop *now*?
                             onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, i / (bench.length-1))
                         } catch (err) { console.error(err) }
                 }
@@ -542,7 +547,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 return Object.keys(result).length ? result : undefined
                 function walk(x) {
                     if (!x || typeof x != 'object' && typeof x != 'function') return
-                    if (typeof x.bench == 'function' && x.bench !== bench) {
+                    if (typeof x.bench == 'function' && x.bench !== E.meta.bench) {
                         const bs = x.bench()
                         for (let id of Object.keys(bs)) {
                             bench.push(bs[id])

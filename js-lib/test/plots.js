@@ -14,7 +14,7 @@ export default Object.assign(function display(into, lbl, vle, stepSize = 1) {
     if (lbl === undefined) {
         let L = into._display
         if (!(L instanceof Map)) return []
-        return [...L.keys()]
+        return [...L.keys()].filter(k => k !== display)
     }
     if (vle === undefined) {
         // Remove the row.
@@ -203,7 +203,7 @@ function _updatePlot(svg, sizes, data, begin, end) {
         const tooltip = svg.node().parentNode.previousSibling
         const focus = d3.select(elem('div')).style('opacity', 0).style('border', '.1em solid currentColor').style('transition', 'none')
         const text = d3.select(elem('text')).style('opacity', 0).style('color', 'currentColor').style('display', 'block').style('transition', 'none').style('text-align', 'center')
-        focus.style('width', '1em').style('height', '1em').style('border-radius', '.5em')
+        focus.style('width', '.75em').style('height', '.75em').style('border-radius', '.5em')
         text.node().append(elem('text'), elem('number'))
         text.node().firstChild.style.textShadow = '-0.15em .15em .15em var(--background)'
         text.node().lastChild.style.textShadow = '-0.15em .15em .15em var(--background)'
@@ -220,9 +220,9 @@ function _updatePlot(svg, sizes, data, begin, end) {
             else {
                 const x = this._x(i+1), y = this._y(data[i])
                 focus.style('opacity', 1), text.style('opacity', 1)
-                focus.style('transform', `translate(-50%,-50%) translate(1ch,0) translate(${x}px, ${y}px)`)
+                focus.style('transform', `translate(-50%,-50%) translate(.3ch,0) translate(${x}px, ${y}px)`)
                 _updatePlotTooltip(text.node(), i, data, i >= this._len-1)
-                text.style('transform', `translate(-50%,-100%) translate(1ch,0) translate(${x}px, ${y-20}px)`)
+                text.style('transform', `translate(-50%,-100%) translate(.3ch,0) translate(${x}px, ${y-20}px)`)
             }
   
             // Also display the rectangle of the future zoom.

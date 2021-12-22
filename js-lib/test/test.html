@@ -51,7 +51,8 @@
           <textarea rows=1 id=json-textarea></textarea>
         </div>
       </div>
-      <button id=bench-button>Run all benchmarks (slow)</button>
+      <br>
+      <button style="width:100%" id=bench-button>Run all benchmarks (slow)</button>
       <div id=bench></div>
     </div>
   </div>
@@ -81,12 +82,14 @@
       let obj
       try { obj = JSON.parse(this.value) }
       catch (err) { return }
+      if (!obj) return
       const json = document.getElementById('json')
-      for (let lbl of display(json))
-        display(json, lbl, undefined)
       for (let lbl of Object.keys(obj))
-        try { display(json, lbl, obj[lbl]) }
+        try { display(json, lbl, 'empty'), display(json, lbl, obj[lbl]) }
         catch (err) { console.error(err) }
+      for (let lbl of display(json))
+        if (!(lbl in obj))
+          display(json, lbl, undefined)
     }
     ;(document.getElementById('json-textarea').oninput = updateJSON).call(document.getElementById('json-textarea'))
 
