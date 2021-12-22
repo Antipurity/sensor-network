@@ -362,7 +362,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 if (!dst) return
                 const start = performance.now(), startMemory = E._memory()
                 ++ch.stepsNow
-                console.log('handle enter') // TODO:
+                // console.log('handle enter') // TODO:
                 try {
                     // Concat sensors into `.data` and `.error`.
                     T.data = E._allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : E._allocF32(T.cells * T.cellSize)
@@ -418,7 +418,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     E._Packet.updateMean(dst.msPerStep, (dst.lastUsed = performance.now()) - start)
                     // console.log('handle exit C') // TODO:
                     ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
-                    console.log('handle exit') // TODO:
+                    // console.log('handle exit') // TODO:
                 }
             }
             static async handleLoop(channel, cellShape) {
@@ -553,15 +553,12 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 const benchOwner = []
                 walk(E) // Get benchmarks.
                 for (let i = 0; i < bench.length; ++i) { // Benchmark.
-                    console.log('bench', i, 'owner', benchOwner[i].name) // TODO:
                     currentBenchmark = Object.create(null)
                     if (typeof benchFilter != 'function' || benchFilter(bench[i]))
                         try {
                             const stop = bench[i].call()
                             assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
-                            console.log('A', secPerBenchmark * 1000) // TODO: Why is it not stopping?
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
-                            console.log('B') // TODO: Okay, who's entering the infinite loop *now*?
                             onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, i / (bench.length-1))
                         } catch (err) { console.error(err) }
                 }
