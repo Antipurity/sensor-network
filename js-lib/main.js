@@ -15,8 +15,10 @@ export default (function(exports) {
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
     const S = Object.create(null) // See `E._state(channel, cellShape)`.
-    const f32aCache = Object.create(null)
     let currentBenchmark = null
+
+    const f32aCache = Object.create(null)
+    const arrayCache = []
 
     return A(E, {
         Sensor: A(class Sensor {
@@ -50,18 +52,23 @@ export default (function(exports) {
                 }).resume()
             }
             needsExtensionAPI() { return null }
-            send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
+            sendCallback(then, values, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
+                assert(values instanceof Float32Array)
+                assert(error === null || error instanceof Float32Array)
+                assert(values.length === this.values, "Data size differs from the one in options")
+                error && assert(values.length === error.length)
                 const ch = E._state(this.channel)
                 const removed = Sensor._removed || (Sensor._removed = new Set)
-                for (let cellShape of ch.cellShapes) {
+                for (let i = 0; i < ch.cellShapes.length; ++i) {
+                    const cellShape = ch.cellShapes[i]
                     const dst = ch.shaped[cellShape]
                     if (!dst.handlers.length) {
                         if (performance.now() - dst.lastUsed > 60000) removed.add(cellShape)
                         continue
                     }
-                    const namer = this._namer(cellShape)
+                    const namer = E.Sensor._namer(this, cellShape)
                     const flatV = allocF32(namer.namedSize)
                     const flatE = error ? allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
@@ -74,32 +81,13 @@ export default (function(exports) {
                     removed.clear()
                 }
                 deallocF32(values), error && deallocF32(error)
-                return new Promise(then => this.feedbackCallbacks.push(then))
+                this.feedbackCallbacks.push(then)
             }
-            _gotFeedback(data, error, feedback, fbOffset, cellShape) {
-                // Fulfill the promise of `.send`.
-                if (feedback && !this.noFeedback) {
-                    const flatV = allocF32(this.values)
-                    this._namer(cellShape).unname(feedback, fbOffset, flatV)
-                    this.feedbackCallbacks.shift()(flatV)
-                } else
-                    this.feedbackCallbacks.shift()(null)
-                deallocF32(data), error && deallocF32(error)
-            }
-            _namer(cellShape) {
-                const s = ''+cellShape
-                if (!this.dataNamers[s]) {
-                    // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
-                    const [reward, user, name, data] = cellShape
-                    const metaSize = reward + user + name
-                    this.partSize = gcd(gcd(reward, user), name)
-                    this.rewardParts = reward / this.partSize | 0
-                    this.userParts = user / this.partSize | 0
-                    this.nameParts = name / this.partSize | 0
-                    this.dataNamers[s] = E._dataNamer(this)
-                    function gcd(a,b) { return !b ? a : gcd(b, a % b) }
-                }
-                return this.dataNamers[s]
+            send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
+                return new Promise((then, reject) => {
+                    try { this.sendCallback(then, values, error, reward) }
+                    catch (err) { reject(err) }
+                })
             }
             pause() {
                 if (this.paused) return this
@@ -117,14 +105,40 @@ export default (function(exports) {
                 this.paused = false
                 return this
             }
+            // These are static methods to avoid collisions with inheritors.
+            static _gotFeedback(T, data, error, allFeedback, fbOffset, cellShape) {
+                // Fulfill the promise of `.send`.
+                try {
+                    if (allFeedback && !T.noFeedback) {
+                        const flatV = allocF32(data.length)
+                        E.Sensor._namer(T, cellShape).unname(allFeedback, fbOffset, flatV)
+                        T.feedbackCallbacks.shift()(flatV)
+                    } else
+                        T.feedbackCallbacks.shift()(null)
+                } finally { deallocF32(data), error && deallocF32(error) }
+            }
+            static _namer(T, cellShape) {
+                const s = ''+cellShape
+                if (!T.dataNamers[s]) {
+                    // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
+                    const [reward, user, name, data] = cellShape
+                    const metaSize = reward + user + name
+                    T.partSize = gcd(gcd(reward, user), name)
+                    T.rewardParts = reward / T.partSize | 0
+                    T.userParts = user / T.partSize | 0
+                    T.nameParts = name / T.partSize | 0
+                    T.dataNamers[s] = E._dataNamer(T)
+                    function gcd(a,b) { return !b ? a : gcd(b, a % b) }
+                }
+                return T.dataNamers[s]
+            }
         }, {
             docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
 
 - \`constructor({ name, values, onValues=null, channel='', noFeedback=false, rewardName=[], userName=[], emptyValues=0, hasher=undefined })\`
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
-    - \`values\`: how many values each packet will have. To mitigate misalignment, try to stick to powers-of-2.
-    - \`onValues(sensor)\`: the regularly-executed function that reports data, by calling \`sensor.send\` inside.
-        - Can return a promise.
+    - \`onValues(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
+        - To run faster, use \`sensor.sendCallback(fn(feedback), data, …)\` with a static function.
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
@@ -136,12 +150,15 @@ export default (function(exports) {
 
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
     - (Do not override in child classes, only call.)
-    - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
-        - (Can use \`sn._allocF32(len)\` to reuse.)
-    - \`error\`: can be owned flat data, -1…1 \`Float32Array\` of length \`values\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
-    - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Close enough.)
+    - \`values\`: owned flat data, -1…1 \`Float32Array\`. Do not perform ANY operations on it once called.
+        - To mitigate misalignment, try to stick to powers of 2 in all sizes.
+        - (Can use \`sn._allocF32(len)\` for efficient reuse.)
+    - \`error\`: can be \`null\` or owned flat data, -1…1 \`Float32Array\` of length \`values.length\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
+    - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Either way, it sounds like a proper body.)
         - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
+
+- \`sendCallback(then(null|feedback), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise.
 
 - \`pause()\`, \`resume()\`: for convenience, these return the object.
 
@@ -257,21 +274,23 @@ export default (function(exports) {
                 return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
                 function river(cells) { // 1-filled data → -1-filled feedback
                     const dataSize = 64
+                    function onSensorFeedback(feedback) {
+                        if (feedback)
+                            feedback.fill(.5439828952837), // "Read" it.
+                            E._deallocF32(feedback) // Reuse it.
+                    }
                     return function start() {
                         const from = new E.Sensor({
                             name: ['some', 'kinda', 'name'],
                             values: cells*dataSize,
-                            async onValues(sensor) {
-                                const data = allocF32(cells*dataSize)
+                            onValues(sensor, data) {
                                 data.fill(1)
-                                const feedback = await sensor.send(data)
-                                feedback && feedback.fill(.5439828952837) // "Read" it.
-                                E._deallocF32(feedback)
+                                sensor.sendCallback(onSensorFeedback, data)
                             },
                         })
                         const to = new E.Handler({
                             dataSize,
-                            async onValues(data, error, cellShape, writeFeedback, feedback) {
+                            onValues(data, error, cellShape, writeFeedback, feedback) {
                                 data.fill(.489018922485) // "Read" it.
                                 if (writeFeedback) feedback.fill(-1)
                             },
@@ -354,7 +373,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 if (dst.packetCache.length < 64) dst.packetCache.push(this)
             }
             send(sensor, point, error, noFeedback) {
-                // `sensor` is a `E.Sensor` with `._gotFeedback(…)`, from `point` (owned) & `error` (owned) & `allFeedback` (not owned) & `fbOffset` (int) & `cellShape`.
+                // `sensor` is a `E.Sensor`.
                 //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
                 //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
                 // `point` is a named Float32Array of named cells, and this function takes ownership of it.
@@ -398,24 +417,35 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                         }
                     }
                     // Accumulators.
-                    for (let a of ch.accumulators)
+                    for (let i = 0; i < ch.accumulators.length; ++i) {
+                        const a = ch.accumulators[i]
                         if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
                             T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined)
                             T.accumulatorCallback.push(a.onFeedback)
                         }
+                    }
                     // Handlers.
                     if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
                         T.feedback = allocF32(namedSize), T.feedback.set(T.data)
                     else
                         T.feedback = null
-                    if (mainHandler) await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
-                    let tmp
-                    for (let h of dst.handlers)
-                        if (typeof h.onValues == 'function') {
-                            const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
-                            if (r instanceof Promise) (tmp || (tmp = [])).push(r)
+                    if (mainHandler) {
+                        const r = mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
+                        if (r instanceof Promise) await r
+                    }
+                    const hs = dst.handlers
+                    if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler) {
+                        const tmp = allocArray()
+                        for (let i = 0; i < hs.length; ++i) {
+                            const h = hs[i]
+                            if (h !== mainHandler && typeof h.onValues == 'function') {
+                                const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
+                                if (r instanceof Promise) tmp.push(r)
+                            }
                         }
-                    if (tmp) for (let i = 0; i < tmp.length; ++i) await tmp[i]
+                        for (let i = 0; i < tmp.length; ++i) await tmp[i]
+                        deallocArray(tmp)
+                    }
                     // Accumulators.
                     while (T.accumulatorCallback.length) {
                         const f = T.accumulatorCallback.pop()
@@ -423,7 +453,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     }
                     // Sensors.
                     while (T.sensor.length)
-                        T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
+                        E.Sensor._gotFeedback(T.sensor.pop(), T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
                     E._Packet._handledBytes = (E._Packet._handledBytes || 0) + namedSize * 4
                     T.deinit()
                 } finally {
@@ -440,8 +470,8 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
             static async handleLoop(channel, cellShape) {
                 const cellShapeStr = cellShape+''
                 const ch = S[channel], dst = ch.shaped[cellShapeStr]
-                if (dst.looping) return;  else dst.looping = true
-                let prevEnd = performance.now()
+                if (!dst || dst.looping) return;  else dst.looping = true
+                let prevEnd = performance.now(), prevWait = prevEnd
                 while (true) {
                     if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
                     const start = performance.now(), end = start + dst.msPerStep[1]
@@ -452,10 +482,14 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length) return dst.looping = false
                     // Get sensor data.
                     const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
-                    if (mainHandler)
-                        for (let s of ch.sensors)
-                            s.onValues(s)
-                    await Promise.resolve() // Wait a bit. If sensors are too slow, their data will have to wait until the next step.
+                    if (mainHandler && Array.isArray(ch.sensors))
+                        for (let i = 0; i < ch.sensors.length; ++i) {
+                            const s = ch.sensors[i]
+                            const data = allocF32(s.values)
+                            s.onValues(s, data)
+                        }
+                    await Promise.resolve() // Wait a bit.
+                    //   (Also, commenting this out halves Firefox throughput.)
                     // Send it off.
                     const nextPacket = dst.nextPacket;  dst.nextPacket = E._Packet.init(channel, cellShape)
                     nextPacket.handle(mainHandler)
@@ -465,8 +499,9 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     const now = performance.now(), needToWait = prevEnd - now
                     prevEnd += dst.msPerStep[1]
                     if (prevEnd < now - 1000) prevEnd = now - 1000 // Don't get too eager after being stalled.
-                    if (needToWait > 0)
-                        await new Promise(then => setTimeout(then, needToWait))
+                    if (needToWait > 0 || now - prevWait > 100)
+                        await new Promise(then => setTimeout(then, Math.max(needToWait, 0))),
+                        prevWait = performance.now()
                 }
             }
             static _measureThroughput() {
@@ -782,12 +817,18 @@ Extra parameters:
                 function round(x) { return Math.round(x*100) / 100 }
             },
             hasher: A(function hasher(name, partCount, partSize) {
-                let parts = [], lastPartWasNumber = false, firstNumberIndex = null
+                let parts = [], lastPartWasNumber = false, firstNumberIndex = null, isConst = true
                 flattenName(name), name = null
-                return function specifyCell(...args) {
-                    const numbers = fillParts(new Float32Array(partCount * partSize), ...args)
-                    return function hash(dst, offset) { dst.set(numbers, offset) }
-                }
+                if (isConst) {
+                    const numbers = fillParts(new Float32Array(partCount * partSize))
+                    return function specifyCell(...args) {
+                        return function putHash(dst, offset) { dst.set(numbers, offset) }
+                    }
+                } else
+                    return function specifyCell(...args) {
+                        const numbers = fillParts(new Float32Array(partCount * partSize), ...args)
+                        return function putHash(dst, offset) { dst.set(numbers, offset) }
+                    }
                 function flattenName(part) {
                     if (Array.isArray(part))
                         part.forEach(flattenName)
@@ -803,6 +844,7 @@ Extra parameters:
                         if (!lastPartWasNumber || parts[parts.length-1].length >= partSize)
                             parts.push([]), lastPartWasNumber = true
                         if (firstNumberIndex == null) firstNumberIndex = parts.length-1
+                        if (typeof part == 'function') isConst = false
                         parts[parts.length-1].push(part)
                     } else error("Unrecognized name part:", part)
                 }
@@ -880,4 +922,6 @@ Makes only the sign matter for low-frequency numbers.` }),
         const c = f32aCache[len]
         if (c.length < 16) c.push(a)
     }
+    function allocArray() { return arrayCache.length ? arrayCache.pop() : [] }
+    function deallocArray(a) { Array.isArray(a) && arrayCache.length < 16 && (a.length = 0, arrayCache.push(a)) }
 })(Object.create(null))

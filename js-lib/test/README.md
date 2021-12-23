@@ -8,19 +8,23 @@ Code should always pass all tests, and should improve benchmark numbers over tim
 
 ## Benchmarks
 
-- Handler: one sensor that always sends `960` `1`s, and one handler that always responds with `-1`s. The simplest possible scenario, dominated by array-copying time.
+- Handler: one sensor that always sends `960` `1`s, and one handler that always responds with `-1`s. The simplest possible scenario, dominated by array-copying and garbage-collection time.
 
 ## Current benchmark results
 
-Reporting the mean, usually for about `1000` transferred numbers per second.
+Reporting the mean, usually for about `1000` transferred numbers per packet.
 
 - Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
     - Handler:
         - Firefox:
-            - <details><summary>throughput <code>41.68</code> MiB/s (↑)</summary><textarea readonly>{"Handler: simultaneous steps":[2.98,2.98,2.97,2.96,2.96,2.96,2.95,2.95,2.94,2.94],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[43702489.64,63391796.95,74223281.83,75702844.35,89013130.95,98188888.85,102252543.63,105714524.03,107841315.8,110008642.75]}</textarea></details>
+            - <details><summary>throughput <code>148.53</code> MiB/s (↑)</summary><textarea readonly>{"Handler: simultaneous steps":[1,1,1,1,1,1,1,1,1,1],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[155746845.59,207823644.67,203790433.77,246371608.24,260854304.92,270054227.75,265606367.58,286011449.4,290056239.88,293305333.44]}</textarea></details>
         - Chrome:
-            - <details><summary>throughput <code>83.90</code> MiB/s (↑), allocations <code>1.13</code> MiB/s (↓)</summary><textarea readonly>{"Handler: simultaneous steps":[2.98,2.98,2.97,2.96,2.96,2.95,2.94,2.94,2.93,2.93],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[87973845.69,127264548.26,148152427.41,164654286.74,174877317.78,184397151.64,189017669.54,199339354.82,202965898.95,211741332.77],"Handler: allocations, bytes/s":[1181544.2,2146027.95,3558120.15,2875348.56,3241276.41,3480596.46,2750931.85,1855689.04,966435.22,844000.91]}</textarea></details>
+            - <details><summary>throughput <code>252.56</code> MiB/s (↑), allocations <code> 3.25</code> MiB/s (↓)</summary><textarea readonly>{"Handler: simultaneous steps":[1,1,1,1,1,1,1,1,1,1],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[264831014.82,381572379.67,455253033.98,501104131.18,524175730.05,560954490.83,586383352.87,594249972.29,610052237.9,620215557.81],"Handler: allocations, bytes/s":[3407715.58,4648851.37,3786856.92,4641209.19,2491384.5,2933324.58,4734019.96,4618951.49,4116209.01,3050580.04]}</textarea></details>
 
 ## Lessons
 
-- `E:{_allocF32()}` bad. `function allocF32()` good.
+- `E:{_allocF32()}` bad, for performance. `function allocF32()` good.
+
+- `Promise`s bad, for allocations. Callbacks good.
+
+- `for-of` loops allocate a bit, but not nearly as much as promises.

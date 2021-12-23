@@ -233,7 +233,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ System resources, if exposed: `m=performance.memory`, `m.usedJSHeapSize / m.totalJSHeapSize * 2 - 1`.
             - ⋯ In-extension sensors:
                 - ⋯ Time, as sines of exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
-                - ⋯ [Tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`.
+                - ⋯ [Tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
                 - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
                 - ⋯ To communicate rewardName/userName/name, fill them with closures, that read from received data.
