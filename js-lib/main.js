@@ -63,12 +63,13 @@ export default (function(exports) {
                 const removed = Sensor._removed || (Sensor._removed = new Set)
                 for (let i = 0; i < ch.cellShapes.length; ++i) {
                     const cellShape = ch.cellShapes[i]
-                    const dst = ch.shaped[cellShape]
+                    const cellShapeStr = String(cellShape)
+                    const dst = ch.shaped[cellShapeStr]
                     if (!dst.handlers.length) {
                         if (performance.now() - dst.lastUsed > 60000) removed.add(cellShape)
                         continue
                     }
-                    const namer = E.Sensor._namer(this, cellShape)
+                    const namer = E.Sensor._namer(this, cellShape, cellShapeStr)
                     const flatV = allocF32(namer.namedSize)
                     const flatE = error ? allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
@@ -106,19 +107,18 @@ export default (function(exports) {
                 return this
             }
             // These are static methods to avoid collisions with inheritors.
-            static _gotFeedback(T, data, error, allFeedback, fbOffset, cellShape) {
+            static _gotFeedback(T, data, error, allFeedback, fbOffset, cellShape, s = String(cellShape)) {
                 // Fulfill the promise of `.send`.
                 try {
                     if (allFeedback && !T.noFeedback) {
                         const flatV = allocF32(data.length)
-                        E.Sensor._namer(T, cellShape).unname(allFeedback, fbOffset, flatV)
+                        E.Sensor._namer(T, cellShape, s).unname(allFeedback, fbOffset, flatV)
                         T.feedbackCallbacks.shift()(flatV)
                     } else
                         T.feedbackCallbacks.shift()(null)
                 } finally { deallocF32(data), error && deallocF32(error) }
             }
-            static _namer(T, cellShape) {
-                const s = ''+cellShape
+            static _namer(T, cellShape, s = String(cellShape)) {
                 if (!T.dataNamers[s]) {
                     // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
                     const [reward, user, name, data] = cellShape
@@ -399,7 +399,9 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 return a
             }
             async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors; `this` must not be used after this call.
-                const T = this, ch = S[T.channel], dst = ch.shaped[T.cellShape]
+                const T = this, ch = S[T.channel]
+                const cellShapeStr = String(T.cellShape)
+                const dst = ch.shaped[cellShapeStr]
                 if (!dst) return
                 const start = performance.now(), namedSize = T.cells * T.cellSize
                 ++ch.stepsNow
@@ -453,7 +455,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     }
                     // Sensors.
                     while (T.sensor.length)
-                        E.Sensor._gotFeedback(T.sensor.pop(), T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
+                        E.Sensor._gotFeedback(T.sensor.pop(), T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape, cellShapeStr)
                     E._Packet._handledBytes = (E._Packet._handledBytes || 0) + namedSize * 4
                     T.deinit()
                 } finally {
