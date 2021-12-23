@@ -49,6 +49,7 @@ export default (function(exports) {
                     feedbackCallbacks: [], // A queue of promise-fulfilling callbacks. Very small, so an array is the fastest option.
                 }).resume()
             }
+            needsExtensionAPI() { return null }
             send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
@@ -101,18 +102,20 @@ export default (function(exports) {
                 return this.dataNamers[s]
             }
             pause() {
-                if (this.paused) return
+                if (this.paused) return this
                 E._state(this.channel).sensors = E._state(this.channel).sensors.filter(v => v !== this)
                 this.paused = true
+                return this
             }
             resume() {
-                if (!this.paused) return
+                if (!this.paused) return this
                 if (typeof this.onValues == 'function') {
                     E._state(this.channel).sensors.push(this)
                     for (let cellShape of E._state(this.channel).cellShapes)
                         E._Packet.handleLoop(this.channel, cellShape)
                 }
                 this.paused = false
+                return this
             }
         }, {
             docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
@@ -132,6 +135,7 @@ export default (function(exports) {
     - To change any of this, \`pause()\` and recreate.
 
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
+    - (Do not override in child classes, only call.)
     - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
         - (Can use \`sn._allocF32(len)\` to reuse.)
     - \`error\`: can be owned flat data, -1…1 \`Float32Array\` of length \`values\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
@@ -139,7 +143,9 @@ export default (function(exports) {
         - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
 
-- \`pause()\`, \`resume()\``,
+- \`pause()\`, \`resume()\`: for convenience, these return the object.
+
+- \`needsExtensionAPI() → null|String\`: overridable in child classes. By default, the sensor is entirely in-page in a [content script](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts) if injected by an extension. For example, make this return \`'tabs'\` to get access to [\`chrome.tabs\`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs) in an extension.`,
         }),
         Accumulator: A(class Accumulator {
             constructor({ onValues=null, onFeedback=null, priority=0, channel='' }) {
@@ -157,15 +163,17 @@ export default (function(exports) {
                 }).resume()
             }
             pause() {
-                if (this.paused) return
+                if (this.paused) return this
                 E._state(this.channel).accumulators = E._state(this.channel).accumulators.filter(v => v !== this)
                 this.paused = true
+                return this
             }
             resume() {
-                if (!this.paused) return
+                if (!this.paused) return this
                 E._state(this.channel).accumulators.push(this)
                 E._state(this.channel).accumulators.sort((a,b) => b.priority - a.priority)
                 this.paused = false
+                return this
             }
         }, {
             docs:`Modifies data/feedback, after sensors and before handlers.
@@ -183,7 +191,7 @@ export default (function(exports) {
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
     - To change any of this, \`pause()\` and recreate.
 
-- \`pause()\`, \`resume()\``,
+- \`pause()\`, \`resume()\`: for convenience, these return the object.`,
         }),
         Handler: A(class Handler {
             constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' }) {
@@ -201,7 +209,7 @@ export default (function(exports) {
                 }).resume()
             }
             pause() {
-                if (this.paused) return
+                if (this.paused) return this
                 const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
                 dst.handlers = dst.handlers.filter(v => v !== this)
                 if (ch.mainHandler === this) {
@@ -211,15 +219,17 @@ export default (function(exports) {
                             if (!h.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < h.priority)) ch.mainHandler = h
                 }
                 this.paused = true
+                return this
             }
             resume() {
-                if (!this.paused) return
+                if (!this.paused) return this
                 const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
                 dst.handlers.push(this)
                 dst.handlers.sort((a,b) => b.priority - a.priority)
                 if (!this.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < this.priority)) ch.mainHandler = this
                 if (this.onValues) E._Packet.handleLoop(this.channel, this.cellShape)
                 this.paused = false
+                return this
             }
         }, {
             docs:`Given data, gives feedback: human or AI model.
@@ -241,7 +251,7 @@ export default (function(exports) {
         - \`priority\`: the highest-priority handler without \`noFeedback\` will be the *main* handler, and give feedback.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
 
-- \`pause()\`, \`resume()\``,
+- \`pause()\`, \`resume()\`: for convenience, these return the object.`,
             bench() {
                 const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
                 return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.

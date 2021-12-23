@@ -118,6 +118,7 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ Communicate in packets: cell-count and 1+value-size (so that names can be resized if needed) and cell-size and all-cell-data (`-1`…`1`). Uncompressed for simplicity of integration.
             - ⋯ Benchmark actual throughput.
         - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model to do next-frame prediction and first-cell-number maximization.
+            - ⋯ To take advantage of exponential improvement of learning, ML must be a journey, not a series of separate steps like it is today. Sensor network being able to represent all datasets in one format is a prerequisite. So, experiment: implement weight decay weighted by gradient to [learn precise behaviors](https://mathai-iclr.github.io/papers/papers/MATHAI_29_paper.pdf) without much inter-task interference, or weight-magnitude-based evolution of weight groups for cache-aware sparsification, then make the same model fully learn very small datasets. Are there then benefits to learning bigger text-based datasets?
     - ⋯ A Neuralink device. Once it, you know, exists. (Maybe it would be a [HID](https://web.dev/hid/).)
 
 - ⋯ Compression, for Internet and files:
@@ -140,7 +141,7 @@ Isn't implementing this such a joyful learning opportunity?
 Intelligence can do anything. But how to support the utter formlessness of generality of intelligence? By supporting every form at once. With reasonable defaults.
 
 - ⋯ One library that puts everything into the global `sn`, populated as variables:
-    - ⋯ The basics:
+    - ✓ The basics:
         - ✓ Have a name-hasher, from name and available-parts and part-size to Float32Array, possibly written-to in-place.
             - ✓ To not waste space, numbers fill up their cells (and all no-string cells) with fractally-folded versions of themselves; each fold turns the line `{ 0: -1, 1: 1 }` into `{ 0: -1, .5: 1, 1: -1 }`, so, `x → 1-2*abs(x)`. (The listener can then make out details more easily.)
             - ✓ Data should also do that if unused, with feedback adding up the details too so that the reported feedback is nudged appropriately. No holes, only more detail.
@@ -184,9 +185,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ Make a table of contents at the top, with refs to the top at every section heading.
             - ✓ Make `npm run doc` import the library and call this and write its result to `docs/DOCS.md`.
         - ✓ Ability to de/serialize sensors/accumulators/handlers, so that users can pick up power-ups at the press of a button.
-            - ⋯ Some way to specify which parts are done in-extension and which are in-content-script and which are in-page-JS, here.
-                - …How exactly would we specify the interface that splits & aggregates code, though… Should we start on `/js-ext` now, just to force it?…
-    - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files:
+            - ✓ Have the `.needsExtensionAPI() → null|string` method on `Sensor`s, returning `null` by default, but can return `''` or `'tabs'`. Let users control which parts of the `chrome` API the extension can see.
+    - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files, or maybe their own NPM modules (though they *are* small):
         - ⋯ `.Sensor`:
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
                 - ⋯ Keyboard. Variants:
@@ -230,7 +230,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1..1.
                     - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
             - ⋯ System resources, if exposed: `m=performance.memory`, `m.usedJSHeapSize / m.totalJSHeapSize * 2 - 1`.
-            - ⋯ Time, as sines exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
+            - ⋯ In-extension sensors:
+                - ⋯ Time, as sines of exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
+                - ⋯ [Tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
                 - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
                 - ⋯ To communicate rewardName/userName/name, fill them with closures, that read from received data.
