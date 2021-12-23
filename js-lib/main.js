@@ -15,6 +15,7 @@ export default (function(exports) {
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
     const S = Object.create(null) // See `E._state(channel, cellShape)`.
+    const f32aCache = Object.create(null) // new Map // TODO:
     let currentBenchmark = null
 
     return A(E, {
@@ -60,8 +61,8 @@ export default (function(exports) {
                         continue
                     }
                     const namer = this._namer(cellShape)
-                    const flatV = E._allocF32(namer.namedSize)
-                    const flatE = error ? E._allocF32(namer.namedSize) : null
+                    const flatV = allocF32(namer.namedSize)
+                    const flatE = error ? allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
                     dst.nextPacket.send(this, flatV, flatE, this.noFeedback)
@@ -76,13 +77,13 @@ export default (function(exports) {
             _gotFeedback(data, error, feedback, fbOffset, cellShape) {
                 // Fulfill the promise of `.send`.
                 if (feedback && !this.noFeedback) {
-                    const flatV = E._allocF32(this.values)
+                    const flatV = allocF32(this.values)
                     this._namer(cellShape).unname(feedback, fbOffset, flatV)
                     this.feedbackCallbacks.shift()(flatV)
-                    E._deallocF32(flatV)
+                    deallocF32(flatV)
                 } else
                     this.feedbackCallbacks.shift()(null)
-                E._deallocF32(data), error && E._deallocF32(error)
+                deallocF32(data), error && deallocF32(error)
             }
             _namer(cellShape) {
                 const s = ''+cellShape
@@ -132,11 +133,10 @@ export default (function(exports) {
 
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
     - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
-        - (Can use \`._allocF32(length)\` and fill that to reduce allocations via reuse.)
     - \`error\`: can be owned flat data, -1…1 \`Float32Array\` of length \`values\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
     - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Close enough.)
         - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
-    - (Result: \`feedback\` is NOT owned by you. Do NOT deallocate with \`._deallocF32(feedback)\`.)
+    - (Result: \`feedback\` is NOT owned by you. Do not preserve, read immediately.)
 
 - \`pause()\`, \`resume()\``,
         }),
@@ -251,7 +251,7 @@ export default (function(exports) {
                             name: ['some', 'kinda', 'name'],
                             values: cells*dataSize,
                             async onValues(sensor) {
-                                const data = E._allocF32(cells*dataSize)
+                                const data = allocF32(cells*dataSize)
                                 data.fill(1)
                                 const feedback = await sensor.send(data)
                                 feedback && feedback.fill(.5439828952837)
@@ -283,32 +283,24 @@ export default (function(exports) {
                 })
             const ch = S[channel]
             if (cellShape == null) return ch
-            if (!ch.shaped[cellShape])
-                ch.shaped[cellShape] = {
+            const cellShapeStr = ''+cellShape
+            if (!ch.shaped[cellShapeStr])
+                ch.shaped[cellShapeStr] = {
                     looping: false,
                     lastUsed: performance.now(),
                     msPerStep: [0,0], // [n, mean]
                     cellShape: cellShape, // [reward, user, name, data]
                     handlers: [], // Array<Handler>, sorted by priority.
                     nextPacket: new E._Packet(channel, cellShape),
+                    packetCache: [], // Array<E._Packet>; DO NOT USE
                 }, ch.cellShapes.push(cellShape)
-            return ch.shaped[cellShape]
+            return ch.shaped[cellShapeStr]
         },
         _memory: A(function() { return performance.memory ? performance.memory.usedJSHeapSize : NaN }, {
             docs:`Reports the size of the currently active segment of JS heap in bytes, or NaN.
 
 Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).`,
         }),
-        _allocF32(len) { return E._Packet._f32 && E._Packet._f32[len] && E._Packet._f32[len].length ? E._Packet._f32[len].pop() : new Float32Array(len) },
-        _deallocF32(a) {
-            // Makes `E._allocF32` re-use `a` when allocating an array of the same size. Usually.
-            assert(a instanceof Float32Array)
-            if (!E._Packet._f32) E._Packet._f32 = Object.create(null)
-            const len = a.len
-            if (!E._Packet._f32[len]) E._Packet._f32[len] = []
-            if (E._Packet._f32[len].length > 16) return
-            E._Packet._f32[len].push(a)
-        },
         _Packet: class _Packet {
             constructor(channel, cellShape) {
                 Object.assign(this, {
@@ -330,6 +322,22 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     // handler → accumulator → sensor:
                     feedback: null, // null | owned f32a.
                 })
+            }
+            static init(channel, cellShape) {
+                const dst = E._state(channel, cellShape)
+                return dst.packetCache.length ? dst.packetCache.pop() : new E._Packet(channel, cellShape)
+            }
+            deinit() { // `this` must not be used after this call.
+                // (Allows reuse of this object by `E._Packet.init({…})`.)
+                this.cells = 0
+                this.sensorNeedsFeedback = false
+                this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = 0
+                this.data && (deallocF32(this.data), this.data = null)
+                this.error && (deallocF32(this.error), this.error = null)
+                this.accumulatorExtra.length = this.accumulatorCallback.length = 0
+                this.feedback && (deallocF32(this.feedback), this.feedback = null)
+                const dst = E._state(this.channel, this.cellShape)
+                if (dst.packetCache.length < 64) dst.packetCache.push(this)
             }
             send(sensor, point, error, noFeedback) {
                 // `sensor` is a `E.Sensor` with `._gotFeedback(…)`, from `point` (owned) & `error` (owned) & `allFeedback` (not owned) & `fbOffset` (int) & `cellShape`.
@@ -357,14 +365,14 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                 if (!isFinite(a[1])) a[0] = a[1] = 0
                 return a
             }
-            async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors
+            async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors; `this` must not be used after this call.
                 const T = this, ch = S[T.channel], dst = ch.shaped[T.cellShape]
                 if (!dst) return
-                const start = performance.now()
+                const start = performance.now(), namedSize = T.cells * T.cellSize
                 ++ch.stepsNow
                 try {
                     // Concat sensors into `.data` and `.error`.
-                    T.data = E._allocF32(T.cells * T.cellSize), T.error = !T.sensorError ? null : E._allocF32(T.cells * T.cellSize)
+                    T.data = allocF32(namedSize), T.error = !T.sensorError ? null : allocF32(namedSize)
                     for (let i = 0; i < T.sensorData.length; ++i) {
                         const at = T.sensorIndices[i] * T.cellSize
                         T.data.set(T.sensorData[i], at)
@@ -383,7 +391,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                         }
                     // Handlers.
                     if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
-                        T.feedback = E._allocF32(T.cells * T.cellSize), T.feedback.set(T.data)
+                        T.feedback = allocF32(namedSize), T.feedback.set(T.data)
                     else
                         T.feedback = null
                     if (mainHandler) await mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
@@ -402,11 +410,12 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                     // Sensors.
                     while (T.sensor.length)
                         T.sensor.pop()._gotFeedback(T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape)
-                    E._Packet._handledBytes = (E._Packet._handledBytes || 0) + T.cells * T.cellSize * 4
+                    E._Packet._handledBytes = (E._Packet._handledBytes || 0) + namedSize * 4
+                    T.deinit()
                 } finally {
                     // Self-reporting.
                     E.meta.metric('simultaneous steps', ch.stepsNow)
-                    E.meta.metric('step processed data, values', T.cells * T.cellSize)
+                    E.meta.metric('step processed data, values', namedSize)
                     --ch.stepsNow
                     E._Packet.stepsEnded = E._Packet.stepsEnded + 1 || 1
                     const duration = (dst.lastUsed = performance.now()) - start
@@ -434,7 +443,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                             s.onValues(s)
                     await Promise.resolve() // Wait a bit. If sensors are too slow, their data will have to wait until the next step.
                     // Send it off.
-                    const nextPacket = dst.nextPacket;  dst.nextPacket = new E._Packet(channel, cellShape)
+                    const nextPacket = dst.nextPacket;  dst.nextPacket = E._Packet.init(channel, cellShape)
                     nextPacket.handle(mainHandler)
                     // Benchmark throughput if needed.
                     E._Packet._measureThroughput()
@@ -844,4 +853,17 @@ Makes only the sign matter for low-frequency numbers.` }),
     function assertCounts(msg, ...xs) { assert(xs.every(x => typeof x == 'number' && x >= 0 && x === x>>>0), msg || 'Must be a non-negative integer') }
     function assert(bool, msg) { if (!bool) error(msg || 'Assertion failed') }
     function error(...msg) { throw new Error(msg.join(' ')) }
+
+    function allocF32(len) {
+        const c = f32aCache[len]
+        return c && c.length ? c.pop() : new Float32Array(len)
+    }
+    function deallocF32(a) {
+        // Makes `allocF32` re-use `a` when allocating an array of the same size. Usually.
+        assert(a instanceof Float32Array)
+        const len = a.length
+        if (!f32aCache[len]) f32aCache[len] = []
+        const c = f32aCache[len]
+        if (c.length < 16) c.push(a)
+    }
 })(Object.create(null))

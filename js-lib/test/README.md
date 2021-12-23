@@ -6,6 +6,10 @@ Code should always pass all tests, and should improve benchmark numbers over tim
 
 ---
 
+## Benchmarks
+
+- Handler: one sensor that always sends `960` `1`s, and one handler that always responds with `-1`s. The simplest possible scenario, dominated by array-copying time.
+
 ## Current benchmark results
 
 Reporting the mean, usually for about `1000` transferred numbers per second.
@@ -13,10 +17,10 @@ Reporting the mean, usually for about `1000` transferred numbers per second.
 - Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
     - Handler:
         - Firefox:
-            - <details><summary>throughput <code>36.05</code> MiB/s (↑)</summary><textarea readonly>{"Handler: simultaneous steps":[2.98,2.95,2.94,2.93,2.92,2.91,2.89,2.88,2.88,2.87],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[37804289.09,31230502.09,32799110.39,36769437.49,42946813.78,44033431.93,45794305.34,48985210.89,51437525.88,52752784.34]}</textarea></details>
+            - <details><summary>throughput <code>38.46</code> MiB/s (↑)</summary><textarea readonly>{"Handler: simultaneous steps":[2.98,2.97,2.97,2.96,2.96,2.95,2.94,2.94,2.93,2.93],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[40328886.36,51852526.83,66242457.94,75453420.72,81744097.66,89515398.16,87762512.68,98246072.54,94845157.51,97280910.01]}</textarea></details>
         - Chrome:
-            - <details><summary>throughput <code>17.22</code> MiB/s (↑), allocations <code>3.48</code> MiB/s (↓)</summary><textarea readonly>{"Handler: simultaneous steps":[2.92,2.89,2.88,2.85,2.82,2.79,2.77,2.77,2.74,2.73],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[18057431.79,28048615.64,37257007.09,38770360.81,41685338.16,41774095.81,44441804.94,51476089.45,50008423.26,53523131.22],"Handler: allocations, bytes/s":[3653182.48,5906774.12,5735500.59,4846444.83,6723823.29,6241338.24,7445240.61,5524328.97,6553852.8,6461670.44]}</textarea></details>
+            - <details><summary>throughput <code>73.23</code> MiB/s (↑), allocations <code>5.04</code> MiB/s (↓)</summary><textarea readonly>{"Handler: simultaneous steps":[2.98,2.97,2.96,2.96,2.94,2.94,2.93,2.92,2.91,2.9],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[76784953.99,102231131.04,120946993.07,136811731.02,132228426.69,142528712.04,148185381.25,154876841.38,150812759.28,151921406.17],"Handler: allocations, bytes/s":[5284541.73,10316711.66,10744620.67,7812427.02,6818487.17,9045936.45,6146906.3,4279721.65,7144546.52,7684282.42]}</textarea></details>
 
-## Benchmarks
+## Lessons
 
-- Handler: one sensor that always sends `960` `1`s, and one handler that always responds with `-1`s. The simplest possible scenario, dominated by array-copying time.
+- `E:{_allocF32()}` bad. `function allocF32()` good.
