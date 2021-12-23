@@ -15,7 +15,7 @@ export default (function(exports) {
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
     const S = Object.create(null) // See `E._state(channel, cellShape)`.
-    const f32aCache = Object.create(null) // new Map // TODO:
+    const f32aCache = Object.create(null)
     let currentBenchmark = null
 
     return A(E, {
@@ -80,7 +80,6 @@ export default (function(exports) {
                     const flatV = allocF32(this.values)
                     this._namer(cellShape).unname(feedback, fbOffset, flatV)
                     this.feedbackCallbacks.shift()(flatV)
-                    deallocF32(flatV)
                 } else
                     this.feedbackCallbacks.shift()(null)
                 deallocF32(data), error && deallocF32(error)
@@ -133,10 +132,11 @@ export default (function(exports) {
 
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
     - \`values\`: owned flat data, -1…1 \`Float32Array\` of length \`values\`. Do not perform ANY operations on it once called.
+        - (Can use \`sn._allocF32(len)\` to reuse.)
     - \`error\`: can be owned flat data, -1…1 \`Float32Array\` of length \`values\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
     - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Close enough.)
         - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
-    - (Result: \`feedback\` is NOT owned by you. Do not preserve, read immediately.)
+    - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
 
 - \`pause()\`, \`resume()\``,
         }),
@@ -255,6 +255,7 @@ export default (function(exports) {
                                 data.fill(1)
                                 const feedback = await sensor.send(data)
                                 feedback && feedback.fill(.5439828952837)
+                                E._deallocF32(feedback)
                             },
                         })
                         const to = new E.Handler({
@@ -269,6 +270,8 @@ export default (function(exports) {
                 }
             },
         }),
+        _allocF32: allocF32,
+        _deallocF32: deallocF32,
         maxSimultaneousPackets: 4,
         _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
             if (!S[channel])
