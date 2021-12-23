@@ -118,7 +118,8 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ Communicate in packets: cell-count and 1+value-size (so that names can be resized if needed) and cell-size and all-cell-data (`-1`…`1`). Uncompressed for simplicity of integration.
             - ⋯ Benchmark actual throughput.
         - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model to do next-frame prediction and first-cell-number maximization.
-            - ⋯ To take advantage of exponential improvement of learning, ML must be a journey, not a series of separate steps like it is today. Sensor network being able to represent all datasets in one format is a prerequisite. So, experiment: implement weight decay weighted by gradient to [learn precise behaviors](https://mathai-iclr.github.io/papers/papers/MATHAI_29_paper.pdf) without much inter-task interference, or weight-magnitude-based evolution of weight groups for cache-aware sparsification, then make the same model fully learn very small datasets. Are there then benefits to learning bigger text-based datasets?
+            - ⋯ To take advantage of exponential improvement of learning, ML must be a journey, not a series of separate steps like it is today. Sensor network being able to represent all datasets in one format is a prerequisite. So, experiment: implement weight decay weighted by gradient to [learn precise behaviors](https://mathai-iclr.github.io/papers/papers/MATHAI_29_paper.pdf) without much inter-task interference, or weight-magnitude-based evolution of weight groups for cache-aware sparsification, then make the same model fully learn very small datasets. Are there then benefits to learning bigger text-based datasets? Might be a dead-end though.
+            - ⋯ Prediction is technically a number to optimize. So make an accumulator that rewards a cell's next-frame prediction, and try to fully-learn that, so that models can then choose to predict without being forced to.
     - ⋯ A Neuralink device. Once it, you know, exists. (Maybe it would be a [HID](https://web.dev/hid/).)
 
 - ⋯ Compression, for Internet and files:
@@ -256,6 +257,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ And the ability to use in-page keybindings. (Might even be *usable*.)
         - ⋯ `.Handler`:
             - ⋯ No-feedback sound output (speakers).
+                - How do we do this, exactly? What parts of `AudioContext` do we need?
+                - What strategy do we use even: put-samples-as-is `A`, `A, -A` with configurable repetition length, or IFFT with frequency limitations and resizing?
             - ⋯ Sound input (microphone). Probably terrible.
             - ⋯ Write to Internet.
                 - ⋯ Make sure that at least `error=1` ("no data") is preserved.

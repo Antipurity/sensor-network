@@ -265,14 +265,14 @@ export default (function(exports) {
                                 const data = allocF32(cells*dataSize)
                                 data.fill(1)
                                 const feedback = await sensor.send(data)
-                                feedback && feedback.fill(.5439828952837)
+                                feedback && feedback.fill(.5439828952837) // "Read" it.
                                 E._deallocF32(feedback)
                             },
                         })
                         const to = new E.Handler({
                             dataSize,
                             async onValues(data, error, cellShape, writeFeedback, feedback) {
-                                data.fill(.489018922485)
+                                data.fill(.489018922485) // "Read" it.
                                 if (writeFeedback) feedback.fill(-1)
                             },
                         })
@@ -415,7 +415,7 @@ Note that [Firefox and Safari don't support measuring memory](https://developer.
                             const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
                             if (r instanceof Promise) (tmp || (tmp = [])).push(r)
                         }
-                    if (tmp) await Promise.all(tmp)
+                    if (tmp) for (let i = 0; i < tmp.length; ++i) await tmp[i]
                     // Accumulators.
                     while (T.accumulatorCallback.length) {
                         const f = T.accumulatorCallback.pop()
