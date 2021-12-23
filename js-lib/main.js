@@ -72,6 +72,7 @@ export default (function(exports) {
                     removed.forEach(sh => delete ch[sh])
                     removed.clear()
                 }
+                deallocF32(values), error && deallocF32(error)
                 return new Promise(then => this.feedbackCallbacks.push(then))
             }
             _gotFeedback(data, error, feedback, fbOffset, cellShape) {
