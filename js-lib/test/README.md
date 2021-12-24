@@ -17,9 +17,9 @@ Reporting the mean, usually for about `1000` transferred numbers per packet.
 - Intel(R) Core(TM) i7-8750H CPU @ 2.20GHz
     - Handler:
         - Firefox:
-            - <details><summary>throughput <code>148.53</code> MiB/s (↑)</summary><textarea readonly>{"Handler: simultaneous steps":[1,1,1,1,1,1,1,1,1,1],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[155746845.59,207823644.67,203790433.77,246371608.24,260854304.92,270054227.75,265606367.58,286011449.4,290056239.88,293305333.44]}</textarea></details>
+            - <details><summary>throughput <code>149.47</code> MiB/s (↑)</summary><textarea readonly>{"Handler: simultaneous steps":[1,1,1,1,1,1,1,1,1,1],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[156732776.19,224178555.02,219678606.78,232630245.52,247700313.94,260806358.86,267804259.4,268968967.16,224425665.5,236281398.63]}</textarea></details>
         - Chrome:
-            - <details><summary>throughput <code>252.56</code> MiB/s (↑), allocations <code> 3.25</code> MiB/s (↓)</summary><textarea readonly>{"Handler: simultaneous steps":[1,1,1,1,1,1,1,1,1,1],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[264831014.82,381572379.67,455253033.98,501104131.18,524175730.05,560954490.83,586383352.87,594249972.29,610052237.9,620215557.81],"Handler: allocations, bytes/s":[3407715.58,4648851.37,3786856.92,4641209.19,2491384.5,2933324.58,4734019.96,4618951.49,4116209.01,3050580.04]}</textarea></details>
+            - <details><summary>throughput <code>269.53</code> MiB/s (↑), allocations <code> 2.23</code> MiB/s (↓)</summary><textarea readonly>{"Handler: simultaneous steps":[1,1,1,1,1,1,1,1,1,1],"Handler: step processed data, values":[960,1920,2880,3840,4800,5760,6720,7680,8640,9600],"Handler: throughput, bytes/s":[282620133.46,399673983.06,475995719.95,523101943.34,547517998.98,573855195.11,592481823.9,612028460.51,620438791.99,627211231.18],"Handler: allocations, bytes/s":[2334897.29,5254187.94,4995715.23,5121319.35,2406621.44,3609019.36,4607187.94,3952371.38,2925589.37,2616792.3]}</textarea></details>
 
 ## Lessons
 

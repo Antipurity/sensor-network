@@ -201,7 +201,6 @@ export default (function(exports) {
             if (now - _Packet.lastMeasuredThroughputAt > 500) { // Filter out noise.
                 const s = Math.max(now - _Packet.lastMeasuredThroughputAt, .01) / 1000
                 E.meta.metric('throughput, bytes/s', (_Packet._handledBytes || 0) / s)
-                // TODO: If the first after benchmark start, ignore this value.
                 E.meta.metric('allocations, bytes/s', Math.max(memory() - _Packet.lastMemory, 0) / s)
                 _Packet.lastMeasuredThroughputAt = now
                 _Packet._handledBytes = 0, _Packet.stepsEnded = 0
