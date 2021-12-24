@@ -79,7 +79,7 @@ export default (function(exports) {
             this.sensorIndices.push(this.cells)
             this.cells += point.length / this.cellSize | 0
         }
-        static updateMean(a, value, maxHorizon = 1000) {
+        static updateMean(a, value, maxHorizon = 100) { // TODO:
             const n1 = a[0], n2 = n1+1
             a[0] = Math.min(n2, maxHorizon)
             a[1] += (value - a[1]) / n2
@@ -166,6 +166,9 @@ export default (function(exports) {
             while (true) {
                 if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
                 const start = performance.now(), end = start + dst.msPerStep[1]
+                debug('msPerStep', dst.msPerStep[1]) // TODO: Why is it steadily climbing?! ...Actually, isn't it accurate?...
+                //   Well, it does overshoot often, and when it does, sound gets very noticeably skippy.
+                //     Can we somehow prevent overshooting?
                 // Don't do too much at once.
                 while (ch.stepsNow > E.maxSimultaneousPackets)
                     await new Promise(then => ch.waitingSinceTooManySteps.push(then))
@@ -182,6 +185,7 @@ export default (function(exports) {
                 if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
                     return dst.looping = false
                 await Promise.resolve() // Wait a bit.
+                debug('predictedMsPerStep', (dst.nextPacket.cells * 96 * 4) / 48000 * 1000) // TODO:
                 //   (Also, commenting this out halves Firefox throughput.)
                 // Send it off.
                 const nextPacket = dst.nextPacket;  dst.nextPacket = _Packet.init(channel, cellShape)
@@ -904,6 +908,17 @@ Makes only the sign matter for low-frequency numbers.` }),
     }
     function allocArray() { return arrayCache.length ? arrayCache.pop() : [] }
     function deallocArray(a) { Array.isArray(a) && arrayCache.length < 16 && (a.length = 0, arrayCache.push(a)) }
+
+    function debug(k, v) {
+        // Prints to DOM, to not strain the poor JS console.
+        if (!debug.o) debug.o = Object.create(null)
+        if (!debug.o[k]) {
+            if (!document.body) return
+            debug.o[k] = document.createElement('div')
+            document.body.append(debug.o[k])
+        }
+        debug.o[k].textContent = k + ': ' + v
+    }
 
     function memory() {
         // Reports the size of the currently active segment of JS heap in bytes, or NaN.
