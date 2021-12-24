@@ -32,12 +32,11 @@ export default (function(exports) {
                 cells: 0,
                 sensorNeedsFeedback: false,
                 sensor: [], // Sensor
-                sensorData: [], // Owns f32a (Float32Array), given to `.data(…)`.
-                sensorError: [], // Owns f32a (Float32Array), given to `.data(…)`.
+                sensorData: [], // Owns f32a (Float32Array), given to `.send(…)`.
+                sensorError: [], // Owns f32a (Float32Array), given to `.send(…)`.
                 sensorIndices: [], // ints
                 // accumulator → handler:
-                data: null, // Owned f32a.
-                error: null, // Owned f32a.
+                input: { data:null, error:null }, // Both are owned f32a.
                 accumulatorExtra: [], // ints
                 accumulatorCallback: [], // function(feedback, cellShape, extra)
                 // handler → accumulator → sensor:
@@ -53,8 +52,8 @@ export default (function(exports) {
             this.cells = 0
             this.sensorNeedsFeedback = false
             this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = 0
-            this.data && (deallocF32(this.data), this.data = null)
-            this.error && (deallocF32(this.error), this.error = null)
+            this.input.data && (deallocF32(this.input.data), this.input.data = null)
+            this.input.error && (deallocF32(this.input.error), this.input.error = null)
             this.accumulatorExtra.length = this.accumulatorCallback.length = 0
             this.feedback && (deallocF32(this.feedback), this.feedback = null)
             const dst = state(this.channel, this.cellShape)
@@ -94,33 +93,34 @@ export default (function(exports) {
             const start = performance.now(), namedSize = T.cells * T.cellSize
             ++ch.stepsNow
             try {
-                // Concat sensors into `.data` and `.error`.
-                T.data = allocF32(namedSize), T.error = !T.sensorError ? null : allocF32(namedSize)
+                // Concat sensors into `.input.data` and `.input.error`.
+                T.input.data = allocF32(namedSize)
+                T.input.error = !T.sensorError ? null : allocF32(namedSize)
                 for (let i = 0; i < T.sensorData.length; ++i) {
                     const at = T.sensorIndices[i] * T.cellSize
-                    T.data.set(T.sensorData[i], at)
-                    if (T.error) {
+                    T.input.data.set(T.sensorData[i], at)
+                    if (T.input.error) {
                         if (T.sensorError[i])
-                            T.error.set(T.sensorError[i], at)
+                            T.input.error.set(T.sensorError[i], at)
                         else
-                            T.error.fill(-1, at, at + T.sensorData[i].length)
+                            T.input.error.fill(-1, at, at + T.sensorData[i].length)
                     }
                 }
                 // Accumulators.
                 for (let i = 0; i < ch.accumulators.length; ++i) {
                     const a = ch.accumulators[i]
                     if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                        T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined)
+                        T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input, T.cellShape) : undefined)
                         T.accumulatorCallback.push(a.onFeedback)
                     }
                 }
                 // Handlers.
                 if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
-                    T.feedback = allocF32(namedSize), T.feedback.set(T.data)
+                    T.feedback = allocF32(namedSize), T.feedback.set(T.input.data)
                 else
                     T.feedback = null
                 if (mainHandler) {
-                    const r = mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
+                    const r = mainHandler.onValues(T.input, T.cellShape, T.feedback ? true : false, T.feedback)
                     if (r instanceof Promise) await r
                 }
                 const hs = dst.handlers
@@ -129,7 +129,7 @@ export default (function(exports) {
                     for (let i = 0; i < hs.length; ++i) {
                         const h = hs[i]
                         if (h !== mainHandler && typeof h.onValues == 'function') {
-                            const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
+                            const r = h.onValues(T.input, T.cellShape, false, T.feedback)
                             if (r instanceof Promise) tmp.push(r)
                         }
                     }
@@ -375,7 +375,7 @@ export default (function(exports) {
 
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
-        - \`onValues(data, error, cellShape) → extra\`: can modify \`data\` and the optional \`error\` in-place.
+        - \`onValues({data, error}, cellShape) → extra\`: can modify \`data\` and the optional \`error\` in-place.
             - \`cellShape: [reward, user, name, data]\`
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
             - Can return a promise.
@@ -433,7 +433,7 @@ export default (function(exports) {
             docs:`Given data, gives feedback: human or AI model.
 
 - \`constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
-    - \`onValues(data, error, cellShape, writeFeedback, feedback)\`: process.
+    - \`onValues({data, error}, cellShape, writeFeedback, feedback)\`: process.
         - (\`data\` and \`error\` are not owned; do not write.)
         - \`error\` and \`feedback\` can be \`null\`s.
         - If \`writeFeedback\`, write something to \`feedback\`, else read \`feedback\`.
@@ -471,7 +471,7 @@ export default (function(exports) {
                         })
                         const to = new E.Handler({
                             dataSize,
-                            onValues(data, error, cellShape, writeFeedback, feedback) {
+                            onValues({data, error}, cellShape, writeFeedback, feedback) {
                                 data.fill(.489018922485) // "Read" it.
                                 if (writeFeedback) feedback.fill(-1)
                             },
