@@ -14,11 +14,203 @@ export default (function(exports) {
     //   Safari on iOS       10.3
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
-    const S = Object.create(null) // See `E._state(channel, cellShape)`.
-    let currentBenchmark = null
+    const S = Object.create(null) // See `state(channel, cellShape)`.
 
+
+
+    // Implementation details. That we put at the top. Because JS does not hoist them.
+    let currentBenchmark = null
     const f32aCache = Object.create(null)
     const arrayCache = []
+    class _Packet {
+        constructor(channel, cellShape) {
+            Object.assign(this, {
+                channel,
+                cellShape,
+                cellSize: cellShape.reduce((a,b) => a+b),
+                // sensor → accumulator:
+                cells: 0,
+                sensorNeedsFeedback: false,
+                sensor: [], // Sensor
+                sensorData: [], // Owns f32a (Float32Array), given to `.data(…)`.
+                sensorError: [], // Owns f32a (Float32Array), given to `.data(…)`.
+                sensorIndices: [], // ints
+                // accumulator → handler:
+                data: null, // Owned f32a.
+                error: null, // Owned f32a.
+                accumulatorExtra: [], // ints
+                accumulatorCallback: [], // function(feedback, cellShape, extra)
+                // handler → accumulator → sensor:
+                feedback: null, // null | owned f32a.
+            })
+        }
+        static init(channel, cellShape) {
+            const dst = state(channel, cellShape)
+            return dst.packetCache.length ? dst.packetCache.pop() : new _Packet(channel, cellShape)
+        }
+        deinit() { // `this` must not be used after this call.
+            // (Allows reuse of this object by `_Packet.init({…})`.)
+            this.cells = 0
+            this.sensorNeedsFeedback = false
+            this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = 0
+            this.data && (deallocF32(this.data), this.data = null)
+            this.error && (deallocF32(this.error), this.error = null)
+            this.accumulatorExtra.length = this.accumulatorCallback.length = 0
+            this.feedback && (deallocF32(this.feedback), this.feedback = null)
+            const dst = state(this.channel, this.cellShape)
+            if (dst.packetCache.length < 64) dst.packetCache.push(this)
+        }
+        send(sensor, point, error, noFeedback) {
+            // `sensor` is a `E.Sensor`.
+            //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
+            //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
+            // `point` is a named Float32Array of named cells, and this function takes ownership of it.
+            // `error` is its error (max abs(true - measurement) - 1) or null.
+            // `noFeedback`: bool. If true, `callback` is still called, possibly even with non-null `allFeedback`.
+            assert(point instanceof Float32Array, "Data must be float32")
+            assert(point.length % this.cellSize === 0, "Data must be divided into cells")
+            assert(error == null || error instanceof Float32Array, "Error must be null or float32")
+            assert(error == null || point.length === error.length, "Error must be per-data-point")
+            if (!noFeedback) this.sensorNeedsFeedback = true
+            this.sensor.push(sensor)
+            this.sensorData.push(point)
+            if (error)
+                (this.sensorError || (this.sensorError = []))[this.sensorError.length-1] = error
+            this.sensorIndices.push(this.cells)
+            this.cells += point.length / this.cellSize | 0
+        }
+        static updateMean(a, value, maxHorizon = 1000) {
+            const n1 = a[0], n2 = n1+1
+            a[0] = Math.min(n2, maxHorizon)
+            a[1] += (value - a[1]) / n2
+            if (!isFinite(a[1])) a[0] = a[1] = 0
+            return a
+        }
+        async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors; `this` must not be used after this call.
+            const T = this, ch = S[T.channel]
+            const cellShapeStr = String(T.cellShape)
+            const dst = ch.shaped[cellShapeStr]
+            if (!dst) return
+            const start = performance.now(), namedSize = T.cells * T.cellSize
+            ++ch.stepsNow
+            try {
+                // Concat sensors into `.data` and `.error`.
+                T.data = allocF32(namedSize), T.error = !T.sensorError ? null : allocF32(namedSize)
+                for (let i = 0; i < T.sensorData.length; ++i) {
+                    const at = T.sensorIndices[i] * T.cellSize
+                    T.data.set(T.sensorData[i], at)
+                    if (T.error) {
+                        if (T.sensorError[i])
+                            T.error.set(T.sensorError[i], at)
+                        else
+                            T.error.fill(-1, at, at + T.sensorData[i].length)
+                    }
+                }
+                // Accumulators.
+                for (let i = 0; i < ch.accumulators.length; ++i) {
+                    const a = ch.accumulators[i]
+                    if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
+                        T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined)
+                        T.accumulatorCallback.push(a.onFeedback)
+                    }
+                }
+                // Handlers.
+                if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
+                    T.feedback = allocF32(namedSize), T.feedback.set(T.data)
+                else
+                    T.feedback = null
+                if (mainHandler) {
+                    const r = mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
+                    if (r instanceof Promise) await r
+                }
+                const hs = dst.handlers
+                if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler) {
+                    const tmp = allocArray()
+                    for (let i = 0; i < hs.length; ++i) {
+                        const h = hs[i]
+                        if (h !== mainHandler && typeof h.onValues == 'function') {
+                            const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
+                            if (r instanceof Promise) tmp.push(r)
+                        }
+                    }
+                    for (let i = 0; i < tmp.length; ++i) await tmp[i]
+                    deallocArray(tmp)
+                }
+                // Accumulators.
+                while (T.accumulatorCallback.length) {
+                    const f = T.accumulatorCallback.pop()
+                    if (typeof f == 'function') await f(T.feedback, T.cellShape, T.accumulatorExtra.pop())
+                }
+                // Sensors.
+                while (T.sensor.length)
+                    gotPacketFeedback(T.sensor.pop(), T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape, cellShapeStr)
+                _Packet._handledBytes = (_Packet._handledBytes || 0) + namedSize * 4
+                T.deinit()
+            } finally {
+                // Self-reporting.
+                E.meta.metric('simultaneous steps', ch.stepsNow)
+                E.meta.metric('step processed data, values', namedSize)
+                --ch.stepsNow
+                _Packet.stepsEnded = _Packet.stepsEnded + 1 || 1
+                const duration = (dst.lastUsed = performance.now()) - start
+                _Packet.updateMean(dst.msPerStep, duration)
+                ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
+            }
+        }
+        static async handleLoop(channel, cellShape) {
+            const cellShapeStr = cellShape+''
+            const ch = S[channel], dst = ch.shaped[cellShapeStr]
+            if (!dst || dst.looping) return;  else dst.looping = true
+            let prevEnd = performance.now(), prevWait = prevEnd
+            while (true) {
+                if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
+                const start = performance.now(), end = start + dst.msPerStep[1]
+                // Don't do too much at once.
+                while (ch.stepsNow > E.maxSimultaneousPackets)
+                    await new Promise(then => ch.waitingSinceTooManySteps.push(then))
+                // Pause if no destinations, or no sources & no data to send.
+                if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length) return dst.looping = false
+                // Get sensor data.
+                const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
+                if (mainHandler && Array.isArray(ch.sensors))
+                    for (let i = 0; i < ch.sensors.length; ++i) {
+                        const s = ch.sensors[i]
+                        const data = allocF32(s.values)
+                        s.onValues(s, data)
+                    }
+                await Promise.resolve() // Wait a bit.
+                //   (Also, commenting this out halves Firefox throughput.)
+                // Send it off.
+                const nextPacket = dst.nextPacket;  dst.nextPacket = _Packet.init(channel, cellShape)
+                nextPacket.handle(mainHandler)
+                // Benchmark throughput if needed.
+                _Packet._measureThroughput()
+                // Don't do it too often.
+                const now = performance.now(), needToWait = prevEnd - now
+                prevEnd += dst.msPerStep[1]
+                if (prevEnd < now - 1000) prevEnd = now - 1000 // Don't get too eager after being stalled.
+                if (needToWait > 0 || now - prevWait > 100)
+                    await new Promise(then => setTimeout(then, Math.max(needToWait, 0))),
+                    prevWait = performance.now()
+            }
+        }
+        static _measureThroughput() {
+            const now = performance.now()
+            if (!_Packet.lastMeasuredThroughputAt)
+                _Packet.lastMeasuredThroughputAt = now, _Packet.lastMemory = memory()
+            if (now - _Packet.lastMeasuredThroughputAt > 500) { // Filter out noise.
+                const s = Math.max(now - _Packet.lastMeasuredThroughputAt, .01) / 1000
+                E.meta.metric('throughput, bytes/s', (_Packet._handledBytes || 0) / s)
+                // TODO: If the first after benchmark start, ignore this value.
+                E.meta.metric('allocations, bytes/s', Math.max(memory() - _Packet.lastMemory, 0) / s)
+                _Packet.lastMeasuredThroughputAt = now
+                _Packet._handledBytes = 0, _Packet.stepsEnded = 0
+                _Packet.lastMemory = memory()
+            }
+        }
+    }
+
+
 
     return A(E, {
         Sensor: A(class Sensor {
@@ -31,7 +223,7 @@ export default (function(exports) {
                 assert(error === null || error instanceof Float32Array)
                 assert(values.length === this.values, "Data size differs from the one in options")
                 error && assert(values.length === error.length)
-                const ch = E._state(this.channel)
+                const ch = state(this.channel)
                 const removed = Sensor._removed || (Sensor._removed = new Set)
                 for (let i = 0; i < ch.cellShapes.length; ++i) {
                     const cellShape = ch.cellShapes[i]
@@ -41,7 +233,7 @@ export default (function(exports) {
                         if (performance.now() - dst.lastUsed > 60000) removed.add(cellShape)
                         continue
                     }
-                    const namer = E.Sensor._namer(this, this.dataNamers, cellShape, cellShapeStr)
+                    const namer = packetNamer(this, this.dataNamers, cellShape, cellShapeStr)
                     const flatV = allocF32(namer.namedSize)
                     const flatE = error ? allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
@@ -66,7 +258,7 @@ export default (function(exports) {
             }
             pause() {
                 if (this.paused !== false) return this
-                E._state(this.channel).sensors = E._state(this.channel).sensors.filter(v => v !== this)
+                state(this.channel).sensors = state(this.channel).sensors.filter(v => v !== this)
                 this.paused = true
                 return this
             }
@@ -108,42 +300,12 @@ export default (function(exports) {
                 }
                 if (!this.paused) return this
                 if (typeof this.onValues == 'function') {
-                    E._state(this.channel).sensors.push(this)
-                    for (let cellShape of E._state(this.channel).cellShapes)
-                        E._Packet.handleLoop(this.channel, cellShape)
+                    state(this.channel).sensors.push(this)
+                    for (let cellShape of state(this.channel).cellShapes)
+                        _Packet.handleLoop(this.channel, cellShape)
                 }
                 this.paused = false
                 return this
-            }
-            // These are static methods to avoid collisions with inheritors.
-            static _gotFeedback(T, data, error, allFeedback, fbOffset, cellShape, s = String(cellShape)) {
-                // Fulfill the promise of `.send`.
-                try {
-                    const then = T.feedbackCallbacks.shift()
-                    const noFeedback = T.feedbackNoFeedback.shift()
-                    const namers = T.feedbackNamers.shift()
-                    if (allFeedback && !noFeedback) {
-                        const flatV = allocF32(data.length)
-                        const namer = E.Sensor._namer(T, namers, cellShape, s)
-                        namer.unname(allFeedback, fbOffset, flatV)
-                        then(flatV)
-                    } else
-                        then(null)
-                } finally { deallocF32(data), error && deallocF32(error) }
-            }
-            static _namer(T, dataNamers, cellShape, s = String(cellShape)) {
-                if (!dataNamers[s]) {
-                    // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
-                    const [reward, user, name, data] = cellShape
-                    const metaSize = reward + user + name
-                    T.partSize = gcd(gcd(reward, user), name)
-                    T.rewardParts = reward / T.partSize | 0
-                    T.userParts = user / T.partSize | 0
-                    T.nameParts = name / T.partSize | 0
-                    dataNamers[s] = E._dataNamer(T)
-                    function gcd(a,b) { return !b ? a : gcd(b, a % b) }
-                }
-                return dataNamers[s]
             }
         }, {
             docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
@@ -181,7 +343,7 @@ export default (function(exports) {
             constructor(opts) { assert(opts), this.resume(opts) }
             pause() {
                 if (this.paused !== false) return this
-                const ch = E._state(this.channel)
+                const ch = state(this.channel)
                 ch.accumulators = ch.accumulators.filter(v => v !== this)
                 this.paused = true
                 return this
@@ -204,8 +366,8 @@ export default (function(exports) {
                     })
                 }
                 if (!this.paused) return this
-                E._state(this.channel).accumulators.push(this)
-                E._state(this.channel).accumulators.sort((a,b) => b.priority - a.priority)
+                state(this.channel).accumulators.push(this)
+                state(this.channel).accumulators.sort((a,b) => b.priority - a.priority)
                 this.paused = false
                 return this
             }
@@ -231,7 +393,7 @@ export default (function(exports) {
             constructor(opts) { assert(opts), this.resume(opts) }
             pause() {
                 if (this.paused !== false) return this
-                const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
+                const ch = state(this.channel), dst = state(this.channel, this.cellShape)
                 dst.handlers = dst.handlers.filter(v => v !== this)
                 if (ch.mainHandler === this) {
                     ch.mainHandler = null
@@ -260,11 +422,11 @@ export default (function(exports) {
                     })
                 }
                 if (!this.paused) return this
-                const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
+                const ch = state(this.channel), dst = state(this.channel, this.cellShape)
                 dst.handlers.push(this)
                 dst.handlers.sort((a,b) => b.priority - a.priority)
                 if (!this.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < this.priority)) ch.mainHandler = this
-                if (this.onValues) E._Packet.handleLoop(this.channel, this.cellShape)
+                if (this.onValues) _Packet.handleLoop(this.channel, this.cellShape)
                 this.paused = false
                 return this
             }
@@ -323,223 +485,6 @@ export default (function(exports) {
         _allocF32: allocF32,
         _deallocF32: deallocF32,
         maxSimultaneousPackets: 4,
-        _state(channel, cellShape) { // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
-            if (!S[channel])
-                S[channel] = Object.assign(Object.create(null), {
-                    sensors: [], // Array<Sensor>, but only those that are called automatically.
-                    accumulators: [], // Array<Accumulator>, sorted by priority.
-                    mainHandler: null, // Handler, with max priority.
-                    stepsNow: 0, // int
-                    waitingSinceTooManySteps: [], // Array<function>, called when a step is finished.
-                    cellShapes: [], // Array<String>, for enumeration of `.shaped` just below.
-                    shaped: Object.create(null), // { [handlerShapeAsString] }
-                })
-            const ch = S[channel]
-            if (cellShape == null) return ch
-            const cellShapeStr = ''+cellShape
-            if (!ch.shaped[cellShapeStr])
-                ch.shaped[cellShapeStr] = {
-                    looping: false,
-                    lastUsed: performance.now(),
-                    msPerStep: [0,0], // [n, mean]
-                    cellShape: cellShape, // [reward, user, name, data]
-                    handlers: [], // Array<Handler>, sorted by priority.
-                    nextPacket: new E._Packet(channel, cellShape),
-                    packetCache: [], // Array<E._Packet>; DO NOT USE
-                }, ch.cellShapes.push(cellShape)
-            return ch.shaped[cellShapeStr]
-        },
-        _memory: A(function() { return performance.memory ? performance.memory.usedJSHeapSize : NaN }, {
-            docs:`Reports the size of the currently active segment of JS heap in bytes, or NaN.
-
-Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).`,
-        }),
-        _Packet: class _Packet {
-            constructor(channel, cellShape) {
-                Object.assign(this, {
-                    channel,
-                    cellShape,
-                    cellSize: cellShape.reduce((a,b) => a+b),
-                    // sensor → accumulator:
-                    cells: 0,
-                    sensorNeedsFeedback: false,
-                    sensor: [], // Sensor
-                    sensorData: [], // Owns f32a (Float32Array), given to `.data(…)`.
-                    sensorError: [], // Owns f32a (Float32Array), given to `.data(…)`.
-                    sensorIndices: [], // ints
-                    // accumulator → handler:
-                    data: null, // Owned f32a.
-                    error: null, // Owned f32a.
-                    accumulatorExtra: [], // ints
-                    accumulatorCallback: [], // function(feedback, cellShape, extra)
-                    // handler → accumulator → sensor:
-                    feedback: null, // null | owned f32a.
-                })
-            }
-            static init(channel, cellShape) {
-                const dst = E._state(channel, cellShape)
-                return dst.packetCache.length ? dst.packetCache.pop() : new E._Packet(channel, cellShape)
-            }
-            deinit() { // `this` must not be used after this call.
-                // (Allows reuse of this object by `E._Packet.init({…})`.)
-                this.cells = 0
-                this.sensorNeedsFeedback = false
-                this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = 0
-                this.data && (deallocF32(this.data), this.data = null)
-                this.error && (deallocF32(this.error), this.error = null)
-                this.accumulatorExtra.length = this.accumulatorCallback.length = 0
-                this.feedback && (deallocF32(this.feedback), this.feedback = null)
-                const dst = E._state(this.channel, this.cellShape)
-                if (dst.packetCache.length < 64) dst.packetCache.push(this)
-            }
-            send(sensor, point, error, noFeedback) {
-                // `sensor` is a `E.Sensor`.
-                //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
-                //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
-                // `point` is a named Float32Array of named cells, and this function takes ownership of it.
-                // `error` is its error (max abs(true - measurement) - 1) or null.
-                // `noFeedback`: bool. If true, `callback` is still called, possibly even with non-null `allFeedback`.
-                assert(point instanceof Float32Array, "Data must be float32")
-                assert(point.length % this.cellSize === 0, "Data must be divided into cells")
-                assert(error == null || error instanceof Float32Array, "Error must be null or float32")
-                assert(error == null || point.length === error.length, "Error must be per-data-point")
-                if (!noFeedback) this.sensorNeedsFeedback = true
-                this.sensor.push(sensor)
-                this.sensorData.push(point)
-                if (error)
-                    (this.sensorError || (this.sensorError = []))[this.sensorError.length-1] = error
-                this.sensorIndices.push(this.cells)
-                this.cells += point.length / this.cellSize | 0
-            }
-            static updateMean(a, value, maxHorizon = 1000) {
-                const n1 = a[0], n2 = n1+1
-                a[0] = Math.min(n2, maxHorizon)
-                a[1] += (value - a[1]) / n2
-                if (!isFinite(a[1])) a[0] = a[1] = 0
-                return a
-            }
-            async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors; `this` must not be used after this call.
-                const T = this, ch = S[T.channel]
-                const cellShapeStr = String(T.cellShape)
-                const dst = ch.shaped[cellShapeStr]
-                if (!dst) return
-                const start = performance.now(), namedSize = T.cells * T.cellSize
-                ++ch.stepsNow
-                try {
-                    // Concat sensors into `.data` and `.error`.
-                    T.data = allocF32(namedSize), T.error = !T.sensorError ? null : allocF32(namedSize)
-                    for (let i = 0; i < T.sensorData.length; ++i) {
-                        const at = T.sensorIndices[i] * T.cellSize
-                        T.data.set(T.sensorData[i], at)
-                        if (T.error) {
-                            if (T.sensorError[i])
-                                T.error.set(T.sensorError[i], at)
-                            else
-                                T.error.fill(-1, at, at + T.sensorData[i].length)
-                        }
-                    }
-                    // Accumulators.
-                    for (let i = 0; i < ch.accumulators.length; ++i) {
-                        const a = ch.accumulators[i]
-                        if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                            T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.data, T.error, T.cellShape) : undefined)
-                            T.accumulatorCallback.push(a.onFeedback)
-                        }
-                    }
-                    // Handlers.
-                    if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
-                        T.feedback = allocF32(namedSize), T.feedback.set(T.data)
-                    else
-                        T.feedback = null
-                    if (mainHandler) {
-                        const r = mainHandler.onValues(T.data, T.error, T.cellShape, T.feedback ? true : false, T.feedback)
-                        if (r instanceof Promise) await r
-                    }
-                    const hs = dst.handlers
-                    if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler) {
-                        const tmp = allocArray()
-                        for (let i = 0; i < hs.length; ++i) {
-                            const h = hs[i]
-                            if (h !== mainHandler && typeof h.onValues == 'function') {
-                                const r = h.onValues(T.data, T.error, T.cellShape, false, T.feedback)
-                                if (r instanceof Promise) tmp.push(r)
-                            }
-                        }
-                        for (let i = 0; i < tmp.length; ++i) await tmp[i]
-                        deallocArray(tmp)
-                    }
-                    // Accumulators.
-                    while (T.accumulatorCallback.length) {
-                        const f = T.accumulatorCallback.pop()
-                        if (typeof f == 'function') await f(T.feedback, T.cellShape, T.accumulatorExtra.pop())
-                    }
-                    // Sensors.
-                    while (T.sensor.length)
-                        E.Sensor._gotFeedback(T.sensor.pop(), T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape, cellShapeStr)
-                    E._Packet._handledBytes = (E._Packet._handledBytes || 0) + namedSize * 4
-                    T.deinit()
-                } finally {
-                    // Self-reporting.
-                    E.meta.metric('simultaneous steps', ch.stepsNow)
-                    E.meta.metric('step processed data, values', namedSize)
-                    --ch.stepsNow
-                    E._Packet.stepsEnded = E._Packet.stepsEnded + 1 || 1
-                    const duration = (dst.lastUsed = performance.now()) - start
-                    E._Packet.updateMean(dst.msPerStep, duration)
-                    ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
-                }
-            }
-            static async handleLoop(channel, cellShape) {
-                const cellShapeStr = cellShape+''
-                const ch = S[channel], dst = ch.shaped[cellShapeStr]
-                if (!dst || dst.looping) return;  else dst.looping = true
-                let prevEnd = performance.now(), prevWait = prevEnd
-                while (true) {
-                    if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
-                    const start = performance.now(), end = start + dst.msPerStep[1]
-                    // Don't do too much at once.
-                    while (ch.stepsNow > E.maxSimultaneousPackets)
-                        await new Promise(then => ch.waitingSinceTooManySteps.push(then))
-                    // Pause if no destinations, or no sources & no data to send.
-                    if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length) return dst.looping = false
-                    // Get sensor data.
-                    const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
-                    if (mainHandler && Array.isArray(ch.sensors))
-                        for (let i = 0; i < ch.sensors.length; ++i) {
-                            const s = ch.sensors[i]
-                            const data = allocF32(s.values)
-                            s.onValues(s, data)
-                        }
-                    await Promise.resolve() // Wait a bit.
-                    //   (Also, commenting this out halves Firefox throughput.)
-                    // Send it off.
-                    const nextPacket = dst.nextPacket;  dst.nextPacket = E._Packet.init(channel, cellShape)
-                    nextPacket.handle(mainHandler)
-                    // Benchmark throughput if needed.
-                    E._Packet._measureThroughput()
-                    // Don't do it too often.
-                    const now = performance.now(), needToWait = prevEnd - now
-                    prevEnd += dst.msPerStep[1]
-                    if (prevEnd < now - 1000) prevEnd = now - 1000 // Don't get too eager after being stalled.
-                    if (needToWait > 0 || now - prevWait > 100)
-                        await new Promise(then => setTimeout(then, Math.max(needToWait, 0))),
-                        prevWait = performance.now()
-                }
-            }
-            static _measureThroughput() {
-                const now = performance.now()
-                if (!E._Packet.lastMeasuredThroughputAt)
-                    E._Packet.lastMeasuredThroughputAt = now, E._Packet.lastMemory = E._memory()
-                if (now - E._Packet.lastMeasuredThroughputAt > 500) { // Filter out noise.
-                    const s = Math.max(now - E._Packet.lastMeasuredThroughputAt, .01) / 1000
-                    E.meta.metric('throughput, bytes/s', (E._Packet._handledBytes || 0) / s)
-                    E.meta.metric('allocations, bytes/s', Math.max(E._memory() - E._Packet.lastMemory, 0) / s)
-                    E._Packet.lastMeasuredThroughputAt = now
-                    E._Packet._handledBytes = 0, E._Packet.stepsEnded = 0
-                    E._Packet.lastMemory = E._memory()
-                }
-            }
-        },
         meta:{
             docs: A(function docs() {
                 const markdown = []
@@ -946,4 +891,66 @@ Makes only the sign matter for low-frequency numbers.` }),
     }
     function allocArray() { return arrayCache.length ? arrayCache.pop() : [] }
     function deallocArray(a) { Array.isArray(a) && arrayCache.length < 16 && (a.length = 0, arrayCache.push(a)) }
+
+    function memory() {
+        // Reports the size of the currently active segment of JS heap in bytes, or NaN.
+        // Note that [Firefox and Safari don't support measuring memory](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).
+        return performance.memory ? performance.memory.usedJSHeapSize : NaN
+    }
+    function gotPacketFeedback(T, data, error, allFeedback, fbOffset, cellShape, s = String(cellShape)) {
+        // Fulfill the promise of `.send`.
+        try {
+            const then = T.feedbackCallbacks.shift()
+            const noFeedback = T.feedbackNoFeedback.shift()
+            const namers = T.feedbackNamers.shift()
+            if (allFeedback && !noFeedback) {
+                const flatV = allocF32(data.length)
+                const namer = packetNamer(T, namers, cellShape, s)
+                namer.unname(allFeedback, fbOffset, flatV)
+                then(flatV)
+            } else
+                then(null)
+        } finally { deallocF32(data), error && deallocF32(error) }
+    }
+    function packetNamer(T, dataNamers, cellShape, s = String(cellShape)) {
+        if (!dataNamers[s]) {
+            // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
+            const [reward, user, name, data] = cellShape
+            const metaSize = reward + user + name
+            T.partSize = gcd(gcd(reward, user), name)
+            T.rewardParts = reward / T.partSize | 0
+            T.userParts = user / T.partSize | 0
+            T.nameParts = name / T.partSize | 0
+            dataNamers[s] = E._dataNamer(T)
+            function gcd(a,b) { return !b ? a : gcd(b, a % b) }
+        }
+        return dataNamers[s]
+    }
+    function state(channel, cellShape) {
+        // Returns `cellShape != null ? S[channel].shaped[cellShape] : S[channel]`, creating structures if not present.
+        if (!S[channel])
+            S[channel] = Object.assign(Object.create(null), {
+                sensors: [], // Array<Sensor>, but only those that are called automatically.
+                accumulators: [], // Array<Accumulator>, sorted by priority.
+                mainHandler: null, // Handler, with max priority.
+                stepsNow: 0, // int
+                waitingSinceTooManySteps: [], // Array<function>, called when a step is finished.
+                cellShapes: [], // Array<String>, for enumeration of `.shaped` just below.
+                shaped: Object.create(null), // { [handlerShapeAsString] }
+            })
+        const ch = S[channel]
+        if (cellShape == null) return ch
+        const cellShapeStr = ''+cellShape
+        if (!ch.shaped[cellShapeStr])
+            ch.shaped[cellShapeStr] = {
+                looping: false,
+                lastUsed: performance.now(),
+                msPerStep: [0,0], // [n, mean]
+                cellShape: cellShape, // [reward, user, name, data]
+                handlers: [], // Array<Handler>, sorted by priority.
+                nextPacket: new _Packet(channel, cellShape),
+                packetCache: [], // Array<_Packet>; DO NOT USE
+            }, ch.cellShapes.push(cellShape)
+        return ch.shaped[cellShapeStr]
+    }
 })(Object.create(null))
