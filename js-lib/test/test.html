@@ -134,12 +134,13 @@
       for (let a of prev.events) onBenchProgress(...a)
     }
     function onBenchProgress(obj, id, got, progress) { // Remember & plot.
-      benchProgressStream.events.push([obj, id, got, progress])
       const plots = document.getElementById('bench')
       const progressElem = document.getElementById('bench-progress')
       const elapsed = performance.now() - benchProgressStream.start
       const remainingMs = elapsed / progress - elapsed
       progressElem.textContent = round(progress * 100) + '% done; ETA: ' + round(remainingMs / 1000) + 's'
+      if (!got) return
+      benchProgressStream.events.push([obj, id, got, progress])
       const report = reporting[document.getElementById('bench-reporting').value]
       for (let key of Object.keys(got))
         if (Array.isArray(got[key])) {

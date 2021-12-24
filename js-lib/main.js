@@ -457,7 +457,7 @@ export default (function(exports) {
 - \`pause()\`, \`resume()\`: for convenience, these return the object.`,
             bench() {
                 const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
-                return cellCounts.map(river) // 256 sub-benchmarks, to really see how throughput changes with input size.
+                return cellCounts.map(river) // See how throughput changes with input size.
                 function river(cells) { // 1-filled data → -1-filled feedback
                     const dataSize = 64
                     function onSensorFeedback(feedback) {
@@ -597,13 +597,18 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                             onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, (i+1) / bench.length)
                         } catch (err) { console.error(err) }
                 }
+                if (!bench.length)
+                    onBenchFinished(null, null, null, 1)
                 currentBenchmark = null
                 return Object.keys(result).length ? result : undefined
                 function walk(x) {
                     if (!x || typeof x != 'object' && typeof x != 'function') return
                     if (typeof x.bench == 'function' && x.bench !== E.meta.bench) {
+                        console.log('found', x, E.Handler.Sound, x === E.Handler.Sound) // TODO:
                         const bs = x.bench()
+                        if (x === E.Handler.Sound) // TODO: Why do they all belong to Sound now?! (And none of them are actually *of* sound.)
                         for (let id of Object.keys(bs)) {
+                            console.log('yes', x, x.bench, id) // TODO:
                             bench.push(bs[id])
                             benchIndex.push(id)
                             benchOwner.push(x)

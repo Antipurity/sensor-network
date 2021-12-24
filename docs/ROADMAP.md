@@ -156,7 +156,6 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ✓ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
                 - TODO: Be able to accept `null` in the actual code, which gives no data but still expects feedback. This way, we will be able to fully decouple input from output. (This would replace `error=2` as the preferred method for action-only interfaces.)
-                - TODO: Extract as much as we can from `E` to private variables, only leaving the public interface accessible, for speed.
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed. (The only reason for this is use in browser console, which is too iffy to justify such an unreliable functionality. Besides, forcing storage is just annoying when the user wants to fire-and-forget.)
         - ✓ `.Accumulator`:
             - ✓ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
