@@ -1,4 +1,5 @@
-import "./yamd5.js"
+import './yamd5.js'
+import Sound from './src/handler-sound.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -168,16 +169,18 @@ export default (function(exports) {
                 // Don't do too much at once.
                 while (ch.stepsNow > E.maxSimultaneousPackets)
                     await new Promise(then => ch.waitingSinceTooManySteps.push(then))
-                // Pause if no destinations, or no sources & no data to send.
-                if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length) return dst.looping = false
                 // Get sensor data.
                 const mainHandler = ch.mainHandler && ch.mainHandler.cellShape+'' === cellShape+'' ? ch.mainHandler : null
-                if (mainHandler && Array.isArray(ch.sensors))
+                const mainSensor = ch.mainHandler ? !!mainHandler : ch.cellShapes[0]+'' === cellShape+''
+                if (mainSensor && Array.isArray(ch.sensors))
                     for (let i = 0; i < ch.sensors.length; ++i) {
                         const s = ch.sensors[i]
                         const data = allocF32(s.values)
                         s.onValues(s, data)
                     }
+                // Pause if no destinations, or no sources & no data to send.
+                if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
+                    return dst.looping = false
                 await Promise.resolve() // Wait a bit.
                 //   (Also, commenting this out halves Firefox throughput.)
                 // Send it off.
@@ -211,7 +214,7 @@ export default (function(exports) {
 
 
 
-    return A(E, {
+    A(E, {
         Sensor: A(class Sensor {
             constructor(opts) { assert(opts), this.resume(opts) }
             needsExtensionAPI() { return null }
@@ -398,7 +401,8 @@ export default (function(exports) {
                     ch.mainHandler = null
                     for (let cellShape of ch.cellShapes)
                         for (let h of ch.shaped[cellShape].handlers)
-                            if (!h.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < h.priority)) ch.mainHandler = h
+                            if (!h.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < h.priority))
+                                ch.mainHandler = h
                 }
                 this.paused = true
                 return this
@@ -433,7 +437,8 @@ export default (function(exports) {
             docs:`Given data, gives feedback: human or AI model.
 
 - \`constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
-    - \`onValues({data, error}, cellShape, writeFeedback, feedback)\`: process.
+    - \`onValues({data, error}, cellShape, writeFeedback, feedback)\`: process. // TODO: Put \`cellShape\` into \`input\` too. For accumulators too.
+        - // TODO: And, don't pass in \`feedback\`, return it instead. Fill data with the main handler's feedback on no-data ourselves. As an arg, only give the bool "needFeedback".
         - (\`data\` and \`error\` are not owned; do not write.)
         - \`error\` and \`feedback\` can be \`null\`s.
         - If \`writeFeedback\`, write something to \`feedback\`, else read \`feedback\`.
@@ -868,6 +873,10 @@ Even if your AI model can only accept and return ±1 bits, it can still use the 
 Makes only the sign matter for low-frequency numbers.` }),
         }),
     })
+    // And set the most-common modules.
+    E.Handler.Sound = Sound(E)
+    return E
+
     function test(func, ...args) {
         try { return func(...args) }
         catch (err) { return err instanceof Error ? [err.message, err.stack] : err }
