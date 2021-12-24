@@ -181,7 +181,7 @@ export default (function(exports) {
                     }
                 // Pause if no destinations, or no sources & no data to send.
                 if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
-                    return dst.looping = false
+                    return dst.msPerStep[0] = dst.msPerStep[1] = 0, dst.looping = false
                 await Promise.resolve() // Wait a bit.
                 //   (Also, commenting this out halves Firefox throughput.)
                 // Send it off.
