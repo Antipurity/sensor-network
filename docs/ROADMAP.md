@@ -259,16 +259,10 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ And the ability to use in-page keybindings. (Might even be *usable*.)
         - ⋯ `.Handler`:
             - ⋯ No-feedback sound output (speakers).
-                - How do we do this, exactly? What parts of `AudioContext` do we need?
-                    - `AudioBuffer` can contain PCM data and be played; but how to use it for real-time sound data writing? `.loop=true`, and write at *just* the right positions — would overwriting data like this work?
-                        - TODO: An HTML page with more-or-less: `ctx=new AudioContext();   src=ctx.createBufferSource(); src.buffer=ctx.createBuffer(channels=1, 1 * ctx.sampleRate, ctx.sampleRate); src.loop=true, src.loopEnd=1;  src.connect(ctx.destination); src.start();    src.buffer.getChannelData(0).fill(.15234)`
-                        - https://developer.mozilla.org/en-US/docs/Web/API/BaseAudioContext/currentTime for scheduling audio playback.
-                        - https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode
-                        - TODO: Make some handler that fills the sound buffer with -1|-1|-1|-1|1|1|1|1 data, and writes to the AudioBuffer's `.getChannelData(N)` 10 times per second; verify that the sound changes.
-                        - TODO: Make `test.html` play sound, at least temporarily. (Then again, might as well just create a separate page.)
-                        - (Some people are saying that many `AudioBufferSourceNode`s should be created and played at the right times. And, from testing with Firefox, this is absolutely true there.)
-                - What strategy do we use even: put-samples-as-is `A`, `A, -A` with configurable repetition length, or IFFT with frequency limitations and resizing?
-                    - (IFFT may need to be implemented manually.)
+                - ✓ Make it no-skips and no-huge-backlog.
+                - ⋯ Visualization.
+                - ⋯ With time-domain output, be able to specify how many output values each input should occupy (upsampling).
+                - ⋯ IFFT, implemented manually, with upsampling of inputs.
             - ⋯ Sound input (microphone). Probably terrible.
             - ⋯ Write to Internet.
                 - ⋯ Make sure that at least `error=1` ("no data") is preserved.
