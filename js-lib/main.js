@@ -22,35 +22,7 @@ export default (function(exports) {
 
     return A(E, {
         Sensor: A(class Sensor {
-            constructor({ name, values, onValues=null, channel='', noFeedback=false, rewardName=[], userName=[], emptyValues=0, hasher=undefined }) {
-                assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
-                assertCounts('Must have the value-count', values)
-                assert(onValues == null || typeof onValues == 'function')
-                assert(typeof channel == 'string')
-                assert(typeof rewardName == 'string' || Array.isArray(rewardName))
-                assert(typeof userName == 'string' || Array.isArray(userName))
-                assertCounts('', emptyValues)
-                assert(hasher === undefined || typeof hasher == 'function')
-                Object.assign(this, {
-                    paused: true,
-                    reward: 0,
-                    name,
-                    values,
-                    onValues,
-                    channel,
-                    noFeedback: !!noFeedback,
-                    rewardName,
-                    userName,
-                    emptyValues,
-                    hasher,
-                    dataNamers: Object.create(null), // cellShape → _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher })
-                    partSize: 0,
-                    rewardParts: 0,
-                    userParts: 0,
-                    nameParts: 0,
-                    feedbackCallbacks: [], // A queue of promise-fulfilling callbacks. Very small, so an array is the fastest option.
-                }).resume()
-            }
+            constructor(opts) { assert(opts), this.resume(opts) }
             needsExtensionAPI() { return null }
             sendCallback(then, values, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
                 // Name+send to all handler shapes.
@@ -69,7 +41,7 @@ export default (function(exports) {
                         if (performance.now() - dst.lastUsed > 60000) removed.add(cellShape)
                         continue
                     }
-                    const namer = E.Sensor._namer(this, cellShape, cellShapeStr)
+                    const namer = E.Sensor._namer(this, this.dataNamers, cellShape, cellShapeStr)
                     const flatV = allocF32(namer.namedSize)
                     const flatE = error ? allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
@@ -83,6 +55,8 @@ export default (function(exports) {
                 }
                 deallocF32(values), error && deallocF32(error)
                 this.feedbackCallbacks.push(then)
+                this.feedbackNoFeedback.push(this.noFeedback)
+                this.feedbackNamers.push(this.dataNamers)
             }
             send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
                 return new Promise((then, reject) => {
@@ -91,12 +65,47 @@ export default (function(exports) {
                 })
             }
             pause() {
-                if (this.paused) return this
+                if (this.paused !== false) return this
                 E._state(this.channel).sensors = E._state(this.channel).sensors.filter(v => v !== this)
                 this.paused = true
                 return this
             }
-            resume() {
+            resume(opts) {
+                if (opts) {
+                    this.pause()
+                    const { name, values, onValues=null, channel='', noFeedback=false, rewardName=[], userName=[], emptyValues=0, hasher=undefined } = opts
+                    assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
+                    assertCounts('Must have the value-count', values)
+                    assert(onValues == null || typeof onValues == 'function')
+                    assert(typeof channel == 'string')
+                    assert(typeof rewardName == 'string' || Array.isArray(rewardName))
+                    assert(typeof userName == 'string' || Array.isArray(userName))
+                    assertCounts('', emptyValues)
+                    assert(hasher === undefined || typeof hasher == 'function')
+                    Object.assign(this, {
+                        paused: true,
+                        reward: 0,
+                        name,
+                        values,
+                        onValues,
+                        channel,
+                        noFeedback: !!noFeedback,
+                        rewardName,
+                        userName,
+                        emptyValues,
+                        hasher,
+                        dataNamers: Object.create(null), // cellShape → _dataNamer({ rewardName=[], rewardParts=0, userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher })
+                        partSize: 0,
+                        rewardParts: 0,
+                        userParts: 0,
+                        nameParts: 0,
+                    })
+                    if (!this.feedbackCallbacks) {
+                        this.feedbackCallbacks = []
+                        this.feedbackNoFeedback = []
+                        this.feedbackNamers = []
+                    }
+                }
                 if (!this.paused) return this
                 if (typeof this.onValues == 'function') {
                     E._state(this.channel).sensors.push(this)
@@ -110,16 +119,20 @@ export default (function(exports) {
             static _gotFeedback(T, data, error, allFeedback, fbOffset, cellShape, s = String(cellShape)) {
                 // Fulfill the promise of `.send`.
                 try {
-                    if (allFeedback && !T.noFeedback) {
+                    const then = T.feedbackCallbacks.shift()
+                    const noFeedback = T.feedbackNoFeedback.shift()
+                    const namers = T.feedbackNamers.shift()
+                    if (allFeedback && !noFeedback) {
                         const flatV = allocF32(data.length)
-                        E.Sensor._namer(T, cellShape, s).unname(allFeedback, fbOffset, flatV)
-                        T.feedbackCallbacks.shift()(flatV)
+                        const namer = E.Sensor._namer(T, namers, cellShape, s)
+                        namer.unname(allFeedback, fbOffset, flatV)
+                        then(flatV)
                     } else
-                        T.feedbackCallbacks.shift()(null)
+                        then(null)
                 } finally { deallocF32(data), error && deallocF32(error) }
             }
-            static _namer(T, cellShape, s = String(cellShape)) {
-                if (!T.dataNamers[s]) {
+            static _namer(T, dataNamers, cellShape, s = String(cellShape)) {
+                if (!dataNamers[s]) {
                     // *Guess* handler's `partSize`, based only on `cellShape` for reproducibility. And create the namer.
                     const [reward, user, name, data] = cellShape
                     const metaSize = reward + user + name
@@ -127,10 +140,10 @@ export default (function(exports) {
                     T.rewardParts = reward / T.partSize | 0
                     T.userParts = user / T.partSize | 0
                     T.nameParts = name / T.partSize | 0
-                    T.dataNamers[s] = E._dataNamer(T)
+                    dataNamers[s] = E._dataNamer(T)
                     function gcd(a,b) { return !b ? a : gcd(b, a % b) }
                 }
-                return T.dataNamers[s]
+                return dataNamers[s]
             }
         }, {
             docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
@@ -165,27 +178,31 @@ export default (function(exports) {
 - \`needsExtensionAPI() → null|String\`: overridable in child classes. By default, the sensor is entirely in-page in a [content script](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts) if injected by an extension. For example, make this return \`'tabs'\` to get access to [\`chrome.tabs\`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs) in an extension.`,
         }),
         Accumulator: A(class Accumulator {
-            constructor({ onValues=null, onFeedback=null, priority=0, channel='' }) {
-                assert(typeof priority == 'number' && priority === priority)
-                assert(onValues == null || typeof onValues == 'function')
-                assert(onFeedback == null || typeof onFeedback == 'function')
-                assert(onValues || onFeedback, "Why have an accumulator if it does nothing")
-                assert(typeof channel == 'string')
-                Object.assign(this, {
-                    paused: true,
-                    onValues,
-                    onFeedback,
-                    priority,
-                    channel,
-                }).resume()
-            }
+            constructor(opts) { assert(opts), this.resume(opts) }
             pause() {
-                if (this.paused) return this
-                E._state(this.channel).accumulators = E._state(this.channel).accumulators.filter(v => v !== this)
+                if (this.paused !== false) return this
+                const ch = E._state(this.channel)
+                ch.accumulators = ch.accumulators.filter(v => v !== this)
                 this.paused = true
                 return this
             }
-            resume() {
+            resume(opts) {
+                if (opts) {
+                    this.pause()
+                    const { onValues=null, onFeedback=null, priority=0, channel='' } = opts
+                    assert(typeof priority == 'number' && priority === priority, "Bad `priority`")
+                    assert(onValues == null || typeof onValues == 'function', "Bad `onValues`")
+                    assert(onFeedback == null || typeof onFeedback == 'function', "Bad `onFeedback`")
+                    assert(onValues || onFeedback, "Why have an accumulator if it does nothing; pass in either `onValues` or `onFeedback`")
+                    assert(typeof channel == 'string', "Bad `channel`")
+                    Object.assign(this, {
+                        paused: true,
+                        onValues,
+                        onFeedback,
+                        priority,
+                        channel,
+                    })
+                }
                 if (!this.paused) return this
                 E._state(this.channel).accumulators.push(this)
                 E._state(this.channel).accumulators.sort((a,b) => b.priority - a.priority)
@@ -211,22 +228,9 @@ export default (function(exports) {
 - \`pause()\`, \`resume()\`: for convenience, these return the object.`,
         }),
         Handler: A(class Handler {
-            constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' }) {
-                assert(typeof onValues == 'function', "Handlers must have listeners")
-                assertCounts('', partSize, rewardParts, userParts, nameParts, dataSize)
-                assert(typeof priority == 'number')
-                assert(typeof channel == 'string')
-                Object.assign(this, {
-                    paused: true,
-                    cellShape: [rewardParts * partSize, userParts * partSize, nameParts * partSize, dataSize],
-                    onValues,
-                    noFeedback: !!noFeedback,
-                    priority,
-                    channel,
-                }).resume()
-            }
+            constructor(opts) { assert(opts), this.resume(opts) }
             pause() {
-                if (this.paused) return this
+                if (this.paused !== false) return this
                 const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
                 dst.handlers = dst.handlers.filter(v => v !== this)
                 if (ch.mainHandler === this) {
@@ -238,7 +242,23 @@ export default (function(exports) {
                 this.paused = true
                 return this
             }
-            resume() {
+            resume(opts) {
+                if (opts) {
+                    this.pause()
+                    const { onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' } = opts
+                    assert(typeof onValues == 'function', "Handlers must have `onValues` listeners")
+                    assertCounts('', partSize, rewardParts, userParts, nameParts, dataSize)
+                    assert(typeof priority == 'number')
+                    assert(typeof channel == 'string')
+                    Object.assign(this, {
+                        paused: true,
+                        cellShape: [rewardParts * partSize, userParts * partSize, nameParts * partSize, dataSize],
+                        onValues,
+                        noFeedback: !!noFeedback,
+                        priority,
+                        channel,
+                    })
+                }
                 if (!this.paused) return this
                 const ch = E._state(this.channel), dst = E._state(this.channel, this.cellShape)
                 dst.handlers.push(this)

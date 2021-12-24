@@ -1,0 +1,79 @@
+
+<!DOCTYPE html>
+<html lang=en>
+<head>
+    <meta charset=utf-8>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sound Testing</title>
+    <style>
+    </style>
+</head>
+<body>
+    <script type=module>
+import sn from '../main.js'
+import './handler-sound.js'
+
+
+let ctx, buf, dst
+let loud = Math.random()
+
+addEventListener('pointerdown', play)
+play()
+function play() {
+    // TODO: Yep. Looks good. Now make a handler out of it. (And maybe do IFFT.)
+    if (!ctx) {
+        ctx = new AudioContext()
+        const channels = 1
+        buf = ctx.createBuffer(channels, 1 * ctx.sampleRate, ctx.sampleRate)
+
+        dst = ctx.createAnalyser()
+        dst.fftSize = 2048
+        dst.connect(ctx.destination)
+    }
+
+    loud = Math.random()*.03
+
+
+    const delay = ctx.outputLatency || ctx.baseLatency
+    const b = buf.getChannelData(0)
+    for (let i = 0; i < b.length; ++i) b[i] = ((i/2%2)*2-1) * loud
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(dst), src.start(ctx.currentTime + delay) // Delay the first one to make Firefox not skip/overlay signals.
+    const src2 = ctx.createBufferSource()
+    src2.buffer = buf
+    src2.connect(dst), src2.start(ctx.currentTime + 1 + delay)
+}
+
+
+
+// Visualization, for debugging.
+//   ...Actually, what if we don't remove this, but move it to visualization? Like, `.visualize(elem)`, auto-detecting when the DOM element is not attached or is not visible.
+const canvas = document.createElement('canvas')
+canvas.width = 1000
+canvas.ctx = canvas.getContext('2d')
+document.body.append(canvas)
+draw()
+function draw() {
+    requestAnimationFrame(draw)
+    const data = new Float32Array(dst.frequencyBinCount)
+    dst.getFloatTimeDomainData(data)
+
+    canvas.ctx.fillStyle = 'rgb(200, 200, 200)'
+    canvas.ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    canvas.ctx.lineWidth = 2
+    canvas.ctx.strokeStyle = 'rgb(0, 0, 0)'
+    canvas.ctx.beginPath()
+    const sliceWidth = canvas.width / data.length
+    const mid = canvas.height / 2
+    for (let i = 0, x = 0; i < data.length; ++i, x += sliceWidth) {
+        const y = mid + data[i] * mid
+        !i ? canvas.ctx.moveTo(x, y) : canvas.ctx.lineTo(x, y)
+    }
+    canvas.ctx.lineTo(canvas.width, mid)
+    canvas.ctx.stroke()
+}
+    </script>
+</body>
+</html>

@@ -155,6 +155,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.pause()`, `.resume()`
             - ✓ `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ✓ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
+                - TODO: Be able to accept `null` in the actual code, which gives no data but still expects feedback. This way, we will be able to fully decouple input from output. (This would replace `error=2` as the preferred method for action-only interfaces.)
+                - TODO: Extract as much as we can from `E` to private variables, only leaving the public interface accessible, for speed.
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed. (The only reason for this is use in browser console, which is too iffy to justify such an unreliable functionality. Besides, forcing storage is just annoying when the user wants to fire-and-forget.)
         - ✓ `.Accumulator`:
             - ✓ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
@@ -188,6 +190,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ✓ Ability to de/serialize sensors/accumulators/handlers, so that users can pick up power-ups at the press of a button.
             - ✓ Have the `.needsExtensionAPI() → null|string` method on `Sensor`s, returning `null` by default, but can return `''` or `'tabs'`. Let users control which parts of the `chrome` API the extension can see.
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files, or maybe their own NPM modules (though they *are* small):
+        - ⋯ Make `main.js` import modules that import it and export classes that inherit sensors/accumulators/handlers, by having getters that patch themselves on use.
         - ⋯ `.Sensor`:
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
                 - ⋯ Keyboard. Variants:
@@ -258,7 +261,15 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - ⋯ No-feedback sound output (speakers).
                 - How do we do this, exactly? What parts of `AudioContext` do we need?
+                    - `AudioBuffer` can contain PCM data and be played; but how to use it for real-time sound data writing? `.loop=true`, and write at *just* the right positions — would overwriting data like this work?
+                        - TODO: An HTML page with more-or-less: `ctx=new AudioContext();   src=ctx.createBufferSource(); src.buffer=ctx.createBuffer(channels=1, 1 * ctx.sampleRate, ctx.sampleRate); src.loop=true, src.loopEnd=1;  src.connect(ctx.destination); src.start();    src.buffer.getChannelData(0).fill(.15234)`
+                        - https://developer.mozilla.org/en-US/docs/Web/API/BaseAudioContext/currentTime for scheduling audio playback.
+                        - https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode
+                        - TODO: Make some handler that fills the sound buffer with -1|-1|-1|-1|1|1|1|1 data, and writes to the AudioBuffer's `.getChannelData(N)` 10 times per second; verify that the sound changes.
+                        - TODO: Make `test.html` play sound, at least temporarily. (Then again, might as well just create a separate page.)
+                        - (Some people are saying that many `AudioBufferSourceNode`s should be created and played at the right times. And, from testing with Firefox, this is absolutely true there.)
                 - What strategy do we use even: put-samples-as-is `A`, `A, -A` with configurable repetition length, or IFFT with frequency limitations and resizing?
+                    - (IFFT may need to be implemented manually.)
             - ⋯ Sound input (microphone). Probably terrible.
             - ⋯ Write to Internet.
                 - ⋯ Make sure that at least `error=1` ("no data") is preserved.
