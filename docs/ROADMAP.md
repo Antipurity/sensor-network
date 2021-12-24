@@ -203,32 +203,36 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
                     - ⋯ (May need an actual visualization elem, because pseudo-moving the mouse in the extension is not visualization.)
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
-                - ⋯ Video+audio of a tab.
-                    - ⋯ Allow initializing from a media stream, in case there's some full-screen canvas that we can use and avoid asking the user. (Else, do our best to check that the selection is actually the tab's stream.)
-                        - ⋯ Auto-detect such a scenario.
-                        - ⋯ If the extension is present, request a stream ID from it.
+                - ⋯ Video+audio.
                     - ⋯ Video.
                         - ⋯ Types:
                             - ⋯ Full stream, resized to a target resolution, to see the whole picture.
+                                - ⋯ Tiling, steps; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
                             - ⋯ Around-mouse rect.
-                            - ⋯ Around-mouse fovea.
-                            - ⋯ Around-mouse progressively coarser grids, each zoomed out 2×. So if starting at 8×8 cells, only need 7 more levels to go to 1024×1024, which with default cell-sizes and 44.1kHz sound-output is at most 43FPS for grayscale or 14FPS for full-color. (May act the same as a zooming data augmentation.)
-                        - ⋯ Coalesce chunks spatially wherever possible, with x/y coords of the center in the name.
-                        - ⋯ Expose `.points()->Array` and `.sendPointsRGB(data: Uint8Array)=>Promise<feedback>`, in case someone really wants to render only what is strictly necessary, and not have to prod the user for access.
-                        - ⋯ Allow passing the mouse object as an option, which is any object that has `{x:…,y:…}` with 0…1 client coordinates.
-                        - ⋯ In-page per-pixel feedback to DOM elements, through something like `sn.video.on(elem, imageData=>void)` and/or a hidden canvas. (Differentiable rendering boys, even though JS doesn't have libraries for that.)
-                        - ⋯ Internally, for efficiency, render images to a WebGL texture, and download data from there.
-                            - ⋯ Make each result a separate buffer, downloaded after some delay (say, 4 results max).
-                            - ⋯ For efficiency in certain cases, expose methods that receive data from a WebGL texture & context at 1+ coordinates.
+                                - ⋯ Coarsening, steps & magnitude-per-step; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
+                                - ⋯ Tiling, steps; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
+                                - ⋯ The points: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
+                        - ⋯ Coalesce chunks spatially, with x/y coords of the center in the name, by inferring the max rect dimension from the feedback's cell size.
+                        - ⋯ `.pointer() → Array`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
+                        - ⋯ Get frames from a media stream. If not passed in, ask the user.
+                            - ⋯ Ask the extension for the stream if it allows us. (For security, need a per-tab checkbox "allow the page to read its own video/audio".)
+                            - ⋯ For feedback: the ability to pass in `{ source:elem, feedback:canvas, onFeedback() }`. With this, sending would remember point coords and source coords, and receiving would render to the canvas. (Differentiable rendering boys. Even though JS doesn't have libraries for that.)
+                        - ⋯ JS versions of data & feedback, used if `gpuDecode:false`, used as correctness-reference and for comparing benchmark numbers.
+                        - ⋯ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there.
+                            - ⋯ `canvas.getContext('webgl', { powerPreference:'low-power', alpha:false })`
+                            - ⋯ Each cell's result is a part of the result texture in the fragment shader's output, one row per cell (so that read pixels can just be returned). Center coords and un-zoom-ness passed in as `varying`s, which are just copied from `attribute`s in the vertex shader, for max compatibility.
+                            - ⋯ A benchmark of reading from the same texture, without waiting for input frames.
+                            - ⋯ Delay downloads, by copying the result to a circular-buffer of textures, and reading from there with delay. Hopefully improves the benchmark.
                     - ⋯ Audio.
-                        - ⋯ Mono.
-                        - ⋯ Stereo.
+                        - ⋯ Mono, by averaging all channels.
+                        - ⋯ 2+ channels, each exposed directly.
                         - ⋯ Create an audio context that reads PCM data from the media stream.
-                            - ⋯ In the constructor's options, a volume multiplier, `1` by default.
+                            - ⋯ Request from extension if possible.
                         - ⋯ Expose data and feedback as [audio](https://developer.mozilla.org/en-US/docs/Web/API/MediaStream) [streams](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamAudioDestinationNode): `.soundData()=>dataStream` and `.soundFeedback()=>feedbackStream`.
                             - ⋯ For more efficiency, allow initializing from an audio context by attaching all our nodes to it, in case all sound is played through that: `.onAudioContext(ctx, outputNode)`.
                         - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
-                            - ⋯ In visualization, report data/feedback volumes with color, possibly with `box-shadow`.
+                            - ⋯ And a volume slider.
+                            - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
                 - ⋯ No in-page feedback, in Chrome (Firefox doesn't seem to care as much about direct hardware access):
                     - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1..1.
                     - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
