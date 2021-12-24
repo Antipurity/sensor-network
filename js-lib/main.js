@@ -37,7 +37,7 @@ export default (function(exports) {
                 sensorError: [], // Owns f32a (Float32Array), given to `.send(…)`.
                 sensorIndices: [], // ints
                 // accumulator → handler:
-                input: { data:null, error:null }, // Both are owned f32a.
+                input: { data:null, error:null, cellShape }, // data&error are owned f32a.
                 accumulatorExtra: [], // ints
                 accumulatorCallback: [], // function(feedback, cellShape, extra)
                 // handler → accumulator → sensor:
@@ -111,7 +111,7 @@ export default (function(exports) {
                 for (let i = 0; i < ch.accumulators.length; ++i) {
                     const a = ch.accumulators[i]
                     if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                        T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input, T.cellShape) : undefined)
+                        T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input) : undefined)
                         T.accumulatorCallback.push(a.onFeedback)
                     }
                 }
@@ -121,7 +121,7 @@ export default (function(exports) {
                 else
                     T.feedback = null
                 if (mainHandler) {
-                    const r = mainHandler.onValues(T.input, T.cellShape, T.feedback ? true : false, T.feedback)
+                    const r = mainHandler.onValues(T.input, T.feedback ? true : false, T.feedback)
                     if (r instanceof Promise) await r
                 }
                 const hs = dst.handlers
@@ -130,7 +130,7 @@ export default (function(exports) {
                     for (let i = 0; i < hs.length; ++i) {
                         const h = hs[i]
                         if (h !== mainHandler && typeof h.onValues == 'function') {
-                            const r = h.onValues(T.input, T.cellShape, false, T.feedback)
+                            const r = h.onValues(T.input, false, T.feedback)
                             if (r instanceof Promise) tmp.push(r)
                         }
                     }
@@ -381,7 +381,7 @@ export default (function(exports) {
 
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
-        - \`onValues({data, error}, cellShape) → extra\`: can modify \`data\` and the optional \`error\` in-place.
+        - \`onValues({data, error, cellShape}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
             - \`cellShape: [reward, user, name, data]\`
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
             - Can return a promise.
@@ -440,7 +440,7 @@ export default (function(exports) {
             docs:`Given data, gives feedback: human or AI model.
 
 - \`constructor({ onValues, partSize=8, rewardParts=0, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
-    - \`onValues({data, error}, cellShape, writeFeedback, feedback)\`: process. // TODO: Put \`cellShape\` into \`input\` too. For accumulators too.
+    - \`onValues({data, error, cellShape}, writeFeedback, feedback)\`: process.
         - // TODO: And, don't pass in \`feedback\`, return it instead. Fill data with the main handler's feedback on no-data ourselves. As an arg, only give the bool "needFeedback".
         - (\`data\` and \`error\` are not owned; do not write.)
         - \`error\` and \`feedback\` can be \`null\`s.
@@ -479,7 +479,7 @@ export default (function(exports) {
                         })
                         const to = new E.Handler({
                             dataSize,
-                            onValues({data, error}, cellShape, writeFeedback, feedback) {
+                            onValues({data, error, cellShape}, writeFeedback, feedback) {
                                 data.fill(.489018922485) // "Read" it.
                                 if (writeFeedback) feedback.fill(-1)
                             },

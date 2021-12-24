@@ -1,8 +1,13 @@
 export default function init(sn) {
     return class Sound extends sn.Handler {
         constructor(...a) { return super(...a) }
-        docs() { return `// TODO: Docs.
-    ` }
+        docs() { return `Exposes data as sound, for humans to listen.
+
+In Chrome, users might have to first click on the page for sound to play.
+
+- Extra options, for \`constructor\` and \`resume\`:
+    - \`volume = 1\`: multiplier of sound output.
+` }
         resume(opts) {
             if (opts) {
                 opts.onValues = Sound.onValues
@@ -13,6 +18,7 @@ export default function init(sn) {
         }
         onlyIfNoExtension() { return true } // TODO: Make the extension suppress handlers with this, by flipping a bool in `sn`.
         // TODO: Also, `visualize({data, error}, elem)`, which draws on a canvas.
+        //   (May not want actual sound here, even, but an actual *visual*ization.)
         static bench() {
             let loud = 1
             const sensorCounts = new Array(3).fill().map((_,i) => 1 + i*10)
@@ -43,7 +49,7 @@ export default function init(sn) {
                 }
             }
         }
-        static async onValues({data, error}, cellShape) { // TODO:
+        static async onValues({data, error, cellShape}) {
             if (!data || !data.length) return
             if (!Sound.ctx) {
                 Sound.ctx = new AudioContext()
