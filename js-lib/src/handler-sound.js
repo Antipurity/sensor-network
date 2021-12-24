@@ -13,19 +13,15 @@ export default function init(sn) {
         }
         onlyIfNoExtension() { return true } // TODO: Make the extension suppress handlers with this, by flipping a bool in `sn`.
         // TODO: Also, `visualize({data, error}, elem)`, which draws on a canvas.
-        // TODO: Have a benchmark. Because optimization is a game, you see? A fun game.
         static bench() {
-            const sensorCounts = new Array(200).fill().map((_,i) => 1 + i) // TODO: (Only have like 2 benchmarks, cause it's like impossible to sit through.)
+            let loud = 1
+            const sensorCounts = new Array(3).fill().map((_,i) => 1 + i*10)
             return sensorCounts.map(river)
             function river(sensors) { // Listen to random named data.
                 const dataSize = 64
                 return function start() {
-                    let loud = 1
                     function changeLoud(evt) { loud = Math.random() }
-                    addEventListener('pointerdown', changeLoud) // TODO: ...Damn, it really is delayed by half a second with too much data. With VERY clear & smoothly-changing periodicity. ...But why?
-                    //   ...Isn't this periodic pattern a sign of 2 predictors chasing each other...
-                    //   When ms-per-step prediction is too little, there's too much data, and steps take longer (and simultaneous steps accumulate); when the prediction compensates by (rightfully) becoming too much, there's not enough data (and skips are noticeable).
-                    //   ...Maybe we really should shift our mental model of streams, to low/high water marks, from guess-the-frequency...
+                    addEventListener('pointerdown', changeLoud)
                     const froms = new Array(sensors).fill().map(() => {
                         return new sn.Sensor({
                             name: ['some', 'kinda', 'name'],

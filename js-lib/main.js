@@ -79,7 +79,7 @@ export default (function(exports) {
             this.sensorIndices.push(this.cells)
             this.cells += point.length / this.cellSize | 0
         }
-        static updateMean(a, value, maxHorizon = 100) { // TODO:
+        static updateMean(a, value, maxHorizon = 100) {
             const n1 = a[0], n2 = n1+1
             a[0] = Math.min(n2, maxHorizon)
             a[1] += (value - a[1]) / n2
@@ -152,6 +152,7 @@ export default (function(exports) {
                 E.meta.metric('simultaneous steps', ch.stepsNow)
                 E.meta.metric('step processed data, values', namedSize)
                 --ch.stepsNow
+                if (!ch.stepsNow && ch.giveNextPacketNow) ch.giveNextPacketNow()
                 _Packet.stepsEnded = _Packet.stepsEnded + 1 || 1
                 const duration = (dst.lastUsed = performance.now()) - start
                 _Packet.updateMean(dst.msPerStep, duration)
@@ -166,9 +167,6 @@ export default (function(exports) {
             while (true) {
                 if (!ch.shaped[cellShapeStr]) return // `Sensor`s might have cleaned us up.
                 const start = performance.now(), end = start + dst.msPerStep[1]
-                debug('msPerStep', dst.msPerStep[1]) // TODO: Why is it steadily climbing?! ...Actually, isn't it accurate?...
-                //   Well, it does overshoot often, and when it does, sound gets very noticeably skippy.
-                //     Can we somehow prevent overshooting?
                 // Don't do too much at once.
                 while (ch.stepsNow > E.maxSimultaneousPackets)
                     await new Promise(then => ch.waitingSinceTooManySteps.push(then))
@@ -185,7 +183,6 @@ export default (function(exports) {
                 if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
                     return dst.looping = false
                 await Promise.resolve() // Wait a bit.
-                debug('predictedMsPerStep', (dst.nextPacket.cells * 96 * 4) / 48000 * 1000) // TODO:
                 //   (Also, commenting this out halves Firefox throughput.)
                 // Send it off.
                 const nextPacket = dst.nextPacket;  dst.nextPacket = _Packet.init(channel, cellShape)
@@ -196,9 +193,11 @@ export default (function(exports) {
                 const now = performance.now(), needToWait = prevEnd - now
                 prevEnd += dst.msPerStep[1]
                 if (prevEnd < now - 1000) prevEnd = now - 1000 // Don't get too eager after being stalled.
-                if (needToWait > 0 || now - prevWait > 100)
-                    await new Promise(then => setTimeout(then, Math.max(needToWait, 0))),
+                if (needToWait > 0 || now - prevWait > 100) {
+                    await new Promise(then => setTimeout(ch.giveNextPacketNow = then, Math.max(needToWait, 0)))
+                    ch.giveNextPacketNow = null
                     prevWait = performance.now()
+                }
             }
         }
         static _measureThroughput() {
@@ -608,11 +607,8 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 function walk(x) {
                     if (!x || typeof x != 'object' && typeof x != 'function') return
                     if (typeof x.bench == 'function' && x.bench !== E.meta.bench) {
-                        console.log('found', x, E.Handler.Sound, x === E.Handler.Sound) // TODO:
                         const bs = x.bench()
-                        if (x === E.Handler.Sound) // TODO: Why do they all belong to Sound now?! (And none of them are actually *of* sound.)
                         for (let id of Object.keys(bs)) {
-                            console.log('yes', x, x.bench, id) // TODO:
                             bench.push(bs[id])
                             benchIndex.push(id)
                             benchOwner.push(x)
@@ -962,6 +958,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 accumulators: [], // Array<Accumulator>, sorted by priority.
                 mainHandler: null, // Handler, with max priority.
                 stepsNow: 0, // int
+                giveNextPacketNow: null, // Called when .stepsNow is 0.
                 waitingSinceTooManySteps: [], // Array<function>, called when a step is finished.
                 cellShapes: [], // Array<String>, for enumeration of `.shaped` just below.
                 shaped: Object.create(null), // { [handlerShapeAsString] }
@@ -977,7 +974,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 cellShape: cellShape, // [reward, user, name, data]
                 handlers: [], // Array<Handler>, sorted by priority.
                 nextPacket: new _Packet(channel, cellShape),
-                packetCache: [], // Array<_Packet>; DO NOT USE
+                packetCache: [], // Array<_Packet>
             }, ch.cellShapes.push(cellShape)
         return ch.shaped[cellShapeStr]
     }
