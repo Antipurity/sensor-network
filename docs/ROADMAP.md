@@ -211,8 +211,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ The points `target`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
                             - If empty, downsample the *full* stream, and disable coarsening.
                             - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
-                        - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`, and extraValues auto-inferred such that each tile takes up an integer number of cells, usually 1.
-                            - TODO: But we don't know the listener dataSize, do we... And, a sensor can send to multiple listeners anyway, so can we really guarantee the correct padding — without some kind of support from the base...
+                        - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
                             - ⋯ Each cell's name: `['video', ''+tileDimension, source(), zoomOut(), x(), y()]`, where the source is -1 for tab, 1 for camera.
                         - ⋯ `source`: could be a `<canvas>`, or could be a media stream that's put into a `<video>` to read from, or a function that returns said canvas and the feedback function on each frame (or an array, for many video sources — no need to get picky and stick everything into one size, just take all data and label it).
                             - ⋯ `static stitchCanvases()`, which draws the viewport's visible canvases into a hidden `<canvas>`. This is the default in non-extensions, because it requires no user interaction.

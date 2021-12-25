@@ -226,6 +226,11 @@ export default (function(exports) {
         Sensor: A(class Sensor {
             constructor(opts) { assert(opts), this.resume(opts) }
             needsExtensionAPI() { return null }
+            cellShape() {
+                const ch = state(this.channel)
+                if (ch.mainHandler) return ch.mainHandler.cellShape
+                return ch.cellShapes[0] || null
+            }
             sendCallback(then, values, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
@@ -320,7 +325,7 @@ export default (function(exports) {
         }, {
             docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
 
-- \`constructor({ name, values, onValues=null, channel='', noFeedback=false, rewardName=[], userName=[], emptyValues=0, hasher=undefined })\`
+- \`constructor({ name, values, onValues=null, channel='', noFeedback=false, rewardName=[], userName=[], emptyValues=0, hasher=… })\`
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
     - \`onValues(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
         - To run faster, use \`sensor.sendCallback(fn(feedback), data, …)\` with a static function.
@@ -333,6 +338,8 @@ export default (function(exports) {
         - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default mainly hashes strings in \`rewardName\`/\`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
     - To change any of this, \`pause()\` and recreate.
 
+- \`cellShape() → [reward, user, name, data] | null\`: returns the target's cell shape. Note that this may change rarely.
+
 - \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
     - (Do not override in child classes, only call.)
     - \`values\`: owned flat data, -1…1 \`Float32Array\`. Do not perform ANY operations on it once called.
@@ -343,7 +350,7 @@ export default (function(exports) {
         - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
 
-- \`sendCallback(then(null|feedback), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise.
+- \`sendCallback(then(null|feedback, sensor), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise.
 
 - \`pause()\`, \`resume()\`: for convenience, these return the object.
 
@@ -943,7 +950,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 const flatV = allocF32(data.length)
                 const namer = packetNamer(T, namers, cellShape, s)
                 namer.unname(allFeedback, fbOffset, flatV)
-                then(flatV)
+                then(flatV, T)
             } else
                 then(null)
         } finally { deallocF32(data), error && deallocF32(error) }
