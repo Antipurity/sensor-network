@@ -221,11 +221,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ The points `target`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
                             - ⋯ If empty, downsample the *full* stream, and disable coarsening.
                             - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
-                        - ⋯ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there.
-                            - ⋯ `canvas.getContext('webgl', { powerPreference:'low-power', alpha:false })`
-                            - ⋯ Each cell's result is a part of the result texture in the fragment shader's output, one row per cell (so that read pixels can just be returned). Center coords and un-zoom-ness passed in as `varying`s, which are just copied from `attribute`s in the vertex shader, for max compatibility.
-                            - ⋯ A benchmark of reading from the same texture, without waiting for input frames.
-                            - ⋯ Delay downloads, by copying the result to a circular-buffer of textures, and reading from there with delay. Hopefully improves the benchmark.
+                        - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
+                        - ⋯ A benchmark of reading from the same texture, without waiting for input frames.
                     - ⋯ Audio.
                         - ⋯ Mono, by averaging all channels.
                         - ⋯ 2+ channels, each exposed directly.

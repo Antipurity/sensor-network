@@ -6,9 +6,9 @@ This sensor's output is composed of 1 or more tiles, which are square images.
 
 Extra options:
 - \`tileDimension = 8\`: each tile edge's length.
-- \`source = Video.stitchCanvases\`: TODO:
+- \`source = Video.stitchCanvases\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
+- \`monochrome = false\`: TODO:
 ` }
-        // TODO: How do we do this?
         resume(opts) {
             if (opts) {
                 const td = opts.tileDimension || 8
@@ -18,10 +18,12 @@ Extra options:
                 this.tileDimension = td
                 // (Don't catch errors in `src`, so they'll be logged to console.)
                 this.source = !(src instanceof Promise) ? src : (src.then(v => this.source=v), src)
+                this._tiles = 1
+                this.monochrome = !!opts.monochrome
                 // TODO: Other props. (For example, handle tiling and zooming-in by forking ourselves, and making `pause` responsible for the forks too.)
                 opts.extraValues = 0
                 opts.onValues = Video.onValues
-                opts.values = 1 * this.tileDimension
+                opts.values = this._tiles * this.tileDimension * (this.monochrome ? 1 : 3)
                 opts.name = ['video', ''+td, ] // TODO: What funcs would return x & y & zoomOut & source of a cell?
                 //   (zoomOut and source are the same per-`Video`-instance, I guess.)
                 //   (zoomOut is -1 at level 2**0, 1 at levels 2**10+.)
@@ -32,6 +34,8 @@ Extra options:
         // TODO: First, at least make it work for 1-tile no-zoomout no-targets.
         //   And test that it works with sound.
 
+        // TODO: ...Okay, I think this stub is (mostly) implemented, so, should actually run it.
+
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
             if (!targetShape || this.source instanceof Promise) return
@@ -39,7 +43,7 @@ Extra options:
             const dataSize = targetShape[targetShape.length-1]
             const cells = data.length / dataSize | 0
             const valuesPerCell = Math.ceil(this.values / cells)
-            Video._dataJS(sensor, data, valuesPerCell)
+            Video._dataContext2d(sensor, data, valuesPerCell)
             sensor.sendCallback(Video.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
@@ -56,27 +60,46 @@ Extra options:
                 if ('srcObject' in el) el.srcObject = source
                 else el.src = URL.createObjectURL(source)
                 el.volume = 0
-                el.play() // TODO: Is this required?
+                // el.play() // TODO: Is this required?
                 m.set(source, el)
             }
             return m.get(source)
         }
-        static _dataJS(sensor, data, valuesPerTile) { // Fills data, through JS.
+        static _dataContext2d(sensor, data, valuesPerCell) { // Fills `data`.
             const frame = Video._sourceToDrawable(this.source)
             const width = frame.videoWidth || frame.displayWidth || frame.width
             const height = frame.videoHeight || frame.displayHeight || frame.height
             // Draw frame to canvas, get ImageData.
-            if (!this._canvas)
-                this._canvas = document.createElement('canvas'),
+            if (!this._canvas) {
+                this._canvas = document.createElement('canvas')
                 this._ctx2d = this._canvas.getContext('2d')
+            }
             // TODO: Debug devicePixelRatio. Do we need to take it into account?
-            this._canvas.width = width, this._canvas.height = height
-            this._ctx2d.drawImage(frame, 0, 0)
-            const imageData = this._ctx2d(0, 0, width, height)
+            const td = this.tileDimension, tiles = this._tiles
+            this._canvas.width = td, this._canvas.height = tiles * td
+            // Draw each tile and get its ImageData, and put that into `data`.
+            for (let i = 0; i < this._tiles; ++i) {
+                this._ctx2d.drawImage(frame,
+                    0, 0, width, height,
+                    0, 0, td, i * td,
+                )
+            }
             // Actually draw the data.
-            const td = this.tileDimension
-            // TODO: How to sample from the imageData?
-            //   TODO: Right now, how to downsample it into td×td?
+            const monochrome = this.monochrome
+            const imageData = this._ctx2d.getImageData(0, 0, td, tiles * td).data
+            for (let i = 0; i < this._tiles; ++i) {
+                for (let j = 0; j < valuesPerCell; ++j) {
+                    const R = imageData[4 * (td*td*i + j) + 0] / 255
+                    const G = imageData[4 * (td*td*i + j) + 1] / 255
+                    const B = imageData[4 * (td*td*i + j) + 2] / 255
+                    if (!monochrome) { // Each tile is 3 successive R/G/B cells.
+                        data[(i*3 + 0) * valuesPerCell + j] = R
+                        data[(i*3 + 1) * valuesPerCell + j] = G
+                        data[(i*3 + 2) * valuesPerCell + j] = B
+                    } else // https://en.wikipedia.org/wiki/Relative_luminance
+                        data[i * valuesPerCell + j] = (0.2126*R + 0.7152*G + 0.0722*B) * 2 - 1
+                }
+            }
         }
 
         static requestTab() { // With the user's permission, gets this tab's contents.
