@@ -503,6 +503,8 @@ export default (function(exports) {
         }),
         _allocF32: allocF32,
         _deallocF32: deallocF32,
+        _assert: assert,
+        _assertCounts: assertCounts,
         maxSimultaneousPackets: 4,
         meta:{
             docs: A(function docs() {

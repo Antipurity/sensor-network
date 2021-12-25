@@ -206,13 +206,6 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
                 - ⋯ Video+audio.
                     - ⋯ Video: `Video`.
-                        - ⋯ Coarsening, steps & magnitude-per-step, `zoomOutSteps` &  `zoomOut`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
-                        - ⋯ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
-                        - ⋯ The points `target`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
-                            - If empty, downsample the *full* stream, and disable coarsening.
-                            - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
-                        - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
-                            - ⋯ Each cell's name: `['video', ''+tileDimension, source(), zoomOut(), x(), y()]`, where the source is -1 for tab, 1 for camera.
                         - ⋯ `source`: could be a `<canvas>`, or could be a media stream that's put into a `<video>` to read from, or a function that returns said canvas and the feedback function on each frame (or an array, for many video sources — no need to get picky and stick everything into one size, just take all data and label it).
                             - ⋯ `static stitchCanvases()`, which draws the viewport's visible canvases into a hidden `<canvas>`. This is the default in non-extensions, because it requires no user interaction.
                                 - ⋯ `static stitchCanvasesFeedback()` for feedback.
@@ -221,6 +214,13 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                             - ⋯ Ask the extension for the stream if it allows us. (For security, need a per-tab checkbox "allow the page to read its own video/audio".)
                             - ⋯ For feedback: the ability to pass in `{ source:elem, feedback:canvas, onFeedback() }`. With this, sending would remember point coords and source coords, and receiving would render to the canvas. (Differentiable rendering boys. Even though JS doesn't have libraries for that.)
                         - ⋯ JS versions of data & feedback, used if `gpuDecode:false`, used as correctness-reference and for comparing benchmark numbers.
+                        - ⋯ Coarsening, steps & magnitude-per-step, `zoomOutSteps` &  `zoomOut`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
+                        - ⋯ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
+                        - ⋯ The points `target`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
+                            - ⋯ If empty, downsample the *full* stream, and disable coarsening.
+                            - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
+                        - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
+                            - ⋯ Each cell's name: `['video', ''+tileDimension, source(), zoomOut(), x(), y()]`, where the source is -1 for tab, 1 for camera.
                         - ⋯ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there.
                             - ⋯ `canvas.getContext('webgl', { powerPreference:'low-power', alpha:false })`
                             - ⋯ Each cell's result is a part of the result texture in the fragment shader's output, one row per cell (so that read pixels can just be returned). Center coords and un-zoom-ness passed in as `varying`s, which are just copied from `attribute`s in the vertex shader, for max compatibility.
