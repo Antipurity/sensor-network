@@ -1,6 +1,5 @@
 export default function init(sn) {
     return class Sound extends sn.Handler {
-        constructor(...a) { return super(...a) }
         docs() { return `Exposes data as sound, for humans to listen.
 
 In Chrome, users might have to first click on the page for sound to play.

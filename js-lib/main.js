@@ -1,5 +1,6 @@
 import './yamd5.js'
 import Sound from './src/handler-sound.js'
+import Video from './src/video.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -92,6 +93,7 @@ export default (function(exports) {
             const dst = ch.shaped[cellShapeStr]
             if (!dst) return
             const start = performance.now(), namedSize = T.cells * T.cellSize
+            const benchAtStart = currentBenchmark
             ++ch.stepsNow
             try {
                 // Concat sensors into `.input.data` and `.input.error`.
@@ -149,13 +151,15 @@ export default (function(exports) {
                 T.deinit()
             } finally {
                 // Self-reporting.
-                E.meta.metric('simultaneous steps', ch.stepsNow)
-                E.meta.metric('step processed data, values', namedSize)
                 --ch.stepsNow
                 if (!ch.stepsNow && ch.giveNextPacketNow) ch.giveNextPacketNow()
                 _Packet.stepsEnded = _Packet.stepsEnded + 1 || 1
-                const duration = (dst.lastUsed = performance.now()) - start
-                _Packet.updateMean(dst.msPerStep, duration)
+                if (benchAtStart === currentBenchmark) {
+                    const duration = (dst.lastUsed = performance.now()) - start
+                    _Packet.updateMean(dst.msPerStep, duration)
+                    E.meta.metric('simultaneous steps', ch.stepsNow+1)
+                    E.meta.metric('step processed data, values', namedSize)
+                }
                 ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
             }
         }
@@ -200,14 +204,15 @@ export default (function(exports) {
                 }
             }
         }
-        static _measureThroughput() {
+        static _measureThroughput(reset = false) {
             const now = performance.now()
             if (!_Packet.lastMeasuredThroughputAt)
                 _Packet.lastMeasuredThroughputAt = now, _Packet.lastMemory = memory()
-            if (now - _Packet.lastMeasuredThroughputAt > 500) { // Filter out noise.
+            if (reset || now - _Packet.lastMeasuredThroughputAt > 500) { // Filter out noise.
                 const s = Math.max(now - _Packet.lastMeasuredThroughputAt, .01) / 1000
-                E.meta.metric('throughput, bytes/s', (_Packet._handledBytes || 0) / s)
-                E.meta.metric('allocations, bytes/s', Math.max(memory() - _Packet.lastMemory, 0) / s)
+                if (!reset)
+                    E.meta.metric('throughput, bytes/s', (_Packet._handledBytes || 0) / s),
+                    E.meta.metric('allocations, bytes/s', Math.max(memory() - _Packet.lastMemory, 0) / s)
                 _Packet.lastMeasuredThroughputAt = now
                 _Packet._handledBytes = 0, _Packet.stepsEnded = 0
                 _Packet.lastMemory = memory()
@@ -591,12 +596,14 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 const benchOwner = []
                 walk(E) // Get benchmarks.
                 for (let i = 0; i < bench.length; ++i) { // Benchmark.
-                    currentBenchmark = Object.create(null)
                     if (typeof benchFilter != 'function' || benchFilter(bench[i]))
                         try {
+                            currentBenchmark = Object.create(null)
                             const stop = bench[i].call()
                             assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
+                            _Packet._measureThroughput(true)
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
+                            _Packet._measureThroughput(true)
                             onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, (i+1) / bench.length)
                         } catch (err) { console.error(err) }
                 }
@@ -879,7 +886,12 @@ Makes only the sign matter for low-frequency numbers.` }),
         }),
     })
     // And set the most-common modules.
-    E.Handler.Sound = Sound(E)
+    Object.assign(E.Sensor, {
+        Video: Video(E),
+    })
+    Object.assign(E.Handler, {
+        Sound: Sound(E),
+    })
     return E
 
     function test(func, ...args) {
