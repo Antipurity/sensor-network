@@ -35,16 +35,17 @@ Extra options:
         //   And test that it works with sound.
 
         // TODO: ...Okay, I think this stub is (mostly) implemented, so, should actually run it.
+        //   TODO: Why is there an infinite loop now?
 
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
-            if (!targetShape || this.source instanceof Promise) return
+            if (!targetShape) return
             // Make sure to limit to one tile per cell, so that there's no misalignment.
             const dataSize = targetShape[targetShape.length-1]
             const cells = data.length / dataSize | 0
-            const valuesPerCell = Math.ceil(this.values / cells)
-            Video._dataContext2d(sensor, data, valuesPerCell)
-            sensor.sendCallback(Video.onFeedback, data)
+            const valuesPerCell = Math.ceil(sensor.values / cells)
+            if (sensor._dataContext2d(data, valuesPerCell))
+                sensor.sendCallback(Video.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
             if (!feedback || sensor.noFeedback) return
@@ -52,6 +53,7 @@ Extra options:
         }
 
         static _sourceToDrawable(source) { // .drawImage and .texImage2D can use the result.
+            if (typeof source == 'function') source = source()
             if (!(source instanceof MediaStream)) return source
             const m = Video._streamToVideo || (Video._streamToVideo = new WeakMap)
             // TODO: For the efficiency of having 1 less copy, use https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame and https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor when available. (After we make <video> work, played into sound.)
@@ -65,8 +67,9 @@ Extra options:
             }
             return m.get(source)
         }
-        static _dataContext2d(sensor, data, valuesPerCell) { // Fills `data`.
+        _dataContext2d(data, valuesPerCell) { // Fills `data`.
             const frame = Video._sourceToDrawable(this.source)
+            if (frame instanceof Promise) return false
             const width = frame.videoWidth || frame.displayWidth || frame.width
             const height = frame.videoHeight || frame.displayHeight || frame.height
             // Draw frame to canvas, get ImageData.
@@ -100,6 +103,7 @@ Extra options:
                         data[i * valuesPerCell + j] = (0.2126*R + 0.7152*G + 0.0722*B) * 2 - 1
                 }
             }
+            return true
         }
 
         static requestTab() { // With the user's permission, gets this tab's contents.
@@ -109,6 +113,7 @@ Extra options:
             return sn._getDisplayMedia = navigator.mediaDevices.getDisplayMedia({ audio:true, video:true }).then(s => {
                 const cap = s.getVideoTracks[0].getCapabilities()
                 sn._assert(cap.displaySurface === 'browser', "Did not pick a tab")
+                sn._getDisplayMedia = s
                 return s
             })
         }
