@@ -152,7 +152,7 @@ export default (function(exports) {
             } finally {
                 // Self-reporting.
                 --ch.stepsNow
-                if (!ch.stepsNow && ch.giveNextPacketNow) ch.giveNextPacketNow()
+                if (namedSize && !ch.stepsNow && ch.giveNextPacketNow) ch.giveNextPacketNow()
                 _Packet.stepsEnded = _Packet.stepsEnded + 1 || 1
                 if (benchAtStart === currentBenchmark) {
                     const duration = (dst.lastUsed = performance.now()) - start
@@ -190,6 +190,7 @@ export default (function(exports) {
                 //   (Also, commenting this out halves Firefox throughput.)
                 // Send it off.
                 const nextPacket = dst.nextPacket;  dst.nextPacket = _Packet.init(channel, cellShape)
+                const cells = nextPacket.cells
                 nextPacket.handle(mainHandler)
                 // Benchmark throughput if needed.
                 _Packet._measureThroughput()
@@ -197,8 +198,8 @@ export default (function(exports) {
                 const now = performance.now(), needToWait = prevEnd - now
                 prevEnd += dst.msPerStep[1]
                 if (prevEnd < now - 1000) prevEnd = now - 1000 // Don't get too eager after being stalled.
-                if (needToWait > 0 || now - prevWait > 100) {
-                    await new Promise(then => setTimeout(ch.giveNextPacketNow = then, Math.max(needToWait, 0)))
+                if (needToWait > 0 || now - prevWait > 100 || !cells) {
+                    await new Promise(then => setTimeout(ch.giveNextPacketNow = then, !cells ? 500 : Math.max(needToWait, 0)))
                     ch.giveNextPacketNow = null
                     prevWait = performance.now()
                 }
@@ -264,6 +265,7 @@ export default (function(exports) {
                 this.feedbackCallbacks.push(then)
                 this.feedbackNoFeedback.push(this.noFeedback)
                 this.feedbackNamers.push(this.dataNamers)
+                values && ch.giveNextPacketNow && ch.giveNextPacketNow() // Wake up.
             }
             send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
                 return new Promise((then, reject) => {
@@ -979,7 +981,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 accumulators: [], // Array<Accumulator>, sorted by priority.
                 mainHandler: null, // Handler, with max priority.
                 stepsNow: 0, // int
-                giveNextPacketNow: null, // Called when .stepsNow is 0.
+                giveNextPacketNow: null, // Called when .stepsNow is 0, or on `sensor.send`.
                 waitingSinceTooManySteps: [], // Array<function>, called when a step is finished.
                 cellShapes: [], // Array<String>, for enumeration of `.shaped` just below.
                 shaped: Object.create(null), // { [handlerShapeAsString] }

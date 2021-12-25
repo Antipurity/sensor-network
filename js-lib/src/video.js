@@ -39,17 +39,20 @@ Extra options:
 
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
+            // TODO: Why do no-data sensors cause nothing to ever return to the event loop? This is extremely poor UI.
             if (!targetShape) return
             // Make sure to limit to one tile per cell, so that there's no misalignment.
             const dataSize = targetShape[targetShape.length-1]
             const cells = data.length / dataSize | 0
             const valuesPerCell = Math.ceil(sensor.values / cells)
             if (sensor._dataContext2d(data, valuesPerCell))
+                // console.log('z'), // TODO: Why is this never true?
                 sensor.sendCallback(Video.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
             if (!feedback || sensor.noFeedback) return
             // TODO: What do we do here?
+            //   …Simply upscale from feedback, exactly reversing `_dataContext2d`?
         }
 
         static _sourceToDrawable(source) { // .drawImage and .texImage2D can use the result.
@@ -107,11 +110,15 @@ Extra options:
         }
 
         static requestTab() { // With the user's permission, gets this tab's contents.
+            // TODO: BIG PROBLEMS:
+            //   TODO: Chrome throws if the user hasn't clicked on the page yet.
+            //   TODO: ...Firefox doesn't allow the actual tab, only windows?... Did it change from what I knew?
             // (Make sure that users know to select the current tab.)
             // (May fail, stalling the whole `Video` object forever.)
             if (sn._getDisplayMedia) return sn._getDisplayMedia
             return sn._getDisplayMedia = navigator.mediaDevices.getDisplayMedia({ audio:true, video:true }).then(s => {
-                const cap = s.getVideoTracks[0].getCapabilities()
+                console.log('got display media stream', s) // TODO:
+                const cap = s.getVideoTracks[0].getCapabilities() // TODO: ...Why are there no video tracks??
                 sn._assert(cap.displaySurface === 'browser', "Did not pick a tab")
                 sn._getDisplayMedia = s
                 return s
