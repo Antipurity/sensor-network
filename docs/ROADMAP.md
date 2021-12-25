@@ -156,6 +156,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ✓ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
                 - TODO: Be able to accept `null` in the actual code, which gives no data but still expects feedback. This way, we will be able to fully decouple input from output. (This would replace `error=2` as the preferred method for action-only interfaces.)
+                    - Make handlers accept `noData` and `noFeedback` per-cell u8a as named args.
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed. (The only reason for this is use in browser console, which is too iffy to justify such an unreliable functionality. Besides, forcing storage is just annoying when the user wants to fire-and-forget.)
         - ✓ `.Accumulator`:
             - ✓ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
@@ -204,17 +205,20 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ (May need an actual visualization elem, because pseudo-moving the mouse in the extension is not visualization.)
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
                 - ⋯ Video+audio.
-                    - ⋯ Video.
-                        - ⋯ Types:
-                            - ⋯ Full stream, resized to a target resolution, to see the whole picture.
-                                - ⋯ Tiling, steps; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
-                            - ⋯ Around-mouse rect.
-                                - ⋯ Coarsening, steps & magnitude-per-step; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
-                                - ⋯ Tiling, steps; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
-                                - ⋯ The points: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
-                        - ⋯ Coalesce chunks spatially, with x/y coords of the center in the name, by inferring the max rect dimension from the feedback's cell size.
-                        - ⋯ `.pointer() → Array`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
-                        - ⋯ Get frames from a media stream. If not passed in, ask the user.
+                    - ⋯ Video: `Video`.
+                        - ⋯ Coarsening, steps & magnitude-per-step, `zoomOutSteps` &  `zoomOut`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
+                        - ⋯ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
+                        - ⋯ The points `target`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
+                            - If empty, downsample the *full* stream, and disable coarsening.
+                            - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
+                        - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`, and extraValues auto-inferred such that each tile takes up an integer number of cells, usually 1.
+                            - TODO: But we don't know the listener dataSize, do we... And, a sensor can send to multiple listeners anyway, so can we really guarantee the correct padding — without some kind of support from the base...
+                            - ⋯ Each cell's name: `['video', ''+tileDimension, source(), zoomOut(), x(), y()]`, where the source is -1 for tab, 1 for camera.
+                        - ⋯ `source`: could be a `<canvas>`, or could be a media stream that's put into a `<video>` to read from, or a function that returns said canvas and the feedback function on each frame (or an array, for many video sources — no need to get picky and stick everything into one size, just take all data and label it).
+                            - ⋯ `static stitchCanvases()`, which draws the viewport's visible canvases into a hidden `<canvas>`. This is the default in non-extensions, because it requires no user interaction.
+                                - ⋯ `static stitchCanvasesFeedback()` for feedback.
+                            - ⋯ `static requestTab()`, which uses `getDisplayMedia`.
+                            - ⋯ `static requestCamera()`, which uses `getUserMedia` with permissions.
                             - ⋯ Ask the extension for the stream if it allows us. (For security, need a per-tab checkbox "allow the page to read its own video/audio".)
                             - ⋯ For feedback: the ability to pass in `{ source:elem, feedback:canvas, onFeedback() }`. With this, sending would remember point coords and source coords, and receiving would render to the canvas. (Differentiable rendering boys. Even though JS doesn't have libraries for that.)
                         - ⋯ JS versions of data & feedback, used if `gpuDecode:false`, used as correctness-reference and for comparing benchmark numbers.
