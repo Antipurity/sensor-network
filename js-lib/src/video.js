@@ -46,7 +46,7 @@ Extra options:
             const cells = data.length / dataSize | 0
             const valuesPerCell = Math.ceil(sensor.values / cells)
             if (sensor._dataContext2d(data, valuesPerCell))
-                // console.log('z'), // TODO: Why is this never true?
+                // console.log('z'), // TODO:
                 sensor.sendCallback(Video.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
@@ -109,20 +109,21 @@ Extra options:
             return true
         }
 
+        // TODO: Make the main thing `stitchCanvases`, which will be renamed to `requestTab`, and request stream from extension if possible.
+        //   (getDisplayMedia seems to be too unreliable. Not to mention, it has horrible UI. If API users really want it, they can implement it themselves.)
         static requestTab() { // With the user's permission, gets this tab's contents.
             // TODO: BIG PROBLEMS:
-            //   TODO: Chrome throws if the user hasn't clicked on the page yet.
+            //   TODO: Firefox throws if the user hasn't clicked on the page yet.
             //   TODO: ...Firefox doesn't allow the actual tab, only windows?... Did it change from what I knew?
+            //   ...With these problems, is it even worth it?
             // (Make sure that users know to select the current tab.)
             // (May fail, stalling the whole `Video` object forever.)
-            if (sn._getDisplayMedia) return sn._getDisplayMedia
+            if (sn._getDisplayMedia) return sn._getDisplayMedia // TODO: ...Now, we can't really cache, do we? So, what, promises themselves should have `.result` and `.error`?
             return sn._getDisplayMedia = navigator.mediaDevices.getDisplayMedia({ audio:true, video:true }).then(s => {
-                console.log('got display media stream', s) // TODO:
-                const cap = s.getVideoTracks[0].getCapabilities() // TODO: ...Why are there no video tracks??
-                sn._assert(cap.displaySurface === 'browser', "Did not pick a tab")
                 sn._getDisplayMedia = s
                 return s
-            })
+            }) // TODO: Maybe, on exception, pause this sensor, so that at least others can read `.paused`? ...But what's the sensor... Should set `.error` on the promise instead, and react to it near ` instanceof Promise`.
         }
+        // TODO: Also, be able to request any getDisplayMedia but without a mouse (cause it's untethered), right? `requestDisplay`.
     }
 }

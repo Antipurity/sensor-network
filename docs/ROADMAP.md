@@ -208,10 +208,10 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ Video: `Video`.
                         - ⋯ `source`: could be a `<canvas>`, or could be a media stream that's put into a `<video>` to read from, or a function that returns said canvas and the feedback function on each frame (or an array, for many video sources — no need to get picky and stick everything into one size, just take all data and label it).
                             - ⋯ `static stitchCanvases()`, which draws the viewport's visible canvases into a hidden `<canvas>`. This is the default in non-extensions, because it requires no user interaction.
+                                - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
                                 - ⋯ `static stitchCanvasesFeedback()` for feedback.
-                            - ✓ `static requestTab()`, which uses `getDisplayMedia`.
+                            - ⋯ `static requestDisplay()`, which uses `getDisplayMedia`.
                             - ⋯ `static requestCamera()`, which uses `getUserMedia` with permissions.
-                            - ⋯ Ask the extension for the stream if it allows us. (For security, need a per-tab checkbox "allow the page to read its own video/audio".)
                             - ⋯ For feedback: the ability to pass in `{ source:elem, feedback:canvas, onFeedback() }`. With this, sending would remember point coords and source coords, and receiving would render to the canvas. (Differentiable rendering boys. Even though JS doesn't have libraries for that.)
                         - ⋯ JS versions of data & feedback, used if `gpuDecode:false`, used as correctness-reference and for comparing benchmark numbers.
                         - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
