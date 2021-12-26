@@ -20,18 +20,30 @@ Extra options:
                 this.source = src
                 this._tiles = 1
                 this.monochrome = !!opts.monochrome
+                this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to true.
                 // TODO: Other props. (For example, handle tiling and zooming-in by forking ourselves, and making `pause` responsible for the forks too.)
                 opts.extraValues = 0
                 opts.onValues = Video.onValues
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
-                opts.name = ['video', ''+td, ] // TODO: What funcs would return x & y & zoomOut & source of a cell?
-                //   (zoomOut and source are the same per-`Video`-instance, I guess.)
-                //   (zoomOut is -1 at level 2**0, and 1 at levels 2**10+.)
-                //   (source is -1 for tab (where feedback can happen), 1 for camera (where we can't control pixels).)
+                const xy = this.noFeedback ? null : (dataStart, dataEnd, dataLen) => { // TODO: Should we make main.js pass in the cell index, maybe? (And maybe in an object.)
+                    const cells = Math.ceil(dataLen / (dataEnd - dataStart))
+                    const valuesPerCell = Math.ceil(this.values / cells)
+                    const tile = dataStart / valuesPerCell / (this.monochrome ? 1 : 3) | 0
+                    return {x:0, y:0} // TODO: Infer target x/y, and offset the tile.
+                }
+                const zoomOut = 1 // TODO: Set this.zoomOut to this. And make drawing respect this.
+                opts.name = [
+                    'video',
+                    ''+td,
+                    this.noFeedback ? 0 : (...args) => xy(...args).x,
+                    this.noFeedback ? 0 : (...args) => xy(...args).y,
+                    Math.log2(zoomOut) / 5 - 1,
+                    this.noFeedback ? 1 : -1,
+                ]
             }
             super.resume(opts)
         }
-        // TODO: Allow many targets, self-duplicating to cover more than 1.
+        // TODO: Allow many `targets`, self-duplicating to cover more than 1.
         // TODO: Allow many zoom-out levels.
         // TODO: Allow many tiles.
 

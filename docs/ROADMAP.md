@@ -207,22 +207,25 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Video+audio.
                     - ⋯ Video: `Video`.
                         - ⋯ `source`: could be a `<canvas>`, or could be a media stream that's put into a `<video>` to read from, or a function that returns said canvas and the feedback function on each frame (or an array, for many video sources — no need to get picky and stick everything into one size, just take all data and label it).
-                            - ⋯ `static stitchTab()`, which draws the viewport's visible canvases into a hidden `<canvas>`. This is the default in non-extensions, because it requires no user interaction.
+                            - ⋯ `static stitchTab()`, which draws the viewport's visible canvases into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
+                                - ⋯ For efficiency, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver) to only draw visible picture-y elements. If not available, use `document.querySelectorAll('canvas,video,img')` every frame.
                                 - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
                                 - ⋯ `static stitchTabFeedback()` for feedback.
-                            - ⋯ `static requestDisplay()`, which uses `getDisplayMedia`.
-                            - ⋯ `static requestCamera()`, which uses `getUserMedia` with permissions.
+                            - ✓ `static requestDisplay()`, which uses `getDisplayMedia`.
+                            - ✓ `static requestCamera()`, which uses `getUserMedia`.
                             - ⋯ For feedback: the ability to pass in `{ source:elem, feedback:canvas, onFeedback() }`. With this, sending would remember point coords and source coords, and receiving would render to the canvas. (Differentiable rendering boys. Even though JS doesn't have libraries for that.)
-                        - ⋯ JS versions of data & feedback, used if `gpuDecode:false`, used as correctness-reference and for comparing benchmark numbers.
+                                - TODO: ...Should `stitchTab` be able to accept the feedback-canvas and the on-feedback function? Because, where would we pass that in otherwise?
+                                    - This would require that `opts.source` is an object, right?
+                        - ✓ Data & feedback on context2D.
                         - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
-                            - ⋯ Each cell's name: `['video', ''+tileDimension, x(), y(), zoomOut(), source()]`, where the source is -1 for tab, 1 for camera.
-                        - ⋯ Coarsening, steps & magnitude-per-step, `zoomOutSteps` &  `zoomOut`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
-                        - ⋯ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
-                        - ⋯ The points `target`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
+                            - ⋯ Each cell's name: `['video', ''+tileDimension, x(), y(), zoomOut(), source()]`, where the source is -1 for has-feedback, 1 for no-feedback.
+                        - ⋯ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
                             - ⋯ If empty, downsample the *full* stream, and disable coarsening.
                             - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
+                        - ⋯ Zooming-out, steps & magnitude-per-step, `zoomOutSteps` &  `zoomOut`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
+                        - ⋯ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
                         - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
-                        - ⋯ A benchmark of reading from the same texture, without waiting for input frames.
+                        - ⋯ A benchmark of reading from `<img>`, as fast as possible.
                     - ⋯ Audio.
                         - ⋯ Mono, by averaging all channels.
                         - ⋯ 2+ channels, each exposed directly.
