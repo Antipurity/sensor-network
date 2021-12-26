@@ -42,8 +42,7 @@ Extra options:
                 this.source = src
                 this._tiles = (zoomSteps+1) * (tiling*tiling)
                 this.monochrome = opts.monochrome === undefined ? true : !!opts.monochrome
-                this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to false.
-                //   `typeof src == 'function' && typeof src.onFeedback == 'function'`? (`onFeedback` accepting the data-elem and the feedback-canvas. TODO: But how to synchronize frames?)
+                this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to false: `typeof src.onFeedback != 'function'`.
                 this.targets = targ
                 this._targetIndex = opts._targetIndex || 0
                 this._opts = A(A(Object.create(null), opts), { source:src, targets:targ, _targetIndex: this._targetIndex+1 })
@@ -68,7 +67,8 @@ Extra options:
                     const zoom = zs ** ((tile / t2 | 0) % (zss+1))
                     const dx = Video._tileMove(false, tile % t2, tiling)
                     const dy = Video._tileMove(true, tile % t2, tiling)
-                    return {x: (x + dx*zoom*td)*2-1, y: (y + dy*zoom*td)*2-1, zoom}
+                    const color = this.monochrome ? -1 : ((dataStart / valuesPerCell | 0) % 3 - 1)
+                    return {x: (x + dx*zoom*td)*2-1, y: (y + dy*zoom*td)*2-1, zoom, color}
                 }
                 opts.name = [
                     'video',
@@ -76,15 +76,16 @@ Extra options:
                     this.noFeedback ? 0 : (...args) => xyz(...args).x * 2 - 1,
                     this.noFeedback ? 0 : (...args) => xyz(...args).y * 2 - 1,
                     !zoomSteps ? -1 : (...args) => Math.min(Math.log2(xyz(...args).zoom) / 5 - 1, 1),
-                    this.noFeedback ? 1 : -1,
                 ]
             }
             super.resume(opts)
         }
 
-        // TODO: visualize({data, cellShape}, elem).
+        // TODO: bench(), which creates a 2048×2048 empty <canvas> and sets a stream from it as `source`, and has a handler that does nothing.
 
-        // TODO: bench(), which creates a 2048×2048 empty <canvas> and sets a stream from it as , and has a handler that does nothing.
+        // TODO: visualize({data, cellShape}, elem).
+        //   Draw into one user-resizable canvas. Can't infer it, so just assume.
+        //   For each cell, infer x/y/zoom/color from name, sort them by zoom, then draw all.
 
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
@@ -114,6 +115,7 @@ Extra options:
             if (!feedback || sensor.noFeedback) return
             // TODO: What do we do here?
             //   …Simply upscale from feedback, exactly reversing `_dataContext2d`?
+            // TODO: How do we reuse as much code as possible?
         }
 
         _targets() {
@@ -169,7 +171,7 @@ Extra options:
             if (!this._canvas) {
                 this._canvas = document.createElement('canvas')
                 this._ctx2d = this._canvas.getContext('2d', {alpha:false})
-                document.body.append(this._canvas) // TODO: Don't do this visualization after we're done.
+                document.body.append(this._canvas) // TODO: Don't do this visualization after we have `visualize`.
             }
             const td = this.tileDimension, tiles = this._tiles
             this._canvas.width = td, this._canvas.height = tiles * td
@@ -215,6 +217,10 @@ Extra options:
             }
             return true
         }
+        // TODO: Should have `_feedbackContext2d(feedback, valuesPerCell, target)`, right?
+        //   TODO: Reverse operations in `_dataContext2d`; in the end, `this.source.onFeedback(canvas)`.
+        //   TODO: Have one internal canvas per zoom level, and when we've reversed the whole step, composite them, somewhere.
+        //     ...How to wait for the whole step though...
     }, {
         pointers: A(function pointers() {
             const ps = []
@@ -315,7 +321,6 @@ The result is usable as the \`targets\` option for \`Video\`.`,
                 return canvas
             }
             function draw(elem) {
-                // TODO: ...Why does it take up so much CPU power?
                 const r = elem.getBoundingClientRect()
                 ctx.drawImage(elem, r.x | 0, r.y | 0, r.width, r.height)
             }
@@ -330,7 +335,6 @@ The result is usable as the \`source\` option for \`Video\`.`,
             const p = navigator.mediaDevices.getDisplayMedia(opts).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
-            // TODO: Is it possible to adjust frameRate and/or max width on-the-fly, based on how often these are called? (If not, document this terrible workaround.)
             return function() { return p }
         }, {
             docs:`[Requests a screen/window/tab stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)

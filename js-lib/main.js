@@ -80,7 +80,7 @@ export default (function(exports) {
             this.sensorIndices.push(this.cells)
             this.cells += point.length / this.cellSize | 0
         }
-        static updateMean(a, value, maxHorizon = 100) {
+        static updateMean(a, value, maxHorizon = 32) {
             const n1 = a[0], n2 = n1+1
             a[0] = Math.min(n2, maxHorizon)
             a[1] += (value - a[1]) / n2
