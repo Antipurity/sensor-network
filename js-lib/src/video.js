@@ -10,7 +10,10 @@ Extra options:
 - \`tileDimension = 8\`: each tile edge's length.
 - \`source = Video.stitchTab()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
 - \`monochrome = false\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
-- \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame. If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
+- \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame.
+    - If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
+- \`zoomSteps = 3\`: how many extra zoomed views to generate per target.
+- \`zoomStep = 2\`: the multiplier/divider of in-source tile dimension, per zoom step.
 ` }
         pause() {
             this._nextTarget && this._nextTarget.pause()
@@ -21,13 +24,17 @@ Extra options:
                 const td = opts.tileDimension || 8
                 const src = opts.source || Video.requestDisplay() // TODO: Do Video.stitchTab() by default, once we have that.
                 const targ = opts.targets || Video.pointers()
-                sn._assertCounts('Non-integer tile side', td)
+                const zoomSteps = opts.zoomSteps !== undefined ? opts.zoomSteps : 3
+                const zoomStep = opts.zoomStep !== undefined ? opts.zoomStep : 2
+                sn._assertCounts("Non-integer tile side", td), sn._assert(td > 0)
                 sn._assert(typeof src == 'function' || src instanceof Promise || src instanceof MediaStream || src instanceof Element && (src.tagName === 'CANVAS' || src.tagName === 'VIDEO' || src.tagName === 'IMG'), "Bad source")
                 sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
+                sn._assertCounts("Non-integer zoom step count", zoomSteps)
+                sn._assertCounts("Non-integer zoom step", zoomStep), sn._assert(zoomStep >= 2, "Pointless zoom step")
                 this.tileDimension = td
                 // (Don't catch errors in `src`, so they'll be logged to console.)
                 this.source = src
-                this._tiles = 1
+                this._tiles = (zoomSteps+1)
                 this.monochrome = !!opts.monochrome
                 this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to false.
                 //   `typeof src == 'function' && typeof src.onFeedback == 'function'`? (`onFeedback` accepting the data-elem and the feedback-canvas. TODO: But how to synchronize frames?)
@@ -36,7 +43,9 @@ Extra options:
                 this._opts = A(A(Object.create(null), opts), { source:src, targets:targ, _targetIndex: this._targetIndex+1 })
                 if (!this._nextTarget)
                     this._nextTarget = null // Another Video, for multi-target support by forking.
-                // TODO: Other props. (For example, handle tiling and zooming-in, and targeting by forking ourselves, and making `pause` responsible for the forks too.)
+                this.zoomSteps = zoomSteps
+                this.zoomStep = zoomStep
+                // TODO: Other props. (Handle tiling; anything else?)
                 opts.extraValues = 0
                 opts.onValues = Video.onValues
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
@@ -46,15 +55,16 @@ Extra options:
                     const tile = dataStart / valuesPerCell / (this.monochrome ? 1 : 3) | 0
                     const targets = this._targets()
                     const targ = targets[this._targetIndex]
-                    return targ ? {x:targ.x*2-1, y:targ.y*2-1} : {x:0, y:0} // TODO: Offset the tile properly.
+                    const zss = this.zoomSteps, zs = this.zoomStep
+                    const zoom = zs ** (tile % zss)
+                    return targ ? {x:targ.x*2-1, y:targ.y*2-1, zoom} : {x:.5, y:.5, zoom} // TODO: Offset the tile properly.
                 }
-                const zoomOut = 1 // TODO: Set this.zoomOut to this. And make drawing respect this.
                 opts.name = [
                     'video',
                     ''+td,
                     this.noFeedback ? 0 : (...args) => xy(...args).x * 2 - 1,
                     this.noFeedback ? 0 : (...args) => xy(...args).y * 2 - 1,
-                    Math.min(Math.log2(zoomOut) / 5 - 1, 1),
+                    !zoomSteps ? -1 : (...args) => Math.min(Math.log2(xy(...args).zoom) / 5 - 1, 1),
                     this.noFeedback ? 1 : -1,
                 ]
             }
@@ -140,17 +150,21 @@ Extra options:
             this._canvas.width = td, this._canvas.height = tiles * td
             // Draw each tile and get its ImageData, and put that into `data`.
             for (let i = 0; i < tiles; ++i) {
+                const zss = this.zoomSteps, zs = this.zoomStep
+                const zoom = zs ** (i % (zss+1))
+                // TODO: How to compute the zoom level? i%zss, and zs**(i%zss), perhaps?
                 if (!target) // Fullscreen.
+                    // TODO: How to handle zoom, given `this.zoomSteps` and `this.zoomStep`?
                     this._ctx2d.drawImage(frame,
                         0, 0, width, height,
                         0, 0, td, td,
                     )
                 else { // Around a mouse.
-                    const x = (target.x * width - td/2) | 0
-                    const y = (target.y * height - td/2) | 0
+                    const x = (target.x * width - zoom*td/2) | 0
+                    const y = (target.y * height - zoom*td/2) | 0
                     this._ctx2d.drawImage(frame,
-                        x, y, td, td,
-                        0, 0, td, td,
+                        x, y, zoom*td, zoom*td,
+                        0, (i % (zss+1)) * td, td, td, // TODO: How to draw to the correct zoomed index?
                     )
                 }
             }

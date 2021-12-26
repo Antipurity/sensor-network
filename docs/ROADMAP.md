@@ -215,17 +215,17 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                             - ✓ `static requestCamera()`, which uses `getUserMedia`.
                             - ⋯ For feedback: the ability to pass in `{ source:elem, feedback:canvas, onFeedback() }`. With this, sending would remember point coords and source coords, and receiving would render to the canvas. (Differentiable rendering boys. Even though JS doesn't have libraries for that.)
                                 - TODO: ...Should `stitchTab` be able to accept the feedback-canvas and the on-feedback function? Because, where would we pass that in otherwise?
-                                    - This would require that `opts.source` is an object, right?
+                                    - This would require that `opts.source` is an object, right? Or at least has `.onFeedback`, sometimes.
                         - ✓ Data & feedback on context2D.
                         - ✓ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
                             - ✓ Each cell's name: `['video', ''+tileDimension, x(), y(), zoom(), source()]`, where un/zoom level is -1 for 1× and 1 for 1024×, and the source is -1 for has-feedback, 1 for no-feedback.
-                        - ⋯ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
-                            - ⋯ If empty, downsample the *full* stream, and disable coarsening.
-                            - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
-                        - ⋯ Zooming-out, steps & magnitude-per-step, `zoomOutSteps` &  `zoomOut`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
+                        - ✓ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates.
+                            - ✓ If empty, downsample the *full* stream, else follow the targets.
+                            - ✓ By default, is `static pointers() → Array` for `Video`: every `.pointerId` that is in a pointer event is in here.
+                        - ⋯ Zooming-out, steps & magnitude-per-step, `zoomSteps` &  `zoomStep`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
                         - ⋯ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
                         - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
-                        - ⋯ A benchmark of reading from `<img>`, as fast as possible.
+                        - ⋯ A benchmark of reading from an `<img>`, as fast as possible.
                     - ⋯ Audio.
                         - ⋯ Mono, by averaging all channels.
                         - ⋯ 2+ channels, each exposed directly.

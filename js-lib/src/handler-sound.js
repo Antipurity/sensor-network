@@ -5,7 +5,7 @@ export default function init(sn) {
 In Chrome, users might have to first click on the page for sound to play.
 
 - Extra options, for \`constructor\` and \`resume\`:
-    - \`volume = 1\`: multiplier of sound output.
+    - \`volume = 1\`: multiplier of sound output. // TODO: Maybe make it .01 by default, to not wage aural assault on new users?
 ` }
         resume(opts) {
             if (opts) {
