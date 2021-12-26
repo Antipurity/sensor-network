@@ -1,5 +1,6 @@
 export default function init(sn) {
-    return class Video extends sn.Sensor {
+    const A = Object.assign
+    return A(class Video extends sn.Sensor {
         docs() { return `// TODO:
 
 This sensor's output is composed of 1 or more tiles, which are square images.
@@ -20,12 +21,13 @@ Extra options:
                 this.source = src
                 this._tiles = 1
                 this.monochrome = !!opts.monochrome
-                this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to true.
+                this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to false.
+                //   `typeof src == 'function' && typeof src.onFeedback == 'function'`? (`onFeedback` accepting the data-elem and the feedback-canvas. TODO: But how to synchronize frames?)
                 // TODO: Other props. (For example, handle tiling and zooming-in by forking ourselves, and making `pause` responsible for the forks too.)
                 opts.extraValues = 0
                 opts.onValues = Video.onValues
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
-                const xy = this.noFeedback ? null : (dataStart, dataEnd, dataLen) => { // TODO: Should we make main.js pass in the cell index, maybe? (And maybe in an object.)
+                const xy = this.noFeedback ? null : (dataStart, dataEnd, dataLen) => {
                     const cells = Math.ceil(dataLen / (dataEnd - dataStart))
                     const valuesPerCell = Math.ceil(this.values / cells)
                     const tile = dataStart / valuesPerCell / (this.monochrome ? 1 : 3) | 0
@@ -44,7 +46,10 @@ Extra options:
             super.resume(opts)
         }
         // TODO: Allow many `targets`, self-duplicating to cover more than 1.
+        //   By default, is Video.pointers(), and is called each frame.
+        //   How exactly do we allow this? Make `onValues` check whether the next element exists, and pause/resume (and maybe create) `this._nextTarget` (with `opts._target = this._target+1`)?
         // TODO: Allow many zoom-out levels.
+        //   (If no-target, zoom in on the center instead.)
         // TODO: Allow many tiles.
 
         static onValues(sensor, data) {
@@ -124,24 +129,108 @@ Extra options:
             }
             return true
         }
+    }, {
+        pointers: A(function pointers() {
+            const ps = []
+            const inds = new Map
+            const passive = {passive:true}
+            let attached = false, lastRequest = performance.now()
+            let id = setInterval(() => {
+                // Auto-detach when not needed.
+                if (performance.now() - lastRequest > 15000)
+                    detachEvents(), clearInterval(id), id = null
+            }, 10000)
+            return attachEvents
+            function onpointerdown(evt) { // Add/update.
+                if (evt.pointerType === 'touch') return
+                if (evt.touches) return Array.from(evt.touches).forEach(onpointerdown)
+                const p = ps[indexOf(evt)]
+                p.x = Math.max(0, Math.min(evt.clientX / innerWidth, 1))
+                p.y = Math.max(0, Math.min(evt.clientY / innerHeight, 1))
+            }
+            function onpointerup(evt) { // Remove.
+                if (evt.pointerType === 'touch') return
+                if (!ps.length) return
+                if (evt.touches) {
+                    ps.length = 0, inds.clear()
+                    return Array.from(evt.touches).forEach(onpointerdown)
+                }
+                if (ps.length <= 1) return
+                const i = indexOf(evt), j = ps.length-1
+                ;[ps[i], ps[j]] = [ps[j], ps[i]]
+                ps.pop(), inds.delete(idOf(evt))
+            }
+            function idOf(evt) { return evt.pointerId !== undefined ? evt.pointerId : 'identifier' in evt ? evt.identifier : 'mouse' }
+            function indexOf(evt) {
+                const id = idOf(evt)
+                if (!inds.has(id))
+                    inds.set(id, ps.push({ x:.5, y:.5 })-1)
+                return inds.get(id)
+            }
+            function attachEvents() {
+                if (id == null) return null
+                lastRequest = performance.now()
+                if (attached) return ps
+                addEventListener('touchstart', onpointerdown, passive)
+                addEventListener('touchmove', onpointerdown, passive)
+                addEventListener('touchcancel', onpointerup, passive)
+                addEventListener('touchend', onpointerup, passive)
+                if (typeof PointerEvent == 'undefined') {
+                    addEventListener('mousedown', onpointerdown, passive)
+                    addEventListener('mousemove', onpointerdown, passive)
+                    addEventListener('mouseup', onpointerup, passive)
+                } else {
+                    addEventListener('pointerdown', onpointerdown, passive)
+                    addEventListener('pointermove', onpointerdown, passive)
+                    addEventListener('pointerup', onpointerup, passive)
+                }
+                attached = true
+                return ps
+            }
+            function detachEvents() {
+                if (!attached) return
+                removeEventListener('touchstart', onpointerdown, passive)
+                removeEventListener('touchmove', onpointerdown, passive)
+                removeEventListener('touchcancel', onpointerup, passive)
+                removeEventListener('touchend', onpointerup, passive)
+                if (typeof PointerEvent == 'undefined') {
+                    removeEventListener('mousedown', onpointerdown, passive)
+                    removeEventListener('mousemove', onpointerdown, passive)
+                    removeEventListener('mouseup', onpointerup, passive)
+                } else {
+                    removeEventListener('pointerdown', onpointerdown, passive)
+                    removeEventListener('pointermove', onpointerdown, passive)
+                    removeEventListener('pointerup', onpointerup, passive)
+                }
+                attached = false
+            }
+        }, {
+            docs:`Returns a closure that returns the dynamic list of mouse/touch positions, \`[{x,y}]\`.
+
+Usable as the \`source\` option for \`Video\`.`,
+        }),
 
         // TODO: Make the main thing `stitchTab`:
         //   TODO: Request stream from extension if possible, through DOM events. Else:
         //   TODO: document.querySelectorAll('canvas, video, img')
         //   TODO: Clear the canvas, and draw each thing onto it.
-        static requestDisplay() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
+        requestDisplay: A(function() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const p = navigator.mediaDevices.getDisplayMedia({ audio:true, video:true }).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
             return function() { return p }
-        }
-        static requestCamera() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
+        }, {
+            docs:``, // TODO:
+        }),
+        requestCamera: A(function() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const p = navigator.mediaDevices.getUserMedia({ audio:true, video:true }).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
             return function() { return p }
-        }
-    }
+        }, {
+            docs:``, // TODO:
+        })
+    })
 }
