@@ -222,7 +222,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates.
                             - ✓ If empty, downsample the *full* stream, else follow the targets.
                             - ✓ By default, is `static pointers() → Array` for `Video`: every `.pointerId` that is in a pointer event is in here.
-                        - ⋯ Zooming-out, steps & magnitude-per-step, `zoomSteps` &  `zoomStep`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
+                        - ✓ Zooming-out, steps & magnitude-per-step, `zoomSteps` &  `zoomStep`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
                         - ⋯ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
                         - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
                         - ⋯ A benchmark of reading from an `<img>`, as fast as possible.

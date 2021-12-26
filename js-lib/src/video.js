@@ -1,7 +1,7 @@
 export default function init(sn) {
     const A = Object.assign
     return A(class Video extends sn.Sensor {
-        docs() { return `// TODO:
+        docs() { return `A sequence of images.
 
 This sensor's output is composed of 1 or more tiles, which are square images.    
 It can target 0 or more points, each shown in 1 or more tiles, and can include multiple zoom levels.
@@ -49,7 +49,7 @@ Extra options:
                 opts.extraValues = 0
                 opts.onValues = Video.onValues
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
-                const xy = this.noFeedback ? null : (dataStart, dataEnd, dataLen) => {
+                const xyz = (dataStart, dataEnd, dataLen) => {
                     const cells = Math.ceil(dataLen / (dataEnd - dataStart))
                     const valuesPerCell = Math.ceil(this.values / cells)
                     const tile = dataStart / valuesPerCell / (this.monochrome ? 1 : 3) | 0
@@ -62,18 +62,16 @@ Extra options:
                 opts.name = [
                     'video',
                     ''+td,
-                    this.noFeedback ? 0 : (...args) => xy(...args).x * 2 - 1,
-                    this.noFeedback ? 0 : (...args) => xy(...args).y * 2 - 1,
-                    !zoomSteps ? -1 : (...args) => Math.min(Math.log2(xy(...args).zoom) / 5 - 1, 1),
+                    this.noFeedback ? 0 : (...args) => xyz(...args).x * 2 - 1,
+                    this.noFeedback ? 0 : (...args) => xyz(...args).y * 2 - 1,
+                    !zoomSteps ? -1 : (...args) => Math.min(Math.log2(xyz(...args).zoom) / 5 - 1, 1),
                     this.noFeedback ? 1 : -1,
                 ]
             }
             super.resume(opts)
         }
 
-        // TODO: Allow many zoom-out levels.
-        //   (If no-target, zoom in on the center instead.)
-        // TODO: Allow many tiles.
+        // TODO: Allow tiling.
 
         // TODO: visualize({data, cellShape}, elem).
 
@@ -151,20 +149,18 @@ Extra options:
             // Draw each tile and get its ImageData, and put that into `data`.
             for (let i = 0; i < tiles; ++i) {
                 const zss = this.zoomSteps, zs = this.zoomStep
-                const zoom = zs ** (i % (zss+1))
-                // TODO: How to compute the zoom level? i%zss, and zs**(i%zss), perhaps?
+                const zi = i % (zss+1), zoom = zs ** zi
                 if (!target) // Fullscreen.
-                    // TODO: How to handle zoom, given `this.zoomSteps` and `this.zoomStep`?
                     this._ctx2d.drawImage(frame,
-                        0, 0, width, height,
-                        0, 0, td, td,
+                        width * (.5-.5/zoom), height * (.5-.5/zoom), width/zoom, height/zoom,
+                        0, zi * td, td, td,
                     )
-                else { // Around a mouse.
+                else { // Around a target.
                     const x = (target.x * width - zoom*td/2) | 0
                     const y = (target.y * height - zoom*td/2) | 0
                     this._ctx2d.drawImage(frame,
                         x, y, zoom*td, zoom*td,
-                        0, (i % (zss+1)) * td, td, td, // TODO: How to draw to the correct zoomed index?
+                        0, zi * td, td, td,
                     )
                 }
             }
@@ -271,13 +267,13 @@ The result is usable as the \`targets\` option for \`Video\`.`,
         //   TODO: Request stream from extension if possible, through DOM events. Else:
         //   TODO: document.querySelectorAll('canvas, video, img')
         //   TODO: Clear the canvas, and draw each thing onto it.
-        requestDisplay: A(function(width) { // With the user's permission, gets a screen/window/tab contents. // TODO: Maybe, also accept options, and by default, request 512-width videos or similar?
+        requestDisplay: A(function(width) { // With the user's permission, gets a screen/window/tab contents.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const opts = { audio:true, video:width ? { max:{width} } : true }
             const p = navigator.mediaDevices.getDisplayMedia(opts).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
-            // TODO: Is it possible to adjust frameRate and/or max width on-the-fly, based on how often these are called?
+            // TODO: Is it possible to adjust frameRate and/or max width on-the-fly, based on how often these are called? (If not, document this terrible workaround.)
             return function() { return p }
         }, {
             docs:`[Requests a screen/window/tab stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
