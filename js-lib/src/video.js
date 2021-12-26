@@ -3,17 +3,20 @@ export default function init(sn) {
     return A(class Video extends sn.Sensor {
         docs() { return `A sequence of images.
 
+Images are divided into [small patches, which has mostly been shown to work well in ML.](https://en.wikipedia.org/wiki/Vision_transformer)
+
 This sensor's output is composed of 1 or more tiles, which are square images.    
-It can target 0 or more points, each shown in 1 or more tiles, and can include multiple zoom levels.
+It can target 0 or 1+ points, each shown in 1 or more tiles, and can include multiple zoom levels.
 
 Extra options:
 - \`tileDimension = 8\`: each tile edge's length.
 - \`source = Video.stitchTab()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
-- \`monochrome = false\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
+- \`monochrome = true\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
 - \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame.
     - If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
-- \`zoomSteps = 3\`: how many extra zoomed views to generate per target.
+- \`zoomSteps = 3\`: how many extra zoomed views to generate per target or screen.
 - \`zoomStep = 2\`: the multiplier/divider of in-source tile dimension, per zoom step.
+- \`tiling = 2\`: how many vertical/horizontal repetitions there are per target or screen.
 ` }
         pause() {
             this._nextTarget && this._nextTarget.pause()
@@ -26,26 +29,28 @@ Extra options:
                 const targ = opts.targets || Video.pointers()
                 const zoomSteps = opts.zoomSteps !== undefined ? opts.zoomSteps : 3
                 const zoomStep = opts.zoomStep !== undefined ? opts.zoomStep : 2
+                const tiling = opts.tiling !== undefined ? opts.tiling : 2
                 sn._assertCounts("Non-integer tile side", td), sn._assert(td > 0)
                 sn._assert(typeof src == 'function' || src instanceof Promise || src instanceof MediaStream || src instanceof Element && (src.tagName === 'CANVAS' || src.tagName === 'VIDEO' || src.tagName === 'IMG'), "Bad source")
                 sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
                 sn._assertCounts("Non-integer zoom step count", zoomSteps)
                 sn._assertCounts("Non-integer zoom step", zoomStep), sn._assert(zoomStep >= 2, "Pointless zoom step")
+                sn._assertCounts("Non-integer tiling", tiling), sn._assert(tiling > 0)
                 this.tileDimension = td
                 // (Don't catch errors in `src`, so they'll be logged to console.)
                 this.source = src
-                this._tiles = (zoomSteps+1)
-                this.monochrome = !!opts.monochrome
+                this._tiles = (zoomSteps+1) * (tiling*tiling)
+                this.monochrome = opts.monochrome === undefined ? true : !!opts.monochrome
                 this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to false.
                 //   `typeof src == 'function' && typeof src.onFeedback == 'function'`? (`onFeedback` accepting the data-elem and the feedback-canvas. TODO: But how to synchronize frames?)
                 this.targets = targ
                 this._targetIndex = opts._targetIndex || 0
                 this._opts = A(A(Object.create(null), opts), { source:src, targets:targ, _targetIndex: this._targetIndex+1 })
                 if (!this._nextTarget)
-                    this._nextTarget = null // Another Video, for multi-target support by forking.
+                    this._nextTarget = null // Another `Video`, for multi-target support by forking.
                 this.zoomSteps = zoomSteps
                 this.zoomStep = zoomStep
-                // TODO: Other props. (Handle tiling; anything else?)
+                this.tiling = tiling
                 opts.extraValues = 0
                 opts.onValues = Video.onValues
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
@@ -53,15 +58,20 @@ Extra options:
                     const cells = Math.ceil(dataLen / (dataEnd - dataStart))
                     const valuesPerCell = Math.ceil(this.values / cells)
                     const tile = dataStart / valuesPerCell / (this.monochrome ? 1 : 3) | 0
+                    const td = this.tileDimension
                     const targets = this._targets()
                     const targ = targets[this._targetIndex]
+                    const x = targ ? targ.x : 0, y = targ ? targ.y : 0
                     const zss = this.zoomSteps, zs = this.zoomStep
-                    const zoom = zs ** (tile % zss)
-                    return targ ? {x:targ.x*2-1, y:targ.y*2-1, zoom} : {x:.5, y:.5, zoom} // TODO: Offset the tile properly.
+                    const tiling = this.tiling, t2 = tiling*tiling
+                    const zoom = zs ** ((tile / t2 | 0) % (zss+1))
+                    const dx = Video._tileMove(false, tile % t2, tiling)
+                    const dy = Video._tileMove(true, tile % t2, tiling)
+                    return {x: (x + dx*zoom*td)*2-1, y: (y + dy*zoom*td)*2-1, zoom}
                 }
                 opts.name = [
                     'video',
-                    ''+td,
+                    typeof opts.name == 'string' ? opts.name : String(td) + this.monochrome,
                     this.noFeedback ? 0 : (...args) => xyz(...args).x * 2 - 1,
                     this.noFeedback ? 0 : (...args) => xyz(...args).y * 2 - 1,
                     !zoomSteps ? -1 : (...args) => Math.min(Math.log2(xyz(...args).zoom) / 5 - 1, 1),
@@ -70,8 +80,6 @@ Extra options:
             }
             super.resume(opts)
         }
-
-        // TODO: Allow tiling.
 
         // TODO: visualize({data, cellShape}, elem).
 
@@ -110,6 +118,12 @@ Extra options:
             sn._assert(Array.isArray(targets), "Bad targets")
             return targets
         }
+        static _tileMove(needY=false, tile, tilesSqrt) {
+            // Returns how many tiles we need to move by.
+            if (tilesSqrt === 1) return 0
+            const x = tile % tilesSqrt, y = tile / tilesSqrt | 0
+            return needY ? y + .5 - .5*tilesSqrt : x + .5 - .5*tilesSqrt
+        }
         static _sourceToDrawable(source) { // .drawImage and .texImage2D can use the result.
             if (typeof source == 'function') source = source()
             if (source instanceof Promise) {
@@ -119,7 +133,7 @@ Extra options:
             }
             if (!(source instanceof MediaStream)) return source
             const m = Video._streamToVideo || (Video._streamToVideo = new WeakMap)
-            // TODO: For the efficiency of having 1 less copy, use https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame and https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor when available. (After we make <video> work, played into sound.)
+            // TODO: For the efficiency of having 1 less copy, use https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame and https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor when available.
             if (!m.has(source)) { // Go through <video>.
                 const el = document.createElement('video')
                 if ('srcObject' in el) el.srcObject = source
@@ -149,18 +163,24 @@ Extra options:
             // Draw each tile and get its ImageData, and put that into `data`.
             for (let i = 0; i < tiles; ++i) {
                 const zss = this.zoomSteps, zs = this.zoomStep
-                const zi = i % (zss+1), zoom = zs ** zi
-                if (!target) // Fullscreen.
+                const tiling = this.tiling, t2 = tiling*tiling
+                const zoom = zs ** ((i / t2 | 0) % (zss+1))
+                const dx = Video._tileMove(false, i % t2, tiling)
+                const dy = Video._tileMove(true, i % t2, tiling)
+                if (!target) { // Fullscreen.
+                    const zt = zoom*tiling
+                    const x = (width * (.5*zt+dx-.5)/zt) | 0
+                    const y = (height * (.5*zt+dy-.5)/zt) | 0
                     this._ctx2d.drawImage(frame,
-                        width * (.5-.5/zoom), height * (.5-.5/zoom), width/zoom, height/zoom,
-                        0, zi * td, td, td,
+                        x, y, width/zt, height/zt,
+                        0, i * td, td, td,
                     )
-                else { // Around a target.
-                    const x = (target.x * width - zoom*td/2) | 0
-                    const y = (target.y * height - zoom*td/2) | 0
+                } else { // Around a target.
+                    const x = (target.x * width + zoom*td*(dx-.5)) | 0
+                    const y = (target.y * height + zoom*td*(dy-.5)) | 0
                     this._ctx2d.drawImage(frame,
                         x, y, zoom*td, zoom*td,
-                        0, zi * td, td, td,
+                        0, i * td, td, td,
                     )
                 }
             }
