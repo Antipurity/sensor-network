@@ -15,9 +15,7 @@ In Chrome, users might have to first click on the page for sound to play.
             }
             super.resume(opts)
         }
-        onlyIfNoExtension() { return true } // TODO: Make the extension suppress handlers with this, by flipping a bool in `sn`.
-        // TODO: Also, `visualize({data, error}, elem)`, which draws on a canvas.
-        //   (May not want actual sound here, even, but an actual *visual*ization.)
+        onlyIfNoExtension() { return true } // TODO: Make the extension suppress handlers with this, by making some DOM event flip a bool in `sn`.
         static bench() {
             let loud = 1
             const sensorCounts = new Array(3).fill().map((_,i) => 1 + i*10)
@@ -60,7 +58,7 @@ In Chrome, users might have to first click on the page for sound to play.
                 Sound.overshoot = 0
                 // Metrics.
 
-                // TODO: Remove this silliness. (Only do it on visualization.)
+                // TODO: Remove this silliness. (Not even in visualization.)
                 const canvas = document.createElement('canvas')
                 canvas.width = 1024
                 canvas.ctx = canvas.getContext('2d')

@@ -23,10 +23,10 @@ Extra options:
                 // TODO: Other props. (For example, handle tiling and zooming-in by forking ourselves, and making `pause` responsible for the forks too.)
                 opts.extraValues = 0
                 opts.onValues = Video.onValues
-                opts.values = this._tiles * this.tileDimension * (this.monochrome ? 1 : 3)
+                opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
                 opts.name = ['video', ''+td, ] // TODO: What funcs would return x & y & zoomOut & source of a cell?
                 //   (zoomOut and source are the same per-`Video`-instance, I guess.)
-                //   (zoomOut is -1 at level 2**0, 1 at levels 2**10+.)
+                //   (zoomOut is -1 at level 2**0, and 1 at levels 2**10+.)
                 //   (source is -1 for tab (where feedback can happen), 1 for camera (where we can't control pixels).)
             }
             super.resume(opts)
@@ -54,7 +54,6 @@ Extra options:
 
         static _sourceToDrawable(source) { // .drawImage and .texImage2D can use the result.
             if (typeof source == 'function') source = source()
-            // TODO: If a Promise, unwrap it *here*.
             if (source instanceof Promise) {
                 if ('result' in source) source = source.result
                 else if ('error' in source) return source
@@ -78,7 +77,6 @@ Extra options:
             if (frame instanceof Promise)
                 return console.error(frame.error), this.pause(), false
             if (!frame) return null
-            // TODO: Why is there an infinite loop AGAIN?!
             const width = frame.videoWidth || frame.displayWidth || frame.width
             const height = frame.videoHeight || frame.displayHeight || frame.height
             // Draw frame to canvas, get ImageData.
@@ -90,7 +88,7 @@ Extra options:
             const td = this.tileDimension, tiles = this._tiles
             this._canvas.width = td, this._canvas.height = tiles * td
             // Draw each tile and get its ImageData, and put that into `data`.
-            for (let i = 0; i < this._tiles; ++i) {
+            for (let i = 0; i < tiles; ++i) {
                 this._ctx2d.drawImage(frame,
                     0, 0, width, height,
                     0, 0, td, i * td,
@@ -99,7 +97,7 @@ Extra options:
             // Actually draw the data.
             const monochrome = this.monochrome
             const imageData = this._ctx2d.getImageData(0, 0, td, tiles * td).data
-            for (let i = 0; i < this._tiles; ++i) {
+            for (let i = 0; i < tiles; ++i) {
                 for (let j = 0; j < valuesPerCell; ++j) {
                     const R = imageData[4 * (td*td*i + j) + 0] / 255
                     const G = imageData[4 * (td*td*i + j) + 1] / 255
@@ -112,11 +110,14 @@ Extra options:
                         data[i * valuesPerCell + j] = (0.2126*R + 0.7152*G + 0.0722*B) * 2 - 1
                 }
             }
+            // TODO: How to debug the actual values? Do they even change at all?
             return true
         }
 
-        // TODO: Make the main thing `stitchTab`, and request stream from extension if possible.
-        //   (getDisplayMedia seems to be too unreliable. Not to mention, it has horrible UI. If API users really want it, they can implement it themselves.)
+        // TODO: Make the main thing `stitchTab`:
+        //   TODO: Request stream from extension if possible, through DOM events. Else:
+        //   TODO: document.querySelectorAll('canvas, video, img')
+        //   TODO: Clear the canvas, and draw each thing onto it.
         static requestDisplay() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const p = navigator.mediaDevices.getDisplayMedia({ audio:true, video:true }).then(s => {
