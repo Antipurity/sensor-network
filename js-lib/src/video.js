@@ -81,8 +81,7 @@ Extra options:
             super.resume(opts)
         }
 
-        bench() {
-            // TODO: Run it.
+        static bench() {
             const resolutions = new Array(3).fill().map((_,i) => 2 ** (i+9))
             return resolutions.map(river)
             function river(resolution) { // Read a MediaStream.
@@ -106,7 +105,7 @@ Extra options:
                         zoomStep: 2,
                         tiling: 2,
                     })
-                    const to = new E.Handler({
+                    const to = new sn.Handler({
                         dataSize,
                         noFeedback: true,
                         onValues({data, error, cellShape}, writeFeedback, feedback) {},

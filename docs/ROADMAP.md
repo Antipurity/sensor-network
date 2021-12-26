@@ -223,9 +223,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
                         - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
                         - ⋯ `visualize`, to be able to match data to a familiar format.
-                        - ⋯ A benchmark of reading from a `<canvas>`-sourced `MediaStream`, 2048×2048, as fast as possible.
+                        - ✓ A benchmark of reading from a `<canvas>`-sourced `MediaStream`, 2048×2048, as fast as possible.
                             - ⋯ To not draw invisible elems in `stitchTab`, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
-                            - ⋯ Tone down `MediaStream` settings dynamically (`frameRate`, `max:{width}`), according to how much we can/can't accept.
+                            - ⋯ Tone down `MediaStream` settings dynamically (`frameRate`, `max:{width}`), according to how much we can/can't accept. (Whole-screen recordings lag.)
                     - ⋯ Audio.
                         - ⋯ Mono, by averaging all channels.
                         - ⋯ 2+ channels, each exposed directly.
