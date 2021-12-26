@@ -1,5 +1,6 @@
 export default function init(sn) {
     const A = Object.assign
+    const _tab = {}
     return A(class Video extends sn.Sensor {
         docs() { return `A sequence of images.
 
@@ -25,7 +26,7 @@ Extra options:
         resume(opts) {
             if (opts) {
                 const td = opts.tileDimension || 8
-                const src = opts.source || Video.requestDisplay() // TODO: Do Video.stitchTab() by default, once we have that.
+                const src = opts.source || Video.stitchTab()
                 const targ = opts.targets || Video.pointers()
                 const zoomSteps = opts.zoomSteps !== undefined ? opts.zoomSteps : 3
                 const zoomStep = opts.zoomStep !== undefined ? opts.zoomStep : 2
@@ -83,6 +84,8 @@ Extra options:
 
         // TODO: visualize({data, cellShape}, elem).
 
+        // TODO: bench(), which creates a 2048×2048 empty <canvas> and sets a stream from it as , and has a handler that does nothing.
+
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
             if (!targetShape) return
@@ -133,14 +136,24 @@ Extra options:
             }
             if (!(source instanceof MediaStream)) return source
             const m = Video._streamToVideo || (Video._streamToVideo = new WeakMap)
-            // TODO: For the efficiency of having 1 less copy, use https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame and https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor when available.
             if (!m.has(source)) { // Go through <video>.
-                const el = document.createElement('video')
-                if ('srcObject' in el) el.srcObject = source
-                else el.src = URL.createObjectURL(source)
-                el.volume = 0
-                el.play()
-                m.set(source, el)
+                if (typeof MediaStreamTrackProcessor == 'undefined') {
+                    const el = document.createElement('video')
+                    if ('srcObject' in el) el.srcObject = source
+                    else el.src = URL.createObjectURL(source)
+                    el.volume = 0
+                    el.play()
+                    m.set(source, el)
+                } /*else { // TODO: ONLY after having a benchmark!
+                    // TODO: For the efficiency of having 1 less copy, use https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame and https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor when available.
+                    const proc = new MediaStreamTrackProcessor(source.getVideoTracks()[0])
+                    const reader = proc.readable.getReader()
+                    // TODO: Uh, how to use it?
+                    //   `await reader.read()` will return a VideoFrame... Should we store a function to that? And, call it, right? And do weird things with the resulting promise...
+                    //     Maybe we should just read all frames immediately into a circular buffer?...
+                    //   And, how do we handle "too much stalling, pls add limitations"?
+                    //   And, how do we handle "too much data, pls remove limitations"?
+                }*/
             }
             const el = m.get(source)
             return el
@@ -155,7 +168,7 @@ Extra options:
             // Draw frame to canvas, get ImageData.
             if (!this._canvas) {
                 this._canvas = document.createElement('canvas')
-                this._ctx2d = this._canvas.getContext('2d')
+                this._ctx2d = this._canvas.getContext('2d', {alpha:false})
                 document.body.append(this._canvas) // TODO: Don't do this visualization after we're done.
             }
             const td = this.tileDimension, tiles = this._tiles
@@ -283,11 +296,35 @@ Extra options:
 The result is usable as the \`targets\` option for \`Video\`.`,
         }),
 
-        // TODO: Make the main thing `stitchTab`:
-        //   TODO: Request stream from extension if possible, through DOM events. Else:
-        //   TODO: document.querySelectorAll('canvas, video, img')
-        //   TODO: Clear the canvas, and draw each thing onto it.
-        requestDisplay: A(function(width) { // With the user's permission, gets a screen/window/tab contents.
+        stitchTab: A(function stitchTab() {
+            if (!_tab.canvas) {
+                _tab.canvas = document.createElement('canvas')
+                _tab.ctx = _tab.canvas.getContext('2d', {alpha:false})
+                _tab.lastStitch = performance.now()
+            }
+            const canvas = _tab.canvas, ctx = _tab.ctx
+            return function tab() {
+                if (performance.now() - _tab.lastStitch < 15) return canvas
+                _tab.lastStitch = performance.now()
+                const w = innerWidth, h = innerHeight
+                canvas.width = w, canvas.height = h
+                ctx.clearRect(0, 0, w, h)
+                Array.from(document.getElementsByTagName('canvas')).forEach(draw)
+                Array.from(document.getElementsByTagName('video')).forEach(draw)
+                Array.from(document.getElementsByTagName('img')).forEach(draw)
+                return canvas
+            }
+            function draw(elem) {
+                // TODO: ...Why does it take up so much CPU power?
+                const r = elem.getBoundingClientRect()
+                ctx.drawImage(elem, r.x | 0, r.y | 0, r.width, r.height)
+            }
+        }, {
+            docs:`Views on-page \`<canvas>\`/\`<video>\`/\`<img>\` elements. The rest of the page is black.
+
+The result is usable as the \`source\` option for \`Video\`.`,
+        }),
+        requestDisplay: A(function requestDisplay(width) { // With the user's permission, gets a screen/window/tab contents.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const opts = { audio:true, video:width ? { max:{width} } : true }
             const p = navigator.mediaDevices.getDisplayMedia(opts).then(s => {
@@ -301,7 +338,7 @@ The result is usable as the \`targets\` option for \`Video\`.`,
 The result is usable as the \`source\` option for \`Video\`.`,
         }),
 
-        requestCamera: A(function(width) { // With the user's permission, gets a screen/window/tab contents.
+        requestCamera: A(function requestDisplay(width) { // With the user's permission, gets a screen/window/tab contents.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const opts = { audio:true, video:width ? { max:{width} } : true }
             const p = navigator.mediaDevices.getUserMedia(opts).then(s => {
