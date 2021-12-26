@@ -81,7 +81,41 @@ Extra options:
             super.resume(opts)
         }
 
-        // TODO: bench(), which creates a 2048×2048 empty <canvas> and sets a stream from it as `source`, and has a handler that does nothing.
+        bench() {
+            // TODO: Run it.
+            const resolutions = new Array(3).fill().map((_,i) => 2 ** (i+9))
+            return resolutions.map(river)
+            function river(resolution) { // Read a MediaStream.
+                const dataSize = 64
+                return function start() {
+                    const canvas = document.createElement('canvas')
+                    const ctx = canvas.getContext('2d')
+                    canvas.width = canvas.height = resolution
+                    let ended = false
+                    function draw() { // Make new data each time.
+                        if (ended) return
+                        requestAnimationFrame(draw)
+                        ctx.fillStyle = ['red', 'green', 'blue'][Math.random()*3 | 0]
+                        ctx.fillRect(Math.random() * resolution | 0, Math.random() * resolution | 0, 51, 51)
+                    }
+                    const from = new Video({
+                        source: canvas.captureStream(),
+                        monochrome: false,
+                        tileDimension: 8,
+                        zoomSteps: 3,
+                        zoomStep: 2,
+                        tiling: 2,
+                    })
+                    const to = new E.Handler({
+                        dataSize,
+                        noFeedback: true,
+                        onValues({data, error, cellShape}, writeFeedback, feedback) {},
+                    })
+                    setTimeout(() => sn.meta.metric('resolution', resolution), 500)
+                    return function stop() { ended = true, from.pause(), to.pause() }
+                }
+            }
+        }
 
         // TODO: visualize({data, cellShape}, elem).
         //   Draw into one user-resizable canvas. Can't infer it, so just assume.
