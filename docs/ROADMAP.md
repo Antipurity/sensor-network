@@ -189,6 +189,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ Make `npm run doc` import the library and call this and write its result to `docs/DOCS.md`.
         - ✓ Ability to de/serialize sensors/accumulators/handlers, so that users can pick up power-ups at the press of a button.
             - ✓ Have the `.needsExtensionAPI() → null|string` method on `Sensor`s, returning `null` by default, but can return `''` or `'tabs'`. Let users control which parts of the `chrome` API the extension can see.
+                - ⋯ Actually use it in an extension.
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files, or maybe their own NPM modules (though they *are* small):
         - ⋯ Make `main.js` import modules that import it and export classes that inherit sensors/accumulators/handlers, by having getters that patch themselves on use.
         - ⋯ `.Sensor`:
@@ -235,17 +236,17 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
                             - ⋯ And a volume slider.
                             - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
-                - ⋯ No in-page feedback, in Chrome (Firefox doesn't seem to care as much about direct hardware access):
+                - ⋯ No in-page feedback, in Chrome (Firefox doesn't seem to care as much about direct hardware access, nor about direct performance):
                     - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1..1.
                     - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
             - ⋯ System resources, if exposed: `m=performance.memory`, `m.usedJSHeapSize / m.totalJSHeapSize * 2 - 1`.
             - ⋯ In-extension sensors:
                 - ⋯ Time, as sines of exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
-                - ⋯ [Tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`.
+                - ⋯ [Tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`. (Though, if we have bandwidth for that, then we might as well expose some proper programming language and/or rewriting system for direct use.)
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
                 - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
                 - ⋯ To communicate rewardName/userName/name, fill them with closures, that read from received data.
-                - ⋯ Discourage disengagements: on user disconnect, hold its last block (`0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
+                - ⋯ Discourage disengagements: on user disconnect, hold its last cell (now `0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
             - ⋯ Read from file.
             - ⋯ In extension, read from tabs.
@@ -253,8 +254,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Shuffle blocks.
             - ⋯ Reward, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
                 - ⋯ By default, make F11/F12 give +1/-1 reward.
+            - ⋯ Try "prediction is reward too" meta-learning: replace reward with 8-steps-ago prediction of data by feedback. Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just getting better and scaling up, right?
             - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send 0s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably). May need UI integration, though.
-                - ⋯ Nearest-neighbor lookup by names, to extract more from less.
+                - ⋯ Nearest-neighbor lookup by names, to extract more from less. (Circling-the-drain kind of activity, though: just a worse keyboard.)
             - ⋯ Once we have something that sounds recognizable, try an echo-state network, and see whether that makes it better or worse.
                 - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)
                 - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
@@ -269,10 +271,10 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Visualization.
                 - ⋯ With time-domain output, be able to specify how many output values each input should occupy (upsampling).
                 - ⋯ IFFT, implemented manually, with upsampling of inputs.
-            - ⋯ Sound input (microphone). Probably terrible.
+            - ❌ Sound input (microphone). Probably terrible.
             - ⋯ Write to Internet.
                 - ⋯ Make sure that at least `error=1` ("no data") is preserved.
-            - ⋯ Write to file.
+            - ⋯ Write to `indexedDB`, with visualization allowing saving it all to a file.
                 - ⋯ Replace `error=1` ("no data") with feedback, leave the rest as-is.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
         - ⋯ `.defaults()`.

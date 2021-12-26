@@ -23,6 +23,8 @@ Reporting the mean, usually for about `1000` transferred numbers per packet.
 
 ## Lessons
 
+- Chrome has [`performance.memory`](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).
+
 - `E:{_allocF32()}` bad, for performance. `function allocF32()` good.
 
 - `Promise`s bad, for allocations. Callbacks good.
