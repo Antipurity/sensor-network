@@ -7,21 +7,26 @@ This sensor's output is composed of 1 or more tiles, which are square images.
 
 Extra options:
 - \`tileDimension = 8\`: each tile edge's length.
-- \`source = Video.stitchCanvases()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
+- \`source = Video.stitchTab()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
 - \`monochrome = false\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
+- \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects, or a function to that. If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out.
 ` }
         resume(opts) {
             if (opts) {
                 const td = opts.tileDimension || 8
                 const src = opts.source || Video.requestDisplay() // TODO: Do Video.stitchTab() by default, once we have that.
+                const targ = opts.targets || Video.pointers()
                 sn._assertCounts('Non-integer tile side', td)
                 sn._assert(typeof src == 'function' || src instanceof Promise || src instanceof MediaStream || src instanceof Element && (src.tagName === 'CANVAS' || src.tagName === 'VIDEO' || src.tagName === 'IMG'), "Bad source")
+                sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
                 this.tileDimension = td
                 // (Don't catch errors in `src`, so they'll be logged to console.)
                 this.source = src
                 this._tiles = 1
                 this.monochrome = !!opts.monochrome
                 this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to false.
+                this.targets = targ
+                this._target = 0
                 //   `typeof src == 'function' && typeof src.onFeedback == 'function'`? (`onFeedback` accepting the data-elem and the feedback-canvas. TODO: But how to synchronize frames?)
                 // TODO: Other props. (For example, handle tiling and zooming-in by forking ourselves, and making `pause` responsible for the forks too.)
                 opts.extraValues = 0
@@ -37,20 +42,21 @@ Extra options:
                 opts.name = [
                     'video',
                     ''+td,
-                    this.noFeedback ? 0 : (...args) => xy(...args).x,
-                    this.noFeedback ? 0 : (...args) => xy(...args).y,
+                    this.noFeedback ? 0 : (...args) => xy(...args).x * 2 - 1,
+                    this.noFeedback ? 0 : (...args) => xy(...args).y * 2 - 1,
                     Math.log2(zoomOut) / 5 - 1,
                     this.noFeedback ? 1 : -1,
                 ]
             }
             super.resume(opts)
         }
-        // TODO: Allow many `targets`, self-duplicating to cover more than 1.
-        //   By default, is Video.pointers(), and is called each frame.
-        //   How exactly do we allow this? Make `onValues` check whether the next element exists, and pause/resume (and maybe create) `this._nextTarget` (with `opts._target = this._target+1`)?
+        // TODO: How exactly to allow `targets`?
+        //   Make `onValues` check whether the next element exists, and pause/resume (and maybe create) `this._nextTarget` (with `opts._target = this._target+1`)?
         // TODO: Allow many zoom-out levels.
         //   (If no-target, zoom in on the center instead.)
         // TODO: Allow many tiles.
+
+        // TODO: visualize({data, cellShape}, elem).
 
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
@@ -207,30 +213,34 @@ Extra options:
         }, {
             docs:`Returns a closure that returns the dynamic list of mouse/touch positions, \`[{x,y}]\`.
 
-Usable as the \`source\` option for \`Video\`.`,
+The result is usable as the \`targets\` option for \`Video\`.`,
         }),
 
         // TODO: Make the main thing `stitchTab`:
         //   TODO: Request stream from extension if possible, through DOM events. Else:
         //   TODO: document.querySelectorAll('canvas, video, img')
         //   TODO: Clear the canvas, and draw each thing onto it.
-        requestDisplay: A(function() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
+        requestDisplay: A(function() { // With the user's permission, gets a screen/window/tab contents.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const p = navigator.mediaDevices.getDisplayMedia({ audio:true, video:true }).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
             return function() { return p }
         }, {
-            docs:``, // TODO:
+            docs:`[Requests a screen/window/tab stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
+
+The result is usable as the \`source\` option for \`Video\`.`,
         }),
-        requestCamera: A(function() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
+        requestCamera: A(function() { // With the user's permission, gets a screen/window/tab contents.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
             const p = navigator.mediaDevices.getUserMedia({ audio:true, video:true }).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
             return function() { return p }
         }, {
-            docs:``, // TODO:
+            docs:`[Requests a camera stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
+
+The result is usable as the \`source\` option for \`Video\`.`,
         })
     })
 }

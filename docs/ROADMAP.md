@@ -217,8 +217,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                                 - TODO: ...Should `stitchTab` be able to accept the feedback-canvas and the on-feedback function? Because, where would we pass that in otherwise?
                                     - This would require that `opts.source` is an object, right?
                         - ✓ Data & feedback on context2D.
-                        - ⋯ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
-                            - ⋯ Each cell's name: `['video', ''+tileDimension, x(), y(), zoomOut(), source()]`, where the source is -1 for has-feedback, 1 for no-feedback.
+                        - ✓ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
+                            - ✓ Each cell's name: `['video', ''+tileDimension, x(), y(), zoom(), source()]`, where un/zoom level is -1 for 1× and 1 for 1024×, and the source is -1 for has-feedback, 1 for no-feedback.
                         - ⋯ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates, nested if needed.
                             - ⋯ If empty, downsample the *full* stream, and disable coarsening.
                             - ⋯ By default, is `static pointer() → Array` for `VideoRect`: every `.pointerId` that is in a pointer event is in here, though past `onpointerup`, only the first-seen-id pointer is preserved.
