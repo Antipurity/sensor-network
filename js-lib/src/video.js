@@ -7,7 +7,7 @@ This sensor's output is composed of 1 or more tiles, which are square images.
 Extra options:
 - \`tileDimension = 8\`: each tile edge's length.
 - \`source = Video.stitchCanvases()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
-- \`monochrome = false\`: TODO:
+- \`monochrome = false\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
 ` }
         resume(opts) {
             if (opts) {
@@ -31,10 +31,9 @@ Extra options:
             }
             super.resume(opts)
         }
-        // TODO: First, at least make it work for 1-tile no-zoomout no-targets.
-        //   And test that it works with sound.
-
-        // TODO: ...Okay, I think this stub is (mostly) implemented, so, should actually run it. And fix.
+        // TODO: Allow many targets, self-duplicating to cover more than 1.
+        // TODO: Allow many zoom-out levels.
+        // TODO: Allow many tiles.
 
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
@@ -67,31 +66,32 @@ Extra options:
                 if ('srcObject' in el) el.srcObject = source
                 else el.src = URL.createObjectURL(source)
                 el.volume = 0
-                // el.play() // TODO: Is this required?
+                el.play()
                 m.set(source, el)
             }
-            return m.get(source)
+            const el = m.get(source)
+            return el
         }
         _dataContext2d(data, valuesPerCell) { // Fills `data`.
             let frame = Video._sourceToDrawable(this.source)
             if (frame instanceof Promise)
                 return console.error(frame.error), this.pause(), false
             if (!frame) return null
-            const width = frame.videoWidth || frame.displayWidth || frame.width
-            const height = frame.videoHeight || frame.displayHeight || frame.height
+            let width = frame.videoWidth || frame.displayWidth || frame.width
+            let height = frame.videoHeight || frame.displayHeight || frame.height
             // Draw frame to canvas, get ImageData.
             if (!this._canvas) {
                 this._canvas = document.createElement('canvas')
                 this._ctx2d = this._canvas.getContext('2d')
+                document.body.append(this._canvas) // TODO: Don't do this visualization after we're done.
             }
-            // TODO: Debug devicePixelRatio. Do we need to take it into account?
             const td = this.tileDimension, tiles = this._tiles
             this._canvas.width = td, this._canvas.height = tiles * td
             // Draw each tile and get its ImageData, and put that into `data`.
             for (let i = 0; i < tiles; ++i) {
                 this._ctx2d.drawImage(frame,
                     0, 0, width, height,
-                    0, 0, td, i * td,
+                    0, 0, td, td,
                 )
             }
             // Actually draw the data.
@@ -110,7 +110,6 @@ Extra options:
                         data[i * valuesPerCell + j] = (0.2126*R + 0.7152*G + 0.0722*B) * 2 - 1
                 }
             }
-            // TODO: How to debug the actual values? Do they even change at all?
             return true
         }
 
@@ -125,6 +124,12 @@ Extra options:
             }).catch(e => p.error = e)
             return function() { return p }
         }
-        // TODO: Also `requestCamera`; the API is almost the same as display's, right? Or does it need permissions?
+        static requestCamera() { // With the user's permission, gets a screen/window/tab contents. // TODO: Document, via `Object.assign`ments.
+            // Note that in Firefox, the user has to have clicked somewhere on the page first.
+            const p = navigator.mediaDevices.getUserMedia({ audio:true, video:true }).then(s => {
+                return p.result = s
+            }).catch(e => p.error = e)
+            return function() { return p }
+        }
     }
 }
