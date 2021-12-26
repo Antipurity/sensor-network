@@ -626,6 +626,8 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                     if (!x || typeof x != 'object' && typeof x != 'function') return
                     if (typeof x.bench == 'function' && x.bench !== E.meta.bench) {
                         const bs = x.bench()
+                        console.log(x) // TODO: ...Wtf is this? Why are we 14MB/s?? HOW??? ...I guess it's super efficient somehow.
+                        if (x === E.Sensor.Video) // TODO:
                         for (let id of Object.keys(bs)) {
                             bench.push(bs[id])
                             benchIndex.push(id)

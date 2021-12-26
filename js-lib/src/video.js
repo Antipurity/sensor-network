@@ -97,6 +97,7 @@ Extra options:
                         ctx.fillStyle = ['red', 'green', 'blue'][Math.random()*3 | 0]
                         ctx.fillRect(Math.random() * resolution | 0, Math.random() * resolution | 0, 51, 51)
                     }
+                    draw()
                     const from = new Video({
                         source: canvas.captureStream(),
                         monochrome: false,
