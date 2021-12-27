@@ -68,19 +68,19 @@ export default function init(sn) {
 In Chrome, users might have to first click on the page for sound to play.
 
 - Extra options, for \`constructor\` and \`resume\`:
-    - \`volume = 1\`: multiplier of sound output.
-    - \`minFrequency = 200\`, \`maxFrequency = 16000\`: how well you can hear. [From 20 or 50, to 16000 or 20000 is reasonable.](https://en.wikipedia.org/wiki/Hearing_range) The wider the range, the higher the bandwidth.
-    - \`nameImportance = .25\`: multiplier of cell names. Non-1 to make it easier on your ears.
+    - \`volume = .3\`: amplitude of sound output.
+    - \`minFrequency = 1000\`, \`maxFrequency = 13000\`: how well you can hear. [From 20 or 50, to 16000 or 20000 is reasonable.](https://en.wikipedia.org/wiki/Hearing_range) The wider the range, the higher the bandwidth.
+    - \`nameImportance = .5\`: multiplier of cell names. Non-1 to make it easier on your ears, and emphasize data.
     - \`debug = false\`: if set, visualizes frequency data in a \`<canvas>\`. (Usable for quickly testing \`.Sensor.Video\`.)
 ` }
         resume(opts) {
             if (opts) {
                 opts.onValues = Sound.onValues
                 opts.noFeedback = true
-                this.volume = typeof opts.volume == 'number' && opts.volume >= 0 && opts.volume <= 1 ? opts.volume : 1
-                this.minFrequency = opts.minFrequency !== undefined ? opts.minFrequency : 200
-                this.maxFrequency = opts.maxFrequency || 16000
-                this.nameImportance = opts.nameImportance !== undefined ? opts.nameImportance : .25
+                this.volume = typeof opts.volume == 'number' && opts.volume >= 0 && opts.volume <= 1 ? opts.volume : .3
+                this.minFrequency = opts.minFrequency !== undefined ? opts.minFrequency : 1000
+                this.maxFrequency = opts.maxFrequency || 13000
+                this.nameImportance = opts.nameImportance !== undefined ? opts.nameImportance : .5
                 this.debug = opts.debug
             }
             super.resume(opts)
