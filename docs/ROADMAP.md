@@ -254,7 +254,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Accumulator`:
             - ⋯ Shuffle blocks.
             - ⋯ Reward, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
-                - ⋯ By default, make F11/F12 give +1/-1 reward.
+                - ⋯ By default, make F11/F12 give +1/-1 reward. (Though, these keys are very much used for something else, and we must come up with better keys.)
             - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name, so that even old and remote data is visualizable.
             - ⋯ Try "prediction is reward too" meta-learning: replace reward with 8-steps-ago prediction of data by feedback. Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just getting better and scaling up, right?
             - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send 0s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably). May need UI integration, though.
@@ -272,7 +272,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
                     - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)
                     - ⋯ [Normalize perceived loudness.](https://en.wikipedia.org/wiki/Equal-loudness_contour)
-                - ❌ With time-domain output, be able to specify how many sound samples each value should occupy. (Frequency-domain is the only thing that matters.)
+                - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
             - ❌ Sound input (microphone). Probably terrible.
             - ⋯ Write to Internet.

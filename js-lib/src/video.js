@@ -341,7 +341,8 @@ The result is usable as the \`targets\` option for \`Video\`.`,
                 _tab.lastStitch = performance.now()
                 const w = innerWidth, h = innerHeight
                 canvas.width = w, canvas.height = h
-                ctx.clearRect(0, 0, w, h)
+                ctx.fillStyle = '#777'
+                ctx.fillRect(0, 0, w, h)
                 Array.from(document.getElementsByTagName('canvas')).forEach(draw)
                 Array.from(document.getElementsByTagName('video')).forEach(draw)
                 Array.from(document.getElementsByTagName('img')).forEach(draw)
