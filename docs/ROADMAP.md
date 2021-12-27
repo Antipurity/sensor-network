@@ -1,6 +1,6 @@
 Know what needs to be done, and do it.
 
-No deleting, only adding (at the end) and keeping track of progress.
+No deleting, only adding (at the end) and keeping track of progress. Rephrasing/refinement that spans items is allowed.
 
 - ✓ Track completion with Unicode characters: ⋯ to-do, ✓ complete, ❌ canceled.
 
@@ -255,7 +255,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Shuffle blocks.
             - ⋯ Reward, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
                 - ⋯ By default, make F11/F12 give +1/-1 reward.
-            - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, error, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name, so that even old and remote data is visualizable.
+            - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name, so that even old and remote data is visualizable.
             - ⋯ Try "prediction is reward too" meta-learning: replace reward with 8-steps-ago prediction of data by feedback. Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just getting better and scaling up, right?
             - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send 0s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably). May need UI integration, though.
                 - ⋯ Nearest-neighbor lookup by names, to extract more from less. (Circling-the-drain kind of activity, though: just a worse keyboard.)
@@ -268,16 +268,16 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Ability to hold a cell's button to only route its feedback, since it looks like we'll really need to scrounge for human-to-machine bandwidth, and labels won't be enough.
                     - ⋯ And the ability to use in-page keybindings. (Might even be *usable*.)
         - ⋯ `.Handler`:
-            - ⋯ No-feedback sound output (speakers).
-                - ✓ Make it no-skips and no-huge-backlog.
-                - ⋯ Visualization.
-                - ⋯ With time-domain output, be able to specify how many output values each input should occupy (upsampling).
-                - ⋯ IFFT, implemented manually, with upsampling of inputs.
+            - ✓ No-feedback sound output (speakers).
+                - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
+                    - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)
+                    - ⋯ [Normalize perceived loudness.](https://en.wikipedia.org/wiki/Equal-loudness_contour)
+                - ❌ With time-domain output, be able to specify how many sound samples each value should occupy. (Frequency-domain is the only thing that matters.)
+                - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
             - ❌ Sound input (microphone). Probably terrible.
             - ⋯ Write to Internet.
-                - ⋯ Make sure that at least `error=1` ("no data") is preserved.
+                - ⋯ Preserve no-feedback-to-this-cell marks.
             - ⋯ Write to `indexedDB`, with visualization allowing saving it all to a file.
-                - ⋯ Replace `error=1` ("no data") with feedback, leave the rest as-is.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
         - ⋯ `.defaults()`.
 
@@ -295,9 +295,10 @@ The extension should be a control center that can manage a human's direct connec
         - ⋯ Prompt the user if the page was not authorized. (It's only authorized if the extension injected the video-collecting script, with a nonce.)
     - ⋯ Inject a content script that listens to DOM events and sends those messages to the extension, and sends replies as DOM events.
     - ⋯ Inject a handler that defers to the extension with priority `Infinity`.
+        - ⋯ If active, suppress other handlers with `onlyIfNoExtension()` → `true`.
     - ⋯ Allow extensions to enforce user-selected interfaces on the currently-active tab, disconnecting when the tab switches.
         - ⋯ Benchmark tab-switching.
-    - ⋯ …Come up with something for in-extension DOM visualization of what it tells pages to do.
+    - ⋯ …Come up with something for in-extension DOM visualization of what it tells pages to do: `visualize({data, cellShape}, DOMelem)`.
     - ⋯ Benchmark throughput of `.defaults()`.
     - ⋯ Test that an infinite loop in extension's active snippets can be recovered from, in some way.
 
