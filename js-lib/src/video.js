@@ -92,7 +92,7 @@ Extra options:
                     const ctx = canvas.getContext('2d')
                     canvas.width = canvas.height = resolution
                     let ended = false
-                    function draw() { // Make new data each time.
+                    function draw() { // Make new data each animation frame.
                         if (ended) return
                         requestAnimationFrame(draw)
                         ctx.fillStyle = ['red', 'green', 'blue'][Math.random()*3 | 0]
@@ -189,12 +189,15 @@ Extra options:
             let width = frame.videoWidth || frame.width
             let height = frame.videoHeight || frame.height
             // Draw frame to canvas, get ImageData.
+            const N = 2 // Delay read-back if slow.
             if (!this._canvas) {
-                this._canvas = document.createElement('canvas')
-                this._ctx2d = this._canvas.getContext('2d', {alpha:false})
-                document.body.append(this._canvas) // TODO: Don't do this visualization after we have `visualize`. ...Or, after we're done with the benchmark, since we'll put off `visualize` for much later, I guess.
+                this._canvas = many(() => document.createElement('canvas'))
+                this._ctx2d = many((_,i) => this._canvas[i].getContext('2d', {alpha:false}))
+                this._i = 0, this._slow = 0
+                function many(f) { return new Array(N).fill().map(f) }
             }
-            const canvas = this._canvas, ctx = this._ctx2d
+            let i = ++this._i, iR = this._slow>.5 ? (i+1) % N : i % N, iW = i % N
+            const canvas = this._canvas[iW], ctxWrite = this._ctx2d[iW], ctxRead = this._ctx2d[iR]
             const td = this.tileDimension, tiles = this._tiles
             const zss = this.zoomSteps, zs = this.zoomStep
             const tiling = this.tiling, t2 = tiling*tiling
@@ -205,14 +208,14 @@ Extra options:
                 if (!target) { // Fullscreen.
                     const x = (width * .5 * (1-1/zoom)) | 0
                     const y = (height * .5 * (1-1/zoom)) | 0
-                    ctx2d.drawImage(frame,
+                    ctxWrite.drawImage(frame,
                         x, y, width/zoom, height/zoom,
                         0, tiling * i * td, tiling * td, tiling * td,
                     )
                 } else { // Around a target.
                     const x = (target.x * width + zoom*td*.5*(1-tiling)) | 0
                     const y = (target.y * height + zoom*td*.5*(1-tiling)) | 0
-                    ctx2d.drawImage(frame,
+                    ctxWrite.drawImage(frame,
                         x, y, zoom*td, zoom*td,
                         0, tiling * i * td, tiling * td, tiling * td,
                     )
@@ -220,10 +223,10 @@ Extra options:
             }
             // Actually draw the data.
             const monochrome = this.monochrome
-            // const START = performance.now() // TODO:
-            const imageData = ctx2d.getImageData(0, 0, tiling * td, tiling * (zss+1) * td).data
-            // console.log(performance.now() - START) // TODO: Ah: so we can measure just this one call, and slow down the video if it gets too slow.
-            // TODO: Can we have 2 canvases first, and read from the previous one?
+            const readStart = performance.now()
+            const imageData = ctxRead.getImageData(0, 0, tiling * td, tiling * (zss+1) * td).data
+            const toRead = performance.now() - readStart
+            this._slow = .9*this._slow + .1 * (toRead > 10)
             for (let i = 0; i < tiles; ++i) {
                 // Only read our tile, not the ones horizontally adjacent to it.
                 //   And get our tile's upper-left corner right.
@@ -353,9 +356,9 @@ The result is usable as the \`targets\` option for \`Video\`.`,
 
 The result is usable as the \`source\` option for \`Video\`.`,
         }),
-        requestDisplay: A(function requestDisplay(width) { // With the user's permission, gets a screen/window/tab contents.
+        requestDisplay: A(function requestDisplay(maxWidth = 1024) { // With the user's permission, gets a screen/window/tab contents.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
-            const opts = { audio:true, video:width ? { max:{width} } : true }
+            const opts = { audio:true, video: maxWidth ? { width:{max:maxWidth} } : true }
             const p = navigator.mediaDevices.getDisplayMedia(opts).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
@@ -363,18 +366,22 @@ The result is usable as the \`source\` option for \`Video\`.`,
         }, {
             docs:`[Requests a screen/window/tab stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
 
+For performance, max width is 1024 by default; pass in something else if needed.
+
 The result is usable as the \`source\` option for \`Video\`.`,
         }),
 
-        requestCamera: A(function requestDisplay(width) { // With the user's permission, gets a screen/window/tab contents.
+        requestCamera: A(function requestDisplay(maxWidth = 1024) { // With the user's permission, gets a screen/window/tab contents.
             // Note that in Firefox, the user has to have clicked somewhere on the page first.
-            const opts = { audio:true, video:width ? { max:{width} } : true }
+            const opts = { audio:true, video: maxWidth ? { width:{max:maxWidth} } : true }
             const p = navigator.mediaDevices.getUserMedia(opts).then(s => {
                 return p.result = s
             }).catch(e => p.error = e)
             return function() { return p }
         }, {
             docs:`[Requests a camera stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
+
+For performance, max width is 1024 by default; pass in something else if needed.
 
 The result is usable as the \`source\` option for \`Video\`.`,
         })

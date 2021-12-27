@@ -225,8 +225,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ `visualize` into a user-resizable canvas.
                         - ✓ A benchmark of reading from a `<canvas>`-sourced `MediaStream`, 2048×2048, as fast as possible.
                             - ❌ Use [`VideoFrame` and `MediaStreamTrackProcessor`](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor). (Not a bottleneck.)
+                            - ✓ To minimize GPU→CPU transfer, make reading 1 or more frames behind writing. (Helps a very tiny bit.)
+                            - ❌ Tone down `MediaStream` settings dynamically (`frameRate`, `width:{ideal:512}`), according to how much we can/can't accept. (Doesn't work with canvas streams in Firefox; doesn't help in Chrome.)
                             - ⋯ To not draw invisible elems in `stitchTab`, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
-                            - ⋯ Tone down `MediaStream` settings dynamically (`frameRate`, `max:{width}`), according to how much we can/can't accept. (Whole-screen recordings lag.)
                     - ⋯ Audio.
                         - ⋯ Mono, by averaging all channels.
                         - ⋯ 2+ channels, each exposed directly.
