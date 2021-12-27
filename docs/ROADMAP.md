@@ -207,13 +207,13 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
                 - ⋯ Video+audio.
                     - ⋯ Video: `Video`.
-                        - ⋯ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
+                        - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
                             - ✓ `static stitchTab()`, which draws the viewport's visible canvases into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
                                 - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
                             - ✓ `static requestDisplay()`, which uses `getDisplayMedia`.
                             - ✓ `static requestCamera()`, which uses `getUserMedia`.
                         - ✓ Data on context2D: draw `source` into tiles.
-                        - ⋯ Feedback on context2D: draw tiles into `source`-shaped spots, by having `source.onFeedback(feedbackCanvas)`.
+                        - ⋯ Feedback on context2D: draw tiles into `source`-shaped spots, by having `source.onFeedback(feedbackCanvas)`. Unzoom and position tiles properly, and make sure that max-detail information always wins.
                         - ✓ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
                             - ✓ Each cell's name: `['video', ''+tileDimension, x(), y(), zoom(), color()]`, where un/zoom level is -1 for 1× and 1 for 1024×, and color is -1 for monochrome and -⅓ for red and ⅓ for green and 1 for blue.
                         - ✓ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates.
@@ -222,8 +222,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ Zooming-out, steps & magnitude-per-step, `zoomSteps` &  `zoomStep`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
                         - ✓ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
                         - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
-                        - ⋯ `visualize`, to be able to match data to a familiar format.
+                        - ⋯ `visualize` into a user-resizable canvas.
                         - ✓ A benchmark of reading from a `<canvas>`-sourced `MediaStream`, 2048×2048, as fast as possible.
+                            - ❌ Use [`VideoFrame` and `MediaStreamTrackProcessor`](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor). (Not a bottleneck.)
                             - ⋯ To not draw invisible elems in `stitchTab`, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
                             - ⋯ Tone down `MediaStream` settings dynamically (`frameRate`, `max:{width}`), according to how much we can/can't accept. (Whole-screen recordings lag.)
                     - ⋯ Audio.
@@ -254,6 +255,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Shuffle blocks.
             - ⋯ Reward, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
                 - ⋯ By default, make F11/F12 give +1/-1 reward.
+            - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, error, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name, so that even old and remote data is visualizable.
             - ⋯ Try "prediction is reward too" meta-learning: replace reward with 8-steps-ago prediction of data by feedback. Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just getting better and scaling up, right?
             - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send 0s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably). May need UI integration, though.
                 - ⋯ Nearest-neighbor lookup by names, to extract more from less. (Circling-the-drain kind of activity, though: just a worse keyboard.)

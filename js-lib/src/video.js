@@ -12,6 +12,7 @@ It can target 0 or 1+ points, each shown in 1 or more tiles, and can include mul
 Extra options:
 - \`tileDimension = 8\`: each tile edge's length.
 - \`source = Video.stitchTab()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
+    - Feedback is currently not implemented.
 - \`monochrome = true\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
 - \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame.
     - If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
@@ -42,7 +43,7 @@ Extra options:
                 this.source = src
                 this._tiles = (zoomSteps+1) * (tiling*tiling)
                 this.monochrome = opts.monochrome === undefined ? true : !!opts.monochrome
-                this.noFeedback = true // TODO: If `source` includes feedback canvases, then set this to false: `typeof src.onFeedback != 'function'`.
+                this.noFeedback = true
                 this.targets = targ
                 this._targetIndex = opts._targetIndex || 0
                 this._opts = A(A(Object.create(null), opts), { source:src, targets:targ, _targetIndex: this._targetIndex+1 })
@@ -99,7 +100,9 @@ Extra options:
                     }
                     draw()
                     const from = new Video({
+                        // (If `source` is just `canvas`, it's super fast. Streams are slow.)
                         source: canvas.captureStream(),
+                        targets: [{x:.5, y:.5}],
                         monochrome: false,
                         tileDimension: 8,
                         zoomSteps: 3,
@@ -116,10 +119,6 @@ Extra options:
                 }
             }
         }
-
-        // TODO: visualize({data, cellShape}, elem).
-        //   Draw into one user-resizable canvas. Can't infer it, so just assume.
-        //   For each cell, infer x/y/zoom/color from name, sort them by zoom, then draw all.
 
         static onValues(sensor, data) {
             const targetShape = sensor.cellShape()
@@ -147,9 +146,7 @@ Extra options:
         }
         static onFeedback(feedback, sensor) {
             if (!feedback || sensor.noFeedback) return
-            // TODO: What do we do here?
-            //   …Simply upscale from feedback, exactly reversing `_dataContext2d`?
-            // TODO: How do we reuse as much code as possible?
+            // Yep. Handle feedback here. Handle it good.
         }
 
         _targets() {
@@ -162,6 +159,7 @@ Extra options:
             if (tilesSqrt === 1) return 0
             const x = tile % tilesSqrt, y = tile / tilesSqrt | 0
             return needY ? y + .5 - .5*tilesSqrt : x + .5 - .5*tilesSqrt
+            // Min: .5 - .5*tilesSqrt;   max: .5*tilesSqrt-.5
         }
         static _sourceToDrawable(source) { // .drawImage and .texImage2D can use the result.
             if (typeof source == 'function') source = source()
@@ -173,23 +171,12 @@ Extra options:
             if (!(source instanceof MediaStream)) return source
             const m = Video._streamToVideo || (Video._streamToVideo = new WeakMap)
             if (!m.has(source)) { // Go through <video>.
-                if (typeof MediaStreamTrackProcessor == 'undefined') {
-                    const el = document.createElement('video')
-                    if ('srcObject' in el) el.srcObject = source
-                    else el.src = URL.createObjectURL(source)
-                    el.volume = 0
-                    el.play()
-                    m.set(source, el)
-                } /*else { // TODO: ONLY after having a benchmark!
-                    // TODO: For the efficiency of having 1 less copy, use https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame and https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor when available.
-                    const proc = new MediaStreamTrackProcessor(source.getVideoTracks()[0])
-                    const reader = proc.readable.getReader()
-                    // TODO: Uh, how to use it?
-                    //   `await reader.read()` will return a VideoFrame... Should we store a function to that? And, call it, right? And do weird things with the resulting promise...
-                    //     Maybe we should just read all frames immediately into a circular buffer?...
-                    //   And, how do we handle "too much stalling, pls add limitations"?
-                    //   And, how do we handle "too much data, pls remove limitations"?
-                }*/
+                const el = document.createElement('video')
+                if ('srcObject' in el) el.srcObject = source
+                else el.src = URL.createObjectURL(source)
+                el.volume = 0
+                el.play()
+                m.set(source, el)
             }
             const el = m.get(source)
             return el
@@ -205,31 +192,28 @@ Extra options:
             if (!this._canvas) {
                 this._canvas = document.createElement('canvas')
                 this._ctx2d = this._canvas.getContext('2d', {alpha:false})
-                document.body.append(this._canvas) // TODO: Don't do this visualization after we have `visualize`.
+                document.body.append(this._canvas) // TODO: Don't do this visualization after we have `visualize`. ...Or, after we're done with the benchmark, since we'll put off `visualize` for much later, I guess.
             }
             const td = this.tileDimension, tiles = this._tiles
-            this._canvas.width = td, this._canvas.height = tiles * td
-            // Draw each tile and get its ImageData, and put that into `data`.
-            for (let i = 0; i < tiles; ++i) {
-                const zss = this.zoomSteps, zs = this.zoomStep
-                const tiling = this.tiling, t2 = tiling*tiling
-                const zoom = zs ** ((i / t2 | 0) % (zss+1))
-                const dx = Video._tileMove(false, i % t2, tiling)
-                const dy = Video._tileMove(true, i % t2, tiling)
+            const zss = this.zoomSteps, zs = this.zoomStep
+            const tiling = this.tiling, t2 = tiling*tiling
+            this._canvas.width = tiling * td, this._canvas.height = tiling * (zss+1) * td
+            // Draw each tiling, one draw call per zoom level.
+            for (let i = 0; i <= zss; ++i) {
+                const zoom = zs ** i
                 if (!target) { // Fullscreen.
-                    const zt = zoom*tiling
-                    const x = (width * (.5*zt+dx-.5)/zt) | 0
-                    const y = (height * (.5*zt+dy-.5)/zt) | 0
+                    const x = (width * .5 * (1-1/zoom)) | 0
+                    const y = (height * .5 * (1-1/zoom)) | 0
                     this._ctx2d.drawImage(frame,
-                        x, y, width/zt, height/zt,
-                        0, i * td, td, td,
+                        x, y, width/zoom, height/zoom,
+                        0, tiling * i * td, tiling * td, tiling * td,
                     )
                 } else { // Around a target.
-                    const x = (target.x * width + zoom*td*(dx-.5)) | 0
-                    const y = (target.y * height + zoom*td*(dy-.5)) | 0
+                    const x = (target.x * width + zoom*td*.5*(1-tiling)) | 0
+                    const y = (target.y * height + zoom*td*.5*(1-tiling)) | 0
                     this._ctx2d.drawImage(frame,
                         x, y, zoom*td, zoom*td,
-                        0, i * td, td, td,
+                        0, tiling * i * td, tiling * td, tiling * td,
                     )
                 }
             }
@@ -237,11 +221,17 @@ Extra options:
             const monochrome = this.monochrome
             const imageData = this._ctx2d.getImageData(0, 0, td, tiles * td).data
             for (let i = 0; i < tiles; ++i) {
+                // Only read our tile, not the ones horizontally adjacent to it.
+                //   And get our tile's upper-left corner right.
+                const skipPerRow = td * (tiling-1)
+                const tileX = i % tiling, tileY = i / tiling | 0
+                const start = tileY * tiling * td*td + tileX * td
                 for (let j = 0; j < valuesPerCell; ++j) {
-                    const R = imageData[4 * (td*td*i + j) + 0] / 255
-                    const G = imageData[4 * (td*td*i + j) + 1] / 255
-                    const B = imageData[4 * (td*td*i + j) + 2] / 255
-                    if (!monochrome) { // Each tile is 3 successive R/G/B cells.
+                    const row = j / td | 0
+                    const R = imageData[4 * (start + row*skipPerRow + j) + 0] / 255
+                    const G = imageData[4 * (start + row*skipPerRow + j) + 1] / 255
+                    const B = imageData[4 * (start + row*skipPerRow + j) + 2] / 255
+                    if (!monochrome) { // Each tile is 3 successive R/G/B data cells.
                         data[(i*3 + 0) * valuesPerCell + j] = R * 2 - 1
                         data[(i*3 + 1) * valuesPerCell + j] = G * 2 - 1
                         data[(i*3 + 2) * valuesPerCell + j] = B * 2 - 1
@@ -251,10 +241,6 @@ Extra options:
             }
             return true
         }
-        // TODO: Should have `_feedbackContext2d(feedback, valuesPerCell, target)`, right?
-        //   TODO: Reverse operations in `_dataContext2d`; in the end, `this.source.onFeedback(canvas)`.
-        //   TODO: Have one internal canvas per zoom level, and when we've reversed the whole step, composite them, somewhere.
-        //     ...How to wait for the whole step though...
     }, {
         pointers: A(function pointers() {
             const ps = []
