@@ -186,32 +186,33 @@ Extra options:
             if (frame instanceof Promise)
                 return console.error(frame.error), this.pause(), false
             if (!frame) return null
-            let width = frame.videoWidth || frame.displayWidth || frame.width
-            let height = frame.videoHeight || frame.displayHeight || frame.height
+            let width = frame.videoWidth || frame.width
+            let height = frame.videoHeight || frame.height
             // Draw frame to canvas, get ImageData.
             if (!this._canvas) {
                 this._canvas = document.createElement('canvas')
                 this._ctx2d = this._canvas.getContext('2d', {alpha:false})
                 document.body.append(this._canvas) // TODO: Don't do this visualization after we have `visualize`. ...Or, after we're done with the benchmark, since we'll put off `visualize` for much later, I guess.
             }
+            const canvas = this._canvas, ctx = this._ctx2d
             const td = this.tileDimension, tiles = this._tiles
             const zss = this.zoomSteps, zs = this.zoomStep
             const tiling = this.tiling, t2 = tiling*tiling
-            this._canvas.width = tiling * td, this._canvas.height = tiling * (zss+1) * td
+            canvas.width = tiling * td, canvas.height = tiling * (zss+1) * td
             // Draw each tiling, one draw call per zoom level.
             for (let i = 0; i <= zss; ++i) {
                 const zoom = zs ** i
                 if (!target) { // Fullscreen.
                     const x = (width * .5 * (1-1/zoom)) | 0
                     const y = (height * .5 * (1-1/zoom)) | 0
-                    this._ctx2d.drawImage(frame,
+                    ctx2d.drawImage(frame,
                         x, y, width/zoom, height/zoom,
                         0, tiling * i * td, tiling * td, tiling * td,
                     )
                 } else { // Around a target.
                     const x = (target.x * width + zoom*td*.5*(1-tiling)) | 0
                     const y = (target.y * height + zoom*td*.5*(1-tiling)) | 0
-                    this._ctx2d.drawImage(frame,
+                    ctx2d.drawImage(frame,
                         x, y, zoom*td, zoom*td,
                         0, tiling * i * td, tiling * td, tiling * td,
                     )
@@ -219,7 +220,10 @@ Extra options:
             }
             // Actually draw the data.
             const monochrome = this.monochrome
-            const imageData = this._ctx2d.getImageData(0, 0, td, tiles * td).data
+            // const START = performance.now() // TODO:
+            const imageData = ctx2d.getImageData(0, 0, tiling * td, tiling * (zss+1) * td).data
+            // console.log(performance.now() - START) // TODO: Ah: so we can measure just this one call, and slow down the video if it gets too slow.
+            // TODO: Can we have 2 canvases first, and read from the previous one?
             for (let i = 0; i < tiles; ++i) {
                 // Only read our tile, not the ones horizontally adjacent to it.
                 //   And get our tile's upper-left corner right.
