@@ -205,39 +205,38 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
                     - ⋯ (May need an actual visualization elem, because pseudo-moving the mouse in the extension is not visualization.)
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
-                - ⋯ Video+audio.
-                    - ⋯ Video: `Video`.
-                        - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
-                            - ✓ `static stitchTab()`, which draws the viewport's visible canvases into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
-                                - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
-                            - ✓ `static requestDisplay()`, which uses `getDisplayMedia`.
-                            - ✓ `static requestCamera()`, which uses `getUserMedia`.
-                        - ✓ Data on context2D: draw `source` into tiles.
-                        - ⋯ Feedback on context2D: draw tiles into `source`-shaped spots, by having `source.onFeedback(feedbackCanvas)`. Unzoom and position tiles properly, and make sure that max-detail information always wins.
-                        - ✓ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
-                            - ✓ Each cell's name: `['video', ''+tileDimension, x(), y(), zoom(), color()]`, where un/zoom level is -1 for 1× and 1 for 1024×, and color is -1 for monochrome and -⅓ for red and ⅓ for green and 1 for blue.
-                        - ✓ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates.
-                            - ✓ If empty, downsample the *full* stream, else follow the targets.
-                            - ✓ By default, is `static pointers() → Array` for `Video`: every `.pointerId` that is in a pointer event is in here.
-                        - ✓ Zooming-out, steps & magnitude-per-step, `zoomSteps` &  `zoomStep`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
-                        - ✓ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
-                        - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
-                        - ⋯ `visualize` into a user-resizable canvas.
-                        - ✓ A benchmark of reading from a `<canvas>`-sourced `MediaStream`, 2048×2048, as fast as possible.
-                            - ❌ Use [`VideoFrame` and `MediaStreamTrackProcessor`](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor). (Not a bottleneck.)
-                            - ✓ To minimize GPU→CPU transfer, make reading 1 or more frames behind writing. (Helps a very tiny bit.)
-                            - ❌ Tone down `MediaStream` settings dynamically (`frameRate`, `width:{ideal:512}`), according to how much we can/can't accept. (Doesn't work with canvas streams in Firefox; doesn't help in Chrome.)
-                            - ⋯ To not draw invisible elems in `stitchTab`, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
-                    - ⋯ Audio.
-                        - ⋯ Mono, by averaging all channels.
-                        - ⋯ 2+ channels, each exposed directly.
-                        - ⋯ Create an audio context that reads PCM data from the media stream.
-                            - ⋯ Request from extension if possible.
-                        - ⋯ Expose data and feedback as [audio](https://developer.mozilla.org/en-US/docs/Web/API/MediaStream) [streams](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamAudioDestinationNode): `.soundData()=>dataStream` and `.soundFeedback()=>feedbackStream`.
-                            - ⋯ For more efficiency, allow initializing from an audio context by attaching all our nodes to it, in case all sound is played through that: `.onAudioContext(ctx, outputNode)`.
-                        - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
-                            - ⋯ And a volume slider.
-                            - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
+                - ✓ Video: `Video`.
+                    - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
+                        - ✓ `static stitchTab()`, which draws the viewport's visible canvases into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
+                            - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
+                        - ✓ `static requestDisplay()`, which uses `getDisplayMedia`.
+                        - ✓ `static requestCamera()`, which uses `getUserMedia`.
+                    - ✓ Data on context2D: draw `source` into tiles.
+                    - ⋯ Feedback on context2D: draw tiles into `source`-shaped spots, by having `source.onFeedback(feedbackCanvas)`. Unzoom and position tiles properly, and make sure that max-detail information always wins.
+                    - ✓ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
+                        - ✓ Each cell's name: `['video', ''+tileDimension, x(), y(), zoom(), color()]`, where un/zoom level is -1 for 1× and 1 for 1024×, and color is -1 for monochrome and -⅓ for red and ⅓ for green and 1 for blue.
+                    - ✓ The points `targets`: `[..., {x,y}, ...]`, 0…1 viewport coordinates.
+                        - ✓ If empty, downsample the *full* stream, else follow the targets.
+                        - ✓ By default, is `static pointers() → Array` for `Video`: every `.pointerId` that is in a pointer event is in here.
+                    - ✓ Zooming-out, steps & magnitude-per-step, `zoomSteps` &  `zoomStep`; for example, with 6 & 2 with an 8×8 initial rect also generates 16×16 and 32×32 and 64×64 and 128×128 and 256×256 and 512×512, each downscaled to 8×8.
+                    - ✓ Tiling, steps, `tilingSteps`; 1 is just the one rect, 2 is a 2×2 grid of rects with the center at the middle, and so on.
+                    - ❌ Internally, for efficiency, render images to a WebGL texture if `gpuDecode:true`, and download data from there. (We already rescale via `drawImage` in Canvas 2D.)
+                    - ⋯ `visualize` into a user-resizable canvas.
+                    - ✓ A benchmark of reading from a `<canvas>`-sourced `MediaStream`, 2048×2048, as fast as possible.
+                        - ❌ Use [`VideoFrame` and `MediaStreamTrackProcessor`](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrackProcessor). (Not a bottleneck.)
+                        - ✓ To minimize GPU→CPU transfer, make reading 1 or more frames behind writing. (Helps a very tiny bit.)
+                        - ❌ Tone down `MediaStream` settings dynamically (`frameRate`, `width:{ideal:512}`), according to how much we can/can't accept. (Doesn't work with canvas streams in Firefox; doesn't help in Chrome.)
+                        - ⋯ To not draw invisible elems in `stitchTab`, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
+                - ⋯ Audio.
+                    - ⋯ Mono, by averaging all channels.
+                    - ⋯ 2+ channels, each exposed directly.
+                    - ⋯ Create an audio context that reads PCM data from the media stream.
+                        - ⋯ Request from extension if possible.
+                    - ⋯ Expose data and feedback as [audio](https://developer.mozilla.org/en-US/docs/Web/API/MediaStream) [streams](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamAudioDestinationNode): `.soundData()=>dataStream` and `.soundFeedback()=>feedbackStream`.
+                        - ⋯ For more efficiency, allow initializing from an audio context by attaching all our nodes to it, in case all sound is played through that: `.onAudioContext(ctx, outputNode)`.
+                    - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
+                        - ⋯ And a volume slider.
+                        - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
                 - ⋯ No in-page feedback, in Chrome (Firefox doesn't seem to care as much about direct hardware access, nor about direct performance):
                     - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1..1.
                     - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
