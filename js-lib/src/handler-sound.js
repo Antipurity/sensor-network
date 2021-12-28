@@ -118,8 +118,8 @@ In Chrome, users might have to first click on the page for sound to play.
                 }
             }
         }
-        static onValues({data, error, cellShape}) {
-            if (!data || !data.length) return
+        static onValues(then, {data, cellShape}) {
+            if (!data || !data.length) return then()
             if (!Sound.ctx) {
                 Sound.ctx = new AudioContext()
                 Sound.next = Sound.ctx.currentTime
@@ -135,7 +135,6 @@ In Chrome, users might have to first click on the page for sound to play.
                 canvas.width = 1024
                 canvas.ctx = canvas.getContext('2d')
                 document.body.append(canvas)
-                const T = this
                 draw()
                 function draw() {
                     requestAnimationFrame(draw)
@@ -149,7 +148,6 @@ In Chrome, users might have to first click on the page for sound to play.
                     canvas.ctx.strokeStyle = 'rgb(0, 0, 0)'
                     canvas.ctx.beginPath()
                     const sliceWidth = canvas.width / data.length
-                    const mid = canvas.height / 2
                     for (let i = 0, x = 0; i < data.length; ++i, x += sliceWidth) {
                         const v = data[i] + 105
                         const y = canvas.height - v / 65 * canvas.height
@@ -177,11 +175,11 @@ In Chrome, users might have to first click on the page for sound to play.
             const needToWait = (Sound.next-.01 - Sound.ctx.currentTime - (start === Sound.next ? 0 : delay)) * 1000 - Sound.overshoot
             if (needToWait > Sound.overshoot) {
                 const willLikelyEndAt = performance.now() + needToWait
-                return new Promise(then => setTimeout(() => {
+                setTimeout(() => {
                     Sound.overshoot = Math.max(performance.now() - willLikelyEndAt, 0)
                     then()
-                }, needToWait))
-            }
+                }, needToWait)
+            } else then()
 
             function writeData(src, dst, volume, offset, p, renorm) {
                 const nameSize = cellSize - cellShape[cellShape.length-1]

@@ -214,11 +214,12 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
                 - ✓ Video: `Video`.
                     - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
-                        - ✓ `static stitchTab()`, which draws the viewport's visible canvases into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
+                        - ✓ `static stitchTab()`, which draws the viewport's visible `<canvas>`es into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
                             - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
                         - ✓ `static requestDisplay()`, which uses `getDisplayMedia`.
                         - ✓ `static requestCamera()`, which uses `getUserMedia`.
                     - ✓ Data on context2D: draw `source` into tiles.
+                        - ⋯ To make blindly copying differently-shaped-cell data at least half-correct, collect pixels along diagonals, not row-by-row.
                     - ⋯ Feedback on context2D: draw tiles into `source`-shaped spots, by having `source.onFeedback(feedbackCanvas)`. Unzoom and position tiles properly, and make sure that max-detail information always wins.
                     - ✓ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
                         - ✓ Each cell's name: `['video', ''+tileDimension, x(), y(), zoom(), color()]`, where un/zoom level is -1 for 1× and 1 for 1024×, and color is -1 for monochrome and -⅓ for red and ⅓ for green and 1 for blue.

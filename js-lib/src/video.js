@@ -112,7 +112,7 @@ Extra options:
                     const to = new sn.Handler({
                         dataSize,
                         noFeedback: true,
-                        onValues({data, error, cellShape}, writeFeedback, feedback) {},
+                        onValues(then, {data, error, cellShape}) { then() },
                     })
                     setTimeout(() => sn.meta.metric('resolution', resolution), 500)
                     return function stop() { ended = true, from.pause(), to.pause() }

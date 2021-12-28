@@ -126,25 +126,21 @@ export default (function(exports) {
                     const a = ch.transforms[i]
                     if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function')
                         try {
-                            T.transformExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input) : undefined)
+                            T.transformExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input) : undefined) // TODO: Don't return promises, instead have a callback.
                             T.transformCallback.push(a.onFeedback)
                             // TODO: ...Can we really not allow transforms to return differently-shaped data/feedback...
                             //   (If we replace it with a callback, this would be the opportunity to do this.)
                         } catch (err) { console.error(err) }
                 }
-                // Handlers.
+                // Handlers, first main then others.
                 if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
                     T.feedback = allocF32(namedSize), T.feedback.set(T.input.data)
                 else
                     T.feedback = null
                 if (mainHandler)
-                    try {
-                        const r = mainHandler.onValues(T.input, T.feedback ? true : false, T.feedback)
-                        // TODO: Have a callback that can accept T.feedback. Never write in-place.
-                        //   (Or just have a callback.)
-                        if (r instanceof Promise) await r
-                    } catch (err) { console.error(err) }
-                // TODO: Since this harms our throughput so much, should remember the actual indices of no-data cells, and here only loop over those.
+                    await new Promise(then => {
+                        mainHandler.onValues(then, T.input, T.feedback)
+                    })
                 if (T.feedback) // Replace no-data cells with their feedback (AKA record actions).
                     for (let i = 0; i < T.noDataIndices.length; ++i) {
                         const start = T.cellSize * T.noDataIndices[i], end = start + T.cellSize
@@ -152,25 +148,26 @@ export default (function(exports) {
                             T.input.data[j] = T.feedback[j]
                     }
                 const hs = dst.handlers
-                if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler)
-                    try {
-                        const tmp = allocArray()
-                        for (let i = 0; i < hs.length; ++i) {
-                            const h = hs[i]
-                            if (h !== mainHandler && typeof h.onValues == 'function') {
-                                const r = h.onValues(T.input, false, T.feedback)
-                                if (r instanceof Promise) tmp.push(r)
-                            }
+                if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler) {
+                    const tmp = allocArray()
+                    for (let i = 0; i < hs.length; ++i) {
+                        const h = hs[i]
+                        if (h !== mainHandler && typeof h.onValues == 'function') {
+                            tmp.push(new Promise(then => {
+                                h.onValues(then, T.input)
+                            }))
                         }
-                        for (let i = 0; i < tmp.length; ++i) await tmp[i]
-                        deallocArray(tmp)
-                    } catch (err) { console.error(err) }
+                    }
+                    for (let i = 0; i < tmp.length; ++i) await tmp[i]
+                    deallocArray(tmp)
+                }
                 // Transforms.
                 while (T.transformCallback.length) {
                     const f = T.transformCallback.pop()
                     if (typeof f == 'function')
                         try {
-                            await f(T.feedback, T.cellShape, T.transformExtra.pop()) // TODO: Actually, make callbacks accept `T.input`, which has .noData and .noFeedback and .partSize.
+                            await f(T.feedback, T.cellShape, T.transformExtra.pop()) // TODO: Don't return promises, instead have a callback.
+                            // TODO: Actually, make `f` accept `T.input`, which also has .noData and .noFeedback and .partSize. (In docs too.)
                         } catch (err) { console.error(err) }
                 }
                 // Sensors.
@@ -183,7 +180,7 @@ export default (function(exports) {
             } finally {
                 // Self-reporting.
                 --ch.stepsNow
-                if (namedSize && !ch.stepsNow && ch.giveNextPacketNow) ch.giveNextPacketNow()
+                if (namedSize && ch.stepsNow <= 1 && ch.giveNextPacketNow) ch.giveNextPacketNow()
                 _Packet.stepsEnded = _Packet.stepsEnded + 1 || 1
                 if (benchAtStart === currentBenchmark) {
                     const duration = (dst.lastUsed = performance.now()) - start
@@ -230,7 +227,10 @@ export default (function(exports) {
                 prevEnd += dst.msPerStep[1]
                 if (prevEnd < now - 1000) prevEnd = now - 1000 // Don't get too eager after being stalled.
                 if (needToWait > 0 || now - prevWait > 100 || !cells) {
-                    await new Promise(then => setTimeout(ch.giveNextPacketNow = then, !cells ? 500 : Math.max(needToWait, 0)))
+                    await new Promise(then => {
+                        if (now - prevWait <= 100) ch.giveNextPacketNow = then
+                        setTimeout(then, !cells ? 500 : Math.max(needToWait, 0))
+                    })
                     ch.giveNextPacketNow = null
                     prevWait = performance.now()
                 }
@@ -487,15 +487,16 @@ export default (function(exports) {
                 return this
             }
         }, {
-            docs:`Given data, gives feedback: human or AI model.
+            docs:`Given data, gives feedback: is a human or AI model.
 
 - \`constructor({ onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
-    - \`onValues({data, error, cellShape, noData, noFeedback}, writeFeedback, feedback)\`: process.
-        - TODO: Pass in \`then\` first, and allocate the promise ourselves (in preparation for not having promises).
-        - (\`data\` and \`error\` are not owned; do not write.)
-        - \`error\` and \`feedback\` can be \`null\`s.
-        - If \`writeFeedback\`, write something to \`feedback\`, else read \`feedback\`.
-        - At any time, there is only one *main* handler, and only that can write feedback.
+    - \`onValues(then, {data, error, cellShape, partSize, noData, noFeedback}, feedback=null)\`: process.
+        - TODO: …Once everything is callback-based, excise promises from the main loop, to significantly reduce allocations.
+        - ALWAYS do \`then()\` when done, even on errors.
+        - \`feedback\` is available in the one main handler, which should write to it in-place.
+            - In other handlers, data of \`noData\` cells will be replaced by feedback.
+        - \`data\` and \`error\` are not owned; do not write. \`error\` and \`feedback\` can be \`null\`s.
+        - \`noData\` and \`noFeedback\` are JS arrays, from cell index to boolean.
     - Cell sizes:
         - \`partSize\`: how many numbers each part in the cell ID takes up, where each string in a name takes up a whole part:
             - \`userParts\`
@@ -528,9 +529,11 @@ export default (function(exports) {
                         })
                         const to = new E.Handler({
                             dataSize,
-                            onValues({data, error, cellShape}, writeFeedback, feedback) {
-                                data.fill(.489018922485) // "Read" it.
-                                if (writeFeedback) feedback.fill(-1)
+                            onValues(then, {data, error, cellShape}, feedback) {
+                                try {
+                                    data.fill(.489018922485) // "Read" it.
+                                    if (feedback) feedback.fill(-1)
+                                } finally { then() }
                             },
                         })
                         return function stop() { from.pause(), to.pause() }
