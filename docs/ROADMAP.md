@@ -11,7 +11,7 @@ No deleting, only adding (at the end) and keeping track of progress. Rephrasing/
 
 ## Platform
 
-The Sensor Network aims to expose all real-time data accessible to a machine in a modular, dynamically-reconfigurable, fashion.
+The Sensor Network aims to expose all real-time data accessible to a machine in a modular, dynamically-reconfigurable, AI-enabled, fashion.
 
 It has to be efficient, and easily accessible.
 
@@ -98,7 +98,7 @@ This allows pretty much any interaction to happen, from simple observation of da
 - ⋯ Transforms:
     - ⋯ Shuffle cells, to make models/brains that are not fully order-independent become such.
     - ⋯ Reward sender, which replaces `0`s in all cells' first number with the reward. To specify per-user reward in one place. (The idealized job: you give it your situation, it makes your number go up.)
-        - ⋯ Configurable reward, via a closure that's called each frame. By default, F11 is `-1` reward, F12 is `+1` reward, otherwise `0`.
+        - ⋯ Configurable reward, via a closure that's called each frame. By default, Ctrl+Down is `-1` reward, Ctrl+Up is `+1` reward, otherwise `0`.
     - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send `0`s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably).
 
 - ⋯ Handlers (launch the main handler first, the rest will not give feedback):
@@ -157,7 +157,6 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.pause()`, `.resume()`
             - ✓ `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ✓ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
-                - TODO: Be able to accept `null` in the actual code, which gives no data but still expects feedback. This way, we will be able to fully decouple input from output. (This would replace `error=2` as the preferred method for action-only interfaces.) TODO: Search for all error=2 instances here.
                 - ✓ Make transforms & handlers accept `noData` and `noFeedback` per-cell arrays as named args. After the main handler, replace `noData` cells with their feedback.
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed. (The only reason for this is use in browser console, which is too iffy to justify such an unreliable functionality. Besides, forcing storage is just annoying when the user wants to fire-and-forget.)
         - ✓ `.Transform`:
@@ -165,15 +164,15 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
                 - ❌ The options object can be modified after construction.
                 - ✓ Transforms run highest-priority-first.
-                - ✓ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data]) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
-                - ✓ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
+                - ✓ `onValues({data: Float32Array, error: Float32Array|null, cellShape: [user, name, data], noData: Array<bool>, noFeedback: Array<bool>}) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
+                - ✓ `onFeedback(feedback: Float32Array, cellShape: [user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
             - ✓ `.pause()`, `.resume()`
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the transform is no longer needed.
         - ✓ `.Handler`:
             - ✓ `.constructor({ onValues, channel=null, priority=0, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16 })`.
                 - ❌ The options object can be modified after construction.
                 - ✓ `dataSize` is how many data numbers each cell can hold, `nameSize` is how many numbers the cell is identified with, split into `namePartSize`-sized blocks. First name then data; the first name part is used for the reward (always the first number) and the user ID, the rest are taken up be senders' string hashes and numbers.
-                - ✓ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
+                - ✓ `onValues({data: Float32Array, error: Float32Array|null, cellShape: [user, name, data], noData: Array<bool>, noFeedback: Array<bool>}, writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
             - ✓ `.pause()`, `.resume()`
             - ✓ On each sent message, wait a bit before handling messages, to make inputs more coherent.
                 - ✓ Benchmark the coherence, as the cell-count transformed at each step. (Seems fully coherent.)
@@ -256,8 +255,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Read from file.
             - ⋯ In extension, read from tabs.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
-                - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
-                - ⋯ To communicate rewardName/userName/name, fill them with closures, that read from received data.
+                - ⋯ Each data packet (1+ cells) references its meta-data (cellShape & partSize & noData & noFeedback) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost).
+                - ⋯ To communicate userName/name, fill them with closures, that read from received data.
                 - ⋯ Discourage disengagements: on user disconnect, hold its last cell (now `0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
             - ⋯ Search: in a distributed database (sync with search-server URL/s if given, updating a few fitting entries on demand), lookup the nearest-neighbor of values' feedback (the label) (must not be linked elsewhere), and connect via read-from-Internet.
@@ -289,7 +288,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Write to `indexedDB`, with visualization (`option()`?) allowing saving it all to a file.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ⋯ Write to Internet.
-                - ⋯ Preserve no-data-from-this-cell and no-feedback-to-this-cell marks.
+                - ⋯ Take on the remote cellShape and partSize.
+                - ⋯ Preserve no-data-from-this-cell and no-feedback-to-this-cell arrays.
             - ⋯ Advertise yourself for search (sync with search-server URL/s if given), and when someone connects, write-to-Internet.
         - ⋯ `.defaults()`.
 

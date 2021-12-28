@@ -42,6 +42,7 @@ export default (function(exports) {
                 sensorIndices: [], // ints
                 noData, // Array<bool>
                 noFeedback, // Array<bool>
+                noDataIndices: [], // Array<index> where !!noData[index]
                 // transform → handler:
                 input: { data:null, error:null, noData, noFeedback, cellShape, partSize }, // data&error are owned f32a.
                 transformExtra: [], // ints
@@ -50,21 +51,21 @@ export default (function(exports) {
                 feedback: null, // null | owned f32a.
             })
         }
-        static init(channel, cellShape, partSize) {
+        static init(channel, cellShape, partSize, summary) {
             // Is `new _Packet`, but can reuse objects.
-            const dst = state(channel, cellShape, partSize)
-            return dst.packetCache.length ? dst.packetCache.pop() : new _Packet(channel, cellShape, partSize)
+            const dst = state(channel, cellShape, partSize, summary)
+            return dst.packetCache.length ? dst.packetCache.pop() : new _Packet(channel, cellShape, partSize, summary)
         }
         deinit() { // `this` must not be used after this call.
-            // (Allows reuse of this object by `_Packet.init({…})`.)
+            // (Allows reuse of this object by `_Packet.init(…)`.)
             this.cells = 0
             this.sensorNeedsFeedback = false
-            this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = this.noData.length = this.noFeedback.length = 0
+            this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = this.noData.length = this.noFeedback.length = this.noDataIndices.length = 0
             this.input.data && (deallocF32(this.input.data), this.input.data = null)
             this.input.error && (deallocF32(this.input.error), this.input.error = null)
             this.transformExtra.length = this.transformCallback.length = 0
             this.feedback && (deallocF32(this.feedback), this.feedback = null)
-            const dst = state(this.channel, this.cellShape, this.partSize)
+            const dst = state(this.channel, this.cellShape, this.partSize, this.summary)
             if (dst.packetCache.length < 64) dst.packetCache.push(this)
         }
         send(sensor, point, error, noData, noFeedback) {
@@ -84,8 +85,12 @@ export default (function(exports) {
             this.sensorData.push(point)
             if (error) this.sensorError[this.sensorError.length-1] = error
             this.sensorIndices.push(this.cells)
-            for (let c = 0; c < cells.length; ++c)
-                this.noData.push(!!noData), this.noFeedback.push(!!noFeedback)
+            noData = !!noData, noFeedback = !!noFeedback
+            for (let c = 0; c < cells; ++c)
+                this.noData.push(noData), this.noFeedback.push(noFeedback)
+            if (noData)
+                for (let c = 0; c < cells; ++c)
+                    this.noDataIndices.push(this.cells + c)
             this.cells += point.length / this.cellSize | 0
         }
         static updateMean(a, value, maxHorizon = 32) {
@@ -136,15 +141,16 @@ export default (function(exports) {
                     try {
                         const r = mainHandler.onValues(T.input, T.feedback ? true : false, T.feedback)
                         // TODO: Have a callback that can accept T.feedback. Never write in-place.
+                        //   (Or just have a callback.)
                         if (r instanceof Promise) await r
                     } catch (err) { console.error(err) }
+                // TODO: Since this harms our throughput so much, should remember the actual indices of no-data cells, and here only loop over those.
                 if (T.feedback) // Replace no-data cells with their feedback (AKA record actions).
-                    for (let i = 0; i < T.cells; ++i)
-                        if (T.noData[i]) {
-                            const start = T.cellSize * i, end = start + T.cellSize
-                            for (let j = start; j < end; ++j)
-                                T.input.data[j] = T.feedback[j]
-                        }
+                    for (let i = 0; i < T.noDataIndices.length; ++i) {
+                        const start = T.cellSize * T.noDataIndices[i], end = start + T.cellSize
+                        for (let j = start; j < end; ++j)
+                            T.input.data[j] = T.feedback[j]
+                    }
                 const hs = dst.handlers
                 if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler)
                     try {
@@ -214,7 +220,7 @@ export default (function(exports) {
                 //   (Also, commenting this out halves Firefox throughput.)
                 // Send it off.
                 const nextPacket = dst.nextPacket
-                dst.nextPacket = _Packet.init(channel, cellShape, partSize)
+                dst.nextPacket = _Packet.init(channel, cellShape, partSize, summary)
                 const cells = nextPacket.cells
                 nextPacket.handle(mainHandler)
                 // Benchmark throughput if needed.
@@ -422,7 +428,7 @@ export default (function(exports) {
 
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
-        - \`onValues({data, error, cellShape}) → extra\`: can modify \`data\` and the optional \`error\` in-place. // TODO: Also onData and onFeedback.
+        - \`onValues({data, error, cellShape, noData, noFeedback}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
             - \`cellShape: [user, name, data]\`
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
             - Can return a promise.
@@ -439,7 +445,7 @@ export default (function(exports) {
             constructor(opts) { assert(opts), this.resume(opts) }
             pause() {
                 if (this.paused !== false) return this
-                const ch = state(this.channel), dst = state(this.channel, this.cellShape, this.partSize)
+                const ch = state(this.channel), dst = state(this.channel, this.cellShape, this.partSize, this.summary)
                 dst.handlers = dst.handlers.filter(v => v !== this)
                 if (ch.mainHandler === this) {
                     ch.mainHandler = null
@@ -472,7 +478,7 @@ export default (function(exports) {
                     })
                 }
                 if (!this.paused) return this
-                const ch = state(this.channel), dst = state(this.channel, this.cellShape, this.partSize)
+                const ch = state(this.channel), dst = state(this.channel, this.cellShape, this.partSize, this.summary)
                 dst.handlers.push(this)
                 dst.handlers.sort((a,b) => b.priority - a.priority)
                 if (!this.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < this.priority)) ch.mainHandler = this
@@ -484,8 +490,8 @@ export default (function(exports) {
             docs:`Given data, gives feedback: human or AI model.
 
 - \`constructor({ onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
-    - \`onValues({data, error, cellShape}, writeFeedback, feedback)\`: process. // TODO: Also .onData and .onFeedback.
-        - // TODO: To update \`feedback\`, pass it to the callback instead. Fill data with the main handler's feedback on no-data ourselves. As an arg, only give the bool "needFeedback".
+    - \`onValues({data, error, cellShape, noData, noFeedback}, writeFeedback, feedback)\`: process.
+        - TODO: Pass in \`then\` first, and allocate the promise ourselves (in preparation for not having promises).
         - (\`data\` and \`error\` are not owned; do not write.)
         - \`error\` and \`feedback\` can be \`null\`s.
         - If \`writeFeedback\`, write something to \`feedback\`, else read \`feedback\`.
@@ -532,7 +538,6 @@ export default (function(exports) {
                 }
             },
         }),
-        // TODO: ...Also, insert `try`/`catch` near every `.onValues` and `gotPacketFeedback` and such, in `_Packet.handle` and `_Packet.handleLoop`.
         _allocF32: allocF32,
         _deallocF32: deallocF32,
         _assert: assert,
@@ -997,7 +1002,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         return dataNamers[summary]
     }
     function shapeSummary(cellShape, partSize) { return partSize + ':' + cellShape }
-    function state(channel, cellShape, partSize) {
+    function state(channel, cellShape, partSize, summary = cellShape && shapeSummary(cellShape, partSize)) {
         // Returns `cellShape == null ? S[channel] : S[channel].shaped[shapeSummary(cellShape, partSize)]`, creating structures if not present.
         if (!S[channel])
             S[channel] = Object.assign(Object.create(null), {
@@ -1012,7 +1017,6 @@ Makes only the sign matter for low-frequency numbers.` }),
             })
         const ch = S[channel]
         if (cellShape == null) return ch
-        const summary = shapeSummary(cellShape, partSize)
         if (!ch.shaped[summary])
             ch.shaped[summary] = {
                 partSize,
@@ -1021,7 +1025,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 msPerStep: [0,0], // [n, mean]
                 cellShape, // [user, name, data]
                 handlers: [], // Array<Handler>, sorted by priority.
-                nextPacket: new _Packet(channel, cellShape, partSize),
+                nextPacket: new _Packet(channel, cellShape, partSize, summary),
                 packetCache: [], // Array<_Packet>
             }, ch.cellShapes.push({cellShape, partSize, summary})
         return ch.shaped[summary]
