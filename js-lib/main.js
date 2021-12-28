@@ -102,6 +102,15 @@ export default (function(exports) {
             if (!isFinite(a[1])) a[0] = a[1] = 0
             return a
         }
+        // TODO: Excise promises from the main loop, to significantly reduce allocations.
+        //   TODO: Split `handle` into many stages. Make the constructor bind `this`. Preserve all state on `this`.
+        //     ...Okay, but, any more details?...
+        //     State that we are lacking (from local variables of `handle`):
+        //       ch, dst, start, namedSize, benchAtStart.
+        //       And variables that go across `await`s:
+        //         "Transform"'s i, prevCells; "other handler"'s i (and the callback-counter for knowing when all handlers have returned); "reverse transform"'s prevCells.
+        //     TODO: Write down the exact stages and what they do. (Callbacks call the next stage.)
+        //   TODO: Split `handleLoop` into many stages. Make the constructor bind `this` for each instance. Preserve all state on `this`.
         async handle(mainHandler) { // sensors → transforms → handlers → transforms → sensors; `this` must not be used after this call.
             const T = this, ch = S[T.channel]
             const dst = ch.shaped[T.summary]
@@ -527,7 +536,6 @@ export default (function(exports) {
                 return this
             }
         }, {
-            // TODO: …Once everything is callback-based, excise promises from the main loop, to significantly reduce allocations.
             docs:`Given data, gives feedback: is a human or AI model.
 
 - \`constructor({ onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
