@@ -43,12 +43,12 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ Pre-implemented `send(&self, data: Vec<f32>, reward: f32)->Future<(feedback: Vec<f32>, reward_feedback: f32)>`: send data, receive feedback, [eventually](https://crates.io/crates/futures).
         - ⋯ Implement `std::io::Write` (sending data) and `std::io::Read` (getting feedback) on top of `send`, which make the reward `0`. (Unless Rust complains about conflicting implementations.)
         - ⋯ `no_feedback(&self)->bool`, `true` by default, for no-action things. Handlers shouldn't bother giving feedback on these.
-    - ⋯ The trait `Accumulator`, which changes a frame's data (post-sending pre-handling):
-        - ⋯ For efficiency, accumulators are not IPC (which would have needed at least one IPC copy per accumulator per message), but have to be created in the same process as the main `Handler`.
+    - ⋯ The trait `Transform`, which changes a frame's data (post-sending pre-handling):
+        - ⋯ For efficiency, transforms are not IPC (which would have needed at least one IPC copy per transform per message), but have to be created in the same process as the main `Handler`.
         - ⋯ `new(channel: Option<String>)`.
         - ⋯ `on_data(&self, data: Vec<f32>, cell_shape:&[u32])->Future<(Vec<f32>, Extra)>` returns a value [eventually](https://crates.io/crates/futures).
         - ⋯ `on_feedback(&self, feedback: Vec<f32>, cell_shape:&[u32], extra: Extra)->Future<Vec<f32>>`.
-        - ⋯ `priority(&self) -> f64`: all accumulators are called in a chain, highest-priority-first. `0` by default.
+        - ⋯ `priority(&self) -> f64`: all transforms are called in a chain, highest-priority-first. `0` by default.
     - ⋯ The trait `Handler`, which gives feedback to sensors:
         - ⋯ `new(channel: Option<String>)`.
         - ⋯ `on_data(&self, data: Vec<f32>, error: Vec<f32>, cellShape: &[f32], feedback: Option<Vec<f32>>) -> Future<Option<Vec<f32>>>`: give feedback to data, or observe another handler's data+feedback.
@@ -56,7 +56,7 @@ This allows pretty much any interaction to happen, from simple observation of da
                 - ⋯ A periodic loop of fulfilling corrections to smooth network latency, released in the order that they were requested, sending back data if not handled when needed. Try to match the latency of observation-correction things.
                     - ⋯ Benchmark the latency deviation, mean & stdev. Both when messages are sent evenly, and in bursts of 2/4/8/16/32/64/128.
                     - ⋯ Give per-number max error along with data.
-            - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders accumulated, avg per step.)
+            - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders transformed, avg per step.)
             - ⋯ Only send feedback to those senders that have `.no_feedback()->false`.
         - ⋯ `no_feedback(&self) -> bool`, `true` by default.
         - ⋯ `priority(&self) -> f64`, `0` by default: only the one max-priority handler with `no_feedback=false` will give feedback, the rest will simply observe.
@@ -64,7 +64,7 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ `name_size(&self) -> u32`, `64` by default.
         - ⋯ `name_part_size(&self) -> u32`, `16` by default.
     - ⋯ Sensors first request cell shapes from handlers, then for each unique shape, allocate the actual positions. On step, limit f32 numbers to `-1`…`1`, put them in places, fill in reward (`0`) & name, compress if specified, then send to handlers.
-    - ⋯ Test that all data is indeed accumulated correctly, via bogus senders/accumulators.
+    - ⋯ Test that all data is indeed transformed correctly, via bogus senders/transforms.
     - ⋯ Benchmark throughput and latency with bogus data, in time-per-cell.
 
 - ⋯ Sensors, each with read and write modes:
@@ -95,7 +95,7 @@ This allows pretty much any interaction to happen, from simple observation of da
         - ⋯ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding.
     - ⋯ A [Puppeteer](https://pptr.dev/)ed browser, where the JS extension is installed, and we make it inject interfaces and collect data by calling a Puppeteer-injected function (from base64 data, to a promise of base64 feedback) for us.
 
-- ⋯ Accumulators:
+- ⋯ Transforms:
     - ⋯ Shuffle cells, to make models/brains that are not fully order-independent become such.
     - ⋯ Reward sender, which replaces `0`s in all cells' first number with the reward. To specify per-user reward in one place. (The idealized job: you give it your situation, it makes your number go up.)
         - ⋯ Configurable reward, via a closure that's called each frame. By default, F11 is `-1` reward, F12 is `+1` reward, otherwise `0`.
@@ -119,7 +119,7 @@ This allows pretty much any interaction to happen, from simple observation of da
             - ⋯ Benchmark actual throughput.
         - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model to do next-frame prediction and first-cell-number maximization.
             - ⋯ To take advantage of exponential improvement of learning, ML must be a journey, not a series of separate steps like it is today. Sensor network being able to represent all datasets in one format is a prerequisite. So, experiment: implement weight decay weighted by gradient to [learn precise behaviors](https://mathai-iclr.github.io/papers/papers/MATHAI_29_paper.pdf) without much inter-task interference, or weight-magnitude-based evolution of weight groups for cache-aware sparsification, then make the same model fully learn very small datasets. Are there then benefits to learning bigger text-based datasets? Might be a dead-end though.
-            - ⋯ Prediction is technically a number to optimize. So make an accumulator that rewards a cell's next-frame prediction, and try to fully-learn that, so that models can then choose to predict without being forced to.
+            - ⋯ Prediction is technically a number to optimize. So make a transform that rewards a cell's next-frame prediction, and try to fully-learn that, so that models can then choose to predict without being forced to.
     - ⋯ A Neuralink device. Once it, you know, exists. (Maybe it would be a [HID](https://web.dev/hid/).)
 
 - ⋯ Compression, for Internet and files:
@@ -157,18 +157,18 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `.pause()`, `.resume()`
             - ✓ `.send(values: Float32Array|null, error: Float32Array|null, reward=0, noFeedback=false) -> Promise<Float32Array|null>`: send data, receive feedback, once. (Reward is not fed back.)
                 - ✓ "Allocate" the name into one array by creating a closure that writes, and re-use it, copying values into proper places.
-                - TODO: Be able to accept `null` in the actual code, which gives no data but still expects feedback. This way, we will be able to fully decouple input from output. (This would replace `error=2` as the preferred method for action-only interfaces.)
-                    - Make handlers accept `noData` and `noFeedback` per-cell u8a as named args.
+                - TODO: Be able to accept `null` in the actual code, which gives no data but still expects feedback. This way, we will be able to fully decouple input from output. (This would replace `error=2` as the preferred method for action-only interfaces.) TODO: Search for all error=2 instances here.
+                - ✓ Make transforms & handlers accept `noData` and `noFeedback` per-cell arrays as named args. After the main handler, replace `noData` cells with their feedback.
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed. (The only reason for this is use in browser console, which is too iffy to justify such an unreliable functionality. Besides, forcing storage is just annoying when the user wants to fire-and-forget.)
-        - ✓ `.Accumulator`:
-            - ⋯ Rename from `Accumulator` to `Transform` to stop confusing people.
+        - ✓ `.Transform`:
+            - ✓ Rename from `Accumulator` to `Transform` to stop being confusing.
             - ✓ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
                 - ❌ The options object can be modified after construction.
-                - ✓ Accumulators run highest-priority-first.
+                - ✓ Transforms run highest-priority-first.
                 - ✓ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data]) -> Promise<extra>`: prepares to modify data in-place, possibly async. The sum of numbers in `cellShape` always divides `data.length`.
                 - ✓ `onFeedback(feedback: Float32Array, cellShape: [reward=1, user, name, data], extra) -> Promise<void>`: modifies data's feedback. Maybe you want privacy, or maybe not all input sources are equally easy to activate.
             - ✓ `.pause()`, `.resume()`
-            - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the accumulator is no longer needed.
+            - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, stop when the transform is no longer needed.
         - ✓ `.Handler`:
             - ✓ `.constructor({ onValues, channel=null, priority=0, noFeedback=false, dataSize=64, nameSize=64, namePartSize=16 })`.
                 - ❌ The options object can be modified after construction.
@@ -176,7 +176,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ `onValues(data: Float32Array, error: Float32Array|null, cellShape: [reward=1, user, name, data], writeFeedback: bool, feedback: null|Float32Array)->Promise<void>`: receive data, and modify it in-place to send feedback (modify synchronously when the promise returns, to prevent data races).
             - ✓ `.pause()`, `.resume()`
             - ✓ On each sent message, wait a bit before handling messages, to make inputs more coherent.
-                - ✓ Benchmark the coherence, as the cell-count accumulated at each step. (Seems fully coherent.)
+                - ✓ Benchmark the coherence, as the cell-count transformed at each step. (Seems fully coherent.)
         - ✓ A function that runs all unit tests, `.tests()`, which traverses `sn` (not through prototypes) and calls every `tests` method.
             - ✓ `test.html`, which imports the `main.js` module and runs `sn.tests()`.
         - ✓ A function that runs all benchmarks, `.bench()`: traverses `sn` (not through prototypes) and calls every `bench` method.
@@ -186,27 +186,32 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ Display each object's benchmark results, with all per-metric plots (copy plotting code from Conceptual).
                 - ✓ Allow switching between mean/median/all views for a fuller view of performance.
             - ✓ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over █ minutes of running.
-        - ✓ `.docs()`, which traverses `sn` and accumulates all `docs` strings into a Markdown string.
+        - ✓ `.docs()`, which traverses `sn` and transformes all `docs` strings into a Markdown string.
             - ✓ Parents should become sections, into which their children belong.
             - ✓ Make a table of contents at the top, with refs to the top at every section heading.
             - ✓ Make `npm run doc` import the library and call this and write its result to `docs/DOCS.md`.
-        - ✓ Ability to de/serialize sensors/accumulators/handlers, so that users can pick up power-ups at the press of a button.
+        - ✓ Ability to de/serialize sensors/transforms/handlers, so that users can pick up power-ups at the press of a button.
             - ✓ Have the `.needsExtensionAPI() → null|string` method on `Sensor`s, returning `null` by default, but can return `''` or `'tabs'`. Let users control which parts of the `chrome` API the extension can see.
                 - ⋯ Actually use it in an extension.
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files, or maybe their own NPM modules (though they *are* small):
-        - ⋯ Make `main.js` import modules that import it and export classes that inherit sensors/accumulators/handlers, by having getters that patch themselves on use.
+        - ⋯ Make `main.js` import modules that import it and export classes that inherit sensors/transforms/handlers, by having getters that patch themselves on use.
         - ⋯ `.Sensor`:
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
-                - ⋯ Keyboard. Variants:
-                    - ⋯ Put all keys in one strip, in lexicographically-first order.
-                    - ⋯ Spatially-grouped QWERTY key layout.
-                    - ⋯ Every key has its own cell.
-                - ⋯ Mouse.
-                    - ⋯ Expose `{x:…,y:…}` on the object itself, 0…1.
-                    - ⋯ The first mouse can control the actual mouse, though only with [non-trusted events](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted). The rest only update `{x:…,y:…}`, and can be used in videos.
-                        - ⋯ Main mouse movement fires mouse/pointer move/over/out events.
-                        - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
-                    - ⋯ (May need an actual visualization elem, because pseudo-moving the mouse in the extension is not visualization.)
+                - ⋯ Keyboard.
+                    - ❌ Put all keys in one strip, in lexicographically-first order. Or use a spatially-grouped QWERTY key layout. Or have a separate cell for every possible key, for max precision. (Too data-inefficient.)
+                    - ⋯ One-hot-encode or MD5-hash the key, and have like 3 observation or action cells.
+                - ⋯ Pointer (mouse/touch).
+                    - ⋯ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this with `Video` to be able to move virtual pointers.
+                        - ⋯ `Video.pointers` → `Pointer.tab`.
+                        - ⋯ Make `Pointer.tab()` return the exact same array if called many times, don't attach new event listeners.
+                        - ⋯ Optionally have `.update()`, set by `Pointer.tab()`:
+                            - ⋯ Movement fires pointer move/over/out events; rising/falling `active` edge fires up/down events.
+                            - ⋯ The first item `.isPrimary` and `'mouse'`, the rest are `'touch'`.
+                            - ⋯ Test whether mouse/touch event listeners are triggered by pointer events, and if not, dispatch them too.
+                            - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
+                    - ⋯ If an observation: a cell per pointer (dynamically created/destroyed), report x/y and is-it-pressed. (And possibly width, height, pressure, tangentialPressure, tiltX, tiltY, twist, pointerType, isPrimary.)
+                    - ⋯ If an action: on feedback, update the `{x,y}` objects, and create [non-trusted](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted)[ pointer events](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/PointerEvent) (the first item is primary and `'mouse'`, the rest are `'touch'`) if possible to make the DOM aware.
+                    - ⋯ `visualize({data, cellShape}, elem)`, showing round points.
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
                 - ✓ Video: `Video`.
                     - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
@@ -256,7 +261,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Discourage disengagements: on user disconnect, hold its last cell (now `0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
             - ⋯ Search: in a distributed database (sync with search-server URL/s if given, updating a few fitting entries on demand), lookup the nearest-neighbor of values' feedback (the label) (must not be linked elsewhere), and connect via read-from-Internet.
-        - ⋯ `.Accumulator`:
+        - ⋯ `.Transform`:
             - ⋯ `Reward`, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
                 - ⋯ By default, make Ctrl+Up/Ctrl+Down give +1/-1 reward.
             - ⋯ `RewardFeedback`, which waits 8 steps to get feedback then calls its function to get the reward. The most natural function is a discriminator between data & feedback, or a simple difference if lazy. (Really empathize with other AI models.)

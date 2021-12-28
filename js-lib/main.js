@@ -26,22 +26,25 @@ export default (function(exports) {
     const arrayCache = []
     class _Packet {
         constructor(channel, cellShape) {
+            const noData = [], noFeedback = []
             Object.assign(this, {
                 channel,
                 cellShape,
                 cellSize: cellShape.reduce((a,b) => a+b),
-                // sensor → accumulator:
+                // sensor → transform:
                 cells: 0,
                 sensorNeedsFeedback: false,
                 sensor: [], // Sensor
                 sensorData: [], // Owns f32a (Float32Array), given to `.send(…)`.
                 sensorError: [], // Owns f32a (Float32Array), given to `.send(…)`.
                 sensorIndices: [], // ints
-                // accumulator → handler:
-                input: { data:null, error:null, cellShape }, // data&error are owned f32a.
-                accumulatorExtra: [], // ints
-                accumulatorCallback: [], // function(feedback, cellShape, extra)
-                // handler → accumulator → sensor:
+                noData, // Array<bool>
+                noFeedback, // Array<bool>
+                // transform → handler:
+                input: { data:null, error:null, noData, noFeedback, cellShape }, // data&error are owned f32a.
+                transformExtra: [], // ints
+                transformCallback: [], // function(feedback, cellShape, extra)
+                // handler → transform → sensor:
                 feedback: null, // null | owned f32a.
             })
         }
@@ -53,15 +56,15 @@ export default (function(exports) {
             // (Allows reuse of this object by `_Packet.init({…})`.)
             this.cells = 0
             this.sensorNeedsFeedback = false
-            this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = 0
+            this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = this.noData.length = this.noFeedback.length = 0
             this.input.data && (deallocF32(this.input.data), this.input.data = null)
             this.input.error && (deallocF32(this.input.error), this.input.error = null)
-            this.accumulatorExtra.length = this.accumulatorCallback.length = 0
+            this.transformExtra.length = this.transformCallback.length = 0
             this.feedback && (deallocF32(this.feedback), this.feedback = null)
             const dst = state(this.channel, this.cellShape)
             if (dst.packetCache.length < 64) dst.packetCache.push(this)
         }
-        send(sensor, point, error, noFeedback) {
+        send(sensor, point, error, noData, noFeedback) {
             // `sensor` is a `E.Sensor`.
             //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
             //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
@@ -72,14 +75,17 @@ export default (function(exports) {
             assert(point.length % this.cellSize === 0, "Data must be divided into cells")
             assert(error == null || error instanceof Float32Array, "Error must be null or float32")
             assert(error == null || point.length === error.length, "Error must be per-data-point")
+            const cells = point.length / this.cellSize | 0
             if (!noFeedback) this.sensorNeedsFeedback = true
             this.sensor.push(sensor)
             this.sensorData.push(point)
-            if (error)
-                (this.sensorError || (this.sensorError = []))[this.sensorError.length-1] = error
+            if (error) this.sensorError[this.sensorError.length-1] = error
             this.sensorIndices.push(this.cells)
+            for (let c = 0; c < cells.length; ++c)
+                this.noData.push(!!noData), this.noFeedback.push(!!noFeedback)
             this.cells += point.length / this.cellSize | 0
         }
+        // TODO: How to remove `reward` from cellShape, everywhere?
         static updateMean(a, value, maxHorizon = 32) {
             const n1 = a[0], n2 = n1+1
             a[0] = Math.min(n2, maxHorizon)
@@ -87,7 +93,7 @@ export default (function(exports) {
             if (!isFinite(a[1])) a[0] = a[1] = 0
             return a
         }
-        async handle(mainHandler) { // sensors → accumulators → handlers → accumulators → sensors; `this` must not be used after this call.
+        async handle(mainHandler) { // sensors → transforms → handlers → transforms → sensors; `this` must not be used after this call.
             const T = this, ch = S[T.channel]
             const cellShapeStr = String(T.cellShape)
             const dst = ch.shaped[cellShapeStr]
@@ -109,12 +115,14 @@ export default (function(exports) {
                             T.input.error.fill(-1, at, at + T.sensorData[i].length)
                     }
                 }
-                // Accumulators.
-                for (let i = 0; i < ch.accumulators.length; ++i) {
-                    const a = ch.accumulators[i]
+                // Transforms.
+                for (let i = 0; i < ch.transforms.length; ++i) {
+                    const a = ch.transforms[i]
                     if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function') {
-                        T.accumulatorExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input) : undefined)
-                        T.accumulatorCallback.push(a.onFeedback)
+                        T.transformExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input) : undefined)
+                        T.transformCallback.push(a.onFeedback)
+                        // TODO: ...Can we really not allow transforms to return differently-shaped data/feedback...
+                        //   (If we replace it with a callback, this would be the opportunity to do this.)
                     }
                 }
                 // Handlers.
@@ -124,8 +132,16 @@ export default (function(exports) {
                     T.feedback = null
                 if (mainHandler) {
                     const r = mainHandler.onValues(T.input, T.feedback ? true : false, T.feedback)
+                    // TODO: Don't ever pass in T.feedback, instead have a callback that can accept it.
                     if (r instanceof Promise) await r
                 }
+                if (T.feedback) // Replace no-data cells with their feedback (AKA record actions).
+                    for (let i = 0; i < T.cells; ++i)
+                        if (T.noData[i]) {
+                            const start = T.cellSize * i, end = start + T.cellSize
+                            for (let j = start; j < end; ++j)
+                                T.input.data[j] = T.feedback[j]
+                        }
                 const hs = dst.handlers
                 if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler) {
                     const tmp = allocArray()
@@ -139,10 +155,10 @@ export default (function(exports) {
                     for (let i = 0; i < tmp.length; ++i) await tmp[i]
                     deallocArray(tmp)
                 }
-                // Accumulators.
-                while (T.accumulatorCallback.length) {
-                    const f = T.accumulatorCallback.pop()
-                    if (typeof f == 'function') await f(T.feedback, T.cellShape, T.accumulatorExtra.pop())
+                // Transforms.
+                while (T.transformCallback.length) {
+                    const f = T.transformCallback.pop()
+                    if (typeof f == 'function') await f(T.feedback, T.cellShape, T.transformExtra.pop())
                 }
                 // Sensors.
                 while (T.sensor.length)
@@ -232,14 +248,13 @@ export default (function(exports) {
                 if (ch.mainHandler) return ch.mainHandler.cellShape
                 return ch.cellShapes[0] || null
             }
-            sendCallback(then, values, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
+            sendCallback(then, values = null, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
-                // TODO: Allow `values` to be `null`.
-                assert(values instanceof Float32Array)
+                assert(values === null || values instanceof Float32Array)
                 assert(error === null || error instanceof Float32Array)
-                assert(values.length === this.values, "Data size differs from the one in options")
-                error && assert(values.length === error.length)
+                values && assert(values.length === this.values, "Data size differs from the one in options")
+                error && assert(values && values.length === error.length)
                 const ch = state(this.channel)
                 const removed = Sensor._removed || (Sensor._removed = new Set)
                 for (let i = 0; i < ch.cellShapes.length; ++i) {
@@ -251,11 +266,12 @@ export default (function(exports) {
                         continue
                     }
                     const namer = packetNamer(this, this.dataNamers, cellShape, cellShapeStr)
-                    const flatV = allocF32(namer.namedSize) // TODO: Could be `null`.
+                    const flatV = allocF32(namer.namedSize)
                     const flatE = error ? allocF32(namer.namedSize) : null
+                    if (!values) flatV.fill(0)
                     namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
-                    dst.nextPacket.send(this, flatV, flatE, this.noFeedback) // TODO: Make `flatV` able to be `null` there, and if so, remember that in `.noData` (a sequence of `Uint8Array`s in _Packet, concatenated at data-time).
+                    dst.nextPacket.send(this, flatV, flatE, values === null, this.noFeedback)
                 }
                 if (removed.size) {
                     ch.cellShapes = ch.cellShapes.filter(sh => !removed.has(sh))
@@ -335,7 +351,7 @@ export default (function(exports) {
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
-        - \`rewardName\`: the name of the currently-optimized task, in case accumulators want to change it and inform handlers.
+        - \`rewardName\`: the name of the currently-optimized task, in case transforms want to change it and inform handlers.
         - \`userName\`: the name of the machine that sources data. Makes it possible to reliably distinguish sources.
         - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
         - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default mainly hashes strings in \`rewardName\`/\`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
@@ -343,12 +359,13 @@ export default (function(exports) {
 
 - \`cellShape() → [reward, user, name, data] | null\`: returns the target's cell shape. Note that this may change rarely.
 
-- \`send(values, error = null, reward = 0) → Promise<null|feedback>\`
+- \`send(values = null, error = null, reward = 0) → Promise<null|feedback>\`
     - (Do not override in child classes, only call.)
-    - \`values\`: owned flat data, -1…1 \`Float32Array\`. Do not perform ANY operations on it once called.
+    - \`values\`: \`null\` or owned flat data, -1…1 \`Float32Array\`. Do not perform ANY operations on it once called.
+        - (\`null\` means "feedback only please", meaning, actions.)
         - To mitigate misalignment, try to stick to powers of 2 in all sizes.
         - (Can use \`sn._allocF32(len)\` for efficient reuse.)
-    - \`error\`: can be \`null\` or owned flat data, -1…1 \`Float32Array\` of length \`values.length\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
+    - \`error\`: \`null\` or owned flat data, -1…1 \`Float32Array\` of length \`values.length\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
     - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in your mind? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Either way, it sounds like a proper body.)
         - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
@@ -359,12 +376,12 @@ export default (function(exports) {
 
 - \`needsExtensionAPI() → null|String\`: overridable in child classes. By default, the sensor is entirely in-page in a [content script](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts) if injected by an extension. For example, make this return \`'tabs'\` to get access to [\`chrome.tabs\`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs) in an extension.`,
         }),
-        Accumulator: A(class Accumulator { // TODO: Rename to `Transform`.
+        Transform: A(class Transform {
             constructor(opts) { assert(opts), this.resume(opts) }
             pause() {
                 if (this.paused !== false) return this
                 const ch = state(this.channel)
-                ch.accumulators = ch.accumulators.filter(v => v !== this)
+                ch.transforms = ch.transforms.filter(v => v !== this)
                 this.paused = true
                 return this
             }
@@ -375,7 +392,7 @@ export default (function(exports) {
                     assert(typeof priority == 'number' && priority === priority, "Bad `priority`")
                     assert(onValues == null || typeof onValues == 'function', "Bad `onValues`")
                     assert(onFeedback == null || typeof onFeedback == 'function', "Bad `onFeedback`")
-                    assert(onValues || onFeedback, "Why have an accumulator if it does nothing; pass in either `onValues` or `onFeedback`")
+                    assert(onValues || onFeedback, "Why have a transform if it does nothing? Pass in either `onValues` or `onFeedback`")
                     assert(typeof channel == 'string', "Bad `channel`")
                     Object.assign(this, {
                         paused: true,
@@ -386,8 +403,8 @@ export default (function(exports) {
                     })
                 }
                 if (!this.paused) return this
-                state(this.channel).accumulators.push(this)
-                state(this.channel).accumulators.sort((a,b) => b.priority - a.priority)
+                state(this.channel).transforms.push(this)
+                state(this.channel).transforms.sort((a,b) => b.priority - a.priority)
                 this.paused = false
                 return this
             }
@@ -397,13 +414,13 @@ export default (function(exports) {
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
         - \`onValues({data, error, cellShape}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
-            - \`cellShape: [reward, user, name, data]\`
+            - \`cellShape: [reward, user, name, data]\` // TODO: Remove reward here, and everywhere there's a cell shape…
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
             - Can return a promise.
         - \`onFeedback(feedback, cellShape, extra)\`: can modify \`feedback\` in-place.
             - Can return a promise.
     - Extra flexibility:
-        - \`priority\`: accumulators run in order, highest priority first.
+        - \`priority\`: transforms run in order, highest priority first.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
     - To change any of this, \`pause()\` and recreate.
 
@@ -660,8 +677,8 @@ Those methods return objects (such as arrays) that contain start functions, whic
                 function walk(k, v) {
                     const s = typeof v == 'string' ? JSON.stringify(v) : ''+v
                     if (typeof v == 'function' && s.slice(0,6) === 'class ') { // Bring classes into our `sn` fold.
-                        assert(v instanceof E.Sensor || v instanceof E.Accumulator || v instanceof E.Handler, "Unrecognized class prototype")
-                        const become = 'sn.' + (v instanceof E.Sensor ? 'Sensor' : v instanceof E.Accumulator ? 'Accumulator' : 'Handler')
+                        assert(v instanceof E.Sensor || v instanceof E.Transform || v instanceof E.Handler, "Unrecognized class prototype")
+                        const become = 'sn.' + (v instanceof E.Sensor ? 'Sensor' : v instanceof E.Transform ? 'Transform' : 'Handler')
                         s = s.replace(/\s+extends\s+.+\s+{/, become)
                     }
                     const alreadyPresent = dependencies[k] !== undefined
@@ -979,7 +996,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         if (!S[channel])
             S[channel] = Object.assign(Object.create(null), {
                 sensors: [], // Array<Sensor>, but only those that are called automatically.
-                accumulators: [], // Array<Accumulator>, sorted by priority.
+                transforms: [], // Array<Transform>, sorted by priority.
                 mainHandler: null, // Handler, with max priority.
                 stepsNow: 0, // int
                 giveNextPacketNow: null, // Called when .stepsNow is 0, or on `sensor.send`.
