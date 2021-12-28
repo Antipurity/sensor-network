@@ -126,10 +126,12 @@ export default (function(exports) {
                     const a = ch.transforms[i]
                     if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function')
                         try {
-                            T.transformExtra.push(typeof a.onValues == 'function' ? await a.onValues(T.input) : undefined) // TODO: Don't return promises, instead have a callback.
+                            const extra = await new Promise(then => {
+                                // TODO: With callbacks, also allow differently-sized data (if different, change `T.cells` and `namedSize`).
+                                typeof a.onValues == 'function' ? a.onValues(then, T.input) : then()
+                            })
+                            T.transformExtra.push(extra)
                             T.transformCallback.push(a.onFeedback)
-                            // TODO: ...Can we really not allow transforms to return differently-shaped data/feedback...
-                            //   (If we replace it with a callback, this would be the opportunity to do this.)
                         } catch (err) { console.error(err) }
                 }
                 // Handlers, first main then others.
@@ -138,9 +140,11 @@ export default (function(exports) {
                 else
                     T.feedback = null
                 if (mainHandler)
-                    await new Promise(then => {
-                        mainHandler.onValues(then, T.input, T.feedback)
-                    })
+                    try {
+                        await new Promise(then => {
+                            mainHandler.onValues(then, T.input, T.feedback)
+                        })
+                    } catch (err) { console.error(err) }
                 if (T.feedback) // Replace no-data cells with their feedback (AKA record actions).
                     for (let i = 0; i < T.noDataIndices.length; ++i) {
                         const start = T.cellSize * T.noDataIndices[i], end = start + T.cellSize
@@ -158,7 +162,9 @@ export default (function(exports) {
                             }))
                         }
                     }
-                    for (let i = 0; i < tmp.length; ++i) await tmp[i]
+                    for (let i = 0; i < tmp.length; ++i)
+                        try { await tmp[i] }
+                        catch (err) { console.error(err) }
                     deallocArray(tmp)
                 }
                 // Transforms.
@@ -166,8 +172,10 @@ export default (function(exports) {
                     const f = T.transformCallback.pop()
                     if (typeof f == 'function')
                         try {
-                            await f(T.feedback, T.cellShape, T.transformExtra.pop()) // TODO: Don't return promises, instead have a callback.
-                            // TODO: Actually, make `f` accept `T.input`, which also has .noData and .noFeedback and .partSize. (In docs too.)
+                            await new Promise(then => {
+                                // TODO: With callbacks, also allow returning differently-sized T.feedback (if different, change T.cells and namedSize, asserting that T.cells is now the same as before this transform's manipulations, and that T.input.noData and T.input.noFeedback have length T.cells).
+                                f(then, T.input, T.feedback, T.transformExtra.pop()) // TODO: In docs too.
+                            })
                         } catch (err) { console.error(err) }
                 }
                 // Sensors.
@@ -428,12 +436,13 @@ export default (function(exports) {
 
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
-        - \`onValues({data, error, cellShape, noData, noFeedback}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
+        - \`onValues(then, {data, error, cellShape, partSize, noData, noFeedback}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
+            - ALWAYS do \`then()\`, even on errors.
             - \`cellShape: [user, name, data]\`
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
             - Can return a promise.
-        - \`onFeedback(feedback, cellShape, extra)\`: can modify \`feedback\` in-place. // TODO: Accept the object {data, cellShape, …}, not just the cell shape.
-            - Can return a promise.
+        - \`onFeedback(then, {data, error, cellShape, partSize, noData, noFeedback}, feedback, cellShape, extra)\`: can modify \`feedback\` in-place.
+            - ALWAYS do \`then()\`, even on errors.
     - Extra flexibility:
         - \`priority\`: transforms run in order, highest priority first.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
@@ -487,16 +496,16 @@ export default (function(exports) {
                 return this
             }
         }, {
+            // TODO: …Once everything is callback-based, excise promises from the main loop, to significantly reduce allocations.
             docs:`Given data, gives feedback: is a human or AI model.
 
 - \`constructor({ onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
-    - \`onValues(then, {data, error, cellShape, partSize, noData, noFeedback}, feedback=null)\`: process.
-        - TODO: …Once everything is callback-based, excise promises from the main loop, to significantly reduce allocations.
+    - \`onValues(then, {data, error, cellShape, partSize, noData, noFeedback}, feedback)\`: process.
         - ALWAYS do \`then()\` when done, even on errors.
         - \`feedback\` is available in the one main handler, which should write to it in-place.
             - In other handlers, data of \`noData\` cells will be replaced by feedback.
-        - \`data\` and \`error\` are not owned; do not write. \`error\` and \`feedback\` can be \`null\`s.
         - \`noData\` and \`noFeedback\` are JS arrays, from cell index to boolean.
+        - \`data\` and \`error\` are not owned; do not write. \`error\` and \`feedback\` can be \`null\`s.
     - Cell sizes:
         - \`partSize\`: how many numbers each part in the cell ID takes up, where each string in a name takes up a whole part:
             - \`userParts\`
@@ -647,13 +656,14 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 for (let i = 0; i < bench.length; ++i) { // Benchmark.
                     if (typeof benchFilter != 'function' || benchFilter(bench[i]))
                         try {
-                            currentBenchmark = Object.create(null)
+                            const cb = currentBenchmark = Object.create(null)
                             const stop = bench[i].call()
                             assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
                             _Packet._measureThroughput(true)
                             await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
                             _Packet._measureThroughput(true)
-                            onBenchFinished(benchOwner[i], benchIndex[i], currentBenchmark, (i+1) / bench.length)
+                            currentBenchmark = null
+                            onBenchFinished(benchOwner[i], benchIndex[i], cb, (i+1) / bench.length)
                         } catch (err) { console.error(err) }
                 }
                 if (!bench.length)
