@@ -133,9 +133,11 @@ This allows pretty much any interaction to happen, from simple observation of da
 - ⋯ PyTorch (or NumPy) integration, via easily-comprehensible blocking "gimme more data" and "give more data" functions.
     - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those. (Take a bath in data. Rub it into your eyes.)
 
+- ⋯ A server for nearest-neighbor search. Accept requests: "register/update this ID, with a removal token" (the -1…1 vector label is decided randomly), "remove this ID, given a removal token" (the label still persists), "get up-to-N nearest neighbors, current URL/IP & ID & current label", "update this ID with this suggested vector label" (with an update method that effectively averages inter-user most-recent votes, and slowly nudges the label toward that, notifying the register-ee along the way, removing the ID if not connected). (Connect AI models & humans: train a worldwide AI model collaboratively, and vote with far more detail than democracy can ever hope for.)
+
 - ⋯ If we can somehow find TBs of storage for hosting, create a server that stores all incoming connections to file, and samples from that file when requested, or reads by stream ID.
 
-Isn't implementing this such a joyful learning opportunity?
+Isn't implementing all this such a joyful learning opportunity?
 
 ### JS API
 
@@ -159,6 +161,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - Make handlers accept `noData` and `noFeedback` per-cell u8a as named args.
             - ❌ For convenience, if [`FinalizationRegistry`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry) is present, `.pause()` when the sender is no longer needed. (The only reason for this is use in browser console, which is too iffy to justify such an unreliable functionality. Besides, forcing storage is just annoying when the user wants to fire-and-forget.)
         - ✓ `.Accumulator`:
+            - ⋯ Rename from `Accumulator` to `Transform` to stop confusing people.
             - ✓ `.constructor({ channel=null, priority=0, onValues=null, onFeedback=null })`.
                 - ❌ The options object can be modified after construction.
                 - ✓ Accumulators run highest-priority-first.
@@ -244,22 +247,24 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ In-extension sensors:
                 - ⋯ Time, as sines of exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
                 - ⋯ [Tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`. (Though, if we have bandwidth for that, then we might as well expose some proper programming language and/or rewriting system for direct use.)
+            - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
+            - ⋯ Read from file.
+            - ⋯ In extension, read from tabs.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
                 - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
                 - ⋯ To communicate rewardName/userName/name, fill them with closures, that read from received data.
                 - ⋯ Discourage disengagements: on user disconnect, hold its last cell (now `0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
-            - ⋯ Read from file.
-            - ⋯ In extension, read from tabs.
+            - ⋯ Search: in a distributed database (sync with search-server URL/s if given, updating a few fitting entries on demand), lookup the nearest-neighbor of values' feedback (the label) (must not be linked elsewhere), and connect via read-from-Internet.
         - ⋯ `.Accumulator`:
-            - ⋯ Shuffle blocks.
-            - ⋯ Reward, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
-                - ⋯ By default, make F11/F12 give +1/-1 reward. (Though, these keys are very much used for something else, and we must come up with better keys.)
+            - ⋯ `Reward`, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
+                - ⋯ By default, make Ctrl+Up/Ctrl+Down give +1/-1 reward.
+            - ⋯ `RewardFeedback`, which waits 8 steps to get feedback then calls its function to get the reward. The most natural function is a discriminator between data & feedback, or a simple difference if lazy. (Really empathize with other AI models.)
+                - ⋯ Allow inserting more cells, for discrimination between mechanisms.
+                - ⋯ Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just about getting better and scaling up, right?
             - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name, so that even old and remote data is visualizable.
-            - ⋯ Try "prediction is reward too" meta-learning: replace reward with 8-steps-ago prediction of data by feedback. Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just getting better and scaling up, right?
-            - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send 0s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably). May need UI integration, though.
-                - ⋯ Nearest-neighbor lookup by names, to extract more from less. (Circling-the-drain kind of activity, though: just a worse keyboard.)
-            - ⋯ Once we have something that sounds recognizable, try an echo-state network, and see whether that makes it better or worse.
+            - ⋯ Shuffle blocks.
+            - ⋯ Once we have something that `Sound`s recognizable, try an echo-state network, and see whether that makes it better or worse.
                 - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)
                 - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
                 - (This would have been so much easier if we just had a Neuralink device or an equivalent.)
@@ -267,6 +272,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Name calibration, where each sensor's name can participate, and on uncalibrated `0`-data feedback collect suggestions of what it is, as long as it's opened in this UI.
                 - ⋯ Ability to hold a cell's button to only route its feedback, since it looks like we'll really need to scrounge for human-to-machine bandwidth, and labels won't be enough.
                     - ⋯ And the ability to use in-page keybindings. (Might even be *usable*.)
+            - ❌ Ask the user to rename cells using feedback. (Feedback is value-only, and besides, it's probably inferior to AI translation from meager user data to full feedback, which is already trivially achievable by observing the user, demanding actions, and a handler that defers to an AI model.)
         - ⋯ `.Handler`:
             - ✓ No-feedback sound output (speakers).
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
@@ -274,11 +280,12 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ [Normalize perceived loudness.](https://en.wikipedia.org/wiki/Equal-loudness_contour)
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
-            - ❌ Sound input (microphone). Probably terrible.
-            - ⋯ Write to Internet.
-                - ⋯ Preserve no-feedback-to-this-cell marks.
-            - ⋯ Write to `indexedDB`, with visualization allowing saving it all to a file.
+            - ❌ Sound input (microphone). Probably terrible, especially without an ML model to summarize it.
+            - ⋯ Write to `indexedDB`, with visualization (`option()`?) allowing saving it all to a file.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
+            - ⋯ Write to Internet.
+                - ⋯ Preserve no-data-from-this-cell and no-feedback-to-this-cell marks.
+            - ⋯ Advertise yourself for search (sync with search-server URL/s if given), and when someone connects, write-to-Internet.
         - ⋯ `.defaults()`.
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)

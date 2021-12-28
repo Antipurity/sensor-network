@@ -235,6 +235,7 @@ export default (function(exports) {
             sendCallback(then, values, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
+                // TODO: Allow `values` to be `null`.
                 assert(values instanceof Float32Array)
                 assert(error === null || error instanceof Float32Array)
                 assert(values.length === this.values, "Data size differs from the one in options")
@@ -250,11 +251,11 @@ export default (function(exports) {
                         continue
                     }
                     const namer = packetNamer(this, this.dataNamers, cellShape, cellShapeStr)
-                    const flatV = allocF32(namer.namedSize)
+                    const flatV = allocF32(namer.namedSize) // TODO: Could be `null`.
                     const flatE = error ? allocF32(namer.namedSize) : null
                     namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
-                    dst.nextPacket.send(this, flatV, flatE, this.noFeedback)
+                    dst.nextPacket.send(this, flatV, flatE, this.noFeedback) // TODO: Make `flatV` able to be `null` there, and if so, remember that in `.noData` (a sequence of `Uint8Array`s in _Packet, concatenated at data-time).
                 }
                 if (removed.size) {
                     ch.cellShapes = ch.cellShapes.filter(sh => !removed.has(sh))
@@ -262,7 +263,7 @@ export default (function(exports) {
                     removed.clear()
                 }
                 deallocF32(values), error && deallocF32(error)
-                this.feedbackCallbacks.push(then)
+                this.feedbackCallbacks.push(then) // Called even if no feedback is registered, with `null`.
                 this.feedbackNoFeedback.push(this.noFeedback)
                 this.feedbackNamers.push(this.dataNamers)
                 values && ch.giveNextPacketNow && ch.giveNextPacketNow() // Wake up.
@@ -358,7 +359,7 @@ export default (function(exports) {
 
 - \`needsExtensionAPI() → null|String\`: overridable in child classes. By default, the sensor is entirely in-page in a [content script](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts) if injected by an extension. For example, make this return \`'tabs'\` to get access to [\`chrome.tabs\`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs) in an extension.`,
         }),
-        Accumulator: A(class Accumulator {
+        Accumulator: A(class Accumulator { // TODO: Rename to `Transform`.
             constructor(opts) { assert(opts), this.resume(opts) }
             pause() {
                 if (this.paused !== false) return this
