@@ -45,6 +45,7 @@ export default (function(exports) {
                 noDataIndices: [], // Array<index> where !!noData[index]
                 // transform → handler:
                 input: { data:null, error:null, noData, noFeedback, cellShape, partSize }, // data&error are owned f32a.
+                transformCells: [], // ints
                 transformExtra: [], // ints
                 transformCallback: [], // function(feedback, cellShape, extra)
                 // handler → transform → sensor:
@@ -58,15 +59,16 @@ export default (function(exports) {
         }
         deinit() { // `this` must not be used after this call.
             // (Allows reuse of this object by `_Packet.init(…)`.)
-            this.cells = 0
-            this.sensorNeedsFeedback = false
-            this.sensor.length = this.sensorData.length = this.sensorError.length = this.sensorIndices.length = this.noData.length = this.noFeedback.length = this.noDataIndices.length = 0
-            this.input.data && (deallocF32(this.input.data), this.input.data = null)
-            this.input.error && (deallocF32(this.input.error), this.input.error = null)
-            this.transformExtra.length = this.transformCallback.length = 0
-            this.feedback && (deallocF32(this.feedback), this.feedback = null)
-            const dst = state(this.channel, this.cellShape, this.partSize, this.summary)
-            if (dst.packetCache.length < 64) dst.packetCache.push(this)
+            const T = this
+            T.cells = 0
+            T.sensorNeedsFeedback = false
+            T.sensor.length = T.sensorData.length = T.sensorError.length = T.sensorIndices.length = T.noData.length = T.noFeedback.length = T.noDataIndices.length = 0
+            T.input.data && (deallocF32(T.input.data), T.input.data = null)
+            T.input.error && (deallocF32(T.input.error), T.input.error = null)
+            T.transformCells.length = T.transformExtra.length = T.transformCallback.length = 0
+            T.feedback && (deallocF32(T.feedback), T.feedback = null)
+            const dst = state(T.channel, T.cellShape, T.partSize, T.summary)
+            if (dst.packetCache.length < 64) dst.packetCache.push(T)
         }
         send(sensor, point, error, noData, noFeedback) {
             // `sensor` is a `E.Sensor`.
@@ -126,17 +128,35 @@ export default (function(exports) {
                     const a = ch.transforms[i]
                     if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function')
                         try {
+                            const prevCells = T.cells
                             const extra = await new Promise(then => {
-                                // TODO: With callbacks, also allow differently-sized data (if different, change `T.cells` and `namedSize`).
-                                typeof a.onValues == 'function' ? a.onValues(then, T.input) : then()
+                                typeof a.onValues == 'function' ? a.onValues((extra, nextData, nextError) => {
+                                    if (nextData && nextData !== T.input.data) {
+                                        assert(nextData instanceof Float32Array)
+                                        assert(nextData.length % T.cellSize === 0, "Bad data size")
+                                        if (T.input.error) {
+                                            assert(nextError instanceof Float32Array)
+                                            assert(nextData.length === nextError.length, "Data and error lengths differ")
+                                        } else assert(!nextError)
+                                        const nextCells = nextData.length / T.cellSize | 0
+                                        assert(T.input.noData.length === nextCells, "Must resize `noData` too")
+                                        assert(T.input.noFeedback.length === nextCells, "Must resize `noFeedback` too")
+                                        T.cells = nextCells
+                                        deallocF32(T.input.data), T.input.data = nextData
+                                        if (T.input.error)
+                                            deallocF32(T.input.error), T.input.error = nextError
+                                    } else if (!nextData) assert(!nextError)
+                                    then(extra)
+                                }, T.input) : then()
                             })
+                            T.transformCells.push(prevCells)
                             T.transformExtra.push(extra)
                             T.transformCallback.push(a.onFeedback)
                         } catch (err) { console.error(err) }
                 }
                 // Handlers, first main then others.
                 if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
-                    T.feedback = allocF32(namedSize), T.feedback.set(T.input.data)
+                    T.feedback = allocF32(T.cells * T.cellSize), T.feedback.set(T.input.data)
                 else
                     T.feedback = null
                 if (mainHandler)
@@ -169,12 +189,24 @@ export default (function(exports) {
                 }
                 // Transforms.
                 while (T.transformCallback.length) {
+                    const prevCells = T.transformCells.pop()
+                    const extra = T.transformExtra.pop()
                     const f = T.transformCallback.pop()
                     if (typeof f == 'function')
                         try {
                             await new Promise(then => {
-                                // TODO: With callbacks, also allow returning differently-sized T.feedback (if different, change T.cells and namedSize, asserting that T.cells is now the same as before this transform's manipulations, and that T.input.noData and T.input.noFeedback have length T.cells).
-                                f(then, T.input, T.feedback, T.transformExtra.pop()) // TODO: In docs too.
+                                f((extra, nextFeedback) => {
+                                    if (!T.feedback) assert(!nextFeedback)
+                                    if (nextFeedback && nextFeedback !== T.feedback) {
+                                        assert(nextFeedback instanceof Float32Array)
+                                        assert(nextFeedback.length === prevCells * T.cellSize, "Feedback's length differs from data's")
+                                        assert(T.input.noData.length === prevCells, "Must resize `noData` back too")
+                                        assert(T.input.noFeedback.length === prevCells, "Must resize `noFeedback` back too")
+                                        T.cells = prevCells
+                                        deallocF32(T.feedback), T.feedback = nextFeedback
+                                    }
+                                    then(extra)
+                                }, T.input, T.feedback, extra)
                             })
                         } catch (err) { console.error(err) }
                 }
@@ -183,7 +215,7 @@ export default (function(exports) {
                     try {
                         gotPacketFeedback(T.sensor.pop(), T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape, T.partSize, T.summary)
                     } catch (err) { console.error(err) }
-                _Packet._handledBytes = (_Packet._handledBytes || 0) + namedSize * 4
+                _Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                 T.deinit()
             } finally {
                 // Self-reporting.
@@ -221,8 +253,6 @@ export default (function(exports) {
                 // Pause if no destinations, or no sources & no data to send.
                 if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
                     return dst.msPerStep[0] = dst.msPerStep[1] = 0, dst.looping = false
-                await Promise.resolve() // Wait a bit.
-                //   (Also, commenting this out halves Firefox throughput.)
                 // Send it off.
                 const nextPacket = dst.nextPacket
                 dst.nextPacket = _Packet.init(channel, cellShape, partSize, summary)
@@ -237,10 +267,9 @@ export default (function(exports) {
                 if (needToWait > 0 || now - prevWait > 100 || !cells) {
                     await new Promise(then => {
                         if (now - prevWait <= 100) ch.giveNextPacketNow = then
-                        setTimeout(then, !cells ? 500 : Math.max(needToWait, 0))
+                        setTimeout(() => { prevWait = performance.now(), then() }, !cells ? 500 : Math.max(needToWait, 0))
                     })
                     ch.giveNextPacketNow = null
-                    prevWait = performance.now()
                 }
             }
         }
@@ -436,13 +465,15 @@ export default (function(exports) {
 
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
-        - \`onValues(then, {data, error, cellShape, partSize, noData, noFeedback}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
-            - ALWAYS do \`then()\`, even on errors.
+        - \`onValues(then, {data, error, noData, noFeedback, cellShape, partSize}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
+            - ALWAYS do \`then(extra, …)\`, even on errors. \`extra\` will be seen by \`onFeedback\` if specified.
+                - To resize \`data\` and possibly \`error\`, pass the next version (\`._allocF32(len)\`) to \`then(extra, data2)\` or \`then(extra, data2, error2)\`; also resize \`noData\` and \`noFeedback\`; do not deallocate arguments.
             - \`cellShape: [user, name, data]\`
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
-            - Can return a promise.
-        - \`onFeedback(then, {data, error, cellShape, partSize, noData, noFeedback}, feedback, cellShape, extra)\`: can modify \`feedback\` in-place.
+            - \`noData\` and \`noFeedback\` are JS arrays, from cell index to boolean.
+        - \`onFeedback(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback, extra)\`: can modify \`feedback\` in-place.
             - ALWAYS do \`then()\`, even on errors.
+                - To resize \`data\` and possibly \`error\`, pass the next version (\`._allocF32(len)\`) to \`then(extra, data2)\` or \`then(extra, data2, error2)\`; do not deallocate arguments.
     - Extra flexibility:
         - \`priority\`: transforms run in order, highest priority first.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
@@ -500,7 +531,7 @@ export default (function(exports) {
             docs:`Given data, gives feedback: is a human or AI model.
 
 - \`constructor({ onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
-    - \`onValues(then, {data, error, cellShape, partSize, noData, noFeedback}, feedback)\`: process.
+    - \`onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback)\`: process.
         - ALWAYS do \`then()\` when done, even on errors.
         - \`feedback\` is available in the one main handler, which should write to it in-place.
             - In other handlers, data of \`noData\` cells will be replaced by feedback.
