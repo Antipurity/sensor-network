@@ -22,7 +22,7 @@ Extra options:
 ` }
         pause() {
             this._nextTarget && this._nextTarget.pause()
-            super.pause()
+            return super.pause()
         }
         resume(opts) {
             if (opts) {
