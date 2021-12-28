@@ -103,13 +103,21 @@ export default (function(exports) {
             return a
         }
         // TODO: Excise promises from the main loop, to significantly reduce allocations.
-        //   TODO: Split `handle` into many stages. Make the constructor bind `this`. Preserve all state on `this`.
-        //     ...Okay, but, any more details?...
-        //     State that we are lacking (from local variables of `handle`):
-        //       ch, dst, start, namedSize, benchAtStart.
-        //       And variables that go across `await`s:
-        //         "Transform"'s i, prevCells; "other handler"'s i (and the callback-counter for knowing when all handlers have returned); "reverse transform"'s prevCells.
-        //     TODO: Write down the exact stages and what they do. (Callbacks call the next stage.)
+        //   TODO: Split `handle` into 4 stages, bound to `this` by the constructor. They are (all callbacks go to the next stage):
+        //     1: Process the first/next transform.
+        //       When first entering, init variables and concat sensor data/error.
+        //       First process next data/error, then go to the next transform. If first entering, only process data/error; if last entering, don't go to the next transform (but to the next stage).
+        //     2: Set up feedback, and call the main handler.
+        //     3: Replace no-data cells with feedback, set up the non-main-handlers counter, then call all non-main handlers at once.
+        //     4: Decrement the handlers counter, and when it hits 0, reverse the transform:
+        //       First process next feedback, then go to the next reverse-transform. If first entering, only process; if last entering, don't go to the next reverse-transform.
+        //       When last leaving:
+        //         While there's a sensor-feedback-spot, give it feedback all at once (`gotPacketFeedback`).
+        //           When done, finalize: add memory to the counter, deinit, self-report.
+        //   TODO: Have state on `this`:
+        //     ch, dst, start, namedSize, benchAtStart.
+        //     And variables that go across `await`s:
+        //       "Transform"'s i, prevCells; "other handler"'s i (and the callback-counter for knowing when all handlers have returned); "reverse transform"'s prevCells.
         //   TODO: Split `handleLoop` into many stages. Make the constructor bind `this` for each instance. Preserve all state on `this`.
         async handle(mainHandler) { // sensors → transforms → handlers → transforms → sensors; `this` must not be used after this call.
             const T = this, ch = S[T.channel]
