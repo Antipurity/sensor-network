@@ -1,7 +1,8 @@
 import './yamd5.js'
 import Sound from './src/handler-sound.js'
-import Video from './src/video.js'
+import Video from './src/sensor-video.js'
 import Time from './src/sensor-time.js'
+import Reward from './src/transform-reward.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -142,14 +143,14 @@ export default (function(exports) {
                         }
                         ++dst.stepsNow
                     } T.stage = 1;  case 1: { // Go over transforms in order.
-                        const i = T.transformI
-                        if (i < ch.transforms.length) {
-                            const a = ch.transforms[i]
+                        if (T.transformI < ch.transforms.length) {
+                            const a = ch.transforms[T.transformI]
                             if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function')
                                 try {
                                     T.prevCells = T.cells
                                     T.transformCallback.push(a.onFeedback)
                                     T.stage = 9
+                                    ++T.transformI
                                     if (typeof a.onValues == 'function')
                                         return a.onValues(T.handleStateMachine, T.input)
                                     else
@@ -510,7 +511,7 @@ export default (function(exports) {
 
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
-        - \`onValues(then, {data, error, noData, noFeedback, cellShape, partSize}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
+        - \`onValues(then, {data, error, noData, noFeedback, cellShape, partSize})\`: can modify \`data\` and the optional \`error\` in-place.
             - ALWAYS do \`then(extra, …)\`, at the end, even on errors. \`extra\` will be seen by \`onFeedback\` if specified.
                 - To resize \`data\` and possibly \`error\`, pass the next version (\`._allocF32(len)\`) to \`then(extra, data2)\` or \`then(extra, data2, error2)\`; also resize \`noData\` and \`noFeedback\`; do not deallocate arguments.
             - \`cellShape: [user, name, data]\`
@@ -1020,6 +1021,9 @@ Makes only the sign matter for low-frequency numbers.` }),
     Object.assign(E.Sensor, {
         Video: Video(E),
         Time: Time(E),
+    })
+    Object.assign(E.Transform, {
+        Reward: Reward(E),
     })
     Object.assign(E.Handler, {
         Sound: Sound(E),

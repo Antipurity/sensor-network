@@ -385,5 +385,5 @@ For performance, max width is 1024 by default; pass in 0 or something else if ne
 
 The result is usable as the \`source\` option for \`Video\`.`,
         })
-    }) // TODO: Why did we not set `Video`'s docs?!
+    })
 }
