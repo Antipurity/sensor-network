@@ -111,7 +111,6 @@ In Chrome, users might have to first click on the page for sound to play.
                     const to = new Sound({
                         volume: .01,
                     })
-                    // TODO: Investigate why sound appears to receive way too much data.
                     return function stop() {
                         froms.forEach(from => from.pause()), to.pause()
                         removeEventListener('pointerdown', changeLoud)

@@ -184,6 +184,7 @@ export default (function(exports) {
                                 if (hs[i] !== T.mainHandler && typeof hs[i].onValues == 'function')
                                     try { hs[i].onValues(T.handleStateMachine, T.input) }
                                     catch (err) { console.error(err) }
+                            return
                         } else { T.stage = 6;  continue }
                     } T.stage = 5;  case 5: { // Wait for all non-main handlers.
                         if (--T.handlersLeft) return
@@ -208,7 +209,9 @@ export default (function(exports) {
                         _Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                         _Packet.stepsEnded = (_Packet.stepsEnded || 0) + 1
                         if (T.benchAtStart === currentBenchmark) {
-                            const duration = (dst.lastUsed = performance.now()) - T.handleStart
+                            let duration = (dst.lastUsed = performance.now()) - T.handleStart
+                            if (dst.msPerStep[0]) // Prevent "overeager scheduling of steps makes them interfere with each other, causing overestimation of ms-per-step".
+                                duration = Math.min(duration, 1.1 * dst.msPerStep[1])
                             _Packet.updateMean(dst.msPerStep, duration)
                             E.meta.metric('simultaneous steps', ch.stepsNow+1)
                             E.meta.metric('step processed data, values', T.cells * T.cellSize)
