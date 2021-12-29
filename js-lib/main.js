@@ -1,6 +1,7 @@
 import './yamd5.js'
 import Sound from './src/handler-sound.js'
 import Video from './src/video.js'
+import Time from './src/sensor-time.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -342,6 +343,7 @@ export default (function(exports) {
             sendCallback(then, values = null, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
+                assert(then === null || typeof then == 'function')
                 assert(values === null || values instanceof Float32Array)
                 assert(error === null || error instanceof Float32Array)
                 values && assert(values.length === this.values, "Data size differs from the one in options")
@@ -439,6 +441,8 @@ export default (function(exports) {
 
 - \`constructor({ name, values, onValues=null, channel='', noFeedback=false, userName=[], emptyValues=0, hasher=… })\`
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
+    - \`values\`: how many -1…1 numbers this sensor exposes.
+        - Usually a good idea to keep this to powers-of-2, and squares. Such as 64.
     - \`onValues(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
         - To run faster, use \`sensor.sendCallback(fn(feedback), data, …)\` with a static function.
     - Extra flexibility:
@@ -447,7 +451,7 @@ export default (function(exports) {
         - \`userName\`: the name of the machine that sources data. Makes it possible to reliably distinguish sources.
         - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
         - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default mainly hashes strings in \`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
-    - To change any of this, \`pause()\` and recreate.
+    - To change any of this, \`pause()\` and \`resume({…})\`.
 
 - \`cellShape() → [user, name, data] | null\`: returns the target's cell shape. Note that this may change rarely.
 
@@ -518,7 +522,7 @@ export default (function(exports) {
     - Extra flexibility:
         - \`priority\`: transforms run in order, highest priority first.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
-    - To change any of this, \`pause()\` and recreate.
+    - To change any of this, \`pause()\` and \`resume({…})\`.
 
 - \`pause()\`, \`resume()\`: for convenience, these return the object.`,
         }),
@@ -586,6 +590,7 @@ export default (function(exports) {
         - \`noFeedback\`: can't provide feedback if \`true\`, only observe it.
         - \`priority\`: the highest-priority handler without \`noFeedback\` will be the *main* handler, and give feedback.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
+    - To change any of this, \`pause()\` and \`resume({…})\`.
 
 - \`pause()\`, \`resume()\`: for convenience, these return the object.`,
             bench() {
@@ -1014,6 +1019,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     // And set the most-common modules.
     Object.assign(E.Sensor, {
         Video: Video(E),
+        Time: Time(E),
     })
     Object.assign(E.Handler, {
         Sound: Sound(E),
@@ -1069,9 +1075,9 @@ Makes only the sign matter for low-frequency numbers.` }),
                 const flatV = allocF32(data.length)
                 const namer = packetNamer(T, namers, cellShape, partSize, summary)
                 namer.unname(allFeedback, fbOffset, flatV)
-                then(flatV, T)
+                then && then(flatV, T)
             } else
-                then(null)
+                then && then(null)
         } finally { deallocF32(data), error && deallocF32(error) }
     }
     function packetNamer(T, dataNamers, cellShape, partSize, summary) {

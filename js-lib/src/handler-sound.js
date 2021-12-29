@@ -63,7 +63,7 @@ export default function init(sn) {
     }
 
     return class Sound extends sn.Handler {
-        docs() { return `Exposes data as sound, for humans to listen.
+        static docs() { return `Exposes data as sound, for humans to listen.
 
 In Chrome, users might have to first click on the page for sound to play.
 
@@ -85,7 +85,7 @@ In Chrome, users might have to first click on the page for sound to play.
                 this.nameImportance = opts.nameImportance !== undefined ? opts.nameImportance : .5
                 this.debug = opts.debug
             }
-            super.resume(opts)
+            return super.resume(opts)
         }
         onlyIfNoExtension() { return true }
         static bench() {

@@ -2,7 +2,7 @@ export default function init(sn) {
     const A = Object.assign
     const _tab = {}
     return A(class Video extends sn.Sensor {
-        docs() { return `A sequence of images.
+        static docs() { return `A sequence of images.
 
 Images are divided into [small patches, which has mostly been shown to work well in ML.](https://en.wikipedia.org/wiki/Vision_transformer)
 
@@ -79,7 +79,7 @@ Extra options:
                     !zoomSteps ? -1 : (...args) => Math.min(Math.log2(xyz(...args).zoom) / 5 - 1, 1),
                 ]
             }
-            super.resume(opts)
+            return super.resume(opts)
         }
 
         static bench() {
@@ -366,7 +366,7 @@ The result is usable as the \`source\` option for \`Video\`.`,
         }, {
             docs:`[Requests a screen/window/tab stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
 
-For performance, max width is 1024 by default; pass in something else if needed.
+For performance, max width is 1024 by default; pass in 0 or something else if needed.
 
 The result is usable as the \`source\` option for \`Video\`.`,
         }),
@@ -381,9 +381,9 @@ The result is usable as the \`source\` option for \`Video\`.`,
         }, {
             docs:`[Requests a camera stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
 
-For performance, max width is 1024 by default; pass in something else if needed.
+For performance, max width is 1024 by default; pass in 0 or something else if needed.
 
 The result is usable as the \`source\` option for \`Video\`.`,
         })
-    })
+    }) // TODO: Why did we not set `Video`'s docs?!
 }
