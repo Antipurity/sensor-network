@@ -417,7 +417,8 @@ export default (function(exports) {
                 const nextPacket = dst.nextPacket
                 dst.nextPacket = _Packet.init(channel, cellShape, partSize, summary)
                 const cells = nextPacket.cells
-                nextPacket.mainHandler = mainHandler, nextPacket.handleStateMachine()
+                nextPacket.mainHandler = mainHandler, nextPacket.handleStateMachine() // TODO:
+                // nextPacket.mainHandler = mainHandler, nextPacket.handle()
                 // Benchmark throughput if needed.
                 _Packet._measureThroughput()
                 // Don't do it too often.
@@ -844,7 +845,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 const benchOwner = []
                 walk(E) // Get benchmarks.
                 for (let i = 0; i < bench.length; ++i) { // Benchmark.
-                    if (typeof benchFilter != 'function' || benchFilter(bench[i]))
+                    if (typeof benchFilter != 'function' || benchFilter(benchOwner[i]))
                         try {
                             const cb = currentBenchmark = Object.create(null)
                             const stop = bench[i].call()

@@ -53,8 +53,16 @@
         </div>
       </div>
       <br>
-      <button style="width:100%" id=bench-button>Run all benchmarks</button>
+      <button style="width:100%" id=bench-button>Run benchmarks</button>
       <br>
+      <div class="hiding isHiding">
+        <div class=hidingSurface></div>
+        <span class=hidingMarker>▶</span>
+        Which benchmarks
+        <div class="hidable" style="height:0px">
+          <div id=bench-enabling></div>
+        </div>
+      </div>
       Before running, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/now">disable reduced time precision</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory">don't use Firefox to measure memory</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/setTimeout">and keep the tab open (in Chromium, must not be obscured by a full-screen window)</a>.<br>
       When running for
       <select id=sec-per-benchmark>
@@ -69,8 +77,7 @@
         <option value="median">Median</option>
         <option value="all">Distribution</option>
       </select>
-      <div id=bench>
-      </div>
+      <div id=bench></div>
       <div id=bench-progress></div>
     </div>
   </div>
@@ -133,6 +140,7 @@
       },
       all(a) { return a },
     }
+    const benchDisabled = new Map
     let benchProgressStream = { start:performance.now(), events:[] }
     document.getElementById('bench-button').onclick = runBenchmarks
     document.getElementById('bench-reporting').oninput = function() { // Clear & re-plot.
@@ -141,6 +149,7 @@
       for (let lbl of display(plots)) display(plots, lbl, undefined)
       for (let a of prev.events) onBenchProgress(...a)
     }
+    collectBenchmarks()
     function onBenchProgress(obj, id, got, progress) { // Remember & plot.
       const plots = document.getElementById('bench')
       const progressElem = document.getElementById('bench-progress')
@@ -159,6 +168,25 @@
           display(plots, lbl, typeof result == 'number' ? round(result) : result)
         }
     }
+    async function collectBenchmarks() { // Create checkboxes, which allow disabling some benchmarks.
+      const objs = new Set
+      await sn.meta.bench(+document.getElementById('sec-per-benchmark').value, obj => void objs.add(obj))
+      const el = document.getElementById('bench-enabling')
+      objs.forEach(obj => {
+        const name = ''+obj.name, id = 'genesgnnienigrngtr' + name
+        const div = document.createElement('div')
+        const check = document.createElement('input')
+        check.id = id
+        check.type = 'checkbox'
+        check.checked = true
+        check.onchange = () => benchDisabled.set(obj, !check.checked)
+        const label = document.createElement('label')
+        label.htmlFor = id
+        label.append(name)
+        div.append(check), div.append(label)
+        el.append(div)
+      })
+    }
     async function runBenchmarks() {
       const plots = document.getElementById('bench')
       const progressElem = document.getElementById('bench-progress')
@@ -166,7 +194,8 @@
       progressElem.textContent = '0% done'
       benchProgressStream = { start:performance.now(), events:[] }
       this.disabled = true
-      await sn.meta.bench(+document.getElementById('sec-per-benchmark').value, obj => true, onBenchProgress)
+      const filter = obj => !benchDisabled.get(obj)
+      await sn.meta.bench(+document.getElementById('sec-per-benchmark').value, filter, onBenchProgress)
       this.disabled = false
     }
     function round(x) { return Math.round(x*100) / 100 }
