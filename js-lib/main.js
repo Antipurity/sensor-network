@@ -36,7 +36,7 @@ export default (function(exports) {
                 partSize,
                 ch: state(channel),
                 dst: state(channel, cellShape, partSize, summary),
-                // `handle` state-machine state:
+                // `handleStateMachine` state:
                 stage: 0,
                 mainHandler: null,
                 handleStart: 0,
@@ -120,7 +120,6 @@ export default (function(exports) {
         handleStateMachine(A,B,C) {
             // sensors → transforms → handlers → transforms → sensors
             // When first called by `handleLoop`, takes ownership of `this`.
-            // TODO: Test that this works.
             const T = this, ch = T.ch, dst = T.dst
             if (!ch.shaped[T.summary]) return
             while (true)
@@ -209,7 +208,7 @@ export default (function(exports) {
                         _Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
                         _Packet.stepsEnded = (_Packet.stepsEnded || 0) + 1
                         if (T.benchAtStart === currentBenchmark) {
-                            const duration = (dst.lastUsed = performance.now()) - start
+                            const duration = (dst.lastUsed = performance.now()) - T.handleStart
                             _Packet.updateMean(dst.msPerStep, duration)
                             E.meta.metric('simultaneous steps', ch.stepsNow+1)
                             E.meta.metric('step processed data, values', T.cells * T.cellSize)
@@ -415,7 +414,7 @@ export default (function(exports) {
                 const nextPacket = dst.nextPacket
                 dst.nextPacket = _Packet.init(channel, cellShape, partSize, summary)
                 const cells = nextPacket.cells
-                nextPacket.mainHandler = mainHandler, nextPacket.handle()
+                nextPacket.mainHandler = mainHandler, nextPacket.handleStateMachine()
                 // Benchmark throughput if needed.
                 _Packet._measureThroughput()
                 // Don't do it too often.
@@ -1218,7 +1217,7 @@ Makes only the sign matter for low-frequency numbers.` }),
             })
         const ch = S[channel]
         if (cellShape == null) return ch
-        if (!ch.shaped[summary])
+        if (!ch.shaped[summary]) {
             ch.shaped[summary] = {
                 partSize,
                 looping: false,
@@ -1226,9 +1225,12 @@ Makes only the sign matter for low-frequency numbers.` }),
                 msPerStep: [0,0], // [n, mean]
                 cellShape, // [user, name, data]
                 handlers: [], // Array<Handler>, sorted by priority.
-                nextPacket: new _Packet(channel, cellShape, partSize, summary),
+                nextPacket: null,
                 packetCache: [], // Array<_Packet>
-            }, ch.cellShapes.push({cellShape, partSize, summary})
+            }
+            ch.shaped[summary].nextPacket = new _Packet(channel, cellShape, partSize, summary)
+            ch.cellShapes.push({cellShape, partSize, summary})
+        }
         return ch.shaped[summary]
     }
 })(Object.create(null))
