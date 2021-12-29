@@ -263,8 +263,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Search: in a distributed database (sync with search-server URL/s if given, updating a few fitting entries on demand), lookup the nearest-neighbor of values' feedback (the label) (must not be linked elsewhere), and connect via read-from-Internet.
             - ⋯ In-extension [tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`. (Though, if we have bandwidth for that, then we might as well expose some proper programming language and/or rewriting system for direct use.)
         - ⋯ `.Transform`:
-            - ⋯ `Reward`, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
-                - ⋯ By default, make Ctrl+Up/Ctrl+Down give +1/-1 reward.
+            - ✓ `Reward`, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
+                - ✓ By default, make Ctrl+Up/Ctrl+Down give +1/-1 reward.
             - ⋯ `RewardFeedback`, which waits 8 steps to get feedback then calls its function to get the reward. The most natural function is a discriminator between data & feedback, or a simple difference if lazy. (Really empathize with other AI models.)
                 - ⋯ Allow inserting more cells, for discrimination between mechanisms.
                 - ⋯ Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just about getting better and scaling up, right?
@@ -278,9 +278,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - TODO: So what do we do next?
                 - If easiest-first:
-                    - Reward, keyboard, pointers, options, `indexedDB` files.
+                    - Keyboard, pointers, options, text, `indexedDB` files.
                 - If most-important-first:
-                    - Files, options, pointers, keyboard, audio, reward.
+                    - Files, options, pointers, keyboard, text, audio.
             - ✓ No-feedback sound output (speakers).
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
                     - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)

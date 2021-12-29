@@ -1,12 +1,10 @@
 export default function init(sn) {
-    return class Reward extends sn.Transform {
-        static docs() { return `// TODO: 
+    const A = Object.assign
+    return A(class Reward extends sn.Transform {
+        static docs() { return `Sets reward for all cells unless already set.
 
-
-
-
-
-
+Options:
+- \`reward = Reward.keybindings('Ctrl+ArrowUp', 'Ctrl+ArrowDown')\`: the function that, given nothing, will return the reward each frame, -1…1.
 ` }
         resume(opts) {
             if (opts) {
@@ -28,14 +26,10 @@ export default function init(sn) {
                         data[i] = R
             } finally { then() }
         }
-        // TODO: Test.
-        //   TODO: Does it work?
-        // TODO: Fill `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
-        // TODO: By default, make Ctrl+ArrowUp/Ctrl+ArrowDown give +1/-1 reward.
-        //   `static keybindings(upKey='Ctrl+Up', downKey='Ctrl+Up')`
-        //   https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
-        static keybindings(upKey = 'Ctrl+ArrowUp', downKey = 'Ctrl+ArrowUp') {
+    }, {
+        keybindings: A(function keybindings(upKey = 'Ctrl+ArrowUp', downKey = 'Ctrl+ArrowDown') {
             // Reward: +1 while `upKey` is held, -1 while `downKey` is held (0 when both).
+            sn._assert(upKey !== downKey)
             upKey = parseKey(upKey), downKey = parseKey(downKey)
             const passive = {passive:true}
             let lastListen = 0, attached = false, up = false, down = false
@@ -53,18 +47,20 @@ export default function init(sn) {
                 return r
             }
             function onKeyDown(evt) {
-                if (evt.key === upKey[0]) {
+                if (evt.key === upKey[0] && !evt.repeat) {
                     let ok = true
                     for (let i = 1; i < upKey.length; ++i) if (!evt[upKey[i]]) ok = false
                     if (ok) up = true
                 }
-                if (evt.key === downKey[0]) {
+                if (evt.key === downKey[0] && !evt.repeat) {
                     let ok = true
                     for (let i = 1; i < downKey.length; ++i) if (!evt[downKey[i]]) ok = false
                     if (ok) down = true
                 }
             }
             function onKeyUp(evt) {
+                // (Modifiers are only important when the key starts being held.)
+                //   (Release the modifier but hold the key, and nothing will change.)
                 if (evt.key === upKey[0]) up = false
                 if (evt.key === downKey[0]) down = false
             }
@@ -84,6 +80,11 @@ export default function init(sn) {
                 removeEventListener('keyup', onKeyUp, passive)
                 clearInterval(unlistener), unlistener = null
             }
-        }
-    }
+        }, {
+            docs:`The human has access to 2 buttons: +1 reward and -1 reward.
+
+By default, 'Ctrl+ArrowUp' is +1, 'Ctrl+ArrowDown' is -1. [Can use other keybindings.](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values)
+`,
+        }),
+    })
 }
