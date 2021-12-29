@@ -249,7 +249,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ No in-page feedback, in Chrome (Firefox doesn't seem to care as much about direct hardware access, nor about direct performance):
                     - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1..1.
                     - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
-            - ⋯ System resources, if exposed: `m=performance.memory`, `m.usedJSHeapSize / m.totalJSHeapSize * 2 - 1`.
+            - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ In-extension sensors:
                 - ⋯ Time, as sines of exponentially increasing frequency, with 100FPS as the most-frequent-wave-period.
                 - ⋯ [Tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`. (Though, if we have bandwidth for that, then we might as well expose some proper programming language and/or rewriting system for direct use.)
@@ -268,18 +268,20 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ `RewardFeedback`, which waits 8 steps to get feedback then calls its function to get the reward. The most natural function is a discriminator between data & feedback, or a simple difference if lazy. (Really empathize with other AI models.)
                 - ⋯ Allow inserting more cells, for discrimination between mechanisms.
                 - ⋯ Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just about getting better and scaling up, right?
-            - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name, so that even old and remote data is visualizable.
+            - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name (by turning names into byte-strings, and pre-constructing regexes from sensors' names), so that even old and remote data is visualizable.
+                - ⋯ `Visualize.all()({data, cellShape})`, which returns a `<canvas>` on which green=1 black=0 red=-1 4×4 pixels are drawn, with empty pixels between reward/user/name and data.
             - ⋯ Shuffle blocks.
-            - ⋯ Once we have something that `Sound`s recognizable, try an echo-state network, and see whether that makes it better or worse.
+            - ⋯ Try an echo-state network, and see whether that makes `Sound` better or worse.
                 - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)
                 - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
-                - (This would have been so much easier if we just had a Neuralink device or an equivalent.)
-            - ⋯ Extension-oriented, mainly-for-visualization things:
-                - ⋯ Name calibration, where each sensor's name can participate, and on uncalibrated `0`-data feedback collect suggestions of what it is, as long as it's opened in this UI.
-                - ⋯ Ability to hold a cell's button to only route its feedback, since it looks like we'll really need to scrounge for human-to-machine bandwidth, and labels won't be enough.
-                    - ⋯ And the ability to use in-page keybindings. (Might even be *usable*.)
-            - ❌ Ask the user to rename cells using feedback. (Feedback is value-only, and besides, it's probably inferior to AI translation from meager user data to full feedback, which is already trivially achievable by observing the user, demanding actions, and a handler that defers to an AI model.)
+            - ❌ Ask the user to rename cells using feedback. (Feedback is value-only, and besides, it's probably inferior to AI translation from meager user data to full feedback, which is already trivially achievable by observing the user, demanding actions, and a handler that defers to an AI model. BMI? Pfft, AI translation is superior.)
         - ⋯ `.Handler`:
+            - TODO: Time next.
+            - TODO: So what do we do next?
+                - If easiest-first:
+                    - Reward, time, keyboard, pointers, options, `indexedDB` files.
+                - If most-important-first:
+                    - Files, time, options, pointers, keyboard, reward.
             - ✓ No-feedback sound output (speakers).
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
                     - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)
@@ -293,6 +295,10 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Take on the remote cellShape and partSize.
                 - ⋯ Preserve no-data-from-this-cell and no-feedback-to-this-cell arrays.
             - ⋯ Advertise yourself for search (sync with search-server URL/s if given), and when someone connects, write-to-Internet.
+            - ⋯ Research AI translation, from human observations to rewardable actions. [Just-reward is most general task description](https://deepmind.com/research/publications/2021/Reward-is-Enough), and an endless complexity of ways to hopefully align with future rewards, broadly falling into prediction or uncertainty-maximization (getting more data to predict). The age-old question: can specifics be learned from the general description? [Probably](http://www.incompleteideas.net/IncIdeas/BitterLesson.html), but how to best do it? In the sensor network, each cell has its own reward so that the model can learn many tasks at once, and distill many AI models (and humans, and anything else) into one. Basically, for a good prior: should perform max-reward filling of non-`noFeedback` cells, while also predicting non-`noData` cells with a slightly-different cell-name, so that actions are as-data-does first and well-adapted second. (Easy to implement, hard to implement well. But nothing is created perfect, and all we can do is improve: the better the model, the more humans use it and trust it and the more well-pointed their observations and rewards are, which means "the better the model, the faster it improves", which means "exponential progress", which means that any level of performance is practically reachable.)
+                - (A personal AI model is basically soft mind uploading, realistically-gradual rather than instantly-perfect. The only real obstacle is that a typical PC doesn't have the compute to run some massive AI model full-time. But AI-training increases in efficiency rapidly, [2…10 ](https://openai.com/blog/ai-and-efficiency/)[times in ](https://venturebeat.com/2020/06/04/ark-invest-ai-training-costs-dropped-100-fold-between-2017-and-2019/)[a year](https://ark-invest.com/articles/analyst-research/ai-training/): what is today a [multi-million-dollar project](https://syncedreview.com/2020/04/30/ai21-labs-asks-how-much-does-it-cost-to-train-nlp-models/) may be doable on a personal computer in a decade. Phones and other devices that need a battery could connect; [network bandwidth is growing too, at 1.5× a year](https://www.nngroup.com/articles/law-of-bandwidth/).)
+                - ⋯ Need concrete and relatively-compute-light tasks to strive for. Such as "in a game, learn to augment human play with non-human actions" or "predict near-term reward from facial expression".
+        - ⋯ `.options()` and `.options(X)` UI.
         - ⋯ `.defaults()`.
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
