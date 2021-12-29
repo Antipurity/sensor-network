@@ -27,12 +27,22 @@ export default (function(exports) {
     class _Packet {
         constructor(channel, cellShape, partSize) {
             const noData = [], noFeedback = []
+            const summary = shapeSummary(cellShape, partSize)
             Object.assign(this, {
                 channel,
-                summary: shapeSummary(cellShape, partSize),
+                summary,
                 cellShape,
                 cellSize: cellShape.reduce((a,b) => a+b),
                 partSize,
+                ch: state(channel),
+                dst: state(channel, cellShape, partSize, summary),
+                // `handle` state-machine state:
+                stage: 0,
+                mainHandler: null,
+                handleStart: 0,
+                benchAtStart: null,
+                transformI: 0, prevCells: 0, handlersLeft: 0,
+                handleStateMachine: this.handleStateMachine.bind(this),
                 // sensor → transform:
                 cells: 0,
                 sensorNeedsFeedback: false, // Any sensor.
@@ -60,6 +70,11 @@ export default (function(exports) {
         deinit() { // `this` must not be used after this call.
             // (Allows reuse of this object by `_Packet.init(…)`.)
             const T = this
+            T.stage = 0
+            T.mainHandler = null
+            T.handleStart = 0
+            T.benchAtStart = null
+            T.transformI = T.prevCells = T.handlersLeft = 0
             T.cells = 0
             T.sensorNeedsFeedback = false
             T.sensor.length = T.sensorData.length = T.sensorError.length = T.sensorIndices.length = T.noData.length = T.noFeedback.length = T.noDataIndices.length = 0
@@ -102,34 +117,153 @@ export default (function(exports) {
             if (!isFinite(a[1])) a[0] = a[1] = 0
             return a
         }
-        // TODO: Excise promises from the main loop, to significantly reduce allocations.
-        //   TODO: Split `handle` into 4 stages, bound to `this` by the constructor. They are (all callbacks go to the next stage):
-        //     1: Process the first/next transform.
-        //       When first entering, init variables and concat sensor data/error.
-        //       First process next data/error, then go to the next transform. If first entering, only process data/error; if last entering, don't go to the next transform (but to the next stage).
-        //     2: Set up feedback, and call the main handler.
-        //     3: Replace no-data cells with feedback, set up the non-main-handlers counter, then call all non-main handlers at once.
-        //     4: Decrement the handlers counter, and when it hits 0, reverse the transform:
-        //       First process next feedback, then go to the next reverse-transform. If first entering, only process; if last entering, don't go to the next reverse-transform.
-        //       When last leaving:
-        //         While there's a sensor-feedback-spot, give it feedback all at once (`gotPacketFeedback`).
-        //           When done, finalize: add memory to the counter, deinit, self-report.
-        //   TODO: Have state on `this`:
-        //     ch, dst, start, namedSize, benchAtStart.
-        //     And variables that go across `await`s:
-        //       "Transform"'s i, prevCells; "other handler"'s i (and the callback-counter for knowing when all handlers have returned); "reverse transform"'s prevCells.
-        //   TODO: Split `handleLoop` into many stages. Make the constructor bind `this` for each instance. Preserve all state on `this`.
-        async handle(mainHandler) { // sensors → transforms → handlers → transforms → sensors; `this` must not be used after this call.
-            const T = this, ch = S[T.channel]
-            const dst = ch.shaped[T.summary]
-            if (!dst) return
+        handleStateMachine(A,B,C) {
+            // sensors → transforms → handlers → transforms → sensors
+            // When first called by `handleLoop`, takes ownership of `this`.
+            // TODO: Test that this works.
+            const T = this, ch = T.ch, dst = T.dst
+            if (!ch.shaped[T.summary]) return
+            while (true)
+                switch (T.stage) {
+                    case 0: { // Init variables and concat data & error.
+                        T.handleStart = performance.now()
+                        T.benchAtStart = currentBenchmark
+                        T.input.data = allocF32(T.cells * T.cellSize)
+                        T.input.error = !T.sensorError ? null : allocF32(T.cells * T.cellSize)
+                        for (let i = 0; i < T.sensorData.length; ++i) {
+                            const at = T.sensorIndices[i] * T.cellSize
+                            T.input.data.set(T.sensorData[i], at)
+                            if (T.input.error) {
+                                if (T.sensorError[i])
+                                    T.input.error.set(T.sensorError[i], at)
+                                else
+                                    T.input.error.fill(-1, at, at + T.sensorData[i].length)
+                            }
+                        }
+                        ++ch.stepsNow
+                    } T.stage = 1;  case 1: { // Go over transforms in order.
+                        const i = T.transformI
+                        if (i < ch.transforms.length) {
+                            const a = ch.transforms[i]
+                            if (typeof a.onValues == 'function' || typeof a.onFeedback == 'function')
+                                try {
+                                    T.prevCells = T.cells
+                                    T.transformCallback.push(a.onFeedback)
+                                    T.stage = 9
+                                    if (typeof a.onValues == 'function')
+                                        return a.onValues(T.handleStateMachine, T.input)
+                                    else
+                                        return T.handleStateMachine()
+                                } catch (err) { console.error(err) }
+                        }
+                    } T.stage = 2;  case 2: { // Set up feedback, and call the main handler.
+                        if (T.mainHandler && !T.mainHandler.noFeedback && T.sensorNeedsFeedback)
+                            T.feedback = allocF32(T.cells * T.cellSize), T.feedback.set(T.input.data)
+                        else
+                            T.feedback = null
+                        if (T.mainHandler)
+                            try {
+                                T.stage = 3
+                                return T.mainHandler.onValues(T.handleStateMachine, T.input, T.feedback)
+                            } catch (err) { console.error(err) }
+                    } T.stage = 3;  case 3: { // Replace no-data cells with feedback (AKA record actions).
+                        if (T.feedback)
+                            for (let i = 0; i < T.noDataIndices.length; ++i) {
+                                const start = T.cellSize * T.noDataIndices[i], end = start + T.cellSize
+                                for (let j = start; j < end; ++j)
+                                    T.input.data[j] = T.feedback[j]
+                            }
+                    } T.stage = 4;  case 4: { // Call all non-main handlers at once.
+                        const hs = dst.handlers
+                        T.handlersLeft = 0
+                        for (let i = 0; i < hs.length; ++i)
+                            if (hs[i] !== T.mainHandler && typeof hs[i].onValues == 'function')
+                                ++T.handlersLeft
+                        if (T.handlersLeft) {
+                            T.stage = 5
+                            for (let i = 0; i < hs.length; ++i)
+                                if (hs[i] !== T.mainHandler && typeof hs[i].onValues == 'function')
+                                    try { hs[i].onValues(T.handleStateMachine, T.input) }
+                                    catch (err) { console.error(err) }
+                        } else { T.stage = 6;  continue }
+                    } T.stage = 5;  case 5: { // Wait for all non-main handlers.
+                        if (--T.handlersLeft) return
+                    } T.stage = 6;  case 6: { // Go over transform-feedback in reverse-order.
+                        while (T.transformCallback.length) {
+                            T.prevCells = T.transformCells.pop()
+                            const extra = T.transformExtra.pop()
+                            const f = T.transformCallback.pop()
+                            if (typeof f == 'function')
+                                try {
+                                    T.stage = 10
+                                    return f(T.handleStateMachine, T.input, T.feedback, extra)
+                                } catch (err) { console.error(err) }
+                        }
+                    } T.stage = 7;  case 7: { // Give feedback to all sensors at once.
+                        while (T.sensor.length)
+                            try {
+                                gotPacketFeedback(T.sensor.pop(), T.sensorData.pop(), T.sensorError.pop(), T.feedback, T.sensorIndices.pop() * T.cellSize, T.cellShape, T.partSize, T.summary)
+                            } catch (err) { console.error(err) }
+                    } T.stage = 8;  case 8: { // Finalize & self-report.
+                        --ch.stepsNow
+                        _Packet._handledBytes = (_Packet._handledBytes || 0) + T.cells * T.cellSize * 4
+                        _Packet.stepsEnded = (_Packet.stepsEnded || 0) + 1
+                        if (T.benchAtStart === currentBenchmark) {
+                            const duration = (dst.lastUsed = performance.now()) - start
+                            _Packet.updateMean(dst.msPerStep, duration)
+                            E.meta.metric('simultaneous steps', ch.stepsNow+1)
+                            E.meta.metric('step processed data, values', T.cells * T.cellSize)
+                        }
+                        const hadCells = !!T.cells
+                        T.deinit()
+                        const tooFew = ch.giveNextPacketNow, tooMuch = ch.waitingSinceTooManySteps
+                        if (hadCells && ch.stepsNow <= 1 && tooFew) tooFew()
+                        return tooMuch.length && tooMuch.shift()()
+                    } case 9: { // Assign the next data/error if given by a transform.
+                        const extra = A, nextData = B, nextError = C
+                        if (nextData && nextData !== T.input.data) {
+                            assert(nextData instanceof Float32Array)
+                            assert(nextData.length % T.cellSize === 0, "Bad data size")
+                            if (T.input.error) {
+                                assert(nextError instanceof Float32Array)
+                                assert(nextData.length === nextError.length, "Data and error lengths differ")
+                            } else assert(!nextError)
+                            const nextCells = nextData.length / T.cellSize | 0
+                            assert(T.input.noData.length === nextCells, "Must resize `noData` too")
+                            assert(T.input.noFeedback.length === nextCells, "Must resize `noFeedback` too")
+                            T.cells = nextCells
+                            deallocF32(T.input.data), T.input.data = nextData
+                            if (T.input.error)
+                                deallocF32(T.input.error), T.input.error = nextError
+                        } else if (!nextData) assert(!nextError)
+                        T.transformCells.push(T.prevCells)
+                        T.transformExtra.push(extra)
+                        T.stage = 1;  continue
+                    } case 10: { // Assign the prev feedback if given.
+                        const nextFeedback = A
+                        if (!T.feedback) assert(!nextFeedback)
+                        if (nextFeedback && nextFeedback !== T.feedback) {
+                            assert(nextFeedback instanceof Float32Array)
+                            assert(nextFeedback.length === T.prevCells * T.cellSize, "Feedback's length differs from data's")
+                            assert(T.input.noData.length === T.prevCells, "Must resize `noData` back too")
+                            assert(T.input.noFeedback.length === T.prevCells, "Must resize `noFeedback` back too")
+                            T.cells = T.prevCells
+                            deallocF32(T.feedback), T.feedback = nextFeedback
+                        }
+                        T.stage = 6;  continue
+                    }
+                }
+        }
+        async handle() { // sensors → transforms → handlers → transforms → sensors; `this` must not be used after this call. // TODO: Don't call; kill.
+            const T = this, ch = T.ch, dst = T.dst
+            if (!ch.shaped[T.summary]) return
             const start = performance.now(), namedSize = T.cells * T.cellSize
             const benchAtStart = currentBenchmark
             ++ch.stepsNow
             try {
                 // Concat sensors into `.input.data` and `.input.error`.
-                T.input.data = allocF32(namedSize)
-                T.input.error = !T.sensorError ? null : allocF32(namedSize)
+                T.input.data = allocF32(T.cells * T.cellSize)
+                T.input.error = !T.sensorError ? null : allocF32(T.cells * T.cellSize)
                 for (let i = 0; i < T.sensorData.length; ++i) {
                     const at = T.sensorIndices[i] * T.cellSize
                     T.input.data.set(T.sensorData[i], at)
@@ -172,14 +306,14 @@ export default (function(exports) {
                         } catch (err) { console.error(err) }
                 }
                 // Handlers, first main then others.
-                if (mainHandler && !mainHandler.noFeedback && T.sensorNeedsFeedback)
+                if (T.mainHandler && !T.mainHandler.noFeedback && T.sensorNeedsFeedback)
                     T.feedback = allocF32(T.cells * T.cellSize), T.feedback.set(T.input.data)
                 else
                     T.feedback = null
-                if (mainHandler)
+                if (T.mainHandler)
                     try {
                         await new Promise(then => {
-                            mainHandler.onValues(then, T.input, T.feedback)
+                            T.mainHandler.onValues(then, T.input, T.feedback)
                         })
                     } catch (err) { console.error(err) }
                 if (T.feedback) // Replace no-data cells with their feedback (AKA record actions).
@@ -189,11 +323,11 @@ export default (function(exports) {
                             T.input.data[j] = T.feedback[j]
                     }
                 const hs = dst.handlers
-                if (hs.length > 2 || hs.length === 1 && hs[0] !== mainHandler) {
+                if (hs.length > 2 || hs.length === 1 && hs[0] !== T.mainHandler) {
                     const tmp = allocArray()
                     for (let i = 0; i < hs.length; ++i) {
                         const h = hs[i]
-                        if (h !== mainHandler && typeof h.onValues == 'function') {
+                        if (h !== T.mainHandler && typeof h.onValues == 'function') {
                             tmp.push(new Promise(then => {
                                 h.onValues(then, T.input)
                             }))
@@ -212,7 +346,7 @@ export default (function(exports) {
                     if (typeof f == 'function')
                         try {
                             await new Promise(then => {
-                                f((extra, nextFeedback) => {
+                                f(nextFeedback => {
                                     if (!T.feedback) assert(!nextFeedback)
                                     if (nextFeedback && nextFeedback !== T.feedback) {
                                         assert(nextFeedback instanceof Float32Array)
@@ -222,7 +356,7 @@ export default (function(exports) {
                                         T.cells = prevCells
                                         deallocF32(T.feedback), T.feedback = nextFeedback
                                     }
-                                    then(extra)
+                                    then()
                                 }, T.input, T.feedback, extra)
                             })
                         } catch (err) { console.error(err) }
@@ -248,6 +382,13 @@ export default (function(exports) {
                 ch.waitingSinceTooManySteps.length && ch.waitingSinceTooManySteps.shift()()
             }
         }
+        //   TODO: Split `handleLoop` into many stages. Make the constructor bind `this` for each instance. Preserve all state on `this`.
+        //     (There are only 2 `await`s. But 3 `return`s.)
+        //     TODO: ...How do we do the infinite loop without infinite callback depth?...
+        //     We could have just 1 function, and a variable for which state we're at, and `switch` to the correct branch.
+        //       (...This is just like Conceptual's interrupt system.)
+        //     TODO: What stages do we need, exactly?
+        //     TODO: What state do we need?
         static async handleLoop(channel, cellShape, partSize, summary) {
             const ch = S[channel], dst = ch.shaped[summary]
             if (!dst || dst.looping) return;  else dst.looping = true
@@ -274,7 +415,7 @@ export default (function(exports) {
                 const nextPacket = dst.nextPacket
                 dst.nextPacket = _Packet.init(channel, cellShape, partSize, summary)
                 const cells = nextPacket.cells
-                nextPacket.handle(mainHandler)
+                nextPacket.mainHandler = mainHandler, nextPacket.handle()
                 // Benchmark throughput if needed.
                 _Packet._measureThroughput()
                 // Don't do it too often.
@@ -483,14 +624,14 @@ export default (function(exports) {
 - \`constructor({ onValues=null, onFeedback=null, priority=0, channel='' })\`
     - Needs one or both:
         - \`onValues(then, {data, error, noData, noFeedback, cellShape, partSize}) → extra\`: can modify \`data\` and the optional \`error\` in-place.
-            - ALWAYS do \`then(extra, …)\`, even on errors. \`extra\` will be seen by \`onFeedback\` if specified.
+            - ALWAYS do \`then(extra, …)\`, at the end, even on errors. \`extra\` will be seen by \`onFeedback\` if specified.
                 - To resize \`data\` and possibly \`error\`, pass the next version (\`._allocF32(len)\`) to \`then(extra, data2)\` or \`then(extra, data2, error2)\`; also resize \`noData\` and \`noFeedback\`; do not deallocate arguments.
             - \`cellShape: [user, name, data]\`
             - Data is split into cells, each made up of \`cellShape.reduce((a,b)=>a+b)\` -1…1 numbers.
             - \`noData\` and \`noFeedback\` are JS arrays, from cell index to boolean.
         - \`onFeedback(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback, extra)\`: can modify \`feedback\` in-place.
-            - ALWAYS do \`then()\`, even on errors.
-                - To resize \`data\` and possibly \`error\`, pass the next version (\`._allocF32(len)\`) to \`then(extra, data2)\` or \`then(extra, data2, error2)\`; do not deallocate arguments.
+            - ALWAYS do \`then()\`, at the end, even on errors.
+                - If \`data\` was resized and \`feedback\` was given, must resize it back, by passing the next version (\`._allocF32(len)\`) to \`then(feedback)\`; do not deallocate arguments.
     - Extra flexibility:
         - \`priority\`: transforms run in order, highest priority first.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
