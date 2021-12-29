@@ -174,10 +174,11 @@ In Chrome, users might have to first click on the page for sound to play.
 
             const needToWait = (Sound.next-.01 - Sound.ctx.currentTime - (start === Sound.next ? 0 : delay)) * 1000 - Sound.overshoot
             if (needToWait > Sound.overshoot) {
+                const overscheduled = start - Sound.ctx.currentTime > .02
                 const willLikelyEndAt = performance.now() + needToWait
                 setTimeout(() => {
-                    Sound.overshoot = Math.max(performance.now() - willLikelyEndAt, 0)
-                    then()
+                    Sound.overshoot = .5*Sound.overshoot + .5*Math.max(performance.now() - willLikelyEndAt, 0)
+                    then(overscheduled)
                 }, needToWait)
             } else then()
 

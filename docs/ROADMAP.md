@@ -185,7 +185,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ Display each object's benchmark results, with all per-metric plots (copy plotting code from Conceptual).
                 - ✓ Allow switching between mean/median/all views for a fuller view of performance.
             - ✓ Benchmark sending+handling, from `1`-filled data to `-1`-filled feedback. We want to know the throughput (bytes/sec) and memory pressure (bytes/cell), for 4-number and 64-number cells, measured over █ minutes of running.
-            - ⋯ Transition from promises to callbacks, because promises are THE major allocation cause.
+            - ✓ Transition from promises to callbacks, because promises are THE major allocation cause. (In per-packet `handle`, anyway; `handleLoop`, which calls `handle`, would get an annoyingly-infinite async-stack with callbacks.)
         - ✓ `.docs()`, which traverses `sn` and transformes all `docs` strings into a Markdown string.
             - ✓ Parents should become sections, into which their children belong.
             - ✓ Make a table of contents at the top, with refs to the top at every section heading.
