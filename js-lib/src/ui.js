@@ -1,8 +1,12 @@
 export default function init(sn) {
     const A = Object.assign
-    return {
+    const O = {
         options: A(function options(x) {
+            // TODO: How to be able to accept parent paused-ness checkboxes?…
+            //   (Maybe even don't make the actual checkbox ourselves?)
             // TODO: ...How to have global opts, such as cell shape, which would be too error-prone to specify everywhere...
+            //   Accept `selected` objects of parents, and make `optsFor` also add those...
+            //     For this, need to make `optsFor` always overwrite just one object, which is exposed on the result instead of `selected`.
             if (typeof x.options != 'function') return
             const proto = Object.getPrototypeOf(x)
             sn._assert(proto === sn.Sensor || proto === sn.Transform || proto === sn.Handler, "Must be a sensor/transform/handler")
@@ -12,7 +16,7 @@ export default function init(sn) {
             const instance = new x(optsFor(variants, selected)).pause()
             const arr = []
             putElems(arr, instance, variants, selected)
-            return A(dom(arr), {selected})
+            return A(dom(arr), {selected}) // TODO: For symmetry here, should allow passing in `selected` too, for state-preservation, right?
 
             function getDefaults(vars, selected = {}) {
                 for (let k of Object.keys(vars))
@@ -31,7 +35,7 @@ export default function init(sn) {
                         type:'checkbox',
                         runningCheckbox:true,
                         id:runningId,
-                        onchange() { this.checked ? instance.resume(optsFor(vars, selected)) : instance.pause() },
+                        onchange() { instance.pause(), this.checked && instance.resume(optsFor(vars, selected)) },
                     }],
                     [{tag:'label', htmlFor:runningId}, 'Running'],
                 ])
@@ -40,7 +44,7 @@ export default function init(sn) {
                     const opt = [
                         {tag:'select', id:optId, onchange() {
                             selected[k] = this.value
-                            !instance.paused && instance.resume(optsFor(vars, selected))
+                            !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
                         }},
                     ]
                     for (let variant of Object.keys(vars[k]))
@@ -55,7 +59,7 @@ export default function init(sn) {
             function optsFor(vars, selected) {
                 const opts = {}
                 for (let k of Object.keys(vars))
-                    opts[k] = vars[k][selected[k]]
+                    opts[k] = vars[k][selected[k]] // TODO: Actually, should always call this, so that we don't instantly request screen/camera access that we don't need, right?
                 return opts
             }
         }, {
@@ -63,10 +67,17 @@ export default function init(sn) {
 
 The object should define \`.options() → { option:{ valueName: valueJSValue } }\`.`,
         }),
-        // TODO: (Also want the full UI compiler, right... With multi-channel-support and multi-sensor-support and docs (Markdown support only if a function is passed in, else just the first line) and options... And with hierarchical turn-on/off integration... And with preservation-of-`optElem.selected` across restarts...)
+        // TODO: Have "collapsed DOM element" (in `test.html`, of course).
+        // TODO: Have "describe this object": name, options, and collapsed docs (Markdown support only if a function is passed in, else just the first line).
+        // TODO: Have "one or more of this function call's invocations".
+        // TODO: Have "describe this channel": walk `sn`, and for each object-with-options and its parent, add one-or-more: object-descriptions and collapsed children.
+        //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
+        //   TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
+        // TODO: Make `UI` return one-or-more channels.
         // (TODO: Also make `test.html` put the full UI compiler there. Possibly instead of docs.)
         //   (TODO: And make it look good.)
     }
+    return O
     function dom(x) { // Ex: [{ tag:'div', style:'color:red', onclick() { api.levelLoad() } }, 'Click to reload the level']
         if (x instanceof Promise) {
             const el = document.createElement('div')
