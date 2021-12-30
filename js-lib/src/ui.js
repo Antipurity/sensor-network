@@ -1,6 +1,6 @@
 export default function init(sn) {
     const A = Object.assign
-    const O = {
+    const UI = {
         options(x, selected = {}, parentOpts = null) {
             // Given an object, returns the DOM tree that allows the user to select among options.
             // The object should define `.options() → { option:{ valueName: getJSValue() } }`.
@@ -80,7 +80,19 @@ export default function init(sn) {
                 ],
             ])
         },
-        // TODO: Have "describe this object": name, options (given saved `selected` and parent opts), and collapsed docs (Markdown support only if a function is passed in, else just the first line).
+        docsTransformer(docs) { 'Override this: `sn.UI.docsTransformer = …`'
+            return docs.split('\n')[0]
+        },
+        describe(x, selected = {}, parentOpts = null) {
+            // Describes an object: name, options, docs.
+            const proto = Object.getPrototypeOf(x)
+            const docs = typeof x.docs == 'string' ? x.docs : typeof x.docs == 'function' ? x.docs() : null
+            return dom([
+                x.name || `(Unnamed ${proto === sn.Sensor ? 'sensor' : proto === sn.Transform ? 'transform' : proto === sn.Handler ? 'handler' : 'object'})`,
+                UI.options(x, selected, parentOpts),
+                docs && UI.collapsed('Documentation', UI.docsTransformer(docs), true),
+            ])
+        },
         // TODO: Have "one or more of this function call's invocations".
         // TODO: Have "describe this channel": walk `sn`, and for each object-with-options and its parent, add one-or-more: object-descriptions and collapsed children.
         //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
@@ -89,7 +101,7 @@ export default function init(sn) {
         // (TODO: Also make `test.html` put the full UI compiler there. Possibly instead of docs.)
         //   (TODO: And make it look good.)
     }
-    return O
+    return UI
     function dom(x) { // Ex: [{ tag:'div', style:'color:red', onclick() { api.levelLoad() } }, 'Click to reload the level']
         if (x instanceof Promise) {
             const el = document.createElement('div')
