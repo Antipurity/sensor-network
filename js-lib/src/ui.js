@@ -11,7 +11,7 @@ export default function init(sn) {
             const variants = x.options() // {opt:{valueName:jsValue}}
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
-            const opts = Object.create(parentOpts)
+            const opts = Object.create(parentOpts) // TODO: Wait, how to *react* to `parentOpts` changing?
             const instance = new x(optsFor(variants, selected)).pause()
             const arr = []
             putElems(arr, instance, variants, selected)
@@ -100,25 +100,30 @@ export default function init(sn) {
             ])
         },
         oneOrMore(fn) {
-            // Given a DOM-elem-returning func, . // TODO:
+            // Given a DOM-elem-returning func, this returns a spot that can replicate its result.
             const container = dom([
                 [
                     [{tag:'button', onclick() {
-                        // TODO: Append f() to the container (with a self-"-" button).
+                        const another = fn(false)
+                        const wrapper = dom([
+                            [{tag:'button', onclick() {
+                                another.pause(), wrapper.remove()
+                            }}, '-'],
+                            another,
+                        ])
+                        container.append(wrapper)
                     }}, '+'],
-                    fn(),
+                    fn(true),
                 ],
             ])
             return container
         },
-        // TODO: Have "one or more of this function call's invocations".
-        //   How does this happen, exactly? A "+" button to the left, or to the right? And all copies (opened below) should have the "-" button instead, right?
         // TODO: Have "describe this channel": walk `sn`, and for each object-with-options and its parent, add one-or-more: object-descriptions and collapsed children.
         //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
         //   TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
         // TODO: Make `UI` return one-or-more channels.
         // (TODO: Also make `test.html` put the full UI compiler there. Possibly instead of docs.)
-        //   (TODO: And make it look good.)
+        //   (TODO: And make it all look good.)
     }
     return UI // TODO: ...Wait, who did the infinite loop...
     function dom(x) { // Ex: [{ tag:'div', style:'color:red', onclick() { api.levelLoad() } }, 'Click to reload the level']
