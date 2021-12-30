@@ -66,19 +66,20 @@ export default function init(sn) {
                 return opts
             }
         },
-        collapsed(el, byDefault = true) {
-            // Made specifically for `test.html`.
-            // TODO: How do we do this, exactly?
-            /* TODO:
-                <div class="hiding isHiding">
-                    <div class=hidingSurface></div>
-                    <span class=hidingMarker>▶</span>
-                    Documentation
-                    <div class="hidable" style="height:0px" id=docs>···</div>
-                </div>
-            */
+        collapsed(summary, content, byDefault = true) {
+            // Made specifically for `test.html`. Wraps a DOM element in a collapsible container.
+            return dom([
+                {tag:'div', class: byDefault ? 'hiding isHiding' : 'hiding'},
+                [{tag:'div', class:'hidingSurface'}],
+                [{class:'hidingMarker'}, '▶'],
+                summary,
+                [
+                    {tag:'div', class:'hidable'},
+                    bybDefault && {style:'height:0px'},
+                    content,
+                ],
+            ])
         },
-        // TODO: Have "collapsed DOM element" (in `test.html`, of course).
         // TODO: Have "describe this object": name, options (given saved `selected` and parent opts), and collapsed docs (Markdown support only if a function is passed in, else just the first line).
         // TODO: Have "one or more of this function call's invocations".
         // TODO: Have "describe this channel": walk `sn`, and for each object-with-options and its parent, add one-or-more: object-descriptions and collapsed children.
