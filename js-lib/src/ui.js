@@ -40,7 +40,7 @@ export default function init(sn) {
                 const runningId = ''+Math.random()
                 into.push([
                     {tag:'div'},
-                    [{
+                    [{ // TODO: Don't have the checkbox.
                         tag:'input',
                         type:'checkbox',
                         runningCheckbox:true,
@@ -99,8 +99,9 @@ export default function init(sn) {
                 docs && UI.collapsed('Documentation', UI.docsTransformer(docs), true),
             ])
         },
-        oneOrMore(fn) {
+        oneOrMore(fn) { // TODO: ...In its use, when a non-class is used, there should only be one instance, not many (currently, assertion-failing instead)...
             // Given a DOM-elem-returning func, this returns a spot that can replicate its result.
+            const first = fn(true)
             const container = dom([
                 [
                     [{tag:'button', onclick() {
@@ -113,15 +114,31 @@ export default function init(sn) {
                         ])
                         container.append(wrapper)
                     }}, '+'],
-                    fn(true),
+                    first,
                 ],
             ])
-            return container
+            return A(container, {
+                pause() { first.pause && first.pause() },
+                resume() { first.resume && first.resume() },
+            })
         },
-        // TODO: Have "describe this channel": walk `sn`, and for each object-with-options and its parent, add one-or-more: object-descriptions and collapsed children.
+        channel() {
+            // Creates a UI for easy setup of single-channel sensors/transforms/handlers.
+            return walk(sn)
+            function walk(x, selected = {}, parentOpts = null) {
+                if (!x || typeof x != 'object' && typeof x != 'function') return
+                const children = Object.values(x).map(v => walk(v)).filter(x => x)
+                if (typeof x.options == 'function' || children.length) {
+                    // TODO: Return a DOM elem with UI.describe(x, selected, parentOpts) and UI.collapsed(description, childrenIfAny, true).
+                }
+            }
+        },
+        //   TODO: Maintain & pass parent .opts.
         //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
         //   TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
-        // TODO: Make `UI` return one-or-more channels.
+
+        // TODO: Make `UI` itself return one-or-more channels.
+        //   (TODO: Also, maybe, a collapsed area for JS code that creates everything currently-active?)
         // (TODO: Also make `test.html` put the full UI compiler there. Possibly instead of docs.)
         //   (TODO: And make it all look good.)
     }
