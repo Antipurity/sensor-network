@@ -152,6 +152,9 @@
       for (let a of prev.events) onBenchProgress(...a)
     }
     collectBenchmarks()
+
+    document.body.append(sn.UI.options(sn.Transform.Reward)) // TODO:
+
     function onBenchProgress(obj, id, got, progress) { // Remember & plot.
       const plots = document.getElementById('bench')
       const progressElem = document.getElementById('bench-progress')

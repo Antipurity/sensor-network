@@ -3,6 +3,7 @@ import Sound from './src/handler-sound.js'
 import Video from './src/sensor-video.js'
 import Time from './src/sensor-time.js'
 import Reward from './src/transform-reward.js'
+import UI from './src/ui.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -452,7 +453,7 @@ export default (function(exports) {
         - \`userName\`: the name of the machine that sources data. Makes it possible to reliably distinguish sources.
         - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
         - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default mainly hashes strings in \`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
-    - To change any of this, \`pause()\` and \`resume({…})\`.
+    - To change any of this, \`resume({…})\`.
 
 - \`cellShape() → [user, name, data] | null\`: returns the target's cell shape. Note that this may change rarely.
 
@@ -469,7 +470,7 @@ export default (function(exports) {
 
 - \`sendCallback(then(null|feedback, sensor), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise.
 
-- \`pause()\`, \`resume()\`: for convenience, these return the object.
+- \`pause()\`, \`resume(opts?)\`: for convenience, these return the object.
 
 - \`needsExtensionAPI() → null|String\`: overridable in child classes. By default, the sensor is entirely in-page in a [content script](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts) if injected by an extension. For example, make this return \`'tabs'\` to get access to [\`chrome.tabs\`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs) in an extension.`,
         }),
@@ -523,9 +524,9 @@ export default (function(exports) {
     - Extra flexibility:
         - \`priority\`: transforms run in order, highest priority first.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
-    - To change any of this, \`pause()\` and \`resume({…})\`.
+    - To change any of this, \`resume({…})\`.
 
-- \`pause()\`, \`resume()\`: for convenience, these return the object.`,
+- \`pause()\`, \`resume(opts?)\`: for convenience, these return the object.`,
         }),
         Handler: A(class Handler {
             constructor(opts) { assert(opts), this.resume(opts) }
@@ -591,9 +592,9 @@ export default (function(exports) {
         - \`noFeedback\`: can't provide feedback if \`true\`, only observe it.
         - \`priority\`: the highest-priority handler without \`noFeedback\` will be the *main* handler, and give feedback.
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
-    - To change any of this, \`pause()\` and \`resume({…})\`.
+    - To change any of this, \`resume({…})\`.
 
-- \`pause()\`, \`resume()\`: for convenience, these return the object.`,
+- \`pause()\`, \`resume(opts?)\`: for convenience, these return the object.`,
             bench() {
                 const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
                 return cellCounts.map(river) // See how throughput changes with input size.
@@ -1018,6 +1019,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         }),
     })
     // And set the most-common modules.
+    E.UI = UI(E)
     Object.assign(E.Sensor, {
         Video: Video(E),
         Time: Time(E),

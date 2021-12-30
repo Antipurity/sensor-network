@@ -6,6 +6,15 @@ export default function init(sn) {
 Options:
 - \`reward = Reward.keybindings('Ctrl+ArrowUp', 'Ctrl+ArrowDown')\`: the function that, given nothing, will return the reward each frame, -1…1.
 ` }
+        static options() {
+            return {
+                reward: {
+                    ['+1 Ctrl+Up / -1 Ctrl+Down']: Reward.keybindings('Ctrl+ArrowUp', 'Ctrl+ArrowDown'),
+                    ['+1 Shift+Up / -1 Shift+Down']: Reward.keybindings('Shift+ArrowUp', 'Shift+ArrowDown'),
+                    ['+1 F8 / -1 F9']: Reward.keybindings('F8', 'F9'),
+                },
+            }
+        }
         resume(opts) {
             if (opts) {
                 const rf = opts.reward || Reward.keybindings()
