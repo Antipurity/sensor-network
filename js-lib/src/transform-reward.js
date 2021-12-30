@@ -9,9 +9,9 @@ Options:
         static options() {
             return {
                 reward: {
-                    ['+1 Ctrl+Up / -1 Ctrl+Down']: Reward.keybindings('Ctrl+ArrowUp', 'Ctrl+ArrowDown'),
-                    ['+1 Shift+Up / -1 Shift+Down']: Reward.keybindings('Shift+ArrowUp', 'Shift+ArrowDown'),
-                    ['+1 F8 / -1 F9']: Reward.keybindings('F8', 'F9'),
+                    ['+1 Ctrl+Up / -1 Ctrl+Down']: () => Reward.keybindings('Ctrl+ArrowUp', 'Ctrl+ArrowDown'),
+                    ['+1 Shift+Up / -1 Shift+Down']: () => Reward.keybindings('Shift+ArrowUp', 'Shift+ArrowDown'),
+                    ['+1 F8 / -1 F9']: () => Reward.keybindings('F8', 'F9'),
                 },
             }
         }

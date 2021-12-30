@@ -1,22 +1,26 @@
 export default function init(sn) {
     const A = Object.assign
     const O = {
-        options: A(function options(x) {
-            // TODO: How to be able to accept parent paused-ness checkboxes?…
-            //   (Maybe even don't make the actual checkbox ourselves?)
-            // TODO: ...How to have global opts, such as cell shape, which would be too error-prone to specify everywhere...
-            //   Accept `selected` objects of parents, and make `optsFor` also add those...
-            //     For this, need to make `optsFor` always overwrite just one object, which is exposed on the result instead of `selected`.
+        options(x, selected = {}, parentOpts = null) {
+            // Given an object, returns the DOM tree that allows the user to select among options.
+            // The object should define `.options() → { option:{ valueName: getJSValue() } }`.
+            // The result has `.selected` (JSON-serializable) and `.opts` (passable as `parentOpts` here) and `.pause()` and `.resume()`.
             if (typeof x.options != 'function') return
             const proto = Object.getPrototypeOf(x)
             sn._assert(proto === sn.Sensor || proto === sn.Transform || proto === sn.Handler, "Must be a sensor/transform/handler")
             const variants = x.options() // {opt:{valueName:jsValue}}
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
-            const selected = getDefaults(variants)
+            selected = getDefaults(variants, selected)
+            const opts = Object.create(parentOpts)
             const instance = new x(optsFor(variants, selected)).pause()
             const arr = []
             putElems(arr, instance, variants, selected)
-            return A(dom(arr), {selected}) // TODO: For symmetry here, should allow passing in `selected` too, for state-preservation, right?
+            return A(dom(arr), {
+                selected,
+                opts,
+                pause() { instance.pause() },
+                resume() { instance.resume() },
+            })
 
             function getDefaults(vars, selected = {}) {
                 for (let k of Object.keys(vars))
@@ -57,18 +61,25 @@ export default function init(sn) {
                 }
             }
             function optsFor(vars, selected) {
-                const opts = {}
                 for (let k of Object.keys(vars))
-                    opts[k] = vars[k][selected[k]] // TODO: Actually, should always call this, so that we don't instantly request screen/camera access that we don't need, right?
+                    opts[k] = vars[k][selected[k]]()
                 return opts
             }
-        }, {
-            docs:`Given an object, returns the DOM tree that allows the user to select among options.
-
-The object should define \`.options() → { option:{ valueName: valueJSValue } }\`.`,
-        }),
+        },
+        collapsed(el, byDefault = true) {
+            // Made specifically for `test.html`.
+            // TODO: How do we do this, exactly?
+            /* TODO:
+                <div class="hiding isHiding">
+                    <div class=hidingSurface></div>
+                    <span class=hidingMarker>▶</span>
+                    Documentation
+                    <div class="hidable" style="height:0px" id=docs>···</div>
+                </div>
+            */
+        },
         // TODO: Have "collapsed DOM element" (in `test.html`, of course).
-        // TODO: Have "describe this object": name, options, and collapsed docs (Markdown support only if a function is passed in, else just the first line).
+        // TODO: Have "describe this object": name, options (given saved `selected` and parent opts), and collapsed docs (Markdown support only if a function is passed in, else just the first line).
         // TODO: Have "one or more of this function call's invocations".
         // TODO: Have "describe this channel": walk `sn`, and for each object-with-options and its parent, add one-or-more: object-descriptions and collapsed children.
         //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
