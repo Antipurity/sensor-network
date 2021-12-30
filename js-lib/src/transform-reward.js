@@ -56,15 +56,15 @@ Options:
                 return r
             }
             function onKeyDown(evt) {
-                if (evt.key === upKey[0] && !evt.repeat) {
+                if (evt.key === upKey[0]) {
                     let ok = true
                     for (let i = 1; i < upKey.length; ++i) if (!evt[upKey[i]]) ok = false
-                    if (ok) up = true
+                    if (ok) up = true, evt.preventDefault()
                 }
-                if (evt.key === downKey[0] && !evt.repeat) {
+                if (evt.key === downKey[0]) {
                     let ok = true
                     for (let i = 1; i < downKey.length; ++i) if (!evt[downKey[i]]) ok = false
-                    if (ok) down = true
+                    if (ok) down = true, evt.preventDefault()
                 }
             }
             function onKeyUp(evt) {
@@ -76,7 +76,7 @@ Options:
             function listen() {
                 lastListen = performance.now()
                 if (attached) return;  else attached = true
-                addEventListener('keydown', onKeyDown, passive)
+                addEventListener('keydown', onKeyDown)
                 addEventListener('keyup', onKeyUp, passive)
                 unlistener = setInterval(() => {
                     // Auto-detach when too much time has passed.
@@ -85,7 +85,7 @@ Options:
             }
             function unlisten() {
                 if (!attached) return;  else attached = false
-                removeEventListener('keydown', onKeyDown, passive)
+                removeEventListener('keydown', onKeyDown)
                 removeEventListener('keyup', onKeyUp, passive)
                 clearInterval(unlistener), unlistener = null
             }

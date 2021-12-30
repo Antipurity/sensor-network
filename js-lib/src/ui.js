@@ -15,7 +15,13 @@ export default function init(sn) {
             const instance = new x(optsFor(variants, selected)).pause()
             const arr = []
             putElems(arr, instance, variants, selected)
-            return A(dom(arr), {
+            const el = dom(arr)
+            const disconnectListener = setInterval(() => {
+                // Autodie when disconnected. (But never revive.)
+                if (!el.isConnected)
+                    instance.pause(), clearInterval(disconnectListener)
+            }, 10000)
+            return A(el, {
                 selected,
                 opts,
                 pause() { instance.pause() },
@@ -75,12 +81,12 @@ export default function init(sn) {
                 summary,
                 [
                     {tag:'div', class:'hidable'},
-                    bybDefault && {style:'height:0px'},
+                    byDefault && {style:'height:0px'},
                     content,
                 ],
             ])
         },
-        docsTransformer(docs) { 'Override this: `sn.UI.docsTransformer = …`'
+        docsTransformer(docs) { 'Override this: `sn.UI.docsTransformer = docs => …`'
             return docs.split('\n')[0]
         },
         describe(x, selected = {}, parentOpts = null) {
@@ -93,7 +99,20 @@ export default function init(sn) {
                 docs && UI.collapsed('Documentation', UI.docsTransformer(docs), true),
             ])
         },
+        oneOrMore(fn) {
+            // Given a DOM-elem-returning func, . // TODO:
+            const container = dom([
+                [
+                    [{tag:'button', onclick() {
+                        // TODO: Append f() to the container (with a self-"-" button).
+                    }}, '+'],
+                    fn(),
+                ],
+            ])
+            return container
+        },
         // TODO: Have "one or more of this function call's invocations".
+        //   How does this happen, exactly? A "+" button to the left, or to the right? And all copies (opened below) should have the "-" button instead, right?
         // TODO: Have "describe this channel": walk `sn`, and for each object-with-options and its parent, add one-or-more: object-descriptions and collapsed children.
         //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
         //   TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
@@ -101,7 +120,7 @@ export default function init(sn) {
         // (TODO: Also make `test.html` put the full UI compiler there. Possibly instead of docs.)
         //   (TODO: And make it look good.)
     }
-    return UI
+    return UI // TODO: ...Wait, who did the infinite loop...
     function dom(x) { // Ex: [{ tag:'div', style:'color:red', onclick() { api.levelLoad() } }, 'Click to reload the level']
         if (x instanceof Promise) {
             const el = document.createElement('div')
