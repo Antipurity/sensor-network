@@ -25,6 +25,8 @@ export default function init(sn) {
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
             const opts = Object.create(parentOpts) // TODO: Wait, how to *react* to `parentOpts` changing?
+            //   Do we store a list of callbacks on each parent?...
+            //   Is there any other way, even? One that doesn't involve frequent checking? Can parents actually pause+resume all their active children... Actually, I think they can: when the parent's option changes, all children are re-run (have to make sure that it's not a child's option that we're detecting, else we'll end up re-running everything on every change).
             const instance = isClass ? new x() : null
             const arr = []
             putElems(arr, instance, variants, selected)
@@ -197,8 +199,15 @@ export default function init(sn) {
                         pause() { us.pause && us.pause(), children.forEach(c => c.pause && c.pause()) },
                         resume() { us.resume && us.resume(), children.forEach(c => c.resume && c.resume()) },
                     })
-                    function onchange() {
-                        this.classList.toggle('anyRunningInside', !!this.querySelectorAll('.checkboxRunning:checked').length)
+                    function onchange(evt) {
+                        const checks = this.querySelectorAll('.checkboxRunning:checked')
+                        this.classList.toggle('anyRunningInside', !!checks.length)
+                        if (evt && evt.target) { // Re-init children when their parent changes.
+                            if (!children.some(c => c.contains(evt.target))) { // (Only re-init the changed subtree.)
+                                for (let c of Array.from(checks))
+                                    c.click(), c.click()
+                            }
+                        }
                         return this
                     }
                 }
