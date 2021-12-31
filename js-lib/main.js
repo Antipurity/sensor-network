@@ -439,7 +439,7 @@ export default (function(exports) {
                 return this
             }
         }, {
-            docs:`Generalization of eyes and ears and hands, hotswappable and differentiable.
+            docs:`Generalization of eyes and ears and hands, hotswappable and adjustable.
 
 - \`constructor({ name, values, onValues=null, channel='', noFeedback=false, userName=[], emptyValues=0, hasher=… })\`
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.

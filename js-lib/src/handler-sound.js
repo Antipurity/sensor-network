@@ -236,7 +236,11 @@ In Chrome, users might have to first click on the page for sound to play.
                         dst[off + i] = renorm ? (v+1)/2 : v
                     }
                     sn._deallocF32(avgPerCell)
-                } else dst.set(src, off)
+                } else if (off + src.length <= src.length)
+                    dst.set(src, off)
+                else
+                    for (let i = 0; i < src.length && off + i < dst.length; ++i)
+                        dst[off + i] = src[i]
                 const real = ifft(dst)
                 real[0] = real[1] // Too loud.
                 dst.set(real)

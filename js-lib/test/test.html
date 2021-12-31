@@ -8,7 +8,7 @@
   <style>
     .hiding, .hidable, .hidingMarker, .hidingSurface { transition: .3s }
     .hidable { overflow: hidden }
-    .hidingMarker { display: inline-block; position: relative; z-index: 0 }
+    .hidingMarker { display: inline-block; position: relative; z-index: 0; padding: 1px }
     .hiding:not(.isHiding)>.hidingMarker { transform: rotate(90deg) }
 
     .hiding { position: relative }
@@ -82,6 +82,14 @@
       </select>
       <div id=bench></div>
       <div id=bench-progress></div>
+    </div>
+  </div>
+  <div>
+    <div class="hiding isHiding">
+      <div class=hidingSurface></div>
+      <span class=hidingMarker>▶</span>
+      Components for tinkering
+      <div class="hidable" style="height:0px" id=ui>···</div>
     </div>
   </div>
   <script type=module>
@@ -159,7 +167,11 @@
     }
     collectBenchmarks()
 
-    document.body.append(sn.UI()) // TODO:
+    setTimeout(() => {
+      const ui = document.getElementById('ui')
+      while (ui.firstChild) ui.firstChild.remove()
+      ui.append(sn.UI(sn, false))
+    }, 100)
 
     function onBenchProgress(obj, id, got, progress) { // Remember & plot.
       const plots = document.getElementById('bench')
