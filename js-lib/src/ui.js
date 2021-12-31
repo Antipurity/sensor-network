@@ -156,7 +156,7 @@ export default function init(sn) {
             function walk(x, selected = {}, parentOpts = null) {
                 if (!x || typeof x != 'object' && typeof x != 'function') return
                 const children = Object.values(x).map(v => walk(v)).filter(x => x)
-                // TODO: Is it possible to not include the top-level "Sensor network"?
+                if (x === sn) return dom(children)
                 if (typeof x.options == 'function' && x !== UI || children.length) {
                     const us = UI.describe(x, selected, parentOpts)
                     const container = children.length ? UI.collapsed(us, children, true) : us

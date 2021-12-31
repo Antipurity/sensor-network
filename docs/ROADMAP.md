@@ -288,12 +288,13 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling)
                     - That's all. A human can use it. AGI can use it.
             - ✓ No-feedback sound output (speakers).
+                - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
+                    - ⋯ Inspect the first and last numbers of packets: these most likely cause that clicking. Try to pick the wave phase (dependent on previous-packets-size) that minimizes that difference.
+                    - ⋯ What we made is clearly not quite frequency-based, since adding/removing sensors really changes the sound, so fix it.
                     - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)
-                    - ⋯ Inspect the first and last numbers of packets: these probably cause clicking. Try to pick the wave phase (dependent on previous-packets-size) that minimizes that difference.
                     - ⋯ [Normalize perceived loudness.](https://en.wikipedia.org/wiki/Equal-loudness_contour)
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
-                - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
             - ❌ Sound input (microphone). Probably terrible, especially without an ML model to summarize it.
             - ⋯ Write to `indexedDB`, with visualization (`option()`?) allowing saving it all to a file.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
