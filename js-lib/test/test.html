@@ -14,7 +14,7 @@
     .hiding { position: relative }
     .hidingSurface { position:absolute; left:0; right:0; top:0; bottom:0; z-index: 1 }
     .hidingSurface:hover { box-shadow: 0 0 .1em black, 0 0 .1em inset black }
-    .hidable { margin-left: 2em; box-shadow: -3px 0 1px black; position: relative; z-index: 2 }
+    .hidable { margin-left: 2em; box-shadow: -3px 0 1px black; position: relative; z-index: 2; background-color: white }
 
     code { font-family: monospace, monospace;  background-color: #ebebeb;  border-radius: .3em }
     body { font-family: sans-serif }
@@ -25,6 +25,9 @@
 
     #docs { padding-left: .6em }
     td>* { width: 100% }
+
+    .anyRunningInside>.hiding { background: linear-gradient(135deg, white 40%, #007cff 85%, #0040ff 100%);  background-size: 100% 20em;  transition: .3s }
+    .anyRunningInside>.hiding:hover { background-position: 0 -10em }
   </style>
 </head>
 <body>

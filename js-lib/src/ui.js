@@ -5,7 +5,9 @@ export default function init(sn) {
         // Just one channel for now.
         return UI.channel()
     }, {
-        docs:`Creates UI for convenient configuration of sensors. Append it to \`document.body\` or something.`,
+        docs:`Creates UI for convenient configuration of sensors. Append it to \`document.body\` or something.
+
+(It doesn't affect code size that much, so why not.)`,
         groupOf(x) {
             const p = Object.getPrototypeOf(x)
             return p === sn.Sensor ? 'sensor' : p === sn.Transform ? 'transform' : p === sn.Handler ? 'handler' : 'object'
@@ -126,7 +128,7 @@ export default function init(sn) {
                 container.append(another)
             }}, '+']))
             const others = []
-            const container = dom([first])
+            const container = dom(first)
             return A(container, {
                 pause() { first.pause && first.pause(), others.forEach(e => e.pause && e.pause()), others.length = 0 },
                 resume() { first.resume && first.resume() },
@@ -151,6 +153,7 @@ export default function init(sn) {
                     id,
                     tag:'input',
                     type:'checkbox',
+                    class:'checkboxRunning',
                     title:'Currently active',
                     onchange() { if (el) selected[active] = this.checked, this.checked ? el.resume() : el.pause() },
                 }])
@@ -171,7 +174,7 @@ export default function init(sn) {
                 })
             }
         },
-        channel(x = sn) { // TODO: Also have `activateDefaultsByDefault = true`. ...Do we really want that though... Shouldn't this be in `selected` anyway...
+        channel(x = sn) {
             // Creates a UI for easy setup of single-channel sensors/transforms/handlers.
             return walk(x)
             function walk(x, selected = {}, parentOpts = null) {
@@ -180,18 +183,17 @@ export default function init(sn) {
                 if (x === sn) return dom(children)
                 if (typeof x.options == 'function' && x !== UI || children.length) {
                     const us = UI.describe(x, selected, parentOpts, children)
-                    // TODO: But what about a parent's "Running" checkbox? …Or maybe a counter, or at least a color-based indicator?…
-                    //   linear-gradient(to right, white 25%, #007cff)
-                    //     linear-gradient(to right, white 25%, #0040ff) on hover.
-                    //   TODO: What do we name this class?
-                    //   TODO: How do we detect whether there's anything running inside?
-                    return A(dom([
-                        { onchange(evt) { console.log(x, evt) } }, // TODO:
+                    return A(onchange.call(dom([
+                        { onchange },
                         us,
-                    ]), {
+                    ])), {
                         pause() { us.pause && us.pause(), children.forEach(c => c.pause && c.pause()) },
                         resume() { us.resume && us.resume(), children.forEach(c => c.resume && c.resume()) },
                     })
+                    function onchange() {
+                        this.classList.toggle('anyRunningInside', !!this.querySelectorAll('.checkboxRunning:checked').length)
+                        return this
+                    }
                 }
             }
             // TODO: Maintain & pass parent .opts.
@@ -199,6 +201,7 @@ export default function init(sn) {
         },
 
         // TODO: Have `UI.toJS(selected)`.
+        //   TODO: Use it in `UI`, in a <textarea> that allows users to quickly get started (and update `onchange`).
     })
     return UI
     function dom(x) { // Ex: [{ tag:'div', style:'color:red', onclick() { api.levelLoad() } }, 'Click to reload the level']
