@@ -65,6 +65,7 @@ export default function init(sn) {
                         }]
                     table.push([{tag:'tr'}, [{tag:'td', style:'text-align:right'}, prettifyCamelCase(k) + ':'], [{tag:'td'}, opt]])
                     function onchange() {
+                        // TODO: Why do checkboxes not work?
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                         if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
                     }
@@ -121,7 +122,7 @@ export default function init(sn) {
             // Describes an object: name, options, docs.
             const docs = typeof x.docs == 'string' ? x.docs : typeof x.docs == 'function' ? x.docs() : null
             const isClass = UI.groupOf(x) !== 'object'
-            const name = UI.nameOf(x)
+            const name = ' ' + UI.nameOf(x)
             return isClass ? UI.oneOrMore(anItem) : anItem()
             function anItem(btn) {
                 const el = UI.options(x, selected, parentOpts)
@@ -133,8 +134,7 @@ export default function init(sn) {
                     onchange() { if (el) this.checked ? el.resume() : el.pause() },
                 }])
                 return A(UI.collapsed(
-                    running ? [btn || null, running, ' ', name] : [btn || null, name], // TODO: Make `name` a <label> for `running` here.
-                    // TODO: How to allow clicking on summary elements?
+                    [{style:'position:relative; z-index:2'}, btn || null, running || null, name], // TODO: Make `name` a <label> for `running` here.
                     typeof docs == 'string' ? [el, UI.docsTransformer(docs)] : el,
                     true,
                 ), {

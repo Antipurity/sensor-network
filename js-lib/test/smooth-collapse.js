@@ -7,10 +7,8 @@
 
 addEventListener('click', evt => {
     let target = evt.target
-    while (target && (!target.classList || !target.classList.contains('hiding') && !target.classList.contains('hidable')))
-        target = target.parentNode
-    if (!target || !target.classList || !target.classList.contains('hiding')) return
-    let el = target.firstChild
+    if (!target || !target.classList || !target.classList.contains('hidingSurface')) return
+    let el = target.parentNode.firstChild
     while (el && (!el.classList || !el.classList.contains('hidable'))) el = el.nextSibling
     if (!el || !el.classList || !el.classList.contains('hidable')) return
     const shown = !isHidden(el)
