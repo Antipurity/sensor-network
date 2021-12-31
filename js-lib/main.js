@@ -335,7 +335,7 @@ export default (function(exports) {
 
     A(E, {
         Sensor: A(class Sensor {
-            constructor(opts) { assert(opts), this.resume(opts) }
+            constructor(opts) { opts && this.resume(opts) }
             needsExtensionAPI() { return null }
             cellShape() {
                 const ch = state(this.channel)
@@ -475,7 +475,7 @@ export default (function(exports) {
 - \`needsExtensionAPI() → null|String\`: overridable in child classes. By default, the sensor is entirely in-page in a [content script](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts) if injected by an extension. For example, make this return \`'tabs'\` to get access to [\`chrome.tabs\`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs) in an extension.`,
         }),
         Transform: A(class Transform {
-            constructor(opts) { assert(opts), this.resume(opts) }
+            constructor(opts) { opts && this.resume(opts) }
             pause() {
                 if (this.paused !== false) return this
                 const ch = state(this.channel)
@@ -529,7 +529,7 @@ export default (function(exports) {
 - \`pause()\`, \`resume(opts?)\`: for convenience, these return the object.`,
         }),
         Handler: A(class Handler {
-            constructor(opts) { assert(opts), this.resume(opts) }
+            constructor(opts) { opts && this.resume(opts) }
             pause() {
                 if (this.paused !== false) return this
                 const ch = state(this.channel), dst = state(this.channel, this.cellShape, this.partSize, this.summary)

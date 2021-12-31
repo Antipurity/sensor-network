@@ -1,5 +1,6 @@
 export default function init(sn) {
     const A = Object.assign
+    const active = '_uiActive'
     const UI = A(function UI() {
         // Just one channel for now.
         return UI.channel()
@@ -12,7 +13,7 @@ export default function init(sn) {
         nameOf(x) {
             return x.name || (x === sn ? 'Sensor network' : `(Unnamed ${groupOf(x)})`)
         },
-        options(x, selected = {}, parentOpts = null) { // TODO: Also `activeIfDefault=true`.
+        options(x, selected = {}, parentOpts = null) {
             // Given an object, returns the DOM tree that allows the user to select among options.
             // The object should define `.options() → { option:{ valueName: getJSValue() } }`.
             // The result has `.selected` (JSON-serializable) and `.opts` (passable as `parentOpts` here) and `.pause()` and `.resume()`.
@@ -22,7 +23,7 @@ export default function init(sn) {
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
             const opts = Object.create(parentOpts) // TODO: Wait, how to *react* to `parentOpts` changing?
-            const instance = isClass ? new x(optsFor(variants, selected)).pause() : null
+            const instance = isClass ? new x() : null
             const arr = []
             putElems(arr, instance, variants, selected)
             const el = dom(arr)
@@ -40,7 +41,7 @@ export default function init(sn) {
 
             function getDefaults(vars, selected = {}) {
                 for (let k of Object.keys(vars))
-                    if (!selected[k]) {
+                    if (k !== active && !selected[k]) {
                         sn._assert(Object.keys(vars[k]).length, "Can't just be an empty object")
                         selected[k] = Object.keys(vars[k])[0]
                     }
@@ -49,6 +50,7 @@ export default function init(sn) {
             function putElems(into, instance, vars, selected) {
                 const table = [{tag:'table'}]
                 for (let k of Object.keys(vars)) {
+                    if (k === active) continue
                     let opt
                     if (!isCheckboxy(vars[k])) {
                         const optId = ''+Math.random()
@@ -81,6 +83,7 @@ export default function init(sn) {
             }
             function optsFor(vars, selected) {
                 for (let k of Object.keys(vars)) {
+                    if (k === active) continue
                     const f = typeof selected[k] == 'boolean' ? selected[k] : vars[k][selected[k]]
                     opts[k] = typeof f == 'function' ? f() : f
                 }
@@ -129,7 +132,7 @@ export default function init(sn) {
                 resume() { first.resume && first.resume() },
             })
         },
-        describe(x, selected = {}, parentOpts = null, extraDOM = null) { // TODO: Also `activeIfDefault=true`.
+        describe(x, selected = {}, parentOpts = null, extraDOM = null) {
             // Describes an object: name, options, docs.
             let docs = typeof x.docs == 'string' ? x.docs : typeof x.docs == 'function' ? x.docs() : null
             docs = docs && docs.split('\n\n')
@@ -149,8 +152,9 @@ export default function init(sn) {
                     tag:'input',
                     type:'checkbox',
                     title:'Currently active',
-                    onchange() { if (el) this.checked ? el.resume() : el.pause() },
+                    onchange() { if (el) selected[active] = this.checked, this.checked ? el.resume() : el.pause() },
                 }])
+                if (running && selected[active]) running.click()
                 return A(UI.collapsed(
                     [{style:'position:relative; z-index:2'}, btn || null, running || null, running ? [
                         {
@@ -167,7 +171,7 @@ export default function init(sn) {
                 })
             }
         },
-        channel(x = sn) { // TODO: Also have `activateDefaultsByDefault = true`.
+        channel(x = sn) { // TODO: Also have `activateDefaultsByDefault = true`. ...Do we really want that though... Shouldn't this be in `selected` anyway...
             // Creates a UI for easy setup of single-channel sensors/transforms/handlers.
             return walk(x)
             function walk(x, selected = {}, parentOpts = null) {
@@ -177,7 +181,14 @@ export default function init(sn) {
                 if (typeof x.options == 'function' && x !== UI || children.length) {
                     const us = UI.describe(x, selected, parentOpts, children)
                     // TODO: But what about a parent's "Running" checkbox? …Or maybe a counter, or at least a color-based indicator?…
-                    return A(us, {
+                    //   linear-gradient(to right, white 25%, #007cff)
+                    //     linear-gradient(to right, white 25%, #0040ff) on hover.
+                    //   TODO: What do we name this class?
+                    //   TODO: How do we detect whether there's anything running inside?
+                    return A(dom([
+                        { onchange(evt) { console.log(x, evt) } }, // TODO:
+                        us,
+                    ]), {
                         pause() { us.pause && us.pause(), children.forEach(c => c.pause && c.pause()) },
                         resume() { us.resume && us.resume(), children.forEach(c => c.resume && c.resume()) },
                     })
