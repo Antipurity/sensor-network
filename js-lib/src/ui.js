@@ -7,16 +7,16 @@ export default function init(sn) {
             // The result has `.selected` (JSON-serializable) and `.opts` (passable as `parentOpts` here) and `.pause()` and `.resume()`.
             if (typeof x.options != 'function') return
             const proto = Object.getPrototypeOf(x)
-            sn._assert(proto === sn.Sensor || proto === sn.Transform || proto === sn.Handler, "Must be a sensor/transform/handler")
+            const isClass = proto === sn.Sensor || proto === sn.Transform || proto === sn.Handler
             const variants = x.options() // {opt:{valueName:jsValue}}
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
             const opts = Object.create(parentOpts) // TODO: Wait, how to *react* to `parentOpts` changing?
-            const instance = new x(optsFor(variants, selected)).pause()
+            const instance = isClass ? new x(optsFor(variants, selected)).pause() : null
             const arr = []
             putElems(arr, instance, variants, selected)
             const el = dom(arr)
-            const disconnectListener = setInterval(() => {
+            const disconnectListener = instance && setInterval(() => {
                 // Autodie when disconnected. (But never revive.)
                 if (!el.isConnected)
                     instance.pause(), clearInterval(disconnectListener)
@@ -24,8 +24,8 @@ export default function init(sn) {
             return A(el, {
                 selected,
                 opts,
-                pause() { instance.pause() },
-                resume() { instance.resume() },
+                pause() { if (instance) instance.pause() },
+                resume() { if (instance) instance.resume() },
             })
 
             function getDefaults(vars, selected = {}) {
@@ -40,12 +40,12 @@ export default function init(sn) {
                 const runningId = ''+Math.random()
                 into.push([
                     {tag:'div'},
-                    [{ // TODO: Don't have the checkbox.
+                    [{ // TODO: Kill the checkbox.
                         tag:'input',
                         type:'checkbox',
                         runningCheckbox:true,
                         id:runningId,
-                        onchange() { instance.pause(), this.checked && instance.resume(optsFor(vars, selected)) },
+                        onchange() { if (instance) instance.pause(), this.checked && instance.resume(optsFor(vars, selected)) },
                     }],
                     [{tag:'label', htmlFor:runningId}, 'Running'],
                 ])
@@ -54,7 +54,7 @@ export default function init(sn) {
                     const opt = [
                         {tag:'select', id:optId, onchange() {
                             selected[k] = this.value
-                            !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
+                            if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
                         }},
                     ]
                     for (let variant of Object.keys(vars[k]))
@@ -89,26 +89,18 @@ export default function init(sn) {
         docsTransformer(docs) { 'Override this: `sn.UI.docsTransformer = docs => …`'
             return docs.split('\n')[0]
         },
-        describe(x, selected = {}, parentOpts = null) {
-            // Describes an object: name, options, docs.
-            const proto = Object.getPrototypeOf(x)
-            const docs = typeof x.docs == 'string' ? x.docs : typeof x.docs == 'function' ? x.docs() : null
-            return dom([
-                x.name || `(Unnamed ${proto === sn.Sensor ? 'sensor' : proto === sn.Transform ? 'transform' : proto === sn.Handler ? 'handler' : 'object'})`,
-                UI.options(x, selected, parentOpts),
-                docs && UI.collapsed('Documentation', UI.docsTransformer(docs), true),
-            ])
-        },
-        oneOrMore(fn) { // TODO: ...In its use, when a non-class is used, there should only be one instance, not many (currently, assertion-failing instead)...
+        oneOrMore(fn) {
             // Given a DOM-elem-returning func, this returns a spot that can replicate its result.
             const first = fn(true)
+            const others = []
             const container = dom([
                 [
                     [{tag:'button', onclick() {
                         const another = fn(false)
+                        others.push(another)
                         const wrapper = dom([
                             [{tag:'button', onclick() {
-                                another.pause(), wrapper.remove()
+                                wrapper.remove(), others.splice(others.lastIndexOf(another), 1), another.pause()
                             }}, '-'],
                             another,
                         ])
@@ -118,18 +110,38 @@ export default function init(sn) {
                 ],
             ])
             return A(container, {
-                pause() { first.pause && first.pause() },
+                pause() { first.pause && first.pause(), others.forEach(e => e.pause && e.pause()), others.length = 0 },
                 resume() { first.resume && first.resume() },
             })
         },
+        describe(x, selected = {}, parentOpts = null) {
+            // Describes an object: name, options, docs.
+            const docs = typeof x.docs == 'string' ? x.docs : typeof x.docs == 'function' ? x.docs() : null
+            const proto = Object.getPrototypeOf(x)
+            const group = proto === sn.Sensor ? 'sensor' : proto === sn.Transform ? 'transform' : proto === sn.Handler ? 'handler' : 'object'
+            return dom([
+                x.name || `(Unnamed ${group})`,
+                group !== 'object' ? UI.oneOrMore(() => UI.options(x, selected, parentOpts)) : UI.options(x, selected, parentOpts),
+                docs && UI.collapsed('Documentation', UI.docsTransformer(docs), true),
+            ])
+        },
         channel() {
             // Creates a UI for easy setup of single-channel sensors/transforms/handlers.
+            // TODO: Test this.
             return walk(sn)
             function walk(x, selected = {}, parentOpts = null) {
                 if (!x || typeof x != 'object' && typeof x != 'function') return
                 const children = Object.values(x).map(v => walk(v)).filter(x => x)
                 if (typeof x.options == 'function' || children.length) {
-                    // TODO: Return a DOM elem with UI.describe(x, selected, parentOpts) and UI.collapsed(description, childrenIfAny, true).
+                    const us = UI.describe(x, selected, parentOpts)
+                    const container = UI.collapsed(us, children, true)
+                    // TODO: Also a "Running" checkbox, right? Which uses container.pause()/.resume()...
+                    //   ...Wait, no, what about that "one-or-more" — should be able to turn them on/off individually...
+                    return A(container, {
+                        // TODO: Also modify the checkbox's checkedness.
+                        pause() { us.pause && us.pause(), children.forEach(c => c.pause && c.pause()) },
+                        resume() { us.resume && us.resume(), children.forEach(c => c.resume && c.resume()) },
+                    })
                 }
             }
         },

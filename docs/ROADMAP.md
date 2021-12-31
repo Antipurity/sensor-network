@@ -282,11 +282,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - Keyboard, pointers, UI, text, `indexedDB` files.
                 - If most-important-first:
                     - Files, UI, text, pointers, keyboard, audio.
-            - TODO: Text:
-                - TODO: Constraints:
-                    - Position-invariance. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
+            - TODO: Text (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
+                - TODO: Design constraints:
+                    - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
                     - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling)
-                    - TODO: ...We didn't impose any other constraints, right?
+                    - That's all. A human can use it. AGI can use it.
             - ✓ No-feedback sound output (speakers).
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
                     - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)
@@ -304,7 +304,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - (A personal AI model is basically soft mind uploading, realistically-gradual rather than instantly-perfect. The only real obstacle is that a typical PC doesn't have the compute to run some massive AI model full-time. But AI-training increases in efficiency rapidly, [2…10 ](https://openai.com/blog/ai-and-efficiency/)[times in ](https://venturebeat.com/2020/06/04/ark-invest-ai-training-costs-dropped-100-fold-between-2017-and-2019/)[a year](https://ark-invest.com/articles/analyst-research/ai-training/): what is today a [multi-million-dollar project](https://syncedreview.com/2020/04/30/ai21-labs-asks-how-much-does-it-cost-to-train-nlp-models/) may be doable on a personal computer in a decade. Phones and other devices that need a battery could connect; [Internet bandwidth is growing too, at 1.5× a year](https://www.nngroup.com/articles/law-of-bandwidth/).)
                 - ⋯ Need concrete and relatively-compute-light tasks to strive for. Such as "in a game, learn to augment human play with non-human actions" or "predict near-term reward from facial expression".
         - ⋯ `.options()` and `.options(X)` UI.
-        - ⋯ `.defaults()`.
+        - ⋯ `.default()`, collecting non-`false` `.default`s. (And make UI run the defaults by default.)
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
 
