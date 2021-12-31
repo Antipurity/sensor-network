@@ -84,9 +84,9 @@ In Chrome, users might have to first click on the page for sound to play.
                     ['1%']: () => .01,
                 },
                 minFrequency: {
-                    ['1KHz']: () => 1000,
-                    ['0']: () => 0,
-                    ['5KHz']: () => 5000,
+                    ['1 kHz']: () => 1000,
+                    ['0 Hz']: () => 0,
+                    ['5 kHz']: () => 5000,
                 },
                 maxFrequency: {
                     ['13 kHz']: () => 13000,

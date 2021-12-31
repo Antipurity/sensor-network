@@ -16,9 +16,9 @@ Extra options:
 - \`monochrome = true\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
 - \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame.
     - If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
+- \`tiling = 2\`: how many vertical/horizontal repetitions there are per target or screen.
 - \`zoomSteps = 3\`: how many extra zoomed views to generate per target or screen.
 - \`zoomStep = 2\`: the multiplier/divider of in-source tile dimension, per zoom step.
-- \`tiling = 2\`: how many vertical/horizontal repetitions there are per target or screen.
 ` }
         static options() {
             return {
@@ -35,7 +35,28 @@ Extra options:
                     No: false,
                     Yes: true,
                 },
-                // TODO: What do we want?
+                targets: {
+                    ['Mouse/touch']: () => Video.pointers(),
+                    ['None']: () => [],
+                },
+                tiling: {
+                    ['2×2']: () => 2,
+                    ['3×3']: () => 3,
+                    ['4×4']: () => 4,
+                    ['8×8']: () => 8,
+                    ['1×1']: () => 1,
+                },
+                zoomSteps: {
+                    ['3 ']: () => 3,
+                    ['2 ']: () => 2,
+                    ['1 ']: () => 1,
+                    ['0 ']: () => 0,
+                },
+                zoomStep: {
+                    ['2×']: () => 2,
+                    ['3×']: () => 3,
+                    ['4×']: () => 4,
+                },
             }
         }
         pause() {

@@ -49,7 +49,7 @@ export default function init(sn) {
                     if (!isCheckboxy(vars[k])) {
                         const optId = ''+Math.random()
                         opt = [
-                            {tag:'select', id:optId, style:'text-align:right', onchange},
+                            {tag:'select', id:optId, onchange},
                         ]
                         for (let variant of Object.keys(vars[k]))
                             opt.push([
@@ -63,13 +63,13 @@ export default function init(sn) {
                             type:'checkbox',
                             onchange,
                         }]
-                    table.push([{tag:'tr'}, [{tag:'td'}, opt], [{tag:'td'}, prettifyCamelCase(k)]])
+                    table.push([{tag:'tr'}, [{tag:'td', style:'text-align:right'}, prettifyCamelCase(k) + ':'], [{tag:'td'}, opt]])
+                    function onchange() {
+                        selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
+                        if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
+                    }
                 }
                 into.push(table)
-                function onchange() {
-                    selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
-                    if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
-                }
                 function isCheckboxy(o) { return Object.values(o).every(v => typeof v == 'boolean') }
                 function prettifyCamelCase(s) {
                     return s[0].toUpperCase() + s.slice(1).replace(/[A-Z]/g, s => ' '+s.toLowerCase())
@@ -154,6 +154,7 @@ export default function init(sn) {
                 }
             }
         },
+        // What about *this* UI: just "+" and "running" and "Video", and when expanded, show options AND description?
         //   TODO: Maintain & pass parent .opts.
         //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
         //   TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
