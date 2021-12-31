@@ -24,9 +24,7 @@ export default function init(sn) {
             const variants = x.options() // {opt:{valueName:jsValue}}
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
-            const opts = Object.create(parentOpts) // TODO: Wait, how to *react* to `parentOpts` changing?
-            //   Do we store a list of callbacks on each parent?...
-            //   Is there any other way, even? One that doesn't involve frequent checking? Can parents actually pause+resume all their active children... Actually, I think they can: when the parent's option changes, all children are re-run (have to make sure that it's not a child's option that we're detecting, else we'll end up re-running everything on every change).
+            const opts = Object.create(parentOpts)
             const instance = isClass ? new x() : null
             const arr = []
             putElems(arr, instance, variants, selected)
@@ -78,7 +76,7 @@ export default function init(sn) {
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                         optsFor(vars, selected)
                         if (instance) !instance.paused && (instance.pause(), instance.resume(opts))
-                        // TODO: Why is there a "Data must be divided into cells" error?
+                        // TODO: Why does switching dataSize dynamically just kill the process?
                     }
                 }
                 into.push(table)

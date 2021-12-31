@@ -421,6 +421,7 @@ export default (function(exports) {
                         partSize: 0,
                         userParts: 0,
                         nameParts: 0,
+                        dataSize: 0,
                     })
                     if (!this.feedbackCallbacks) {
                         this.feedbackCallbacks = []
@@ -1119,6 +1120,7 @@ Makes only the sign matter for low-frequency numbers.` }),
             T.partSize = partSize
             T.userParts = user / partSize | 0
             T.nameParts = name / partSize | 0
+            T.dataSize = data
             dataNamers[summary] = E._dataNamer(T)
         }
         return dataNamers[summary]
