@@ -127,14 +127,22 @@ export default function init(sn) {
             function anItem(btn) {
                 const el = UI.options(x, selected, parentOpts)
                 if (!el) return btn ? dom([btn, name]) : name
+                const id = ''+Math.random()
                 const running = isClass && dom([{
+                    id,
                     tag:'input',
                     type:'checkbox',
                     title:'Currently active',
                     onchange() { if (el) this.checked ? el.resume() : el.pause() },
                 }])
                 return A(UI.collapsed(
-                    [{style:'position:relative; z-index:2'}, btn || null, running || null, name], // TODO: Make `name` a <label> for `running` here.
+                    [{style:'position:relative; z-index:2'}, btn || null, running || null, running ? [
+                        {
+                            tag: 'label',
+                            htmlFor: id,
+                        },
+                        name,
+                    ] : name],
                     typeof docs == 'string' ? [el, UI.docsTransformer(docs)] : el,
                     true,
                 ), {
@@ -153,7 +161,6 @@ export default function init(sn) {
                 if (typeof x.options == 'function' && x !== UI || children.length) {
                     const us = UI.describe(x, selected, parentOpts)
                     const container = children.length ? UI.collapsed(us, children, true) : us
-                    //   (TODO: How to allow clicking in summary-`us`?)
                     // TODO: But what about a parent's "Running" checkbox? …Or maybe a counter, or at least a color-based indicator?…
                     return A(container, {
                         pause() { us.pause && us.pause(), children.forEach(c => c.pause && c.pause()) },
