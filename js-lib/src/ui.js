@@ -43,14 +43,13 @@ export default function init(sn) {
                 return selected
             }
             function putElems(into, instance, vars, selected) {
-                // TODO: Should we make a `table` of options instead, so that it doesn't look too terrible?
-                //   (And, turn keys from camelCase to Human readable.)
+                const table = [{tag:'table'}]
                 for (let k of Object.keys(vars)) {
                     let opt
                     if (!isCheckboxy(vars[k])) {
                         const optId = ''+Math.random()
                         opt = [
-                            {tag:'select', id:optId, onchange},
+                            {tag:'select', id:optId, style:'text-align:right', onchange},
                         ]
                         for (let variant of Object.keys(vars[k]))
                             opt.push([
@@ -64,13 +63,17 @@ export default function init(sn) {
                             type:'checkbox',
                             onchange,
                         }]
-                    into.push([opt, ' ', k])
+                    table.push([{tag:'tr'}, [{tag:'td'}, opt], [{tag:'td'}, prettifyCamelCase(k)]])
                 }
+                into.push(table)
                 function onchange() {
                     selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                     if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
                 }
                 function isCheckboxy(o) { return Object.values(o).every(v => typeof v == 'boolean') }
+                function prettifyCamelCase(s) {
+                    return s[0].toUpperCase() + s.slice(1).replace(/[A-Z]/g, s => ' '+s.toLowerCase())
+                }
             }
             function optsFor(vars, selected) {
                 for (let k of Object.keys(vars)) {
