@@ -1,25 +1,25 @@
 export default function init(sn) {
     const A = Object.assign
     const UI = {
+        groupOf(x) {
+            const p = Object.getPrototypeOf(x)
+            return p === sn.Sensor ? 'sensor' : p === sn.Transform ? 'transform' : p === sn.Handler ? 'handler' : 'object'
+        },
+        nameOf(x) {
+            return x.name || (x === sn ? 'Sensor network' : `(Unnamed ${groupOf(x)})`)
+        },
         options(x, selected = {}, parentOpts = null) {
             // Given an object, returns the DOM tree that allows the user to select among options.
             // The object should define `.options() → { option:{ valueName: getJSValue() } }`.
             // The result has `.selected` (JSON-serializable) and `.opts` (passable as `parentOpts` here) and `.pause()` and `.resume()`.
             if (typeof x.options != 'function' || x === UI) return
-            const proto = Object.getPrototypeOf(x)
-            const isClass = proto === sn.Sensor || proto === sn.Transform || proto === sn.Handler
+            const isClass = UI.groupOf(x) !== 'object'
             const variants = x.options() // {opt:{valueName:jsValue}}
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
             const opts = Object.create(parentOpts) // TODO: Wait, how to *react* to `parentOpts` changing?
             const instance = isClass ? new x(optsFor(variants, selected)).pause() : null
-            const running = isClass && dom([{
-                tag:'input',
-                type:'checkbox',
-                title:'Currently active',
-                onchange() { if (instance) instance.pause(), this.checked && instance.resume(optsFor(variants, selected)) },
-            }])
-            const arr = running ? [running] : []
+            const arr = []
             putElems(arr, instance, variants, selected)
             const el = dom(arr)
             const disconnectListener = instance && setInterval(() => {
@@ -30,8 +30,8 @@ export default function init(sn) {
             return A(el, {
                 selected,
                 opts,
-                pause() { running && running.checked && running.click() },
-                resume() { running && !running.checked && running.click() },
+                pause() { instance && instance.pause() },
+                resume() { instance && instance.resume(optsFor(variants, selected)) },
             })
 
             function getDefaults(vars, selected = {}) {
@@ -102,24 +102,16 @@ export default function init(sn) {
         },
         oneOrMore(fn) {
             // Given a DOM-elem-returning func, this returns a spot that can replicate its result.
-            const first = fn(true)
+            //   The function accepts a DOM element that adds/removes an item, and should put it.
+            const first = fn(dom([{tag:'button', onclick() {
+                const another = fn(dom([{tag:'button', onclick() {
+                    another.remove(), others.splice(others.lastIndexOf(another), 1), another.pause()
+                }}, '-']))
+                others.push(another)
+                container.append(another)
+            }}, '+']))
             const others = []
-            const container = dom([
-                [
-                    [{tag:'button', onclick() {
-                        const another = fn(false)
-                        others.push(another)
-                        const wrapper = dom([
-                            [{tag:'button', onclick() {
-                                wrapper.remove(), others.splice(others.lastIndexOf(another), 1), another.pause()
-                            }}, '-'],
-                            another,
-                        ])
-                        container.append(wrapper)
-                    }}, '+'],
-                    first,
-                ],
-            ])
+            const container = dom([first])
             return A(container, {
                 pause() { first.pause && first.pause(), others.forEach(e => e.pause && e.pause()), others.length = 0 },
                 resume() { first.resume && first.resume() },
@@ -128,13 +120,28 @@ export default function init(sn) {
         describe(x, selected = {}, parentOpts = null) {
             // Describes an object: name, options, docs.
             const docs = typeof x.docs == 'string' ? x.docs : typeof x.docs == 'function' ? x.docs() : null
-            const proto = Object.getPrototypeOf(x)
-            const group = proto === sn.Sensor ? 'sensor' : proto === sn.Transform ? 'transform' : proto === sn.Handler ? 'handler' : 'object'
-            return dom([
-                ' ' + (x.name || (x === sn ? 'Sensor network' : `(Unnamed ${group})`)),
-                group !== 'object' ? UI.oneOrMore(() => UI.options(x, selected, parentOpts)) : UI.options(x, selected, parentOpts),
-                docs && UI.collapsed('Documentation', UI.docsTransformer(docs), true), // TODO: The title should be the first line, not the generic "Documentation", to maximize content-per-view.
-            ])
+            const isClass = UI.groupOf(x) !== 'object'
+            const name = UI.nameOf(x)
+            return isClass ? UI.oneOrMore(anItem) : anItem()
+            function anItem(btn) {
+                const el = UI.options(x, selected, parentOpts)
+                if (!el) return btn ? dom([btn, name]) : name
+                const running = isClass && dom([{
+                    tag:'input',
+                    type:'checkbox',
+                    title:'Currently active',
+                    onchange() { if (el) this.checked ? el.resume() : el.pause() },
+                }])
+                return A(UI.collapsed(
+                    running ? [btn || null, running, ' ', name] : [btn || null, name], // TODO: Make `name` a <label> for `running` here.
+                    // TODO: How to allow clicking on summary elements?
+                    typeof docs == 'string' ? [el, UI.docsTransformer(docs)] : el,
+                    true,
+                ), {
+                    pause() { el.pause && el.pause() },
+                    resume() { el.resume && el.resume() },
+                })
+            }
         },
         channel() {
             // Creates a UI for easy setup of single-channel sensors/transforms/handlers.
@@ -142,6 +149,7 @@ export default function init(sn) {
             function walk(x, selected = {}, parentOpts = null) {
                 if (!x || typeof x != 'object' && typeof x != 'function') return
                 const children = Object.values(x).map(v => walk(v)).filter(x => x)
+                // TODO: Is it possible to not include the top-level "Sensor network"?
                 if (typeof x.options == 'function' && x !== UI || children.length) {
                     const us = UI.describe(x, selected, parentOpts)
                     const container = children.length ? UI.collapsed(us, children, true) : us
@@ -153,11 +161,9 @@ export default function init(sn) {
                     })
                 }
             }
+            // TODO: Maintain & pass parent .opts.
+            // TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
         },
-        // What about *this* UI: just "+" and "running" and "Video", and when expanded, show options AND description?
-        //   TODO: Maintain & pass parent .opts.
-        //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
-        //   TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
 
         // TODO: Have `Sensor`, `Transform`, `Handler`.
         //   (Don't be boring, come on.)
@@ -182,7 +188,7 @@ export default function init(sn) {
                 if (x[i] && !Array.isArray(x[i]) && typeof x[i] == 'object' && !(x[i] instanceof Promise) && !(x[i] instanceof Node))
                     for (let k of Object.keys(x[i])) {
                         const v = el[k] = x[i][k]
-                        if (typeof v == 'string' || typeof v == 'number' || typeof v == 'boolean')
+                        if (k !== 'tag' && (typeof v == 'string' || typeof v == 'number' || typeof v == 'boolean'))
                             el.setAttribute(k, v)
                     }
                 else if (x[i] != null) el.append(dom(x[i]))

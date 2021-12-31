@@ -30,6 +30,8 @@ Extra options:
                 },
                 source: {
                     ["Stitch the tab's canvas/video/img elements"]: () => Video.stitchTab(),
+                    ["Tab/window/screen"]: () => Video.requestDisplay(),
+                    ["Camera"]: () => Video.requestCamera(),
                 },
                 monochrome: {
                     No: false,
