@@ -13,7 +13,7 @@ export default function init(sn) {
             return p === sn.Sensor ? 'sensor' : p === sn.Transform ? 'transform' : p === sn.Handler ? 'handler' : 'object'
         },
         nameOf(x) {
-            return x.name || (x === sn ? 'Sensor network' : `(Unnamed ${groupOf(x)})`)
+            return x.name || (x === sn ? 'Sensor network' : `(Unnamed ${UI.groupOf(x)})`)
         },
         options(x, selected = {}, parentOpts = null) {
             // Given an object, returns the DOM tree that allows the user to select among options.
@@ -74,7 +74,9 @@ export default function init(sn) {
                     table.push([{tag:'tr'}, [{tag:'td', style:'text-align:right'}, prettifyCamelCase(k) + ':'], [{tag:'td'}, opt]])
                     function onchange() {
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
-                        if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
+                        optsFor(vars, selected)
+                        if (instance) !instance.paused && (instance.pause(), instance.resume(opts))
+                        // TODO: Why is there a "Data must be divided into cells" error?
                     }
                 }
                 into.push(table)
@@ -92,6 +94,7 @@ export default function init(sn) {
                 return opts
             }
         },
+        // TODO: Why do parents-with-options still have selectability...
         collapsed(summary, content, byDefault = true) {
             // Made specifically for `test.html`. Wraps a DOM element in a collapsible container.
             return dom([
@@ -146,7 +149,7 @@ export default function init(sn) {
                 const el = UI.options(x, selected, parentOpts)
                 if (!el) {
                     const header = dom([btn || null, name])
-                    return UI.collapsed(header, [docs.cloneNode(true), extraDOM], true)
+                    return UI.collapsed(header, [docs && docs.cloneNode(true), extraDOM], true)
                 }
                 const id = ''+Math.random()
                 const running = isClass && dom([{
@@ -166,9 +169,10 @@ export default function init(sn) {
                         },
                         name,
                     ] : name],
-                    [docs.cloneNode(true), el, extraDOM],
+                    [docs && docs.cloneNode(true), el, extraDOM],
                     true,
                 ), {
+                    opts: el && el.opts,
                     pause() { el.pause && el.pause() },
                     resume() { el.resume && el.resume() },
                 })
@@ -179,10 +183,12 @@ export default function init(sn) {
             return walk(x)
             function walk(x, selected = {}, parentOpts = null) {
                 if (!x || typeof x != 'object' && typeof x != 'function') return
-                const children = Object.values(x).map(v => walk(v)).filter(x => x)
+                const chElem = dom([])
+                const us = UI.describe(x, selected, parentOpts, chElem)
+                const children = Object.values(x).map(v => walk(v, {}, us.opts || parentOpts)).filter(x => x)
                 if (x === sn) return dom(children)
                 if (typeof x.options == 'function' && x !== UI || children.length) {
-                    const us = UI.describe(x, selected, parentOpts, children)
+                    chElem.replaceWith(dom(children))
                     return A(onchange.call(dom([
                         { onchange },
                         us,
@@ -196,7 +202,6 @@ export default function init(sn) {
                     }
                 }
             }
-            // TODO: Maintain & pass parent .opts.
             // TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
         },
 
