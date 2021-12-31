@@ -94,7 +94,6 @@ export default function init(sn) {
                 return opts
             }
         },
-        // TODO: Why do parents-with-options still have selectability...
         collapsed(summary, content, byDefault = true) {
             // Made specifically for `test.html`. Wraps a DOM element in a collapsible container.
             return dom([
@@ -162,7 +161,9 @@ export default function init(sn) {
                 }])
                 if (running && selected[active]) running.click()
                 return A(UI.collapsed(
-                    [{style:'position:relative; z-index:2'}, btn || null, running || null, running ? [
+                    [running ? {
+                        style:'position:relative; z-index:2'
+                    } : null, btn || null, running || null, running ? [
                         {
                             tag: 'label',
                             htmlFor: id,
