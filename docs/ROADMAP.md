@@ -290,6 +290,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ No-feedback sound output (speakers).
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
                     - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)
+                    - ⋯ Inspect the first and last numbers of packets: these probably cause clicking. Try to pick the wave phase (dependent on previous-packets-size) that minimizes that difference.
                     - ⋯ [Normalize perceived loudness.](https://en.wikipedia.org/wiki/Equal-loudness_contour)
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.

@@ -19,7 +19,7 @@ addEventListener('click', evt => {
     el.offsetHeight // Slow. But smooth.
     el.style.removeProperty('transition')
     toggleHeight(el)
-    target.classList.toggle('isHiding', shown)
+    target.parentNode.classList.toggle('isHiding', shown)
     function isHidden(el) {
         return el.style.height == '0px'
     }

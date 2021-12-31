@@ -65,7 +65,6 @@ export default function init(sn) {
                         }]
                     table.push([{tag:'tr'}, [{tag:'td', style:'text-align:right'}, prettifyCamelCase(k) + ':'], [{tag:'td'}, opt]])
                     function onchange() {
-                        // TODO: Why do checkboxes not work?
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                         if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
                     }
@@ -78,7 +77,7 @@ export default function init(sn) {
             }
             function optsFor(vars, selected) {
                 for (let k of Object.keys(vars)) {
-                    const f = vars[k][selected[k]]
+                    const f = typeof selected[k] == 'boolean' ? selected[k] : vars[k][selected[k]]
                     opts[k] = typeof f == 'function' ? f() : f
                 }
                 return opts
