@@ -1,6 +1,10 @@
 export default function init(sn) {
     const A = Object.assign
-    const UI = {
+    const UI = A(function UI() {
+        // Just one channel for now.
+        return UI.channel()
+    }, {
+        docs:`Creates UI for convenient configuration of sensors. Append it to \`document.body\` or something.`,
         groupOf(x) {
             const p = Object.getPrototypeOf(x)
             return p === sn.Sensor ? 'sensor' : p === sn.Transform ? 'transform' : p === sn.Handler ? 'handler' : 'object'
@@ -150,9 +154,9 @@ export default function init(sn) {
                 })
             }
         },
-        channel() {
+        channel(x = sn) {
             // Creates a UI for easy setup of single-channel sensors/transforms/handlers.
-            return walk(sn)
+            return walk(x)
             function walk(x, selected = {}, parentOpts = null) {
                 if (!x || typeof x != 'object' && typeof x != 'function') return
                 const children = Object.values(x).map(v => walk(v)).filter(x => x)
@@ -160,6 +164,7 @@ export default function init(sn) {
                 if (typeof x.options == 'function' && x !== UI || children.length) {
                     const us = UI.describe(x, selected, parentOpts)
                     const container = children.length ? UI.collapsed(us, children, true) : us
+                    // TODO: Why are parents-with-options double-collapsed? How can we not?
                     // TODO: But what about a parent's "Running" checkbox? …Or maybe a counter, or at least a color-based indicator?…
                     return A(container, {
                         pause() { us.pause && us.pause(), children.forEach(c => c.pause && c.pause()) },
@@ -171,14 +176,15 @@ export default function init(sn) {
             // TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
         },
 
-        // TODO: Have `Sensor`, `Transform`, `Handler`.
+        // TODO: Have options for `Sensor`, `Transform`, `Handler`.
         //   (Don't be boring, come on.)
+        //   Even though only `Handler` actually has anything worth adjusting.
 
-        // TODO: Make `UI` itself return one-or-more channels.
-        //   (TODO: Also, maybe, a collapsed area for JS code that creates everything currently-active?)
+        // TODO: Have `UI.toJS(selected)`.
+
         // (TODO: Also make `test.html` put the full UI compiler there. Possibly instead of docs.)
         //   (TODO: And make it all look good.)
-    }
+    })
     return UI
     function dom(x) { // Ex: [{ tag:'div', style:'color:red', onclick() { api.levelLoad() } }, 'Click to reload the level']
         if (x instanceof Promise) {

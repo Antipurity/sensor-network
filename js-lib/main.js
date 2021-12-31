@@ -595,6 +595,32 @@ export default (function(exports) {
     - To change any of this, \`resume({…})\`.
 
 - \`pause()\`, \`resume(opts?)\`: for convenience, these return the object.`,
+            options() {
+                return {
+                    partSize: {
+                        ['8 ']: () => 8,
+                        ['4 ']: () => 4,
+                        ['16 ']: () => 16,
+                        ['32 ']: () => 32,
+                    },
+                    userParts: {
+                        ['×0']: () => 0,
+                        ['×1']: () => 1,
+                    },
+                    nameParts: {
+                        ['×3']: () => 3,
+                        ['×2']: () => 2,
+                        ['×1']: () => 1,
+                        ['×0']: () => 0,
+                        ['×5']: () => 5,
+                    },
+                    dataSize: {
+                        ['+64']: () => 64,
+                        ['+16']: () => 16,
+                        ['+256']: () => 256,
+                    },
+                }
+            },
             bench() {
                 const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
                 return cellCounts.map(river) // See how throughput changes with input size.
