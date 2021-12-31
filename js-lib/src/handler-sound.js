@@ -74,6 +74,41 @@ In Chrome, users might have to first click on the page for sound to play.
     - \`centerIsZero = false\`: by default, -1 values are silent; to make 0s silent instead, use \`true\`.
     - \`debug = false\`: if set, visualizes frequency data in a \`<canvas>\`. (Usable for quickly testing \`.Sensor.Video\`.)
 ` }
+        static options() {
+            return {
+                volume: {
+                    ['100%']: () => 1,
+                    ['30%']: () => .3,
+                    ['10%']: () => .1,
+                    ['3%']: () => .03,
+                    ['1%']: () => .01,
+                },
+                minFrequency: {
+                    ['1KHz']: () => 1000,
+                    ['0']: () => 0,
+                    ['5KHz']: () => 5000,
+                },
+                maxFrequency: {
+                    ['13 kHz']: () => 13000,
+                    ['16 kHz']: () => 16000,
+                    ['20 kHz']: () => 20000,
+                    ['∞']: () => 999999999,
+                },
+                nameImportance: {
+                    ['50%']: () => .5,
+                    ['100%']: () => 1,
+                    ['0%']: () => 0,
+                },
+                centerIsZero: {
+                    No: false,
+                    Yes: true,
+                },
+                debug: {
+                    No: false,
+                    Yes: true,
+                },
+            }
+        }
         resume(opts) {
             if (opts) {
                 opts.onValues = Sound.onValues
@@ -159,7 +194,8 @@ In Chrome, users might have to first click on the page for sound to play.
             const cellSize = cellShape.reduce((a,b)=>a+b)
             const channels = 1
             const sampleRate = Sound.ctx.sampleRate
-            const soundLen = Math.ceil(data.length * sampleRate / this.maxFrequency)
+            const maxFrequency = Math.min(this.maxFrequency, sampleRate)
+            const soundLen = Math.ceil(data.length * sampleRate / maxFrequency)
             // Firefox has skips all over the sound if we don't delay.
             const delay = Sound.ctx.outputLatency || Sound.ctx.baseLatency
             const buf = Sound.ctx.createBuffer(channels, soundLen, sampleRate)

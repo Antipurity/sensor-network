@@ -20,6 +20,24 @@ Extra options:
 - \`zoomStep = 2\`: the multiplier/divider of in-source tile dimension, per zoom step.
 - \`tiling = 2\`: how many vertical/horizontal repetitions there are per target or screen.
 ` }
+        static options() {
+            return {
+                tileDimension: {
+                    ['8×8']: () => 8,
+                    ['16×16']: () => 16,
+                    ['32×32']: () => 32,
+                    ['4×4']: () => 4,
+                },
+                source: {
+                    ["Stitch the tab's canvas/video/img elements"]: () => Video.stitchTab(),
+                },
+                monochrome: {
+                    No: false,
+                    Yes: true,
+                },
+                // TODO: What do we want?
+            }
+        }
         pause() {
             this._nextTarget && this._nextTarget.pause()
             return super.pause()

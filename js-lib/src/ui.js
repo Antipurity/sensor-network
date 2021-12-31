@@ -44,26 +44,39 @@ export default function init(sn) {
             }
             function putElems(into, instance, vars, selected) {
                 // TODO: Should we make a `table` of options instead, so that it doesn't look too terrible?
+                //   (And, turn keys from camelCase to Human readable.)
                 for (let k of Object.keys(vars)) {
-                    const optId = ''+Math.random()
-                    const opt = [
-                        {tag:'select', id:optId, onchange() {
-                            selected[k] = this.value
-                            if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
-                        }},
-                    ]
-                    for (let variant of Object.keys(vars[k]))
-                        opt.push([
-                            {tag:'option', value:variant},
-                            selected[k] === variant ? {selected:''} : null,
-                            [{tag:'code'}, variant],
-                        ])
+                    let opt
+                    if (!isCheckboxy(vars[k])) {
+                        const optId = ''+Math.random()
+                        opt = [
+                            {tag:'select', id:optId, onchange},
+                        ]
+                        for (let variant of Object.keys(vars[k]))
+                            opt.push([
+                                {tag:'option', value:variant},
+                                selected[k] === variant ? {selected:''} : null,
+                                [{tag:'code'}, variant],
+                            ])
+                    } else
+                        opt = [{
+                            tag:'input',
+                            type:'checkbox',
+                            onchange,
+                        }]
                     into.push([opt, ' ', k])
                 }
+                function onchange() {
+                    selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
+                    if (instance) !instance.paused && (instance.pause(), instance.resume(optsFor(vars, selected)))
+                }
+                function isCheckboxy(o) { return Object.values(o).every(v => typeof v == 'boolean') }
             }
             function optsFor(vars, selected) {
-                for (let k of Object.keys(vars))
-                    opts[k] = vars[k][selected[k]]()
+                for (let k of Object.keys(vars)) {
+                    const f = vars[k][selected[k]]
+                    opts[k] = typeof f == 'function' ? f() : f
+                }
                 return opts
             }
         },
@@ -115,7 +128,7 @@ export default function init(sn) {
             const proto = Object.getPrototypeOf(x)
             const group = proto === sn.Sensor ? 'sensor' : proto === sn.Transform ? 'transform' : proto === sn.Handler ? 'handler' : 'object'
             return dom([
-                x.name || (x === sn ? 'Sensor network' : `(Unnamed ${group})`),
+                ' ' + (x.name || (x === sn ? 'Sensor network' : `(Unnamed ${group})`)),
                 group !== 'object' ? UI.oneOrMore(() => UI.options(x, selected, parentOpts)) : UI.options(x, selected, parentOpts),
                 docs && UI.collapsed('Documentation', UI.docsTransformer(docs), true), // TODO: The title should be the first line, not the generic "Documentation", to maximize content-per-view.
             ])
@@ -130,9 +143,8 @@ export default function init(sn) {
                     const us = UI.describe(x, selected, parentOpts)
                     const container = children.length ? UI.collapsed(us, children, true) : us
                     //   (TODO: How to allow clicking in summary-`us`?)
-                    // TODO: But what about a parent's "Running" checkbox?
+                    // TODO: But what about a parent's "Running" checkbox? …Or maybe a counter, or at least a color-based indicator?…
                     return A(container, {
-                        // TODO: Also modify the checkbox's checkedness.
                         pause() { us.pause && us.pause(), children.forEach(c => c.pause && c.pause()) },
                         resume() { us.resume && us.resume(), children.forEach(c => c.resume && c.resume()) },
                     })
@@ -143,7 +155,8 @@ export default function init(sn) {
         //   TODO: (And a hierarchy of "Running" checkboxes, which force children to their state when flicked.)
         //   TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
 
-        // TODO: Have `.options()` on `Video`, `Sound`; `Sensor`, `Transform`, `Handler`.
+        // TODO: Have `Sensor`, `Transform`, `Handler`.
+        //   (Don't be boring, come on.)
 
         // TODO: Make `UI` itself return one-or-more channels.
         //   (TODO: Also, maybe, a collapsed area for JS code that creates everything currently-active?)
