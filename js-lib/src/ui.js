@@ -1,12 +1,16 @@
 export default function init(sn) {
     const A = Object.assign
     const active = '_uiActive'
+    const selectedJS = new WeakMap
     const UI = A(function UI() {
         // Just one channel for now.
         const state = load() || [{}]
         console.log(state) // TODO:
+        setTimeout(() => console.log(UI.toJS(state)), 10) // TODO:
+        // TODO: Use `UI.toJS` in `UI`, in a <textarea> (updated `onchange`) that allows users to quickly get started.
+        // TODO: (Make `Time` expose its `values` option.)
         return dom([
-            { onchange: () => save(state) },
+            { onchange: () => save(state) }, // (This double-saves each time. Might want to throttle saving.)
             UI.channel(sn, state[0]),
         ])
         function load() {
@@ -56,7 +60,7 @@ export default function init(sn) {
 
             function getDefaults(vars, selected = {}) {
                 for (let k of Object.keys(vars))
-                    if (k !== active && !selected[k]) {
+                    if (k !== active && selected[k] === undefined) {
                         sn._assert(Object.keys(vars[k]).length, "Can't just be an empty object")
                         selected[k] = Object.keys(vars[k])[0]
                         if (isCheckboxy(vars[k])) selected[k] = vars[k][selected[k]]
@@ -99,11 +103,16 @@ export default function init(sn) {
             }
             function isCheckboxy(o) { return Object.values(o).every(v => typeof v == 'boolean') }
             function optsFor(vars, selected) {
+                const js = {}
                 for (let k of Object.keys(vars)) {
                     if (k === active) continue
                     const f = typeof selected[k] == 'boolean' ? selected[k] : vars[k][selected[k]]
                     opts[k] = typeof f == 'function' ? f() : f
+                    const Default = isCheckboxy(vars[k]) ? Object.values(vars[k])[0] : Object.keys(vars[k])[0]
+                    if (selected[k] !== Default)
+                        js[k] = ''+f // Only non-defaults are saved.
                 }
+                selectedJS.set(selected, js)
                 return opts
             }
         },
@@ -239,8 +248,37 @@ export default function init(sn) {
             }
         },
 
-        // TODO: Have `UI.toJS(selected)`.
-        //   TODO: Use it in `UI`, in a <textarea> that allows users to quickly get started (and update `onchange`).
+        toJS(selected = []) {
+            // Collects active items in `selected` into JS code that recreates those items.
+            let js = [`import sn from 'sensor-network'\n`]
+            selected.forEach(s => walk(s, 'sn', {}))
+            return js.join('\n')
+            function selectedToJS(o) { return selectedJS.get(o) || o }
+            function walk(x, path, parentOpts) {
+                if (Array.isArray(x._))
+                    x._.forEach(item => {
+                        if (!item[active]) return
+                        const opts = A({}, parentOpts)
+                        A(opts, selectedToJS(item))
+                        const prettier = k => {
+                            const js = opts[k]
+                            if (js === 'false' || js === 'true') return `${k}:${js}`
+                            if (js.slice(0,4) === '()=>')
+                                return `${k}:${js.slice(5).trim()}`
+                            if (js.slice(0,5) === '() =>')
+                                return `${k}:${js.slice(5).trim()}`
+                            return `${k}:(${js})()`
+                        }
+                        js.push(`new ${path}({${Object.keys(opts).map(prettier)}})`)
+                    })
+                if (!x || typeof x != 'object') return
+                const opts = A({}, parentOpts)
+                if (Array.isArray(x._) && x._[0]) A(opts, selectedToJS(x._[0]))
+                for (let k of Object.keys(x))
+                    if (k !== '_')
+                        walk(x[k], path + '.' + k, opts)
+            }
+        },
     })
     return UI
     function dom(x) { // Ex: [{ tag:'div', style:'color:red', onclick() { api.levelLoad() } }, 'Click to reload the level']

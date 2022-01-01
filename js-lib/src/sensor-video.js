@@ -34,8 +34,8 @@ Extra options:
                     ["Camera"]: () => Video.requestCamera(),
                 },
                 monochrome: {
-                    No: false,
                     Yes: true,
+                    No: false,
                 },
                 targets: {
                     ['Mouse/touch']: () => Video.pointers(),
