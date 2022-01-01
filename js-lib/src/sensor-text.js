@@ -9,8 +9,8 @@ export default function init(sn) {
                 const tokenSize = opts.tokenSize || 64
                 const name = Array.isArray(name) ? name : typeof name == 'string' ? [name] : []
                 const text = opts.text
-                const textToTokens = opts.textToTokens
-                const tokenToData = opts.tokenToData
+                const textToTokens = opts.textToTokens || Text.textToTokens
+                const tokenToData = opts.tokenToData || Text.tokenToData
                 sn._assertCounts('', tokens, tokenSize)
                 sn._assert(typeof text == 'function' || typeof text.feedback == 'function' && typeof textToTokens.feedback == 'function' && typeof tokenToData.feedback == 'function')
                 sn._assert(typeof textToTokens == 'function' && typeof tokenToData == 'function')
@@ -58,9 +58,20 @@ export default function init(sn) {
         // TODO: `readChanges(n=2048)`; what does it do, exactly?
         // TODO: `writeSelection()`: what does it do, exactly?
     }, {
-        // TODO: `_textToTokens`, splitting every char.
-        //   TODO: `.feedback`.
-        // TODO: `_tokenToData`, one-hot-encoding base64 or MD5-ing.
-        //   TODO: `.feedback`.
+        textToTokens: A(function textToTokens(str, max) { // → tokens
+            return str.split('').slice(-max)
+        }, {
+            feedback(tokens) { // → str
+                return tokens.join('')
+            },
+        }),
+        tokenToData: A(function tokenToData(token, data, start, end) {
+            // TODO: What do we do? How to fill `data`?
+            // TODO: How to get the index of the character `token` in base64, and if not there, MD5-encode it and cache it?...
+        }, {
+            feedback(feedback, start, end) { // → token
+                // TODO: What do we do? (How to reverse MD5 hashes, even?)
+            },
+        }),
     })
 }

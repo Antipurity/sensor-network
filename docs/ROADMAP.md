@@ -260,7 +260,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ `Text.writeSelection()`: type via `document.execCommand('insertText', false, str)`, but also keep what was typed selected. If `contenteditable` or `<input>` or `<textarea>`. (Autocomplete.)
                         - ⋯ `Text.readHover(n=2048)`: gets the text position [under ](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretRangeFromPoint)[cursor](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretPositionFromPoint) or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
                         - ⋯ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
-                    - ⋯ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
+                    - ✓ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
                     - ⋯ `tokenToData(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`. By default, one-hot-encode in base64, with unknown characters becoming either `' '` or their MD5 hashes; feedback will be an empty string unless only one number is >.5.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
