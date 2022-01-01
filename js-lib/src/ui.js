@@ -6,7 +6,6 @@ export default function init(sn) {
         const state = load() || [{}]
         console.log(state) // TODO:
         // TODO: Why does updating its setting seem to make Sound start to play, even though the checkbox is not checked...
-        // TODO: WHY IS REGULAR <select> NOT INITIALIZED FROM `selected`?
         return dom([
             { onchange: () => save(state) },
             UI.channel(sn, state[0]),
@@ -78,7 +77,7 @@ export default function init(sn) {
                         for (let variant of Object.keys(vars[k]))
                             opt.push([
                                 {tag:'option', value:variant},
-                                selected[k] === variant ? {selected:''} : null,
+                                selected[k] === variant ? {selected:'selected'} : null,
                                 [{tag:'code'}, variant],
                             ])
                     } else
