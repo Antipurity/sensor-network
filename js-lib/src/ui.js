@@ -8,7 +8,6 @@ export default function init(sn) {
         console.log(state) // TODO:
         setTimeout(() => console.log(UI.toJS(state)), 10) // TODO:
         // TODO: Use `UI.toJS` in `UI`, in a <textarea> (updated `onchange`) that allows users to quickly get started.
-        // TODO: (Make `Time` expose its `values` option.)
         return dom([
             { onchange: () => save(state) }, // (This double-saves each time. Might want to throttle saving.)
             UI.channel(sn, state[0]),
@@ -261,12 +260,13 @@ export default function init(sn) {
                         const opts = A({}, parentOpts)
                         A(opts, selectedToJS(item))
                         const prettier = k => {
-                            const js = opts[k]
+                            let js = opts[k]
                             if (js === 'false' || js === 'true') return `${k}:${js}`
-                            if (js.slice(0,4) === '()=>')
-                                return `${k}:${js.slice(5).trim()}`
-                            if (js.slice(0,5) === '() =>')
-                                return `${k}:${js.slice(5).trim()}`
+                            if (js.slice(0,4) === '()=>') js = '() ' + js.slice(2)
+                            if (js.slice(0,5) === '() =>') {
+                                js = js.slice(5).trim()
+                                if (js[0] !== '{') return `${k}:${js}`
+                            }
                             return `${k}:(${js})()`
                         }
                         js.push(`new ${path}({${Object.keys(opts).map(prettier)}})`)
