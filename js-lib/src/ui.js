@@ -25,6 +25,7 @@ export default function init(sn) {
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
             const opts = Object.create(parentOpts)
+            optsFor(variants, selected)
             const instance = isClass ? new x() : null
             const arr = []
             putElems(arr, instance, variants, selected)
@@ -76,12 +77,7 @@ export default function init(sn) {
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                         optsFor(vars, selected)
                         if (instance) !instance.paused && (instance.pause(), instance.resume(opts))
-                        // TODO: Why does switching dataSize dynamically just kill the process?
-                        //   Does changing Sound's props do that? No.
-                        //   Does changing name-parts do that? Yes.
-                        //   Must be something about the cell shape then...
-                        //     Is the new-shape loop not starting?
-                        //     Oh, the considered-main cell shape is not updated.
+                        // TODO: ...Why does switching dataSize at runtime *still* stop the sound, even though switching nameParts now works acceptably... But only sometimes??
                     }
                 }
                 into.push(table)

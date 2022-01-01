@@ -220,7 +220,7 @@ export default (function(exports) {
                         if (T.benchAtStart === currentBenchmark) {
                             let duration = (dst.lastUsed = performance.now()) - T.handleStart
                             if (dst.msPerStep[0]) // Prevent "overeager scheduling of steps makes them interfere with each other, causing overestimation of ms-per-step".
-                                duration = Math.min(duration, 1.1 * dst.msPerStep[1])
+                                duration = Math.min(duration, 1.1 * dst.msPerStep[1] + 11)
                             _Packet.updateMean(dst.msPerStep, duration)
                             E.meta.metric('simultaneous steps', dst.stepsNow+1)
                             E.meta.metric('step processed data, values', T.cells * T.cellSize)
@@ -270,17 +270,18 @@ export default (function(exports) {
             if (!dst || dst.looping) return;  else dst.looping = true
             dst.prevEnd = performance.now()
             let prevWait = dst.prevEnd
+            // console.log('entering', summary) // TODO:
             while (true) {
                 if (!ch.shaped[summary]) return // `Sensor`s might have cleaned us up.
-                // /*Math.random()<.001 && */console.log('iteration', summary, dst.msPerStep[1]) // TODO: Why so frequent??
-                //   TODO: Does this happen if we don't switch?... No, it doesn't. Why is switching so deadly then...
-                //   TODO: Why are there thousands of iterations without sensor-sending??
+                // console.log('iteration', summary, dst.stepsNow, dst.overscheduled, 'msPerStep', dst.msPerStep[0], dst.msPerStep[1]) // TODO: Why are there sometimes, after a lot of switching, 0-steps-now, 0-overscheduled, no-sound...
                 const lessPackets = dst.overscheduled > .5
                 // Get sensor data.
                 const mainHandler = ch.mainHandler && ch.mainHandler.summary === summary ? ch.mainHandler : null
                 if (!dst.stepsNow || !lessPackets) {
                     const mainSensor = ch.mainHandler ? !!mainHandler : ch.cellShapes[0] && ch.cellShapes[0].summary === summary
-                    // if (mainSensor) console.log('sensors') // TODO:
+                    // if (mainSensor) console.log('sensors') // TODO: ...Why are they not called anymore... Not mainSensor, right. ...But why is *that*?
+                    // else console.log(mainHandler, ch.cellShapes[0], summary) // TODO: Why do we *still* expect 0th cell-shape to be of size 64...
+                    //   TODO: Maybe, move the 0th-slot-swapping into here, gated by "wait, that 0th shape has no handlers"?
                     if (mainSensor && Array.isArray(ch.sensors))
                         for (let i = 0; i < ch.sensors.length; ++i) {
                             const s = ch.sensors[i]
@@ -312,8 +313,9 @@ export default (function(exports) {
                     await new Promise(then => dst.waitingSinceTooManySteps = then)
                 // Don't do it too often.
                 const now = performance.now(), needToWait = dst.prevEnd - now
-                dst.prevEnd += dst.msPerStep[1]
-                if (dst.prevEnd < now - 1000) dst.prevEnd = now - 1000 // Don't get too eager after being stalled.
+                dst.prevEnd += dst.msPerStep[1] + (!dst.stepsNow || !lessPackets ? 0 : 20)
+                if (dst.prevEnd < now - 1000)
+                    dst.prevEnd = now - 1000 // Don't get too eager after being stalled.
                 if (needToWait > 5 || now - prevWait > 100 || noData) {
                     await new Promise(then => {
                         if (now - prevWait <= 100) dst.giveNextPacketNow = then
