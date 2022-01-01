@@ -33,7 +33,9 @@ export default function init(sn) {
     }, {
         docs:`Creates UI for convenient configuration of sensors. Append it to \`document.body\` or something.
 
-(It doesn't affect code size that much, and was quick to develop, so why not.)`,
+CSS not included. Markdown parsing not included.
+
+(It doesn't affect code size that much, was quick to develop, and made apparent a few bugs, so why not?)`,
         groupOf(x) {
             const p = Object.getPrototypeOf(x)
             return p === sn.Sensor ? 'sensor' : p === sn.Transform ? 'transform' : p === sn.Handler ? 'handler' : 'object'

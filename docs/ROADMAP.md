@@ -193,7 +193,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ✓ Ability to de/serialize sensors/transforms/handlers, so that users can pick up power-ups at the press of a button.
             - ✓ Have the `.needsExtensionAPI() → null|string` method on `Sensor`s, returning `null` by default, but can return `''` or `'tabs'`. Let users control which parts of the `chrome` API the extension can see.
                 - ⋯ Actually use it in an extension.
-        - ⋯ A better time-per-step estimation scheme than moving-average-over-32-steps (limited to *1.1+11). It was intended to make small deviations insignificant, but it takes too long to actually adjust to a new rhythm. Maybe, keep track of moving-average-over-4, and when that average is too consistent for 4 steps (so, 4-length subsequences of a 7-steps array have a small standard deviation), update the actual ms-per-step… Or maybe just median instead of mean.
+        - ⋯ A better loop:
+            - ⋯ A better time-per-step estimation scheme than moving-average-over-32-steps (limited to *1.1+11). It was intended to make small deviations insignificant, but it takes too long to actually adjust to a new rhythm. Maybe, keep track of moving-average-over-4, and when that average is too consistent for 4 steps (so, 4-length subsequences of a 7-steps array have a small standard deviation), update the actual ms-per-step… Or maybe just median instead of mean.
+            - ⋯ Keep track of the "bottleneck": on `Handler`s, have `.bottleneck` (0…1), exponentially-updated avg of 0/1, where the last-returning non-main handler is 1 and the rest are 0s (also, compare non/main handlers, and the fastest-returning one is 0). And make `UI` display a message when `.bottleneck>.99`.
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files, or maybe their own NPM modules (though they *are* small):
         - ⋯ Make `main.js` import modules that import it and export classes that inherit sensors/transforms/handlers, by having getters that patch themselves on use.
         - ⋯ `.Sensor`:
@@ -210,8 +212,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                             - ⋯ The first item `.isPrimary` and `'mouse'`, the rest are `'touch'`.
                             - ⋯ Test whether mouse/touch event listeners are triggered by pointer events, and if not, dispatch them too.
                             - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
-                    - ⋯ If an observation: a cell per pointer (dynamically created/destroyed), report x/y and is-it-pressed. (And possibly width, height, pressure, tangentialPressure, tiltX, tiltY, twist, pointerType, isPrimary.)
-                    - ⋯ If an action: on feedback, update the `{x,y}` objects, and create [non-trusted](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted)[ pointer events](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/PointerEvent) (the first item is primary and `'mouse'`, the rest are `'touch'`) if possible to make the DOM aware.
+                    - ⋯ `noFeedback = true`:
+                        - ⋯ If an action: on feedback, update the `{x,y}` objects, and create [non-trusted](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted)[ pointer events](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/PointerEvent) (the first item is primary and `'mouse'`, the rest are `'touch'`) if possible to make the DOM aware.
+                        - ⋯ If an observation: a cell per pointer (dynamically created/destroyed), report x (0…1), y (0…1), is-it-pressed, isPrimary, pointerType, width (screen-fraction), height (screen-fraction), pressure, tangentialPressure, tiltX, tiltY, twist.
                     - ⋯ `visualize({data, cellShape}, elem)`, showing round points.
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
                 - ✓ Video: `Video`.
@@ -247,10 +250,20 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
                         - ⋯ And a volume slider.
                         - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
-                - ⋯ Text input/output: 64 numbers is basically enough for 1 character, and have like, 512 characters. Optionally, set selection and `<input>` and `<textarea>` contents as text. (The ability to *annotate* what you're doing. A real dataset.)
-                - ⋯ No in-page feedback, in Chrome (Firefox doesn't seem to care as much about direct hardware access, nor about direct performance):
-                    - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1..1.
-                    - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
+                - ⋯ `Text`. (The ability to *annotate* what you're doing. No need to guess human intentions if they can just tell you.)
+                    - ⋯ `maxTokens=64`. One token per cell. Sent-cells will be less than max if possible.
+                    - ⋯ `text() → str` or `text:{ feedback(str) }`:
+                        - ⋯ `Text.readSelection(n=2048)`: `getSelection()`, `<input>`, `<textarea>`. If selection is empty, returns up-to-`n` characters before that, else only the selection.
+                            - ⋯ `<select>`: try to read the selected item, or if selecting, all items.
+                        - ⋯ `Text.writeSelection()`: just type, with `document.execCommand` or whatever.
+                        - ⋯ `Text.readHover(n=2048)`: gets the text position under cursor or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
+                        - ⋯ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
+                    - ⋯ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
+                    - ⋯ `tokenToData(token, data, offset, len)=…`, with `.feedback(feedback, offset, len)→token`. By default, one-hot-encode in base64, with unknown characters becoming either `' '` or their MD5 hashes; feedback will be an empty string unless only one number is >.5.
+                    - TODO: Implement this class, in `sensor-text.js`.
+            - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
+                - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
+                - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
             - ✓ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
@@ -273,6 +286,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ `Visualize.all()({data, cellShape})`, which returns a `<canvas>` on which green=1 black=0 red=-1 4×4 pixels are drawn, with empty pixels between reward/user/name and data.
             - ⋯ Shuffle cells.
             - ⋯ Add `-error…error` random numbers to `data`, if there is error.
+            - ⋯ To save feedback of even non-noData cells, a transform that splits such cells into `noData` and `noFeedback` cells.
             - ⋯ Try an echo-state network, and see whether that makes `Sound` better or worse.
                 - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)
                 - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
@@ -288,6 +302,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
                     - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling)
                     - That's all. A human can use it. AGI can use it.
+                - Try model-based meta-learning: `x2 = f(x1, w)`, `dx1 = df(dx2)`, but on backprop, `df` should be a neural network, and we double-backprop to make post-update weights `w - dw` (no learning rate) be more fit. To reduce memory requirements at the cost of 2× the computations, make both `f` and `df` discard and rematerialize their gradient graphs from `x1` and `dx2`. (Not sure how much of a benefit an extra layer of meta-learning really is, on top of RNNs and Transformers, though. And, try on what? Would a regular interaction dataset allow meta-learning to have any benefits?)
             - ✓ No-feedback sound output (speakers).
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
