@@ -77,7 +77,6 @@ export default function init(sn) {
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                         optsFor(vars, selected)
                         if (instance) !instance.paused && (instance.pause(), instance.resume(opts))
-                        // TODO: ...Why does switching dataSize at runtime *still* stop the sound, even though switching nameParts now works acceptably... But only sometimes??
                     }
                 }
                 into.push(table)

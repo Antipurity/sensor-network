@@ -270,18 +270,19 @@ export default (function(exports) {
             if (!dst || dst.looping) return;  else dst.looping = true
             dst.prevEnd = performance.now()
             let prevWait = dst.prevEnd
-            // console.log('entering', summary) // TODO:
             while (true) {
                 if (!ch.shaped[summary]) return // `Sensor`s might have cleaned us up.
-                // console.log('iteration', summary, dst.stepsNow, dst.overscheduled, 'msPerStep', dst.msPerStep[0], dst.msPerStep[1]) // TODO: Why are there sometimes, after a lot of switching, 0-steps-now, 0-overscheduled, no-sound...
                 const lessPackets = dst.overscheduled > .5
                 // Get sensor data.
                 const mainHandler = ch.mainHandler && ch.mainHandler.summary === summary ? ch.mainHandler : null
                 if (!dst.stepsNow || !lessPackets) {
-                    const mainSensor = ch.mainHandler ? !!mainHandler : ch.cellShapes[0] && ch.cellShapes[0].summary === summary
-                    // if (mainSensor) console.log('sensors') // TODO: ...Why are they not called anymore... Not mainSensor, right. ...But why is *that*?
-                    // else console.log(mainHandler, ch.cellShapes[0], summary) // TODO: Why do we *still* expect 0th cell-shape to be of size 64...
-                    //   TODO: Maybe, move the 0th-slot-swapping into here, gated by "wait, that 0th shape has no handlers"?
+                    const sh = ch.cellShapes
+                    if (sh.length > 1 && (!ch.shaped[sh[0].summary] || !ch.shaped[sh[0].summary].handlers.length)) {
+                        // This main-ish shape is clearly unused. So don't use it.
+                        const i = 0, j = 1 + (Math.random() * (sh.length-1) | 0)
+                        ;[sh[i], sh[j]] = [sh[j], sh[i]]
+                    }
+                    const mainSensor = ch.mainHandler ? !!mainHandler : sh.length && sh[0].summary === summary
                     if (mainSensor && Array.isArray(ch.sensors))
                         for (let i = 0; i < ch.sensors.length; ++i) {
                             const s = ch.sensors[i]
@@ -291,11 +292,6 @@ export default (function(exports) {
                         }
                 }
                 // Pause if no destinations, or no sources & no data to send.
-                if (!dst.handlers.length && ch.cellShapes[0].cellShape === dst.cellShape) {
-                    // No longer consider `dst` the main-ish cell shape.
-                    const sh = ch.cellShapes, i = 0, j = 1 + (Math.random() * (sh.length-1) | 0)
-                    ;[sh[i], sh[j]] = [sh[j], sh[i]]
-                }
                 if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
                     return dst.msPerStep[0] = dst.msPerStep[1] = 0, dst.looping = false
                 let noData = false
@@ -320,7 +316,6 @@ export default (function(exports) {
                     await new Promise(then => {
                         if (now - prevWait <= 100) dst.giveNextPacketNow = then
                         const delay = noData ? 500 : Math.max(needToWait, 0)
-                        // console.log('wait', delay, needToWait) // TODO: Why do these do nothing?? Why is 5ms nothing...
                         setTimeout(() => { prevWait = performance.now(), then() }, delay)
                     })
                     dst.giveNextPacketNow = null

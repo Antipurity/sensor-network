@@ -193,7 +193,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ✓ Ability to de/serialize sensors/transforms/handlers, so that users can pick up power-ups at the press of a button.
             - ✓ Have the `.needsExtensionAPI() → null|string` method on `Sensor`s, returning `null` by default, but can return `''` or `'tabs'`. Let users control which parts of the `chrome` API the extension can see.
                 - ⋯ Actually use it in an extension.
-        - ⋯ A better time-per-step estimation scheme than moving-average-over-32-steps (limited to *1.1+11). It was intended to make small deviations insignificant, but it takes too long to actually adjust to a new rhythm. Maybe, keep track of moving-average-over-4, and when that average is too consistent for 4 steps (so, 4-length subsequences of a 7-steps array have a small standard deviation), update the actual ms-per-step…
+        - ⋯ A better time-per-step estimation scheme than moving-average-over-32-steps (limited to *1.1+11). It was intended to make small deviations insignificant, but it takes too long to actually adjust to a new rhythm. Maybe, keep track of moving-average-over-4, and when that average is too consistent for 4 steps (so, 4-length subsequences of a 7-steps array have a small standard deviation), update the actual ms-per-step… Or maybe just median instead of mean.
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files, or maybe their own NPM modules (though they *are* small):
         - ⋯ Make `main.js` import modules that import it and export classes that inherit sensors/transforms/handlers, by having getters that patch themselves on use.
         - ⋯ `.Sensor`:
