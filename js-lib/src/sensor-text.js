@@ -42,10 +42,16 @@ export default function init(sn) {
             sensor.send(sensor.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
-            // TODO: For each token: sensor.tokenToData.feedback()
-            // TODO: Also reverse const str = sensor.textToTokens.feedback(tokens)...
-            // TODO: Also reverse sensor.text.feedback(str)
-            // TODO: ...The rest?... How to reverse `onValues`?
+            const cellShape = sensor.cellShape()
+            if (!cellShape) return
+            const dataSize = cellShape[cellShape.length-1]
+            const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
+
+            const tokens = [], end = Math.min(sensor.tokens, feedback.length / dataSize | 0)
+            for (let i = 0; i < end; ++i)
+                tokens.push(sensor.tokenToData.feedback(feedback, i*valuesPerCell, (i+1)*valuesPerCell))
+            const str = sensor.textToTokens.feedback(tokens)
+            sensor.text.feedback(str)
         }
         // TODO: `static readSelection(n=2048)`; what does it do, exactly?
         // TODO: `static readHover(n=2048)`; what does it do, exactly?
