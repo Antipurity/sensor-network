@@ -5,13 +5,24 @@ export default function init(sn) {
     const UI = A(function UI() {
         // Just one channel for now.
         const state = load() || [{}]
-        console.log(state) // TODO:
-        setTimeout(() => console.log(UI.toJS(state)), 10) // TODO:
-        // TODO: Use `UI.toJS` in `UI`, in a <textarea> (updated `onchange`) that allows users to quickly get started.
-        return dom([
-            { onchange: () => save(state) }, // (This double-saves each time. Might want to throttle saving.)
+        const js = dom([{tag:'textarea', readonly:true, style:'width:100%; resize:vertical'}])
+        const r = dom([
+            // (This double-saves each time. Might want to throttle saving.)
+            { onchange: stateMaybeChanged, onclick: stateMaybeChanged }, //
+            UI.collapsed(
+                ' As JS',
+                js,
+                true,
+            ),
             UI.channel(sn, state[0]),
         ])
+        js.value = UI.toJS(state), js.rows = js.value.split('\n').length
+        return r
+        function stateMaybeChanged(evt) {
+            if (evt.type === 'click' && (!evt.target || evt.target.tagName !== 'BUTTON')) return
+            js.value = UI.toJS(state), js.rows = js.value.split('\n').length
+            save(state)
+        }
         function load() {
             const str = localStorage.snOptions
             return str && JSON.parse(str)
@@ -22,7 +33,7 @@ export default function init(sn) {
     }, {
         docs:`Creates UI for convenient configuration of sensors. Append it to \`document.body\` or something.
 
-(It doesn't affect code size that much, so why not.)`,
+(It doesn't affect code size that much, and was quick to develop, so why not.)`,
         groupOf(x) {
             const p = Object.getPrototypeOf(x)
             return p === sn.Sensor ? 'sensor' : p === sn.Transform ? 'transform' : p === sn.Handler ? 'handler' : 'object'
@@ -146,9 +157,9 @@ export default function init(sn) {
             let i = 0
             const subselected = selected[i] || (selected[i] = {});  ++i
             const first = fn(dom([{tag:'button', onclick:addNewItem}, '+']), subselected)
-            while (i < selected.length) addNewItem()
             const others = []
             const container = dom(first)
+            while (i < selected.length) addNewItem()
             return A(container, {
                 pause() { first.pause && first.pause(), others.forEach(e => e.pause && e.pause()), others.length = 0 },
                 resume() { first.resume && first.resume() },

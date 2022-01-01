@@ -280,10 +280,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - TODO: So what do we do next?
                 - If easiest-first:
-                    - Keyboard, pointers, UI, text, `indexedDB` files.
+                    - Keyboard, pointers, text, `indexedDB` files, WebRTC.
                 - If most-important-first:
-                    - Files, UI, text, pointers, keyboard, audio.
-                        - ...Isn't WebRTC way more important than files though, becaues we can't really make users download any files bigger than their RAM, while Rust can just write whatever files it wants...
+                    - WebRTC, text, pointers, keyboard, audio, files.
             - TODO: Text (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
                 - TODO: Design constraints:
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
@@ -307,9 +306,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Research AI translation, from human observations to rewardable actions. [Just-reward is most general task description](https://deepmind.com/research/publications/2021/Reward-is-Enough), and an endless complexity of ways to hopefully align with future rewards, broadly falling into prediction or uncertainty-maximization (getting more data to predict). The age-old question: can specifics be learned from the general description? [Probably](http://www.incompleteideas.net/IncIdeas/BitterLesson.html), but how to best do it? In the sensor network, each cell has its own reward so that the model can learn many tasks at once, and distill many AI models (and humans, and anything else) into one. Basically, for [a good prior](https://deepmind.com/research/publications/2021/Creating-Interactive-Agents-with-Imitation-Learning): should perform max-reward filling of non-`noFeedback` cells, while also predicting non-`noData` cells with a slightly-different cell-name, so that actions are as-data-does first (top-reward among human actions: [a quantilizer](https://intelligence.org/files/QuantilizersSaferAlternative.pdf)) and well-adapted second. (Easy to implement, hard to implement well. But nothing is created perfect, and all we can do is improve: the better the model, the more humans use it and trust it and the more well-pointed their observations and rewards are, which means "the better the model, the faster it improves", which means "exponential progress", which means that any level of performance is practically reachable, even AGI. We can start any time you want.)
                 - (A personal AI model is basically soft mind uploading, realistically-gradual rather than instantly-perfect. The only real obstacle is that a typical PC doesn't have the compute to run some massive AI model full-time. But AI-training increases in efficiency rapidly, [2…10 ](https://openai.com/blog/ai-and-efficiency/)[times in ](https://venturebeat.com/2020/06/04/ark-invest-ai-training-costs-dropped-100-fold-between-2017-and-2019/)[a year](https://ark-invest.com/articles/analyst-research/ai-training/): what is today a [multi-million-dollar project](https://syncedreview.com/2020/04/30/ai21-labs-asks-how-much-does-it-cost-to-train-nlp-models/) may be doable on a personal computer in a decade. Phones and other devices that need a battery could connect; [Internet bandwidth is growing too, at 1.5× a year](https://www.nngroup.com/articles/law-of-bandwidth/).)
                 - ⋯ Need concrete and relatively-compute-light tasks to strive for. Such as "in a game, learn to augment human play with non-human actions" or "predict near-term reward from facial expression".
-        - ⋯ `.UI()`.
+        - ✓ `.UI()`.
             - ⋯ Allow multi-channel configuration, after we have a channel-sensor.
-        - ⋯ `.default()`, collecting non-`false` `.default`s. (And make UI run the defaults by default.)
+        - ❌ `.default()`, collecting non-`false` `.default`s. (UI makes it too easy to include everything you need.)
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
 
