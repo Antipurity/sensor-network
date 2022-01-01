@@ -251,9 +251,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
                         - ⋯ And a volume slider.
                         - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
-                - ⋯ `Text`. (The ability to *annotate* what you're doing. No need to guess human intentions if they can just tell you.)
-                    - ⋯ `name`, integrated into the actual `name`.
-                    - ⋯ `maxTokens=64`. One token per cell. Sent-cells will be less than max if possible.
+                - ⋯ `Text`. (The ability to *annotate* what you're doing. No need to guess intentions of humans if they can just tell you.)
+                    - ✓ `name`, integrated into the actual `name`.
+                    - ✓ `tokens=64`, `tokenSize=64`. One token per cell.
                     - ⋯ `text() → str` or `text:{ feedback(str) }`:
                         - ⋯ `Text.readSelection(n=2048)`: `getSelection()`, `<input>`, `<textarea>`. If selection is empty, returns up-to-`n` characters before that, else only the selection.
                             - ⋯ `<select>`: try to read the selected item, or if selecting, all items.
@@ -261,7 +261,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ `Text.readHover(n=2048)`: gets the text position [under ](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretRangeFromPoint)[cursor](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretPositionFromPoint) or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
                         - ⋯ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
                     - ⋯ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
-                    - ⋯ `tokenToData(token, data, offset, len)=…`, with `.feedback(feedback, offset, len)→token`. By default, one-hot-encode in base64, with unknown characters becoming either `' '` or their MD5 hashes; feedback will be an empty string unless only one number is >.5.
+                    - ⋯ `tokenToData(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`. By default, one-hot-encode in base64, with unknown characters becoming either `' '` or their MD5 hashes; feedback will be an empty string unless only one number is >.5.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
                 - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
