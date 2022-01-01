@@ -77,6 +77,11 @@ export default function init(sn) {
                         optsFor(vars, selected)
                         if (instance) !instance.paused && (instance.pause(), instance.resume(opts))
                         // TODO: Why does switching dataSize dynamically just kill the process?
+                        //   Does changing Sound's props do that? No.
+                        //   Does changing name-parts do that? Yes.
+                        //   Must be something about the cell shape then...
+                        //     Is the new-shape loop not starting?
+                        //     Oh, the considered-main cell shape is not updated.
                     }
                 }
                 into.push(table)
