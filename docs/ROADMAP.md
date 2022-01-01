@@ -218,6 +218,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ `visualize({data, cellShape}, elem)`, showing round points.
                 - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
                 - ✓ Video: `Video`.
+                    - ⋯ `name`, integrated into the actual `name`.
                     - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
                         - ✓ `static stitchTab()`, which draws the viewport's visible `<canvas>`es into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
                             - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
@@ -251,16 +252,16 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ And a volume slider.
                         - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
                 - ⋯ `Text`. (The ability to *annotate* what you're doing. No need to guess human intentions if they can just tell you.)
+                    - ⋯ `name`, integrated into the actual `name`.
                     - ⋯ `maxTokens=64`. One token per cell. Sent-cells will be less than max if possible.
                     - ⋯ `text() → str` or `text:{ feedback(str) }`:
                         - ⋯ `Text.readSelection(n=2048)`: `getSelection()`, `<input>`, `<textarea>`. If selection is empty, returns up-to-`n` characters before that, else only the selection.
                             - ⋯ `<select>`: try to read the selected item, or if selecting, all items.
-                        - ⋯ `Text.writeSelection()`: just type, with `document.execCommand` or whatever.
-                        - ⋯ `Text.readHover(n=2048)`: gets the text position under cursor or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
+                        - ⋯ `Text.writeSelection()`: type via `document.execCommand('insertText', false, str)`, but also keep what was typed selected. If `contenteditable` or `<input>` or `<textarea>`. (Autocomplete.)
+                        - ⋯ `Text.readHover(n=2048)`: gets the text position [under ](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretRangeFromPoint)[cursor](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretPositionFromPoint) or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
                         - ⋯ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
                     - ⋯ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
                     - ⋯ `tokenToData(token, data, offset, len)=…`, with `.feedback(feedback, offset, len)→token`. By default, one-hot-encode in base64, with unknown characters becoming either `' '` or their MD5 hashes; feedback will be an empty string unless only one number is >.5.
-                    - TODO: Implement this class, in `sensor-text.js`.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
                 - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).

@@ -116,6 +116,7 @@ CSS not included. Markdown parsing not included.
             function isCheckboxy(o) { return Object.values(o).every(v => typeof v == 'boolean') }
             function optsFor(vars, selected) {
                 const js = {}
+                for (let k of Object.keys(opts)) delete opts[k]
                 for (let k of Object.keys(vars)) {
                     if (k === active) continue
                     const f = typeof selected[k] == 'boolean' ? selected[k] : vars[k][selected[k]]
