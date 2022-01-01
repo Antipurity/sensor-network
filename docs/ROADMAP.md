@@ -283,6 +283,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - Keyboard, pointers, UI, text, `indexedDB` files.
                 - If most-important-first:
                     - Files, UI, text, pointers, keyboard, audio.
+                        - ...Isn't WebRTC way more important than files though, becaues we can't really make users download any files bigger than their RAM, while Rust can just write whatever files it wants...
             - TODO: Text (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
                 - TODO: Design constraints:
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)

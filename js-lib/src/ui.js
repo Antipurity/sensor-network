@@ -3,7 +3,21 @@ export default function init(sn) {
     const active = '_uiActive'
     const UI = A(function UI() {
         // Just one channel for now.
-        return UI.channel()
+        const state = load() || [{}]
+        console.log(state) // TODO:
+        // TODO: Why does updating its setting seem to make Sound start to play, even though the checkbox is not checked...
+        // TODO: WHY IS REGULAR <select> NOT INITIALIZED FROM `selected`?
+        return dom([
+            { onchange: () => save(state) },
+            UI.channel(sn, state[0]),
+        ])
+        function load() {
+            const str = localStorage.snOptions
+            return str && JSON.parse(str)
+        }
+        function save(s) {
+            localStorage.snOptions = JSON.stringify(s)
+        }
     }, {
         docs:`Creates UI for convenient configuration of sensors. Append it to \`document.body\` or something.
 
@@ -47,6 +61,7 @@ export default function init(sn) {
                     if (k !== active && !selected[k]) {
                         sn._assert(Object.keys(vars[k]).length, "Can't just be an empty object")
                         selected[k] = Object.keys(vars[k])[0]
+                        if (isCheckboxy(vars[k])) selected[k] = vars[k][selected[k]]
                     }
                 return selected
             }
@@ -71,7 +86,7 @@ export default function init(sn) {
                             tag:'input',
                             type:'checkbox',
                             onchange,
-                        }]
+                        }, selected[k] ? {checked:true} : null]
                     table.push([{tag:'tr'}, [{tag:'td', style:'text-align:right'}, prettifyCamelCase(k) + ':'], [{tag:'td'}, opt]])
                     function onchange() {
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
@@ -80,11 +95,11 @@ export default function init(sn) {
                     }
                 }
                 into.push(table)
-                function isCheckboxy(o) { return Object.values(o).every(v => typeof v == 'boolean') }
                 function prettifyCamelCase(s) {
                     return s[0].toUpperCase() + s.slice(1).replace(/[A-Z]/g, s => ' '+s.toLowerCase())
                 }
             }
+            function isCheckboxy(o) { return Object.values(o).every(v => typeof v == 'boolean') }
             function optsFor(vars, selected) {
                 for (let k of Object.keys(vars)) {
                     if (k === active) continue
@@ -119,32 +134,39 @@ export default function init(sn) {
             // }
             return docs.split('\n')[0]
         },
-        oneOrMore(fn) {
+        oneOrMore(fn, selected = []) {
             // Given a DOM-elem-returning func, this returns a spot that can replicate its result.
             //   The function accepts a DOM element that adds/removes an item, and should put it.
-            const first = fn(dom([{tag:'button', onclick() {
-                const another = fn(dom([{tag:'button', onclick() {
-                    another.remove(), others.splice(others.lastIndexOf(another), 1), another.pause()
-                }}, '-']))
-                others.push(another)
-                container.append(another)
-            }}, '+']))
+            let i = 0
+            const subselected = selected[i] || (selected[i] = {});  ++i
+            const first = fn(dom([{tag:'button', onclick:addNewItem}, '+']), subselected)
+            while (i < selected.length) addNewItem()
             const others = []
             const container = dom(first)
             return A(container, {
                 pause() { first.pause && first.pause(), others.forEach(e => e.pause && e.pause()), others.length = 0 },
                 resume() { first.resume && first.resume() },
             })
+            function addNewItem() {
+                const subselected = selected[i] || (selected[i] = {});  ++i
+                const another = fn(dom([{tag:'button', onclick() {
+                    sn._assert(selected.indexOf(subselected) >= 0)
+                    selected.splice(selected.indexOf(subselected), 1), --i
+                    another.remove(), others.splice(others.lastIndexOf(another), 1), another.pause()
+                }}, '-']), subselected)
+                others.push(another)
+                container.append(another)
+            }
         },
-        describe(x, selected = {}, parentOpts = null, extraDOM = null) {
+        describe(x, selected = [], parentOpts = null, extraDOM = null) {
             // Describes an object: name, options, docs.
             let docs = typeof x.docs == 'string' ? x.docs : typeof x.docs == 'function' ? x.docs() : null
             docs = docs && docs.split('\n\n')
             docs = docs && (docs.length > 1 ? UI.collapsed([{style:'display:inline-block'}, UI.docsTransformer(docs[0])], [UI.docsTransformer(docs.slice(1).join('\n\n'))]) : dom(docs))
             const isClass = UI.groupOf(x) !== 'object'
             const name = ' ' + UI.nameOf(x)
-            return isClass ? UI.oneOrMore(anItem) : anItem()
-            function anItem(btn) {
+            return isClass ? UI.oneOrMore(anItem, selected) : anItem(null, selected[0] || (selected[0] = {}))
+            function anItem(btn, selected) {
                 const el = UI.options(x, selected, parentOpts)
                 if (!el) {
                     const header = dom([btn || null, name])
@@ -160,6 +182,7 @@ export default function init(sn) {
                     onchange() { if (el) selected[active] = this.checked, this.checked ? el.resume() : el.pause() },
                 }])
                 if (running && selected[active]) running.click()
+                if (!selected[active]) selected[active] = false
                 return A(UI.collapsed(
                     [running ? {
                         style:'position:relative; z-index:2'
@@ -179,14 +202,20 @@ export default function init(sn) {
                 })
             }
         },
-        channel(x = sn) {
+        channel(x = sn, selected = {}) {
             // Creates a UI for easy setup of single-channel sensors/transforms/handlers.
-            return walk(x)
+            return walk(x, selected)
             function walk(x, selected = {}, parentOpts = null) {
                 if (!x || typeof x != 'object' && typeof x != 'function') return
                 const chElem = dom([])
-                const us = UI.describe(x, selected, parentOpts, chElem)
-                const children = Object.values(x).map(v => walk(v, {}, us.opts || parentOpts)).filter(x => x)
+                const us = UI.describe(x, selected._ || (selected._ = []), parentOpts, chElem)
+                if (selected._.length === 1 && !Object.keys(selected._[0]).length)
+                    delete selected._
+                const children = Object.keys(x).map(k => {
+                    const r = walk(x[k], selected[k] || (selected[k] = {}), us.opts || parentOpts)
+                    if (!Object.keys(selected[k]).length) delete selected[k]
+                    return r
+                }).filter(x => x)
                 if (x === sn) return dom(children)
                 if (typeof x.options == 'function' && x !== UI || children.length) {
                     chElem.replaceWith(dom(children))
@@ -210,7 +239,6 @@ export default function init(sn) {
                     }
                 }
             }
-            // TODO: (And a hierarchy or store of `options().selected`, which are synced to extension places or localStorage.)
         },
 
         // TODO: Have `UI.toJS(selected)`.
