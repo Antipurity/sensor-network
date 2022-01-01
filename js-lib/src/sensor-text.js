@@ -1,4 +1,4 @@
-export default function init(sn) { // TODO: Assign this to `sn.Sensor`.
+export default function init(sn) {
     const A = Object.assign
     return A(class Text extends sn.Sensor {
         // TODO: Docs.
@@ -20,23 +20,37 @@ export default function init(sn) { // TODO: Assign this to `sn.Sensor`.
                     ...name,
                     (dStart, dEnd, dLen) => dLen > dStart ? 2 * dStart / (dLen - dEnd) - 1 : 1
                 ]
-                this.tokens = tokens, this.tokenSize = tokenSize
+                opts.emptyValues = 0
                 if (typeof text == 'function') opts.onValues = Text.onValues
-                if (typeof text.feedback == 'function') opts.onFeedback = Text.onFeedback // TODO: ...Uh... `sensor.sendCallback` accepts a callback; we don't set it here.
+                this.onFeedback = typeof text.onFeedback == 'function' ? Text.onFeedback : null
                 this.textToTokens = textToTokens, this.tokenToData = tokenToData
+                this.tokens = tokens, this.tokenSize = tokenSize
             }
             return super.resume(opts)
         }
-        // TODO: `static onValues(sensor, data)`; what does it do?
-        //   this.textToTokens(this.text(), this.tokens) → tokens
-        //   For each token: this.tokenToData(tokens[i], data, i*this.tokenSize, (i+1)*this.tokenSize)
-        //     Zero-fill the non-provided tokens.
-        // TODO: `static onFeedback(feedback, sensor)`; what does it do?
-        //   For each token: this.tokenToData.feedback()
+        static onValues(sensor, data) {
+            const cellShape = sensor.cellShape()
+            if (!cellShape) return
+            const dataSize = cellShape[cellShape.length-1]
+            const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
+
+            const str = sensor.text()
+            const tokens = sensor.textToTokens(str, sensor.tokens)
+            for (let i = 0; i < tokens.length; ++i)
+                sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
+            data.fill(0, tokens.length)
+            sensor.send(sensor.onFeedback, data)
+        }
+        static onFeedback(feedback, sensor) {
+            // TODO: For each token: sensor.tokenToData.feedback()
+            // TODO: Also reverse const str = sensor.textToTokens.feedback(tokens)...
+            // TODO: Also reverse sensor.text.feedback(str)
+            // TODO: ...The rest?... How to reverse `onValues`?
+        }
         // TODO: `static readSelection(n=2048)`; what does it do, exactly?
         // TODO: `static readHover(n=2048)`; what does it do, exactly?
         // TODO: `readChanges(n=2048)`; what does it do, exactly?
-        // TODO: `writeSelection()`
+        // TODO: `writeSelection()`: what does it do, exactly?
     }, {
         // TODO: `_textToTokens`, splitting every char.
         //   TODO: `.feedback`.

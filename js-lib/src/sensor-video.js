@@ -93,7 +93,7 @@ Extra options:
                 this.zoomSteps = zoomSteps
                 this.zoomStep = zoomStep
                 this.tiling = tiling
-                opts.extraValues = 0
+                opts.emptyValues = 0
                 opts.onValues = Video.onValues
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
                 const xyz = (dataStart, dataEnd, dataLen) => {
@@ -162,12 +162,11 @@ Extra options:
         }
 
         static onValues(sensor, data) {
-            const targetShape = sensor.cellShape()
-            if (!targetShape) return
             // Make sure to limit to one tile per cell, so that there's no misalignment.
-            const dataSize = targetShape[targetShape.length-1]
-            const cells = data.length / dataSize | 0
-            const valuesPerCell = Math.ceil(sensor.values / cells)
+            const cellShape = sensor.cellShape()
+            if (!cellShape) return
+            const dataSize = cellShape[cellShape.length-1]
+            const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
 
             // Targeting stuff.
             const targets = this._targets()

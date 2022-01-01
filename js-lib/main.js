@@ -4,6 +4,7 @@ import Video from './src/sensor-video.js'
 import Time from './src/sensor-time.js'
 import Reward from './src/transform-reward.js'
 import UI from './src/ui.js'
+import Text from './src/sensor-text.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -454,7 +455,7 @@ export default (function(exports) {
     - \`values\`: how many -1…1 numbers this sensor exposes.
         - Usually a good idea to keep this to powers-of-2, and squares. Such as 64.
     - \`onValues(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
-        - To run faster, use \`sensor.sendCallback(fn(feedback), data, …)\` with a static function.
+        - To run faster, use \`sensor.sendCallback(fn(feedback, sensor), data, …)\` with a static function.
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
@@ -1055,6 +1056,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     // And set the most-common modules.
     E.UI = UI(E)
     Object.assign(E.Sensor, {
+        Text: Text(E),
         Video: Video(E),
         Time: Time(E),
     })
