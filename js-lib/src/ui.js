@@ -5,7 +5,6 @@ export default function init(sn) {
         // Just one channel for now.
         const state = load() || [{}]
         console.log(state) // TODO:
-        // TODO: Why does updating its setting seem to make Sound start to play, even though the checkbox is not checked...
         return dom([
             { onchange: () => save(state) },
             UI.channel(sn, state[0]),
@@ -90,7 +89,7 @@ export default function init(sn) {
                     function onchange() {
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                         optsFor(vars, selected)
-                        if (instance) !instance.paused && (instance.pause(), instance.resume(opts))
+                        if (instance) instance.paused === false && (instance.pause(), instance.resume(opts))
                     }
                 }
                 into.push(table)
