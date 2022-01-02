@@ -256,14 +256,14 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ✓ `tokens=64`, `tokenSize=64`. One token per cell.
                     - ⋯ `text() → str` or `text:{ feedback(str) }`:
                         - ✓ `Text.readSelection(n=2048)`: `getSelection()`, `<input>`, `<textarea>`. If selection is empty, returns up-to-`n` characters before that, else only the selection.
-                        - ⋯ `Text.readHover(n=2048)`: gets the text position [under ](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretRangeFromPoint)[cursor](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretPositionFromPoint) or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
-                        - ⋯ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
+                        - ✓ `Text.readHover(pos=Video.pointers(), n=2048)`: gets the text position [under ](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretRangeFromPoint)[cursor](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretPositionFromPoint) or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
+                        - ❌ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver). (Why, does this happen often enough to be useful?)
                         - ⋯ `Text.writeSelection()`: type via `document.execCommand('insertText', false, str)`, but also [keep what was typed selected](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/setSelectionRange). If `contenteditable` or `<input>` or `<textarea>`. (Autocomplete.)
                     - ✓ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
                     - ✓ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`. Use MD5 hashes because it's easy to, though feedback may suffer.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
-                - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
+            - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
             - ✓ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.

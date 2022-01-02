@@ -46,6 +46,7 @@ export default function init(sn) {
                 const textToTokens = opts.textToTokens || Text.textToTokens
                 const tokenToData = opts.tokenToData || Text.tokenToDataMD5
                 sn._assertCounts('', tokens, tokenSize)
+                // TODO: Allow `text` to be a string or input or textarea.
                 sn._assert(typeof text == 'function' || typeof text.feedback == 'function' && typeof textToTokens.feedback == 'function' && typeof tokenToData.feedback == 'function')
                 sn._assert(typeof textToTokens == 'function' && typeof tokenToData == 'function')
                 opts.values = tokens * tokenSize
@@ -55,9 +56,9 @@ export default function init(sn) {
                     (dStart, dEnd, dLen) => dLen > dStart ? 2 * dStart / (dLen - dEnd) - 1 : 1
                 ]
                 opts.emptyValues = 0
-                if (typeof text == 'function') opts.onValues = Text.onValues
+                if (typeof text != 'object') opts.onValues = Text.onValues
                 this.onFeedback = typeof text.onFeedback == 'function' ? Text.onFeedback : null
-                this.textToTokens = textToTokens, this.tokenToData = tokenToData
+                this.text = text, this.textToTokens = textToTokens, this.tokenToData = tokenToData
                 this.tokens = tokens, this.tokenSize = tokenSize
             }
             return super.resume(opts)
@@ -89,22 +90,58 @@ export default function init(sn) {
         }
     }, {
         readSelection: A(function readSelection(n=2048) {
-            return function readSelection() {
+            return function read() {
                 const selection = getSelection().toString()
                 if (selection) return selection.slice(-n)
                 const el = document.activeElement
-                if (el && (el.tagName === 'INPUT' && typeof el.value == 'string' && typeof el.selectionStart == 'number' || el.tagName === 'TEXTAREA')) {
+                if (el && (el.tagName === 'INPUT' && typeof el.value == 'string' && typeof el.selectionStart == 'number' || el.tagName === 'TEXTAREA')) { // TODO: Should this check be extracted to a function, so that even `resume` can use it?
                     const start = el.selectionStart, end = el.selectionEnd
                     return el.value.slice(start === end ? 0 : end, end).slice(-n)
                 }
+                return ''
             }
         }, {
             docs:`Reads the selection, in document and \`<input>\`s and \`<textarea>\`s.
 
 Can pass the maximum returned string length, 2048 by default.`,
         }),
-        // TODO: `readHover(n=2048, obj:{x,y})`; what does it do, exactly?
-        // TODO: `readChanges(n=2048)`; what does it do, exactly?
+        readHover: A(function readHover(pos = sn.Sensor.Video.pointers(), n=2048) {
+            return function read() {
+                let p = pos
+                if (Array.isArray(p) && !p.length) return p
+                if (Array.isArray(p)) p = p[0]
+                sn._assert(typeof p.x == 'number' && typeof p.y == 'number')
+                const x = p.x * innerWidth, y = p.y * innerHeight
+                let node, offset
+                if (document.caretRangeFromPoint) {
+                    const range = document.caretRangeFromPoint(x,y)
+                    node = range.startContainer, offset = range.startOffset
+                } else if (document.caretPositionFromPoint) {
+                    const caret = document.caretPositionFromPoint(x,y)
+                    node = caret.offsetNode, offset = caret.offset
+                }
+                if (node) {
+                    let s = node.textContent
+                    if (!(node instanceof Element)) { // Go to the word's end.
+                        const ws = /\s|[!@#$%^&*()\[\]{},.<>/?;:'"]|$/
+                        ws.lastIndex = offset
+                        const wordEnd = s.search(ws)
+                        s = s.slice(0, Math.max(wordEnd, offset))
+                    }
+                    while (s.length < n && node) { // Collect text before the hover-point too.
+                        while (node && !node.previousSibling && node.parentNode)
+                            node = node.parentNode
+                        node = node.previousSibling
+                        if (node) s = node.textContent + s
+                    }
+                    return s.slice(-n)
+                }
+            }
+        }, {
+            docs:`Reads the text under the pointer.
+
+Can pass the \`{x,y}\` object (\`Video.pointers\` by default), and maximum returned string length, 2048 by default.`,
+        }),
         // TODO: `writeSelection()`: what does it do, exactly?
 
         textToTokens: A(function textToTokens(str, max) { // → tokens
