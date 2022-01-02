@@ -98,7 +98,7 @@ Options:
                     (dStart, dEnd, dLen) => 2 * dEnd / dLen - 1,
                 ]
                 opts.emptyValues = 0
-                if (typeof text != 'object') opts.onValues = Text.onValues
+                opts.onValues = Text.onValues
                 this.onFeedback = typeof text.feedback == 'function' ? Text.onFeedback : null
                 this.text = text, this.textToTokens = textToTokens, this.tokenToData = tokenToData
                 this.tokens = tokens, this.tokenSize = tokenSize
@@ -107,21 +107,24 @@ Options:
         }
         static onValues(sensor, data) {
             const cellShape = sensor.cellShape()
-            // console.log(sensor.onFeedback) // TODO: Where is this?!
             if (!cellShape) return
             const dataSize = cellShape[cellShape.length-1]
             const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
 
             const txt = sensor.text
-            const str = typeof txt == 'string' ? txt : isInputy(txt) ? txt.value : txt()
-            sn._assert(typeof str == 'string')
-            const tokens = sensor.textToTokens(str, sensor.tokens)
-            for (let i = 0; i < tokens.length; ++i)
-                sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
-            data.fill(0, tokens.length)
-            sensor.sendCallback(sensor.onFeedback, data) // TODO: Also set noData, right?
+            const str = typeof txt == 'string' ? txt : isInputy(txt) ? txt.value : typeof txt == 'function' ? txt() : null
+            if (str != null) {
+                sn._assert(typeof str == 'string')
+                const tokens = sensor.textToTokens(str, sensor.tokens)
+                for (let i = 0; i < tokens.length; ++i)
+                    sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
+                data.fill(0, tokens.length)
+                sensor.sendCallback(sensor.onFeedback, data)
+            } else
+                sensor.sendCallback(sensor.onFeedback, null)
         }
         static onFeedback(feedback, sensor) {
+            if (!feedback) return
             const cellShape = sensor.cellShape()
             if (!cellShape || !sensor.text || !sensor.text.feedback) return
             const dataSize = cellShape[cellShape.length-1]
@@ -192,7 +195,6 @@ Can pass the \`{x,y}\` object or array/function to that object (\`Video.pointers
         }),
         writeSelection: A(function writeSelection() {
             return { feedback: function write(str) {
-                console.log('writeSelection', str) // TODO: Where is it?!
                 if (!str) return
                 const el = document.activeElement
                 if (isInputy(el)) {
@@ -244,7 +246,7 @@ The new text will still be selected, so it can function as autocomplete or autoc
                     for (let i = 0; i < s.length; ++i)
                         fedBackMD5 = doTokenToMD5(s[i]).length
                 }
-                sn._dataNamer.unfill(feedback, 0, fedBackMD5, data.length)
+                sn._dataNamer.unfill(feedback, 0, fedBackMD5, feedback.length)
                 const a = []
                 for (let i = 0, j = start; i < fedBackMD5 && j < end; ++i, ++j)
                     a.push(String.fromCharCode(Math.round((feedback[j]+1)/2*255)))

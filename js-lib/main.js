@@ -372,7 +372,7 @@ export default (function(exports) {
                     const flatV = allocF32(namer.namedSize)
                     const flatE = error ? allocF32(namer.namedSize) : null
                     if (!values) flatV.fill(0)
-                    namer.name(values, flatV, 0, reward)
+                    flatV && namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
                     dst.nextPacket.send(this, flatV, flatE, values === null, this.noFeedback)
 
@@ -384,7 +384,7 @@ export default (function(exports) {
                     removed.forEach(o => delete ch.shaped[o.summary])
                     removed.clear()
                 }
-                deallocF32(values), error && deallocF32(error)
+                values && deallocF32(values), error && deallocF32(error)
                 this.feedbackCallbacks.push(then) // Called even if no feedback is registered, with `null`.
                 this.feedbackNoFeedback.push(this.noFeedback)
                 this.feedbackNamers.push(this.dataNamers)
@@ -880,19 +880,22 @@ Safe to save+load if \`.toString\` is not overriden by any dependency, though no
                             dst[start] = r
                         } else dst.fill(skipNonData, start, dataStart)
                         // Data.
-                        const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
-                        for (let s = srcStart, d = dataStart; s < srcEnd; ++s, ++d) dst[d] = src[s]
+                        if (src) {
+                            const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
+                            for (let s = srcStart, d = dataStart; s < srcEnd; ++s, ++d) dst[d] = src[s]
+                        }
                         E._dataNamer.fill(dst, dataStart, valuesPerCell, dataSize)
                     }
                     return dstOffset + cells * cellSize // Return the next `dstOffset`.
                 },
                 unname(src, srcOffset, dst) { // named → flat; `named` is consumed.
-                    for (let i = 0; i < cells; ++i) { // Extract data from the whole cell.
-                        const start = srcOffset + i * cellSize, dataStart = start + (userParts + nameParts) * partSize
-                        E._dataNamer.unfill(src, dataStart, valuesPerCell, dataSize)
-                        const dstStart = i * valuesPerCell, dstEnd = Math.min(dstStart + valuesPerCell, dst.length)
-                        for (let s = dataStart, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
-                    }
+                    if (src)
+                        for (let i = 0; i < cells; ++i) { // Extract data from the whole cell.
+                            const start = srcOffset + i * cellSize, dataStart = start + (userParts + nameParts) * partSize
+                            E._dataNamer.unfill(src, dataStart, valuesPerCell, dataSize)
+                            const dstStart = i * valuesPerCell, dstEnd = Math.min(dstStart + valuesPerCell, dst.length)
+                            for (let s = dataStart, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
+                        }
                     return srcOffset + cells * cellSize // Return the next `srcOffset`.
                 },
             }
@@ -1121,7 +1124,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 namer.unname(allFeedback, fbOffset, flatV)
                 then && then(flatV, T)
             } else
-                then && then(null)
+                then && then(null, T)
         } finally { deallocF32(data), error && deallocF32(error) }
     }
     function packetNamer(T, dataNamers, cellShape, partSize, summary) {
