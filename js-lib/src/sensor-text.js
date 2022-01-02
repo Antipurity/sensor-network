@@ -46,8 +46,7 @@ export default function init(sn) {
                 const textToTokens = opts.textToTokens || Text.textToTokens
                 const tokenToData = opts.tokenToData || Text.tokenToDataMD5
                 sn._assertCounts('', tokens, tokenSize)
-                // TODO: Allow `text` to be a string or input or textarea.
-                sn._assert(typeof text == 'function' || typeof text.feedback == 'function' && typeof textToTokens.feedback == 'function' && typeof tokenToData.feedback == 'function')
+                sn._assert(typeof text == 'string' || typeof text == 'function' || isInputy(text) || (typeof text.feedback == 'function' || isInputy(text.feedback)) && typeof textToTokens.feedback == 'function' && typeof tokenToData.feedback == 'function')
                 sn._assert(typeof textToTokens == 'function' && typeof tokenToData == 'function')
                 opts.values = tokens * tokenSize
                 opts.name = [
@@ -57,7 +56,7 @@ export default function init(sn) {
                 ]
                 opts.emptyValues = 0
                 if (typeof text != 'object') opts.onValues = Text.onValues
-                this.onFeedback = typeof text.onFeedback == 'function' ? Text.onFeedback : null
+                this.onFeedback = typeof text.feedback == 'function' ? Text.onFeedback : null
                 this.text = text, this.textToTokens = textToTokens, this.tokenToData = tokenToData
                 this.tokens = tokens, this.tokenSize = tokenSize
             }
@@ -69,7 +68,8 @@ export default function init(sn) {
             const dataSize = cellShape[cellShape.length-1]
             const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
 
-            const str = sensor.text()
+            const txt = sensor.text
+            const str = typeof txt == 'string' ? txt : isInputy(txt) ? txt.value : txt()
             const tokens = sensor.textToTokens(str, sensor.tokens)
             for (let i = 0; i < tokens.length; ++i)
                 sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
@@ -78,7 +78,7 @@ export default function init(sn) {
         }
         static onFeedback(feedback, sensor) {
             const cellShape = sensor.cellShape()
-            if (!cellShape) return
+            if (!cellShape || !sensor.text || !sensor.text.feedback) return
             const dataSize = cellShape[cellShape.length-1]
             const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
 
@@ -86,7 +86,8 @@ export default function init(sn) {
             for (let i = 0; i < end; ++i)
                 tokens.push(sensor.tokenToData.feedback(feedback, i*valuesPerCell, (i+1)*valuesPerCell))
             const str = sensor.textToTokens.feedback(tokens)
-            sensor.text.feedback(str)
+            const txt = sensor.text.feedback
+            isInputy(txt) ? (txt.value = str) : txt(str)
         }
     }, {
         readSelection: A(function readSelection(n=2048) {
