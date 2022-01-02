@@ -1,5 +1,6 @@
 export default function init(sn) {
     const A = Object.assign
+    // The ingenious "embed all characters by their MD5 bytes" scheme.
     const tokenToMD5 = Object.create(null)
     const MD5toToken = Object.create(null)
     function doTokenToMD5(s) {
@@ -7,13 +8,30 @@ export default function init(sn) {
         const i32 = self.YaMD5.hashStr(part, true)
         const u8 = new Uint8Array(i32.buffer, i32.byteOffset, i32.byteLength)
         const m = String.fromCharCode(...u8)
-        tokenToMD5[s] = m, MD5toToken[m] = s
+        tokenToMD5[s] = m
+
+        let o = MD5toToken, m_ = m // Remember all coarsenings, for better lookup.
+        for (let level = 0; level <= 8; ++level) {
+            o[m_] = s
+            o = o._ || (o._ = Object.create(null))
+            m_ = coarsenMD5(m_)
+        }
+
         return m
     }
+    function coarsenMD5(m) {
+        return m.split('').map(ch => String.fromCharCode(ch.charCodeAt()/2 | 0)).join('')
+    }
     function doMD5toToken(m) {
-        if (MD5toToken[m]) return MD5toToken[m]
+        let o = MD5toToken, m_ = m
+        while (o) {
+            if (o[m_]) return o[m_]
+            o = o._
+            m_ = coarsenMD5(m_)
+        }
         return ''
     }
+
     return A(class Text extends sn.Sensor {
         // TODO: Docs.
         // TODO: Options.
@@ -87,7 +105,6 @@ export default function init(sn) {
             sn._dataNamer.fill(data, 0, m.length, data.length)
         }, {
             feedback(feedback, start, end) { // → token
-                // (This will likely fail to find a match, unless the handler is extremely sure.)
                 if (!Text._fedBackBefore) {
                     // Pre-fill the MD5 cache, so that we could hopefully reverse more.
                     //   (Whose idea was it to use MD5 for character embeddings, anyway?)
