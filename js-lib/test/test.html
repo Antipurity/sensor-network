@@ -100,7 +100,7 @@
     import './smooth-collapse.js'
     import display from './plots.js'
     import 'https://cdn.jsdelivr.net/npm/marked/marked.min.js'
-    sn.UI.docsTransformer = docs => {
+    sn.meta.UI.docsTransformer = docs => {
       const html = document.createElement('div')
       html.innerHTML = marked.parse(docs)
       return html
@@ -173,7 +173,7 @@
     setTimeout(() => {
       const ui = document.getElementById('ui')
       while (ui.firstChild) ui.firstChild.remove()
-      ui.append(sn.UI(sn, false))
+      ui.append(sn.meta.UI(sn, false))
     }, 100)
 
     function onBenchProgress(obj, id, got, progress) { // Remember & plot.

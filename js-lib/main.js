@@ -1054,7 +1054,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         }),
     })
     // And set the most-common modules.
-    E.UI = UI(E)
+    E.meta.UI = UI(E)
     Object.assign(E.Sensor, {
         Text: Text(E),
         Video: Video(E),

@@ -34,7 +34,11 @@ export default function init(sn) {
     }
 
     return A(class Text extends sn.Sensor {
-        // TODO: Docs.
+        static docs() { return `// TODO:
+
+
+
+`}
         // TODO: Options.
         // TODO: Test everything.
         resume(opts) {

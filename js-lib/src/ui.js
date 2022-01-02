@@ -143,11 +143,11 @@ CSS not included. Markdown parsing not included.
                 ],
             ])
         },
-        docsTransformer(docs) { 'Override this: `sn.UI.docsTransformer = docs => …`'
+        docsTransformer(docs) { 'Override this: `sn.meta.UI.docsTransformer = docs => …`'
             // For example:
             // import sn from '../main.js'
             // import 'https://cdn.jsdelivr.net/npm/marked/marked.min.js'
-            // sn.UI.docsTransformer = docs => {
+            // sn.meta.UI.docsTransformer = docs => {
             //   const html = document.createElement('div')
             //   html.innerHTML = marked.parse(docs)
             //   return html
