@@ -14,7 +14,12 @@
     .hiding { position: relative }
     .hidingSurface { position:absolute; left:0; right:0; top:0; bottom:0; z-index: 1 }
     .hidingSurface:hover { box-shadow: 0 0 .1em black, 0 0 .1em inset black }
-    .hidable { margin-left: 2em; box-shadow: -3px 0 1px black; position: relative; z-index: 2; background-color: white }
+    .hidable { margin-left: 2em; position: relative; z-index: 2; background-color: white }
+    .hidable { box-shadow: -3px 0 1px black }
+    .hidable .hidable { box-shadow: -3px 0 1px #333 }
+    .hidable .hidable .hidable { box-shadow: -3px 0 1px #666 }
+    .hidable .hidable .hidable .hidable { box-shadow: -3px 0 1px #999 }
+    .hidable .hidable .hidable .hidable .hidable { box-shadow: -3px 0 1px #ccc }
 
     code { font-family: monospace, monospace;  background-color: #ebebeb;  border-radius: .3em }
     body { font-family: sans-serif }

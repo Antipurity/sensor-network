@@ -23,9 +23,14 @@ export default function init(sn) {
     function coarsenMD5(m) {
         return m.split('').map(ch => String.fromCharCode(ch.charCodeAt()/2 | 0)).join('')
     }
+    function MD5isEmpty(m) {
+        for (let i = 0; i < m.length; ++i) if (m.charCodeAt(i) !== 0) return false
+        return true
+    }
     function doMD5toToken(m) {
         let o = MD5toToken, m_ = m
         while (o) {
+            if (MD5isEmpty(m_)) return '' // Allow emptiness.
             if (o[m_]) return o[m_]
             o = o._
             m_ = coarsenMD5(m_)
@@ -34,18 +39,36 @@ export default function init(sn) {
     }
 
     return A(class Text extends sn.Sensor {
-        static docs() { return `// TODO:
+        static docs() { return `Observe text, or suggest completions.
 
+Text: abstract, compressed, easy for humans to create. You are reading it.    
+Split into tokens, which are presumably interconnected, and defined by each other.
 
-
+Options:
+- \`name\`: heeded, augmented.
+- \`tokens = 64\`: max token count, in characters by default.
+- \`tokenSize = 64\`: how many numbers each token takes up. Ideally, should match the handler's \`dataSize\`.
+- \`text = Text.readSelection()\`: the actual text observation.
+    - A string, or \`<input>\` or \`<textarea>\`, or a function that returns a string.
+    - Optional \`.feedback(string)\`.
+- \`textToTokens = Text.textToTokens\`: splits text into tokens, characters by default.
+    - \`function(string, tokens) → [...token]\`
+    - \`.feedback([...token]) → string\`
+- \`tokenToData = Text.tokenToDataMD5\`: converts a token to actual numbers.
+    - \`function(token, data, start, end)\`
+    - \`.feedback(feedback, start, end) → token\`
 `}
-        // TODO: Options.
+        static options() {
+            return {
+                // TODO: What do we want?
+            }
+        }
         // TODO: Test everything.
         resume(opts) {
             if (opts) {
                 const tokens = opts.tokens || 64
                 const tokenSize = opts.tokenSize || 64
-                const name = Array.isArray(name) ? name : typeof name == 'string' ? [name] : []
+                const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
                 const text = opts.text || Text.readSelection()
                 const textToTokens = opts.textToTokens || Text.textToTokens
                 const tokenToData = opts.tokenToData || Text.tokenToDataMD5
@@ -78,7 +101,7 @@ export default function init(sn) {
             for (let i = 0; i < tokens.length; ++i)
                 sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
             data.fill(0, tokens.length)
-            sensor.send(sensor.onFeedback, data)
+            sensor.sendCallback(sensor.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
             const cellShape = sensor.cellShape()
@@ -187,7 +210,7 @@ The new text will still be selected, so it can function as autocomplete or autoc
             // MD5-hash the `token`.
             const m = doTokenToMD5(token)
             for (let i = 0, j = start; i < m.length && j < end; ++i, ++j)
-                data[j] = m.charCodeAt(i)/255 * 2 - 1
+                data[j] = m.charCodeAt(i)/255 * 2 - 1 // TODO: Why does this seem to be out-of--1…1-range?
             sn._dataNamer.fill(data, 0, m.length, data.length)
         }, {
             feedback(feedback, start, end) { // → token
