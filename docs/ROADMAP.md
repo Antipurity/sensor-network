@@ -255,11 +255,10 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ✓ `name`, integrated into the actual `name`.
                     - ✓ `tokens=64`, `tokenSize=64`. One token per cell.
                     - ⋯ `text() → str` or `text:{ feedback(str) }`:
-                        - ⋯ `Text.readSelection(n=2048)`: `getSelection()`, `<input>`, `<textarea>`. If selection is empty, returns up-to-`n` characters before that, else only the selection.
-                            - ⋯ `<select>`: try to read the selected item, or if selecting, all items.
-                        - ⋯ `Text.writeSelection()`: type via `document.execCommand('insertText', false, str)`, but also keep what was typed selected. If `contenteditable` or `<input>` or `<textarea>`. (Autocomplete.)
+                        - ✓ `Text.readSelection(n=2048)`: `getSelection()`, `<input>`, `<textarea>`. If selection is empty, returns up-to-`n` characters before that, else only the selection.
                         - ⋯ `Text.readHover(n=2048)`: gets the text position [under ](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretRangeFromPoint)[cursor](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretPositionFromPoint) or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
                         - ⋯ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
+                        - ⋯ `Text.writeSelection()`: type via `document.execCommand('insertText', false, str)`, but also [keep what was typed selected](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/setSelectionRange). If `contenteditable` or `<input>` or `<textarea>`. (Autocomplete.)
                     - ✓ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
                     - ✓ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`. Use MD5 hashes because it's easy to, though feedback may suffer.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):

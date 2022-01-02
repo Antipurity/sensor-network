@@ -1,6 +1,7 @@
 export default function init(sn) {
     const A = Object.assign
     // The ingenious "embed all characters by their MD5 bytes" scheme.
+    let fedBackMD5 = null
     const tokenToMD5 = Object.create(null)
     const MD5toToken = Object.create(null)
     function doTokenToMD5(s) {
@@ -35,12 +36,13 @@ export default function init(sn) {
     return A(class Text extends sn.Sensor {
         // TODO: Docs.
         // TODO: Options.
+        // TODO: Test everything.
         resume(opts) {
             if (opts) {
                 const tokens = opts.tokens || 64
                 const tokenSize = opts.tokenSize || 64
                 const name = Array.isArray(name) ? name : typeof name == 'string' ? [name] : []
-                const text = opts.text
+                const text = opts.text || Text.readSelection()
                 const textToTokens = opts.textToTokens || Text.textToTokens
                 const tokenToData = opts.tokenToData || Text.tokenToDataMD5
                 sn._assertCounts('', tokens, tokenSize)
@@ -85,11 +87,26 @@ export default function init(sn) {
             const str = sensor.textToTokens.feedback(tokens)
             sensor.text.feedback(str)
         }
-        // TODO: `static readSelection(n=2048)`; what does it do, exactly?
-        // TODO: `static readHover(n=2048)`; what does it do, exactly?
+    }, {
+        readSelection: A(function readSelection(n=2048) {
+            return function readSelection() {
+                const selection = getSelection().toString()
+                if (selection) return selection.slice(-n)
+                const el = document.activeElement
+                if (el && (el.tagName === 'INPUT' && typeof el.value == 'string' && typeof el.selectionStart == 'number' || el.tagName === 'TEXTAREA')) {
+                    const start = el.selectionStart, end = el.selectionEnd
+                    return el.value.slice(start === end ? 0 : end, end).slice(-n)
+                }
+            }
+        }, {
+            docs:`Reads the selection, in document and \`<input>\`s and \`<textarea>\`s.
+
+Can pass the maximum returned string length, 2048 by default.`,
+        }),
+        // TODO: `readHover(n=2048, obj:{x,y})`; what does it do, exactly?
         // TODO: `readChanges(n=2048)`; what does it do, exactly?
         // TODO: `writeSelection()`: what does it do, exactly?
-    }, {
+
         textToTokens: A(function textToTokens(str, max) { // → tokens
             return str.split('').slice(-max)
         }, {
@@ -105,7 +122,7 @@ export default function init(sn) {
             sn._dataNamer.fill(data, 0, m.length, data.length)
         }, {
             feedback(feedback, start, end) { // → token
-                if (!Text._fedBackBefore) {
+                if (!fedBackMD5) {
                     // Pre-fill the MD5 cache, so that we could hopefully reverse more.
                     //   (Whose idea was it to use MD5 for character embeddings, anyway?)
                     //   (Terrible idea.)
@@ -113,11 +130,11 @@ export default function init(sn) {
                     const
                     s = document.documentElement.textContent
                     for (let i = 0; i < s.length; ++i)
-                        Text._fedBackBefore = doTokenToMD5(s[i]).length
+                        fedBackMD5 = doTokenToMD5(s[i]).length
                 }
-                sn._dataNamer.unfill(feedback, 0, Text._fedBackBefore, data.length)
+                sn._dataNamer.unfill(feedback, 0, fedBackMD5, data.length)
                 const a = []
-                for (let i = 0, j = start; i < Text._fedBackBefore && j < end; ++i, ++j)
+                for (let i = 0, j = start; i < fedBackMD5 && j < end; ++i, ++j)
                     a.push(String.fromCharCode(Math.round((feedback[j]+1)/2*255)))
                 return doMD5toToken(a.join(''))
             },
