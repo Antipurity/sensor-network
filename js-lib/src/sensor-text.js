@@ -6,7 +6,7 @@ export default function init(sn) {
     const MD5toToken = Object.create(null)
     function doTokenToMD5(s) {
         if (tokenToMD5[s]) return tokenToMD5[s]
-        const i32 = self.YaMD5.hashStr(part, true)
+        const i32 = self.YaMD5.hashStr(s, true)
         const u8 = new Uint8Array(i32.buffer, i32.byteOffset, i32.byteLength)
         const m = String.fromCharCode(...u8)
         tokenToMD5[s] = m
@@ -80,7 +80,6 @@ Options:
                 },
             }
         }
-        // TODO: Test everything.
         resume(opts) {
             if (opts) {
                 const tokens = opts.tokens || 64
@@ -114,6 +113,7 @@ Options:
 
             const txt = sensor.text
             const str = typeof txt == 'string' ? txt : isInputy(txt) ? txt.value : txt()
+            sn._assert(typeof str == 'string')
             const tokens = sensor.textToTokens(str, sensor.tokens)
             for (let i = 0; i < tokens.length; ++i)
                 sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
@@ -140,7 +140,7 @@ Options:
                 if (isInputy(el)) {
                     let start = el.selectionStart, end = el.selectionEnd
                     ;[start, end] = [Math.min(start, end), Math.max(start, end)]
-                    return el.value.slice(start === end ? 0 : end, end).slice(-n)
+                    return el.value.slice(start === end ? 0 : start, end).slice(-n)
                 }
                 const selection = getSelection().toString()
                 if (selection) return selection.slice(-n)
@@ -154,7 +154,8 @@ Can pass the maximum returned string length, 2048 by default.`,
         readHover: A(function readHover(pos = sn.Sensor.Video.pointers(), n=2048) {
             return function read() {
                 let p = pos
-                if (Array.isArray(p) && !p.length) return p
+                if (typeof p == 'function') p = p()
+                if (Array.isArray(p) && !p.length) return ''
                 if (Array.isArray(p)) p = p[0]
                 sn._assert(typeof p.x == 'number' && typeof p.y == 'number')
                 const x = p.x * innerWidth, y = p.y * innerHeight
@@ -169,9 +170,9 @@ Can pass the maximum returned string length, 2048 by default.`,
                 if (node) {
                     let s = node.textContent
                     if (!(node instanceof Element)) { // Go to the word's end.
-                        const ws = /\s|[!@#$%^&*()\[\]{},.<>/?;:'"]|$/
-                        ws.lastIndex = offset
-                        const wordEnd = s.search(ws)
+                        const ws = /\s|[!@#$%^&*()\[\]{},\.\-<>/?;:'"\|\&]|$/
+                        // String.prototype.search doesn't support sticky regexes, for whatever reason.
+                        const wordEnd = offset + s.slice(offset).search(ws)
                         s = s.slice(0, Math.max(wordEnd, offset))
                     }
                     while (s.length < n && node) { // Collect text before the hover-point too.
@@ -186,7 +187,7 @@ Can pass the maximum returned string length, 2048 by default.`,
         }, {
             docs:`Reads the text under the pointer.
 
-Can pass the \`{x,y}\` object (\`Video.pointers\` by default), and maximum returned string length, 2048 by default.`,
+Can pass the \`{x,y}\` object or array/function to that object (\`Video.pointers()\` by default), and maximum returned string length, 2048 by default.`,
         }),
         writeSelection: A(function writeSelection() {
             return { feedback: function write(str) {
