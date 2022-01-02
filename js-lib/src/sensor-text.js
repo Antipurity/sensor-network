@@ -60,7 +60,24 @@ Options:
 `}
         static options() {
             return {
-                // TODO: What do we want?
+                tokens: {
+                    ['64×']: () => 64,
+                    ['128×']: () => 128,
+                    ['256×']: () => 256,
+                    ['512×']: () => 512,
+                    ['1024×']: () => 1024,
+                    ['8×']: () => 8,
+                },
+                tokenSize: {
+                    ['64 ']: () => 64,
+                    ['16 ']: () => 16,
+                    ['256 ']: () => 256,
+                },
+                text: {
+                    ['Read selection']: () => sn.Sensor.Text.readSelection(),
+                    ['Read hovered-over text']: () => sn.Sensor.Text.readHover(sn.Sensor.Video.pointers()),
+                    ['Write selection']: () => sn.Sensor.Text.writeSelection(),
+                },
             }
         }
         // TODO: Test everything.
