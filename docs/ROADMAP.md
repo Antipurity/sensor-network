@@ -295,9 +295,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - TODO: So what do we do next?
                 - If easiest-first:
-                    - Keyboard, pointers, text, `indexedDB` files, WebRTC.
+                    - Scroll, audio, pointers, WebRTC.
                 - If most-important-first:
-                    - WebRTC, text, pointers, keyboard, audio, files.
+                    - WebRTC, pointers, scroll, audio.
             - TODO: Text (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
                 - TODO: Design constraints:
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)

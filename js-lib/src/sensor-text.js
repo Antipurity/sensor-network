@@ -96,7 +96,7 @@ Options:
                 opts.name = [
                     'text',
                     ...name,
-                    (dStart, dEnd, dLen) => dLen > dStart ? 2 * dStart / (dLen - dEnd) - 1 : 1
+                    (dStart, dEnd, dLen) => 2 * dEnd / dLen - 1,
                 ]
                 opts.emptyValues = 0
                 if (typeof text != 'object') opts.onValues = Text.onValues
@@ -227,7 +227,7 @@ The new text will still be selected, so it can function as autocomplete or autoc
             // MD5-hash the `token`.
             const m = doTokenToMD5(token)
             for (let i = 0, j = start; i < m.length && j < end; ++i, ++j)
-                data[j] = m.charCodeAt(i)/255 * 2 - 1 // TODO: Why does this seem to be out-of--1…1-range?
+                data[j] = m.charCodeAt(i)/255 * 2 - 1
             sn._dataNamer.fill(data, 0, m.length, data.length)
         }, {
             feedback(feedback, start, end) { // → token
