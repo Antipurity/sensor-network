@@ -91,13 +91,14 @@ export default function init(sn) {
     }, {
         readSelection: A(function readSelection(n=2048) {
             return function read() {
-                const selection = getSelection().toString()
-                if (selection) return selection.slice(-n)
                 const el = document.activeElement
-                if (el && (el.tagName === 'INPUT' && typeof el.value == 'string' && typeof el.selectionStart == 'number' || el.tagName === 'TEXTAREA')) { // TODO: Should this check be extracted to a function, so that even `resume` can use it?
-                    const start = el.selectionStart, end = el.selectionEnd
+                if (isInputy(el)) {
+                    let start = el.selectionStart, end = el.selectionEnd
+                    ;[start, end] = [Math.min(start, end), Math.max(start, end)]
                     return el.value.slice(start === end ? 0 : end, end).slice(-n)
                 }
+                const selection = getSelection().toString()
+                if (selection) return selection.slice(-n)
                 return ''
             }
         }, {
@@ -142,7 +143,33 @@ Can pass the maximum returned string length, 2048 by default.`,
 
 Can pass the \`{x,y}\` object (\`Video.pointers\` by default), and maximum returned string length, 2048 by default.`,
         }),
-        // TODO: `writeSelection()`: what does it do, exactly?
+        writeSelection: A(function writeSelection() {
+            return { feedback: function write(str) {
+                if (!str) return
+                const el = document.activeElement
+                if (isInputy(el)) {
+                    if (el.disabled || el.readOnly) return
+                    let start = el.selectionStart, end = el.selectionEnd
+                    ;[start, end] = [Math.min(start, end), Math.max(start, end)]
+                    el.setRangeText(str, start, end, 'select')
+                    return
+                }
+                const selection = getSelection()
+                if (selection.rangeCount) {
+                    const range = selection.getRangeAt(0)
+                    let editable = false
+                    for (let p = range.commonAncestorContainer; p; p = p.parentNode)
+                        if (p.isContentEditable) editablee = true
+                    if (!editable) return
+                    range.deleteContents()
+                    range.insertNode(document.createTextNode(str))
+                }
+            } }
+        }, {
+            docs:`Modifies the selection to be the feedback, if possible.
+
+The new text will still be selected, so it can function as autocomplete or autocorrect.`,
+        }),
 
         textToTokens: A(function textToTokens(str, max) { // → tokens
             return str.split('').slice(-max)
@@ -177,4 +204,7 @@ Can pass the \`{x,y}\` object (\`Video.pointers\` by default), and maximum retur
             },
         }),
     })
+    function isInputy(el) {
+        return el && el instanceof Element && (el.tagName === 'INPUT' && typeof el.value == 'string' && typeof el.selectionStart == 'number' || el.tagName === 'TEXTAREA')
+    }
 }
