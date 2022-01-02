@@ -162,7 +162,7 @@ In Chrome, users might have to first click on the page for sound to play.
 
                 Sound.dst = Sound.ctx.createAnalyser()
                 Sound.dst.fftSize = 2048
-                Sound.dst.smoothingTimeConstant = .93
+                Sound.dst.smoothingTimeConstant = .0
                 Sound.dst.connect(Sound.ctx.destination)
             }
             if (this.debug && !Sound.debug) {

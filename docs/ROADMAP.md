@@ -251,10 +251,10 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
                         - ⋯ And a volume slider.
                         - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
-                - ⋯ `Text`. (The ability to *annotate* what you're doing. No need to guess intentions of humans if they can just tell you.)
+                - ✓ `Text`. (The ability to *annotate* what you're doing. No need to guess intentions of humans if they can just tell you.)
                     - ✓ `name`, integrated into the actual `name`.
                     - ✓ `tokens=64`, `tokenSize=64`. One token per cell.
-                    - ⋯ `text() → str` or `text:{ feedback(str) }`:
+                    - ✓ `text() → str` or `text:{ feedback(str) }`:
                         - ✓ `Text.readSelection(n=2048)`: `getSelection()`, `<input>`, `<textarea>`. If selection is empty, returns up-to-`n` characters before that, else only the selection.
                         - ✓ `Text.readHover(pos=Video.pointers(), n=2048)`: gets the text position [under ](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretRangeFromPoint)[cursor](https://developer.mozilla.org/en-US/docs/Web/API/Document/caretPositionFromPoint) or under an `{x,y}` object (a virtual pointer), goes to end-of-word if trivial, and reads `n` characters before that.
                         - ❌ `Text.readChanges(n=2048)`, using a [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver). (Why, does this happen often enough to be useful?)
@@ -312,6 +312,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ [Normalize perceived loudness.](https://en.wikipedia.org/wiki/Equal-loudness_contour)
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
             - ❌ Sound input (microphone). Probably terrible, especially without an ML model to summarize it.
+            - ✓ `Random` feedback. For debugging.
             - ⋯ Write to `indexedDB`, with visualization (`option()`?) allowing saving it all to a file.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ⋯ Write to Internet.

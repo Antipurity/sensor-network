@@ -5,6 +5,7 @@ import Time from './src/sensor-time.js'
 import Reward from './src/transform-reward.js'
 import UI from './src/ui.js'
 import Text from './src/sensor-text.js'
+import Random from './src/handler-random.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1065,6 +1066,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     })
     Object.assign(E.Handler, {
         Sound: Sound(E),
+        Random: Random(E),
     })
     return E
 

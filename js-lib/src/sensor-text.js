@@ -107,6 +107,7 @@ Options:
         }
         static onValues(sensor, data) {
             const cellShape = sensor.cellShape()
+            // console.log(sensor.onFeedback) // TODO: Where is this?!
             if (!cellShape) return
             const dataSize = cellShape[cellShape.length-1]
             const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
@@ -118,7 +119,7 @@ Options:
             for (let i = 0; i < tokens.length; ++i)
                 sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
             data.fill(0, tokens.length)
-            sensor.sendCallback(sensor.onFeedback, data)
+            sensor.sendCallback(sensor.onFeedback, data) // TODO: Also set noData, right?
         }
         static onFeedback(feedback, sensor) {
             const cellShape = sensor.cellShape()
@@ -191,6 +192,7 @@ Can pass the \`{x,y}\` object or array/function to that object (\`Video.pointers
         }),
         writeSelection: A(function writeSelection() {
             return { feedback: function write(str) {
+                console.log('writeSelection', str) // TODO: Where is it?!
                 if (!str) return
                 const el = document.activeElement
                 if (isInputy(el)) {
