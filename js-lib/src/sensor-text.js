@@ -1,5 +1,19 @@
 export default function init(sn) {
     const A = Object.assign
+    const tokenToMD5 = Object.create(null)
+    const MD5toToken = Object.create(null)
+    function doTokenToMD5(s) {
+        if (tokenToMD5[s]) return tokenToMD5[s]
+        const i32 = self.YaMD5.hashStr(part, true)
+        const u8 = new Uint8Array(i32.buffer, i32.byteOffset, i32.byteLength)
+        const m = String.fromCharCode(...u8)
+        tokenToMD5[s] = m, MD5toToken[m] = s
+        return m
+    }
+    function doMD5toToken(m) {
+        if (MD5toToken[m]) return MD5toToken[m]
+        return ''
+    }
     return A(class Text extends sn.Sensor {
         // TODO: Docs.
         // TODO: Options.
@@ -10,7 +24,7 @@ export default function init(sn) {
                 const name = Array.isArray(name) ? name : typeof name == 'string' ? [name] : []
                 const text = opts.text
                 const textToTokens = opts.textToTokens || Text.textToTokens
-                const tokenToData = opts.tokenToData || Text.tokenToData
+                const tokenToData = opts.tokenToData || Text.tokenToDataMD5
                 sn._assertCounts('', tokens, tokenSize)
                 sn._assert(typeof text == 'function' || typeof text.feedback == 'function' && typeof textToTokens.feedback == 'function' && typeof tokenToData.feedback == 'function')
                 sn._assert(typeof textToTokens == 'function' && typeof tokenToData == 'function')
@@ -65,12 +79,30 @@ export default function init(sn) {
                 return tokens.join('')
             },
         }),
-        tokenToData: A(function tokenToData(token, data, start, end) {
-            // TODO: What do we do? How to fill `data`?
-            // TODO: How to get the index of the character `token` in base64, and if not there, MD5-encode it and cache it?...
+        tokenToDataMD5: A(function tokenToData(token, data, start, end) {
+            // MD5-hash the `token`.
+            const m = doTokenToMD5(token)
+            for (let i = 0, j = start; i < m.length && j < end; ++i, ++j)
+                data[j] = m.charCodeAt(i)/255 * 2 - 1
+            sn._dataNamer.fill(data, 0, m.length, data.length)
         }, {
             feedback(feedback, start, end) { // → token
-                // TODO: What do we do? (How to reverse MD5 hashes, even?)
+                // (This will likely fail to find a match, unless the handler is extremely sure.)
+                if (!Text._fedBackBefore) {
+                    // Pre-fill the MD5 cache, so that we could hopefully reverse more.
+                    //   (Whose idea was it to use MD5 for character embeddings, anyway?)
+                    //   (Terrible idea.)
+                    true
+                    const
+                    s = document.documentElement.textContent
+                    for (let i = 0; i < s.length; ++i)
+                        Text._fedBackBefore = doTokenToMD5(s[i]).length
+                }
+                sn._dataNamer.unfill(feedback, 0, Text._fedBackBefore, data.length)
+                const a = []
+                for (let i = 0, j = start; i < Text._fedBackBefore && j < end; ++i, ++j)
+                    a.push(String.fromCharCode(Math.round((feedback[j]+1)/2*255)))
+                return doMD5toToken(a.join(''))
             },
         }),
     })

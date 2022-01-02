@@ -1,4 +1,4 @@
-import './yamd5.js'
+import './yamd5.js' // self.YaMD5
 import Sound from './src/handler-sound.js'
 import Video from './src/sensor-video.js'
 import Time from './src/sensor-time.js'
@@ -984,7 +984,7 @@ Extra parameters:
                     if (Array.isArray(part))
                         part.forEach(flattenName)
                     else if (typeof part == 'string') {
-                        const i32 = YaMD5.hashStr(part, true)
+                        const i32 = self.YaMD5.hashStr(part, true)
                         const u8 = new Uint8Array(i32.buffer, i32.byteOffset, i32.byteLength)
                         const bytes = new Array(Math.min(u8.length, partSize))
                         for (let i = 0; i < bytes.length; ++i) bytes[i] = (u8[i] / 255) * 2 - 1
