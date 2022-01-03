@@ -1,7 +1,7 @@
-export default function init(sn) {
+export default function init(sn) { // TODO: OHHH NOOO: `Text` should at least define `.save:{a}`, so that it could be `save`d and later loaded...
     const A = Object.assign
     // The ingenious "embed all characters by their MD5 bytes" scheme.
-    let fedBackMD5 = null
+    let fedBackMD5 = null // TODO: All these should be on some func.
     const tokenToMD5 = Object.create(null)
     const MD5toToken = Object.create(null)
     function doTokenToMD5(s) {
