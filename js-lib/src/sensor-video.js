@@ -10,6 +10,7 @@ This sensor's output is composed of 1 or more tiles, which are square images.
 It can target 0 or 1+ points, each shown in 1 or more tiles, and can include multiple zoom levels.
 
 Extra options:
+- \`name\`: heeded, augmented.
 - \`tileDimension = 8\`: each tile edge's length.
 - \`source = Video.stitchTab()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
     - Feedback is currently not implemented.
@@ -69,6 +70,7 @@ Extra options:
         }
         resume(opts) {
             if (opts) {
+                const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
                 const td = opts.tileDimension || 8
                 const src = opts.source || Video.stitchTab()
                 const targ = opts.targets || Video.pointers()
@@ -116,6 +118,7 @@ Extra options:
                 }
                 opts.name = [
                     'video',
+                    ...name,
                     typeof opts.name == 'string' ? opts.name : String(td) + this.monochrome,
                     this.noFeedback ? 0 : (...args) => xyz(...args).x * 2 - 1,
                     this.noFeedback ? 0 : (...args) => xyz(...args).y * 2 - 1,

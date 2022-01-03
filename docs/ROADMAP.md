@@ -220,7 +220,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ✓ `target: {x,y} = Video.pointers()`
                     - ✓ `mode: 'read'|'write'|'writeDiff'`
                 - ✓ Video: `Video`.
-                    - ⋯ `name`, integrated into the actual `name`.
+                    - ✓ `name`, integrated into the actual `name`.
                     - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
                         - ✓ `static stitchTab()`, which draws the viewport's visible `<canvas>`es into a hidden `<canvas>`/`<video>`/`<img>`. This is the default in non-extensions, because it requires no user interaction.
                             - ⋯ Ask the extension for the stream if it allows us. (For security, the extension needs a per-tab checkbox "allow the page to read its own video/audio".)
@@ -243,7 +243,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ To minimize GPU→CPU transfer, make reading 1 or more frames behind writing. (Helps a very tiny bit.)
                         - ❌ Tone down `MediaStream` settings dynamically (`frameRate`, `width:{ideal:512}`), according to how much we can/can't accept. (Doesn't work with canvas streams in Firefox; doesn't help in Chrome.)
                         - ⋯ To not draw invisible elems in `stitchTab`, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
-                - ⋯ Audio.
+                - ✓ Audio.
                     - ✓ `fftSize=2048`
                     - ✓ `frequency={minDecibels:-100, maxDecibels:-30}`: could be `null` to expose time-domain data instead of frequency-domain.
                     - ✓ `source = Audio.DOM()`: [`<video>`, `<audio>`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaElementSource), [`MediaStream`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaStreamSource), an array of them, or a function to those (called each frame, with sources properly un/attached). Use an [`AnalyserNode`](https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode) without time-smoothing.
@@ -299,10 +299,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - TODO: So what do we do next?
                 - If easiest-first:
-                    - Audio, pointers, WebRTC.
+                    - Pointers, WebRTC.
                 - If most-important-first:
-                    - WebRTC, pointers, audio.
-            - TODO: Text (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
+                    - WebRTC, pointers.
+            - TODO: Text in `README.md` (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
+                - TODO: Connect arbitrary sensors to a human brain and/or AI model.
                 - TODO: Design constraints:
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
                     - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling)
