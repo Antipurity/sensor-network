@@ -204,8 +204,8 @@ In Chrome, users might have to first click on the page for sound to play.
             const src = Sound.ctx.createBufferSource()
             src.buffer = buf
             const start = Math.max(Sound.next, Sound.ctx.currentTime + delay)
-            console.log('delay, s:', Sound.ctx.currentTime - Sound.next) // TODO: Why so much delay??
-            sn.meta.metric('latency, s', start - Sound.ctx.currentTime)
+            // console.log('delay, s:', Sound.ctx.currentTime - Sound.next) // TODO: Why so much delay?? Really need to switch to medians...
+            sn.meta.metric('latency, s', Sound.next - Sound.ctx.currentTime)
             src.connect(Sound.dst), src.start(start)
             Sound.next = start + soundLen / sampleRate
 

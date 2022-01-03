@@ -250,7 +250,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ `Audio.DOM(Audio)(ctx)`: connects all `<video>`/`<audio>` elements on the page.
                         - ✓ Allow `source` to be an `AudioContext` too, replacing its `.destination` to be our analyzer node via `Object.defineProperty`. (For efficiency, and post-processing, such as [exposing each channel separately.](https://developer.mozilla.org/en-US/docs/Web/API/ChannelSplitterNode))
                         - ⋯ Request a `MediaStream` from extension if possible.
-                    - ❌ Feedback. (No immediate use is apparent.)
+                    - ⋯ Feedback, given to the `feedback(mediaStream)` option. (With `frequency`, need IFFT.)
                     - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
                         - ⋯ And a volume slider.
                         - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.

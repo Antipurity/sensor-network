@@ -626,8 +626,8 @@ export default (function(exports) {
                         ['32 ']: () => 32,
                     },
                     userParts: {
-                        ['×0']: () => 0,
                         ['×1']: () => 1,
+                        ['×0']: () => 0,
                     },
                     nameParts: {
                         ['×3']: () => 3,

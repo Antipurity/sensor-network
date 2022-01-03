@@ -5,13 +5,12 @@ export default function init(sn) {
 
 If you need to test what this sensor records, here:
 
-<audio controls src="https://file-examples-com.github.io/uploads/2017/11/file_example_MP3_700KB.mp3"></audio>
+<audio controls crossorigin src="https://file-examples-com.github.io/uploads/2017/11/file_example_MP3_700KB.mp3"></audio>
 
 Options:
-- \`source = Audio.DOM(Audio)\`: \`<video>\`, \`<audio>\`, \`MediaStream\` \`function(Audio)(audioContext)\`, or the \`AudioContext\` whose \`.destination\` is augmented.
+- \`source = Audio.DOM(Audio)\`: \`<video>\` or \`<audio>\` (with the \`crossorigin\` attribute if crossorigin), \`MediaStream\` \`function(Audio)(audioContext)\`, or the \`AudioContext\` whose \`.destination\` is augmented.
 - \`fftSize = 2048\`: the window size: how many values are exposed per packet (or twice that if \`frequency\`). [Must be a power-of-2.](https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode/fftSize)
 - \`frequency = {minDecibels:-100, maxDecibels:-30}\`: \`null\` to expose \`fftSize\` time-domain numbers, or an object to expose \`fftSize/2\` frequency-domain numbers.` }
-        // TODO: Test it.
         static options() { return {
             fftSize:{
                 ['2048 ']: () => 2048,
@@ -49,14 +48,15 @@ Options:
                 node.fftSize = fftSize
                 node.smoothingTimeConstant = 0
                 const oldDestination = ctx.destination
-                Object.defineProperty(ctx, 'destination', {
+                Object.defineProperty(ctx, 'destination', { // Augment the destination with our analyser.
                     configurable: true,
                     enumerable: true,
                     value: node,
                     writable: true,
                 })
-                if (source instanceof AudioContext) node.connect(oldDestination)
-                else if (typeof source != 'function') Audio._connect(opts.source, ctx)
+                node.connect(oldDestination)
+                if (!(source instanceof AudioContext) && typeof source != 'function')
+                    Audio._connect(opts.source, ctx)
             }
             return super.resume(opts)
         }
@@ -89,7 +89,7 @@ Options:
                 if (prevCtx !== ctx) nodes = new WeakMap
                 prevCtx = ctx
                 if (!ctx) return
-                const videos = document.getElementsByClassName('video'), audios = document.getElementsByClassName('audio')
+                const videos = document.getElementsByTagName('video'), audios = document.getElementsByTagName('audio')
                 Array.prototype.forEach.call(videos, connect)
                 Array.prototype.forEach.call(audios, connect)
                 function connect(elem) {
