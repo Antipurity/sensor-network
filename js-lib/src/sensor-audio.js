@@ -3,16 +3,25 @@ export default function init(sn) {
     return A(class Audio extends sn.Sensor {
         static docs() { return `Sound that's already playing.
 
-// TODO: Also an example of an \`<audio>\` element, from some short audio file on the Internet. For testing.
+If you need to test what this sensor records, here:
+
+<audio controls src="https://file-examples-com.github.io/uploads/2017/11/file_example_MP3_700KB.mp3"></audio>
 
 Options:
-- \`source = Audio.DOM(Audio)\`: \`<video>\`, \`<audio>\`, \`MediaStream\`, or \`function(Audio)(audioContext)\`.
+- \`source = Audio.DOM(Audio)\`: \`<video>\`, \`<audio>\`, \`MediaStream\` \`function(Audio)(audioContext)\`, or the \`AudioContext\` whose \`.destination\` is augmented.
 - \`fftSize = 2048\`: the window size: how many values are exposed per packet (or twice that if \`frequency\`). [Must be a power-of-2.](https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode/fftSize)
 - \`frequency = {minDecibels:-100, maxDecibels:-30}\`: \`null\` to expose \`fftSize\` time-domain numbers, or an object to expose \`fftSize/2\` frequency-domain numbers.` }
         // TODO: Test it.
         static options() { return {
-            // TODO: Uhh, what do we want?
-            //   fftSize, frequency. (`source` is not an option.)
+            fftSize:{
+                ['2048 ']: () => 2048,
+                ['512 ']: () => 512,
+                ['16384 ']: () => 16384,
+            },
+            frequency:{
+                ['Frequency-domain']: () => null,
+                ['Time-domain']: () => ({minDecibels:-100, maxDecibels:-30}),
+            },
         } }
         resume(opts) {
             if (opts) {
@@ -20,7 +29,7 @@ Options:
                 const fftSize = opts.fftSize || 2048
                 const frequency = opts.frequency || {minDecibels:-100, maxDecibels:-30}
                 const source = opts.source || Audio.DOM(Audio)
-                // TODO: Also opts.source.
+                sn._assert(source instanceof AudioContext || source instanceof MediaStreamTrack || source instanceof Element && (source.tagName === 'VIDEO' || source.tagName === 'AUDIO') || typeof source == 'function', "Bad source")
                 sn._assertCounts('', fftSize), sn._assert([32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768].includes(fftSize), "Not an acceptable power-of-2")
                 sn._assert(frequency == null || typeof frequency.minDecibels == 'number' && typeof frequency.maxDecibels == 'number')
                 opts.name = [
@@ -31,27 +40,30 @@ Options:
                 opts.values = frequency ? fftSize/2|0 : fftSize
                 opts.onValues = Audio.onValues
                 opts.noFeedback = true
+                this.source = source
                 this.frequency = frequency
                 if (this.ctx) this.ctx.close()
                 this.ctx = null
-                const ctx = opts.source instanceof AudioContext ? opts.source : (this.ctx = new AudioContext)
+                const ctx = source instanceof AudioContext ? source : (this.ctx = new AudioContext)
                 const node = this.node = ctx.createAnalyser()
                 node.fftSize = fftSize
                 node.smoothingTimeConstant = 0
+                const oldDestination = ctx.destination
                 Object.defineProperty(ctx, 'destination', {
                     configurable: true,
                     enumerable: true,
                     value: node,
                     writable: true,
                 })
-                // TODO: How do we re/connect `source` to `node`? Audio._connect(opts.source, ctx)
+                if (source instanceof AudioContext) node.connect(oldDestination)
+                else if (typeof source != 'function') Audio._connect(opts.source, ctx)
             }
             return super.resume(opts)
         }
         static onValues(sensor, data) {
             const node = sensor.node
             if (!node) return
-            // TODO: Should we call `sensor.source(sensor.ctx)` if a function?
+            if (typeof sensor.source == 'function' && sensor.ctx) sensor.source(sensor.ctx)
             if (sensor.frequency) {
                 node.getFloatFrequencyData(data)
                 const min = sensor.frequency.minDecibels, max = sensor.frequency.maxDecibels, rlen = 1 / (max - min)

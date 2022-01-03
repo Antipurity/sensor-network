@@ -246,8 +246,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Audio.
                     - ✓ `fftSize=2048`
                     - ✓ `frequency={minDecibels:-100, maxDecibels:-30}`: could be `null` to expose time-domain data instead of frequency-domain.
-                    - ⋯ `source = Audio.DOM()`: [`<video>`, `<audio>`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaElementSource), [`MediaStream`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaStreamSource), an array of them, or a function to those (called each frame, with sources properly un/attached). Use an [`AnalyserNode`](https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode) without time-smoothing.
-                        - ⋯ `Audio.DOM(Audio)(ctx)`: returns an array of all `<video>`/`<audio>` elements on the page. TODO: No, instead, connect them all, and disconnect as appropriate...
+                    - ✓ `source = Audio.DOM()`: [`<video>`, `<audio>`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaElementSource), [`MediaStream`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaStreamSource), an array of them, or a function to those (called each frame, with sources properly un/attached). Use an [`AnalyserNode`](https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode) without time-smoothing.
+                        - ✓ `Audio.DOM(Audio)(ctx)`: connects all `<video>`/`<audio>` elements on the page.
                         - ✓ Allow `source` to be an `AudioContext` too, replacing its `.destination` to be our analyzer node via `Object.defineProperty`. (For efficiency, and post-processing, such as [exposing each channel separately.](https://developer.mozilla.org/en-US/docs/Web/API/ChannelSplitterNode))
                         - ⋯ Request a `MediaStream` from extension if possible.
                     - ❌ Feedback. (No immediate use is apparent.)
