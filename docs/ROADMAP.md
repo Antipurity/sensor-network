@@ -227,7 +227,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ `static requestDisplay()`, which uses `getDisplayMedia`.
                         - ✓ `static requestCamera()`, which uses `getUserMedia`.
                     - ✓ Data on context2D: draw `source` into tiles.
-                        - ⋯ To make blindly copying differently-shaped-cell data at least half-correct, collect pixels along diagonals, not row-by-row.
+                        - ❌ To make blindly copying differently-shaped-cell data at least half-correct, collect pixels along diagonals, not row-by-row. (A simple workaround: just don't resize, or at least make the model learn to handle it.)
                     - ⋯ Feedback on context2D: draw tiles into `source`-shaped spots, by having `source.onFeedback(feedbackCanvas)`. Unzoom and position tiles properly, and make sure that max-detail information always wins.
                     - ✓ Coalesce tiles spatially, with x/y coords of the center in the name, with each tile dimension being `tileDimension`. 1 tile per cell: when `cellShape[-1]` is too small, cut off; when too big, zero-fill.
                         - ✓ Each cell's name: `['video', ''+tileDimension, x(), y(), zoom(), color()]`, where un/zoom level is -1 for 1× and 1 for 1024×, and color is -1 for monochrome and -⅓ for red and ⅓ for green and 1 for blue.
@@ -244,12 +244,13 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ❌ Tone down `MediaStream` settings dynamically (`frameRate`, `width:{ideal:512}`), according to how much we can/can't accept. (Doesn't work with canvas streams in Firefox; doesn't help in Chrome.)
                         - ⋯ To not draw invisible elems in `stitchTab`, if available, use [`IntersectionObserver`](https://developer.mozilla.org/en-US/docs/Web/API/IntersectionObserver) and [`MutationObserver`](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver).
                 - ⋯ Audio.
-                    - ⋯ Mono, by averaging all channels.
-                    - ⋯ 2+ channels, each exposed directly.
-                    - ⋯ Create an audio context that reads PCM data from the media stream.
-                        - ⋯ Request from extension if possible.
-                    - ⋯ Expose data and feedback as [audio](https://developer.mozilla.org/en-US/docs/Web/API/MediaStream) [streams](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamAudioDestinationNode): `.soundData()=>dataStream` and `.soundFeedback()=>feedbackStream`.
-                        - ⋯ For more efficiency, allow initializing from an audio context by attaching all our nodes to it, in case all sound is played through that: `.onAudioContext(ctx, outputNode)`.
+                    - ✓ `fftSize=2048`
+                    - ✓ `frequency={minDecibels:-100, maxDecibels:-30}`: could be `null` to expose time-domain data instead of frequency-domain.
+                    - ⋯ `source = Audio.DOM`: [`<video>`, `<audio>`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaElementSource), [`MediaStream`](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaStreamSource), an array of them, or a function to those (called each frame, with sources properly un/attached). Use an [`AnalyserNode`](https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode) without time-smoothing.
+                        - ⋯ `Audio.DOM`: returns an array of all `<video>`/`<audio>` elements on the page.
+                        - ✓ Allow `source` to be an `AudioContext` too, replacing its `.destination` to be our analyzer node via `Object.defineProperty`. (For efficiency, and post-processing, such as [exposing each channel separately.](https://developer.mozilla.org/en-US/docs/Web/API/ChannelSplitterNode))
+                        - ⋯ Request a `MediaStream` from extension if possible.
+                    - ❌ Feedback. (No immediate use is apparent.)
                     - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
                         - ⋯ And a volume slider.
                         - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
@@ -263,6 +264,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ `Text.writeSelection()`: [modify the current selection](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/setRangeText), if `contenteditable` or `<input>` or `<textarea>`. (Is autocomplete or autocorrect.)
                     - ✓ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
                     - ✓ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`. Use MD5 hashes because it's easy to, though feedback may suffer.
+                    - ⋯ [`TextTrack`s](https://developer.mozilla.org/en-US/docs/Web/API/TextTrack) of `<audio>`/`<video>`.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
             - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?

@@ -7,6 +7,7 @@ import UI from './src/ui.js'
 import Text from './src/sensor-text.js'
 import Random from './src/handler-random.js'
 import Scroll from './src/sensor-scroll.js'
+import Audio from './src/sensor-audio.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -116,6 +117,8 @@ export default (function(exports) {
                     this.noDataIndices.push(this.cells + c)
             this.cells += point.length / this.cellSize | 0
         }
+        // TODO: Have median-based `setValue(spot, v, maxHorizon=11)` and `getValue(spot)` (n/2-th largest, sorting a copy each time).
+        //   TODO: Use these wherever `_updateMean` and `.msPerStep[1]` are used.
         static updateMean(a, value, maxHorizon = 32) {
             const n1 = a[0], n2 = n1+1
             a[0] = Math.min(n2, maxHorizon)
@@ -273,8 +276,10 @@ export default (function(exports) {
             if (!dst || dst.looping) return;  else dst.looping = true
             dst.prevEnd = performance.now()
             let prevWait = dst.prevEnd
+            // TODO: Keep track of non-`handle` time. Print it. See how horribly wrong we are. (Even sensor-collection time.)
             while (true) {
                 if (!ch.shaped[summary]) return // `Sensor`s might have cleaned us up.
+                const timeA = performance.now()
                 const lessPackets = dst.overscheduled > .5
                 // Get sensor data.
                 const mainHandler = ch.mainHandler && ch.mainHandler.summary === summary ? ch.mainHandler : null
@@ -294,6 +299,8 @@ export default (function(exports) {
                             catch (err) { console.error(err) }
                         }
                 }
+                const timeB = performance.now()
+                // console.log('Time-to-sense:', timeB-timeA, 'ms') // TODO:
                 // Pause if no destinations, or no sources & no data to send.
                 if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
                     return dst.msPerStep[0] = dst.msPerStep[1] = 0, dst.looping = false
@@ -316,10 +323,14 @@ export default (function(exports) {
                 if (dst.prevEnd < now - 1000)
                     dst.prevEnd = now - 1000 // Don't get too eager after being stalled.
                 if (needToWait > 5 || now - prevWait > 100 || noData) {
+                    const delay = noData ? 500 : Math.max(needToWait, 0) // TODO: Measure & subtract overshooting. (As the median, of course.)
+                    const expectedEnd = performance.now() + delay
                     await new Promise(then => {
                         if (now - prevWait <= 100) dst.giveNextPacketNow = then
-                        const delay = noData ? 500 : Math.max(needToWait, 0)
-                        setTimeout(() => { prevWait = performance.now(), then() }, delay)
+                        setTimeout(() => {
+                            // console.log('overshoot', performance.now() - expectedEnd) // TODO: Yep, relatively-consistent about-8-ms overshoot.
+                            prevWait = performance.now(), then()
+                        }, delay)
                     })
                     dst.giveNextPacketNow = null
                 }
@@ -1063,6 +1074,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     Object.assign(E.Sensor, {
         Text: Text(E),
         Video: Video(E),
+        Audio: Audio(E),
         Scroll: Scroll(E),
         Time: Time(E),
     })
