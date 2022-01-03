@@ -6,6 +6,7 @@ import Reward from './src/transform-reward.js'
 import UI from './src/ui.js'
 import Text from './src/sensor-text.js'
 import Random from './src/handler-random.js'
+import Scroll from './src/sensor-scroll.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1062,6 +1063,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     Object.assign(E.Sensor, {
         Text: Text(E),
         Video: Video(E),
+        Scroll: Scroll(E),
         Time: Time(E),
     })
     Object.assign(E.Transform, {

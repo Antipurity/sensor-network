@@ -216,7 +216,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ⋯ If an action: on feedback, update the `{x,y}` objects, and create [non-trusted](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted)[ pointer events](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/PointerEvent) (the first item is primary and `'mouse'`, the rest are `'touch'`) if possible to make the DOM aware.
                         - ⋯ If an observation: a cell per pointer (dynamically created/destroyed), report x (0…1), y (0…1), is-it-pressed, isPrimary, pointerType, width (screen-fraction), height (screen-fraction), pressure, tangentialPressure, tiltX, tiltY, twist.
                     - ⋯ `visualize({data, cellShape}, elem)`, showing round points.
-                - ⋯ Scroll, exposing not just at top-level but in hierarchy levels: current X/Y and max X/Y scroll position; non-existent ones are 0s. Occupy only 1 cell.
+                - ✓ Scroll, exposing not just the top-level but scrollable elements too: current X/Y and diff X/Y scroll position; non-existent ones are 0s. Only give like 16 numbers.
+                    - ✓ `target: {x,y} = Video.pointers()`
+                    - ✓ `mode: 'read'|'write'|'writeDiff'`
                 - ✓ Video: `Video`.
                     - ⋯ `name`, integrated into the actual `name`.
                     - ✓ `source`: `<canvas>` or `<video>` or `<img>` or `MediaStream` or a function to one of those.
@@ -295,9 +297,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - TODO: So what do we do next?
                 - If easiest-first:
-                    - Scroll, audio, pointers, WebRTC.
+                    - Audio, pointers, WebRTC.
                 - If most-important-first:
-                    - WebRTC, pointers, scroll, audio.
+                    - WebRTC, pointers, audio.
             - TODO: Text (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
                 - TODO: Design constraints:
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)

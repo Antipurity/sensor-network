@@ -10,6 +10,7 @@
     .hidable { overflow: hidden }
     .hidingMarker { display: inline-block; position: relative; z-index: 0; padding: 1px }
     .hiding:not(.isHiding)>.hidingMarker { transform: rotate(90deg) }
+    .isHiding>.hidable { visibility: hidden }
 
     .hiding { position: relative }
     .hidingSurface { position:absolute; left:0; right:0; top:0; bottom:0; z-index: 1 }
@@ -97,7 +98,7 @@
       <div class=hidingSurface></div>
       <span class=hidingMarker>▶</span>
       Components for tinkering
-      <div class="hidable" style="height:0px" id=ui>···</div>
+      <div class="hidable" style="height:0px" id=ui>(<code>Escape</code> to disable all.)</div>
     </div>
   </div>
   <script type=module>
@@ -175,10 +176,16 @@
     }
     collectBenchmarks()
 
+    // UI.
     setTimeout(() => {
       const ui = document.getElementById('ui')
-      while (ui.firstChild) ui.firstChild.remove()
-      ui.append(sn.meta.UI(sn, false))
+      const uiContent = sn.meta.UI(sn, false)
+      ui.append(uiContent)
+      // ESC to disable all.
+      document.addEventListener('keydown', evt => {
+        if (evt.key === 'Escape')
+          Array.from(uiContent.querySelectorAll('.checkboxRunning:checked')).forEach(e => e.click())
+      }, {passive:true})
     }, 100)
 
     function onBenchProgress(obj, id, got, progress) { // Remember & plot.

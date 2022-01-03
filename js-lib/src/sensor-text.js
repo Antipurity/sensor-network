@@ -88,8 +88,10 @@ Options:
                 const text = opts.text || Text.readSelection()
                 const textToTokens = opts.textToTokens || Text.textToTokens
                 const tokenToData = opts.tokenToData || Text.tokenToDataMD5
+                const haveText = typeof text == 'string' || typeof text == 'function' || isInputy(text)
+                const haveTextFeedback = (typeof text.feedback == 'function' || isInputy(text.feedback)) && typeof textToTokens.feedback == 'function' && typeof tokenToData.feedback == 'function'
                 sn._assertCounts('', tokens, tokenSize)
-                sn._assert(typeof text == 'string' || typeof text == 'function' || isInputy(text) || (typeof text.feedback == 'function' || isInputy(text.feedback)) && typeof textToTokens.feedback == 'function' && typeof tokenToData.feedback == 'function')
+                sn._assert(haveText || haveTextFeedback)
                 sn._assert(typeof textToTokens == 'function' && typeof tokenToData == 'function')
                 opts.values = tokens * tokenSize
                 opts.name = [
@@ -99,6 +101,7 @@ Options:
                 ]
                 opts.emptyValues = 0
                 opts.onValues = Text.onValues
+                opts.noFeedback = !haveTextFeedback
                 this.onFeedback = typeof text.feedback == 'function' ? Text.onFeedback : null
                 this.text = text, this.textToTokens = textToTokens, this.tokenToData = tokenToData
                 this.tokens = tokens, this.tokenSize = tokenSize
