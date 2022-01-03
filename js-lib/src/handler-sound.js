@@ -52,12 +52,12 @@ export default function init(sn) {
             return revReal
         }
     }
-    function ifft(freq) {
+    function ifft(freq, phase = 0) {
         if (ifft.n !== freq.length) {
             ifft.o = new IFFT(freq.length)
             ifft.n = freq.length
         }
-        const imag = sn._allocF32(freq.length).fill(0)
+        const imag = sn._allocF32(freq.length).fill(phase)
         try { return ifft.o.do(freq, imag) }
         finally { sn._deallocF32(imag) }
     }
@@ -174,7 +174,8 @@ In Chrome, users might have to first click on the page for sound to play.
                 function draw() {
                     requestAnimationFrame(draw)
                     const data = new Float32Array(Sound.dst.frequencyBinCount)
-                    Sound.dst.getFloatFrequencyData(data)
+                    const time = false
+                    time ? Sound.dst.getFloatTimeDomainData(data) : Sound.dst.getFloatFrequencyData(data)
 
                     canvas.ctx.fillStyle = 'rgb(200, 200, 200)'
                     canvas.ctx.fillRect(0, 0, canvas.width, canvas.height)
@@ -183,9 +184,11 @@ In Chrome, users might have to first click on the page for sound to play.
                     canvas.ctx.strokeStyle = 'rgb(0, 0, 0)'
                     canvas.ctx.beginPath()
                     const sliceWidth = canvas.width / data.length
+                    let max = .000001
+                    for (let i = 0; i < data.length; ++i) max = Math.max(max, Math.abs(data[i]))
                     for (let i = 0, x = 0; i < data.length; ++i, x += sliceWidth) {
-                        const v = data[i] + 105
-                        const y = canvas.height - v / 65 * canvas.height
+                        const v = time ? (data[i]/max/2+.5) : (data[i] + 105) / 65
+                        const y = canvas.height - v * canvas.height
                         !i ? canvas.ctx.moveTo(x, y) : canvas.ctx.lineTo(x, y)
                     }
                     canvas.ctx.stroke()
@@ -197,19 +200,19 @@ In Chrome, users might have to first click on the page for sound to play.
             const maxFrequency = Math.min(this.maxFrequency, sampleRate)
             const soundLen = Math.ceil(data.length * sampleRate / maxFrequency)
             // Firefox has skips all over the sound if we don't delay.
-            const delay = Sound.ctx.outputLatency || Sound.ctx.baseLatency
+            const delay = (Sound.ctx.outputLatency || Sound.ctx.baseLatency)
             const buf = Sound.ctx.createBuffer(channels, soundLen, sampleRate)
+            const start = Math.max(Sound.next, Sound.ctx.currentTime + delay)
             const offset = this.minFrequency / sampleRate * soundLen
-            writeData(data, buf.getChannelData(0), this.volume, offset, this.nameImportance, !this.centerIsZero)
+            writeData(data, buf.getChannelData(0), this.volume, offset, this.nameImportance, !this.centerIsZero, 0)
             const src = Sound.ctx.createBufferSource()
             src.buffer = buf
-            const start = Math.max(Sound.next, Sound.ctx.currentTime + delay)
-            // console.log('delay, s:', Sound.ctx.currentTime - Sound.next) // TODO: Why so much delay?? Really need to switch to medians...
+            sn.meta.metric('gap in sound, bool', start !== Sound.next ? 1 : 0)
             sn.meta.metric('latency, s', Sound.next - Sound.ctx.currentTime)
             src.connect(Sound.dst), src.start(start)
             Sound.next = start + soundLen / sampleRate
 
-            const needToWait = (Sound.next-.01 - Sound.ctx.currentTime - (start === Sound.next ? 0 : delay)) * 1000 - Sound.overshoot
+            const needToWait = (Sound.next-.02 - Sound.ctx.currentTime - (start === Sound.next ? 0 : delay)) * 1000 - Sound.overshoot
             if (needToWait > Sound.overshoot) {
                 const overscheduled = start - Sound.ctx.currentTime > .02
                 const willLikelyEndAt = performance.now() + needToWait
@@ -219,7 +222,7 @@ In Chrome, users might have to first click on the page for sound to play.
                 }, needToWait)
             } else then()
 
-            function writeData(src, dst, volume, offset, p, renorm) {
+            function writeData(src, dst, volume, offset, p, renorm, phase) {
                 const nameSize = cellSize - cellShape[cellShape.length-1]
                 dst.fill(0)
                 const off = Math.floor(offset)
@@ -242,8 +245,8 @@ In Chrome, users might have to first click on the page for sound to play.
                 else
                     for (let i = 0; i < src.length && off + i < dst.length; ++i)
                         dst[off + i] = src[i]
-                const real = ifft(dst)
-                real[0] = real[1] // Too loud.
+                const real = ifft(dst, phase)
+                real.fill(0, 0, real.length/10|0) // A hack, but fixes a lot of the clicking.
                 dst.set(real)
                 for (let i = 0; i < dst.length; ++i) dst[i] *= volume
                 sn._deallocF32(real)

@@ -232,9 +232,9 @@ export default (function(exports) {
                             E.meta.metric('step processed data, values', T.cells * T.cellSize)
                         }
                         const hadCells = !!T.cells
-                        T.deinit()
                         const tooFew = dst.giveNextPacketNow, tooMuch = dst.waitingSinceTooManySteps
-                        if (hadCells && dst.stepsNow <= 1 && tooFew) tooFew()
+                        T.deinit()
+                        if (hadCells && dst.stepsNow <= 1) dst.tooFew = true, tooFew && tooFew()
                         return tooMuch && tooMuch()
                     } case 9: { // Assign the next data/error if given by a transform.
                         const extra = A, nextData = B, nextError = C
@@ -276,7 +276,8 @@ export default (function(exports) {
             if (!dst || dst.looping) return;  else dst.looping = true
             dst.prevEnd = performance.now()
             let prevWait = dst.prevEnd
-            // TODO: Keep track of non-`handle` time. Print it. See how horribly wrong we are. (Even sensor-collection time.)
+            // TODO: Keep track of non-`handle` time. Print it. See how wrong we are. (Even sensor-collection time.)
+            let tooFew = false
             while (true) {
                 if (!ch.shaped[summary]) return // `Sensor`s might have cleaned us up.
                 const timeA = performance.now()
@@ -305,12 +306,15 @@ export default (function(exports) {
                 if (!dst.handlers.length || !ch.sensors.length && !dst.nextPacket.sensor.length)
                     return dst.msPerStep[0] = dst.msPerStep[1] = 0, dst.looping = false
                 let noData = false
+                tooFew = false
                 if (!dst.stepsNow || !lessPackets) {
                     // Send it off.
                     const nextPacket = dst.nextPacket
                     dst.nextPacket = _Packet.init(channel, cellShape, partSize, summary)
                     noData = !nextPacket.cells
+                    tooFew = dst.tooFew = false
                     nextPacket.mainHandler = mainHandler, nextPacket.handleStateMachine()
+                    if (dst.tooFew) tooFew = true
                     // Benchmark throughput if needed.
                     _Packet._measureThroughput()
                 }
@@ -320,13 +324,16 @@ export default (function(exports) {
                 // Don't do it too often.
                 const now = performance.now(), needToWait = dst.prevEnd - now
                 dst.prevEnd += dst.msPerStep[1] + (!dst.stepsNow || !lessPackets ? 0 : 20)
-                if (dst.prevEnd < now - 1000)
-                    dst.prevEnd = now - 1000 // Don't get too eager after being stalled.
-                if (needToWait > 5 || now - prevWait > 100 || noData) {
+                if (dst.prevEnd < now - 500)
+                    dst.prevEnd = now - 500 // Don't get too eager after being stalled.
+                if (dst.prevEnd > now + 500) // Don't get underexcited either.
+                    dst.prevEnd = now + 500
+                const reallyNeedToWait = now - prevWait > 1000 // TODO: 100
+                if (reallyNeedToWait || !tooFew && (needToWait > 5 || noData)) {
                     const delay = noData ? 500 : Math.max(needToWait, 0) // TODO: Measure & subtract overshooting. (As the median, of course.)
                     const expectedEnd = performance.now() + delay
                     await new Promise(then => {
-                        if (now - prevWait <= 100) dst.giveNextPacketNow = then
+                        if (!reallyNeedToWait) dst.giveNextPacketNow = then
                         setTimeout(() => {
                             // console.log('overshoot', performance.now() - expectedEnd) // TODO: Yep, relatively-consistent about-8-ms overshoot.
                             prevWait = performance.now(), then()
@@ -1181,6 +1188,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 handlers: [], // Array<Handler>, sorted by priority.
                 nextPacket: null,
                 packetCache: [], // Array<_Packet>
+                tooFew: false, // For if `handleStateMachine` fully completes before returning.
             }
             ch.shaped[summary].nextPacket = new _Packet(channel, cellShape, partSize, summary)
             ch.cellShapes.push({cellShape, partSize, summary})

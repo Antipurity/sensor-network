@@ -204,6 +204,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ❌ Put all keys in one strip, in lexicographically-first order. Or use a spatially-grouped QWERTY key layout. Or have a separate cell for every possible key, for max precision. (Too data-inefficient.)
                     - ⋯ One-hot-encode or MD5-hash the key, and have like 3 observation or action cells.
                 - ⋯ Pointer (mouse/touch).
+                    - TODO: So, how do we do this? `Pointer.tab` is the most important, then we can make `onValues`/`onFeedback`, right?
+                    - TODO: (Also, remove `sn.meta.save`, because we're not really writing code in that style.)
                     - ⋯ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this with `Video` to be able to move virtual pointers.
                         - ⋯ `Video.pointers` → `Pointer.tab`.
                         - ⋯ Make `Pointer.tab()` return the exact same array if called many times, don't attach new event listeners.
@@ -250,7 +252,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - ✓ `Audio.DOM(Audio)(ctx)`: connects all `<video>`/`<audio>` elements on the page.
                         - ✓ Allow `source` to be an `AudioContext` too, replacing its `.destination` to be our analyzer node via `Object.defineProperty`. (For efficiency, and post-processing, such as [exposing each channel separately.](https://developer.mozilla.org/en-US/docs/Web/API/ChannelSplitterNode))
                         - ⋯ Request a `MediaStream` from extension if possible.
-                    - ⋯ Feedback, given to the `feedback(mediaStream)` option. (With `frequency`, need IFFT.)
+                    - ⋯ Feedback, given to the `feedback(mediaStream)` option. (With `frequency`, need IFFT, though that also needs the phase, which `AnalyserNode` doesn't provide, so may need to implement FFT too.)
                     - ⋯ In its visualization, two `<audio>` elements, for data and feedback.
                         - ⋯ And a volume slider.
                         - ⋯ Report data/feedback volumes with color, possibly with `box-shadow`.
@@ -290,7 +292,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ `Visualize.all()({data, cellShape})`, which returns a `<canvas>` on which green=1 black=0 red=-1 4×4 pixels are drawn, with empty pixels between reward/user/name and data.
             - ⋯ Shuffle cells.
             - ⋯ Add `-error…error` random numbers to `data`, if there is error.
-            - ⋯ To save feedback of even non-noData cells, a transform that splits such cells into `noData` and `noFeedback` cells.
+            - ⋯ To save feedback of even non-noData cells, a transform that splits such cells into `noData` and `noFeedback` cells. (Also set `cell[1]` to -1 for no-feedback and 1 for no-data, to put past-like actions first and adaptation second.)
             - ⋯ Limiter: by-FPS, by-bandwidth.
             - ⋯ Try an echo-state network, and see whether that makes `Sound` better or worse.
                 - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)

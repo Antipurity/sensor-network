@@ -1,75 +1,26 @@
-export default function init(sn) {
+export default function init(sn) { // TODO: Assign this in `sn`.
     const A = Object.assign
-    return A(class Video extends sn.Sensor {
-        static docs() { return `A sequence of images.
+    const _tab = {}
+    return A(class Pointer extends sn.Sensor {
+        static docs() { return `// TODO:
 
-Images are divided into [small patches, which has mostly been shown to work well in ML.](https://en.wikipedia.org/wiki/Vision_transformer)
-
-This sensor's output is composed of 1 or more tiles, which are square images.    
-It can target 0 or 1+ points, each shown in 1 or more tiles, and can include multiple zoom levels.
-
-Extra options:
+Options:
 - \`name\`: heeded, augmented.
-- \`tileDimension = 8\`: each tile edge's length.
-- \`source = Video.stitchTab()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
-    - Feedback is currently not implemented.
-- \`monochrome = true\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
-- \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame.
-    - If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
-- \`tiling = 2\`: how many vertical/horizontal repetitions there are per target or screen.
-- \`zoomSteps = 3\`: how many extra zoomed views to generate per target or screen.
-- \`zoomStep = 2\`: the multiplier/divider of in-source tile dimension, per zoom step.
+- TODO: What do we want?
 ` }
         static options() {
             return {
-                tileDimension: {
-                    ['8×8']: () => 8,
-                    ['16×16']: () => 16,
-                    ['32×32']: () => 32,
-                    ['4×4']: () => 4,
-                },
-                source: {
-                    ["Stitch the tab's canvas/video/img elements"]: () => Video.stitchTab(),
-                    ["Tab/window/screen"]: () => Video.requestDisplay(),
-                    ["Camera"]: () => Video.requestCamera(),
-                },
-                monochrome: {
-                    Yes: true,
-                    No: false,
-                },
-                targets: {
-                    ['Mouse/touch']: () => Video.pointers(),
-                    ['None']: () => [],
-                },
-                tiling: {
-                    ['2×2']: () => 2,
-                    ['3×3']: () => 3,
-                    ['4×4']: () => 4,
-                    ['8×8']: () => 8,
-                    ['1×1']: () => 1,
-                },
-                zoomSteps: {
-                    ['3 ']: () => 3,
-                    ['2 ']: () => 2,
-                    ['1 ']: () => 1,
-                    ['0 ']: () => 0,
-                },
-                zoomStep: {
-                    ['2×']: () => 2,
-                    ['3×']: () => 3,
-                    ['4×']: () => 4,
-                    ['8×']: () => 8,
-                    ['16×']: () => 16,
-                },
+                // TODO: What do we want?
             }
         }
-        pause() {
+        pause() { // TODO: Should we have this in `Pointer`?
             this._nextTarget && this._nextTarget.pause()
             return super.pause()
         }
         resume(opts) {
             if (opts) {
                 const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
+                // TODO: ...Okay, what do we actually preserve here...
                 const td = opts.tileDimension || 8
                 const src = opts.source || Video.stitchTab()
                 const targ = opts.targets || Video.pointers()
@@ -90,8 +41,7 @@ Extra options:
                 this.noFeedback = true
                 this.targets = targ
                 this._targetIndex = opts._targetIndex || 0
-                const A = Object.assign, C = Object.create
-                this._opts = A(A(C(null), opts), { source:src, targets:targ, _targetIndex: this._targetIndex+1 })
+                this._opts = A(A(Object.create(null), opts), { source:src, targets:targ, _targetIndex: this._targetIndex+1 })
                 if (!this._nextTarget)
                     this._nextTarget = null // Another `Video`, for multi-target support by forking.
                 this.zoomSteps = zoomSteps
@@ -128,44 +78,6 @@ Extra options:
             return super.resume(opts)
         }
 
-        static bench() {
-            const resolutions = new Array(3).fill().map((_,i) => 2 ** (i+9))
-            return resolutions.map(river)
-            function river(resolution) { // Read a MediaStream.
-                const dataSize = 64
-                return function start() {
-                    const canvas = document.createElement('canvas')
-                    const ctx = canvas.getContext('2d')
-                    canvas.width = canvas.height = resolution
-                    let ended = false
-                    function draw() { // Make new data each animation frame.
-                        if (ended) return
-                        requestAnimationFrame(draw)
-                        ctx.fillStyle = ['red', 'green', 'blue'][Math.random()*3 | 0]
-                        ctx.fillRect(Math.random() * resolution | 0, Math.random() * resolution | 0, 51, 51)
-                    }
-                    draw()
-                    const from = new Video({
-                        // (If `source` is just `canvas`, it's super fast. Streams are slow.)
-                        source: canvas.captureStream(),
-                        targets: [{x:.5, y:.5}],
-                        monochrome: false,
-                        tileDimension: 8,
-                        zoomSteps: 3,
-                        zoomStep: 2,
-                        tiling: 2,
-                    })
-                    const to = new sn.Handler({
-                        dataSize,
-                        noFeedback: true,
-                        onValues(then, {data, error, cellShape}) { then() },
-                    })
-                    setTimeout(() => sn.meta.metric('resolution', resolution), 500)
-                    return function stop() { ended = true, from.pause(), to.pause() }
-                }
-            }
-        }
-
         static onValues(sensor, data) {
             // Make sure to limit to one tile per cell, so that there's no misalignment.
             const cellShape = sensor.cellShape()
@@ -173,40 +85,27 @@ Extra options:
             const dataSize = cellShape[cellShape.length-1]
             const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
 
-            // Targeting stuff.
-            const targets = this._targets()
-            const target = targets[this._targetIndex]
-            const nextTarget = targets[this._targetIndex+1]
-            if (nextTarget && !this._nextTarget) // Create.
-                this._opts._targetIndex = this._targetIndex + 1,
-                this._nextTarget = new Video(this._opts)
-            if (nextTarget && this._nextTarget && this._nextTarget.paused) // Resume.
-            this._opts._targetIndex = this._targetIndex + 1,
-                this._nextTarget.resume(this._opts)
-            if (!nextTarget && this._nextTarget) // Destroy.
-                this._nextTarget.pause(), this._nextTarget = null
-
-            if (sensor._dataContext2d(data, valuesPerCell, target))
-                sensor.sendCallback(Video.onFeedback, data)
+            // TODO: How to read {x,y}-object props?
         }
         static onFeedback(feedback, sensor) {
             if (!feedback || sensor.noFeedback) return
             // Yep. Handle feedback here. Handle it good.
+            // TODO: Actually update those objects tho.
         }
 
-        _targets() {
+        _targets() { // TODO: No, right?
             const targets = typeof this.targets == 'function' ? this.targets() : this.targets
             sn._assert(Array.isArray(targets), "Bad targets")
             return targets
         }
-        static _tileMove(needY=false, tile, tilesSqrt) {
+        static _tileMove(needY=false, tile, tilesSqrt) { // TODO: No.
             // Returns how many tiles we need to move by.
             if (tilesSqrt === 1) return 0
             const x = tile % tilesSqrt, y = tile / tilesSqrt | 0
             return needY ? y + .5 - .5*tilesSqrt : x + .5 - .5*tilesSqrt
             // Min: .5 - .5*tilesSqrt;   max: .5*tilesSqrt-.5
         }
-        static _sourceToDrawable(source) { // .drawImage and .texImage2D can use the result.
+        static _sourceToDrawable(source) { // .drawImage and .texImage2D can use the result. // TODO: No.
             if (typeof source == 'function') source = source()
             if (source instanceof Promise) {
                 if ('result' in source) source = source.result
@@ -226,7 +125,7 @@ Extra options:
             const el = m.get(source)
             return el
         }
-        _dataContext2d(data, valuesPerCell, target) { // Fills `data`.
+        _dataContext2d(data, valuesPerCell, target) { // Fills `data`. // TODO: No.
             let frame = Video._sourceToDrawable(this.source)
             if (frame instanceof Promise)
                 return console.error(frame.error), this.pause(), false
@@ -294,7 +193,7 @@ Extra options:
             return true
         }
     }, {
-        pointers: A(function pointers() {
+        pointers: A(function pointers() { // TODO: Change into `tab`, and have `.active` and `.set()` and `.get()`…
             const ps = []
             const inds = new Map
             const passive = {passive:true}
@@ -372,64 +271,6 @@ Extra options:
             docs:`Returns a closure that returns the dynamic list of mouse/touch positions, \`[{x,y}]\`.
 
 The result is usable as the \`targets\` option for \`Video\`.`,
-        }),
-
-        stitchTab: A(function stitchTab() {
-            const _tab = sn.Sensor.Video._tab || (sn.Sensor.Video._tab = {})
-            if (!_tab.canvas) {
-                _tab.canvas = document.createElement('canvas')
-                _tab.ctx = _tab.canvas.getContext('2d', {alpha:false})
-                _tab.lastStitch = performance.now()
-            }
-            const canvas = _tab.canvas, ctx = _tab.ctx
-            return function tab() {
-                if (performance.now() - _tab.lastStitch < 15) return canvas
-                _tab.lastStitch = performance.now()
-                const w = innerWidth, h = innerHeight
-                canvas.width = w, canvas.height = h
-                ctx.clearRect(0, 0, w, h)
-                Array.from(document.getElementsByTagName('canvas')).forEach(draw)
-                Array.from(document.getElementsByTagName('video')).forEach(draw)
-                Array.from(document.getElementsByTagName('img')).forEach(draw)
-                return canvas
-            }
-            function draw(elem) {
-                const r = elem.getBoundingClientRect()
-                ctx.drawImage(elem, r.x | 0, r.y | 0, r.width, r.height)
-            }
-        }, {
-            docs:`Views on-page \`<canvas>\`/\`<video>\`/\`<img>\` elements. The rest of the page is black.
-
-The result is usable as the \`source\` option for \`Video\`.`,
-        }),
-        requestDisplay: A(function requestDisplay(maxWidth = 1024) { // With the user's permission, gets a screen/window/tab contents.
-            // Note that in Firefox, the user has to have clicked somewhere on the page first.
-            const opts = { audio:true, video: maxWidth ? { width:{max:maxWidth} } : true }
-            const p = navigator.mediaDevices.getDisplayMedia(opts).then(s => {
-                return p.result = s
-            }).catch(e => p.error = e)
-            return function() { return p }
-        }, {
-            docs:`[Requests a screen/window/tab stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
-
-For performance, max width is 1024 by default; pass in 0 or something else if needed.
-
-The result is usable as the \`source\` option for \`Video\`.`,
-        }),
-
-        requestCamera: A(function requestDisplay(maxWidth = 1024) { // With the user's permission, gets a screen/window/tab contents.
-            // Note that in Firefox, the user has to have clicked somewhere on the page first.
-            const opts = { audio:true, video: maxWidth ? { width:{max:maxWidth} } : true }
-            const p = navigator.mediaDevices.getUserMedia(opts).then(s => {
-                return p.result = s
-            }).catch(e => p.error = e)
-            return function() { return p }
-        }, {
-            docs:`[Requests a camera stream.](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
-
-For performance, max width is 1024 by default; pass in 0 or something else if needed.
-
-The result is usable as the \`source\` option for \`Video\`.`,
         }),
     })
 }
