@@ -29,8 +29,8 @@ Options:
                 },
                 targets: {
                     ["Tab's pointers"]: () => sn.Sensor.Pointer.tab(),
-                    ["Virtual pointer 1"]: () => sn.Sensor.Pointer.pointer1(), // TODO: Make `Video` and `Text.readHover` also have these options.
-                    ["Virtual pointer 2"]: () => sn.Sensor.Pointer.pointer2(), // TODO: Make `Video` and `Text.readHover` also have these options.
+                    ["Virtual pointer 1"]: () => sn.Sensor.Pointer.pointer1(),
+                    ["Virtual pointer 2"]: () => sn.Sensor.Pointer.pointer2(),
                 },
             }
         }

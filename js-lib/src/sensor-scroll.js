@@ -15,7 +15,9 @@ Options:
                     ['Read + move']: () => 'move',
                 },
                 target: {
-                    ['Mouse/touch']: () => sn.Sensor.Pointer.tab(),
+                    ["Tab's pointers"]: () => sn.Sensor.Pointer.tab(),
+                    ["Virtual pointer 1"]: () => sn.Sensor.Pointer.pointer1()[0],
+                    ["Virtual pointer 2"]: () => sn.Sensor.Pointer.pointer2()[0],
                 },
             }
         }

@@ -38,7 +38,9 @@ Extra options:
                     No: false,
                 },
                 targets: {
-                    ['Mouse/touch']: () => sn.Sensor.Pointer.tab(),
+                    ["Tab's pointers"]: () => sn.Sensor.Pointer.tab(),
+                    ["Virtual pointer 1"]: () => sn.Sensor.Pointer.pointer1(),
+                    ["Virtual pointer 2"]: () => sn.Sensor.Pointer.pointer2(),
                     ['None']: () => [],
                 },
                 tiling: {

@@ -1,7 +1,7 @@
-export default function init(sn) { // TODO: OHHH NOOO: `Text` should at least define `.save:{a}`, so that it could be `save`d and later loaded...
+export default function init(sn) {
     const A = Object.assign
     // The ingenious "embed all characters by their MD5 bytes" scheme.
-    let fedBackMD5 = null // TODO: All these should be on some func.
+    let fedBackMD5 = null
     const tokenToMD5 = Object.create(null)
     const MD5toToken = Object.create(null)
     function doTokenToMD5(s) {
@@ -76,6 +76,8 @@ Options:
                 text: {
                     ['Read selection']: () => sn.Sensor.Text.readSelection(),
                     ['Read hovered-over text']: () => sn.Sensor.Text.readHover(sn.Sensor.Pointer.tab()),
+                    ["Read text under virtual pointer 1"]: () => sn.Sensor.Text.readHover(sn.Sensor.Pointer.pointer1()[0]),
+                    ["Read text under virtual pointer 2"]: () => sn.Sensor.Text.readHover(sn.Sensor.Pointer.pointer2()[0]),
                     ['Write selection']: () => sn.Sensor.Text.writeSelection(),
                 },
             }
