@@ -202,7 +202,16 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
                 - ⋯ Keyboard.
                     - ❌ Put all keys in one strip, in lexicographically-first order. Or use a spatially-grouped QWERTY key layout. Or have a separate cell for every possible key, for max precision. (Too data-inefficient.)
+                    - ⋯ `keys=3`, `keySize=16`.
+                    - ⋯ `noFeedback=true`: if `false`, dispatch events.
+                    - ⋯ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`.
                     - ⋯ MD5-hash the key, and have like 3 observation or action cells.
+                    - ⋯ On key down+up too quickly to register, still report the key for one frame.
+                    - TODO: ...So: do this. (Should be easy, right? onkeydown and onkeyup, change our key state, and in onValues, report (MD5-hashes of) the first 3 pressed keys. And with feedback, just dispatch onkeydown and onkeyup as needed (and repeat on a timer).)
+                        - TODO: ...What about `input` events? ...And what about actual typing?
+                            - ...Okay, well, at least observation should be easy.
+                        - TODO: How do we look up the keys, key codes, and locations?
+                        - TODO: What about `keypress` events for compatibility?
                 - ✓ Pointer (mouse/touch).
                     - ✓ `pointers = 1`
                     - ✓ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this exact array with `Video` to be able to move virtual pointers.
@@ -212,9 +221,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                             - ✓ The first item `.isPrimary` and `'mouse'`, the rest are `'touch'`.
                             - ✓ Dispatch not just pointer but ✓mouse/❌touch events too (with `{bubbles:true}` as needed), since they aren't triggered automatically.
                             - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
-                    - ⋯ `noFeedback = true`:
-                        - ⋯ If an action: on feedback, update the `{x,y}` objects, and create [non-trusted](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted)[ pointer events](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/PointerEvent) (the first item is primary and `'mouse'`, the rest are `'touch'`) if possible to make the DOM aware.
-                        - ⋯ If an observation: a cell per pointer (dynamically created/destroyed), report x (0…1), y (0…1), is-it-pressed, isPrimary, pointerType, width (screen-fraction), height (screen-fraction), pressure, tangentialPressure, tiltX, tiltY, twist.
+                    - ✓ `noFeedback = true`:
+                        - ✓ If an action: on feedback, update the `{x,y}` objects, and create [non-trusted](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted)[ pointer events](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/PointerEvent) (the first item is primary and `'mouse'`, the rest are `'touch'`) if possible to make the DOM aware.
+                        - ✓ If an observation: a cell per pointer (dynamically created/destroyed), report x (0…1), y (0…1), is-it-pressed, isPrimary, pointerType, width (screen-fraction), height (screen-fraction), pressure, tangentialPressure, tiltX, tiltY, twist.
                     - ⋯ `visualize({data, cellShape}, elem)`, showing round points.
                 - ✓ Scroll, exposing not just the top-level but scrollable elements too: current X/Y and diff X/Y scroll position; non-existent ones are 0s. Only give like 16 numbers.
                     - ✓ `target: {x,y} = Video.pointers()`

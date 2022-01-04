@@ -236,6 +236,7 @@ The new text will still be selected, so it can function as autocomplete or autoc
         tokenToDataMD5: A(function tokenToData(token, data, start, end) {
             // MD5-hash the `token`.
             const m = doTokenToMD5(token)
+            if (!data) return
             for (let i = 0, j = start; i < m.length && j < end; ++i, ++j)
                 data[j] = m.charCodeAt(i)/255 * 2 - 1
             sn._dataNamer.fill(data, 0, m.length, data.length)

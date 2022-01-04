@@ -9,6 +9,7 @@ import Random from './src/handler-random.js'
 import Scroll from './src/sensor-scroll.js'
 import Audio from './src/sensor-audio.js'
 import Pointer from './src/sensor-pointer.js'
+import Keyboard from './src/sensor-keyboard.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1045,6 +1046,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         Text: Text(E),
         Video: Video(E),
         Audio: Audio(E),
+        Keyboard: Keyboard(E),
         Pointer: Pointer(E),
         Scroll: Scroll(E),
         Time: Time(E),
