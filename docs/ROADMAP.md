@@ -202,16 +202,16 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
                 - ⋯ Keyboard.
                     - ❌ Put all keys in one strip, in lexicographically-first order. Or use a spatially-grouped QWERTY key layout. Or have a separate cell for every possible key, for max precision. (Too data-inefficient.)
-                    - ⋯ `keys=3`, `keySize=16`.
+                    - ✓ `keys=3`, `keySize=16`.
                     - ⋯ `noFeedback=true`: if `false`, dispatch events.
-                    - ⋯ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`.
-                    - ⋯ MD5-hash the key, and have like 3 observation or action cells.
-                    - ⋯ On key down+up too quickly to register, still report the key for one frame.
-                    - TODO: ...So: do this. (Should be easy, right? onkeydown and onkeyup, change our key state, and in onValues, report (MD5-hashes of) the first 3 pressed keys. And with feedback, just dispatch onkeydown and onkeyup as needed (and repeat on a timer).)
+                        - TODO: Dispatch `keydown` and `keyup` events, based on how feedback-keys have changed since the last frame.
                         - TODO: ...What about `input` events? ...And what about actual typing?
                             - ...Okay, well, at least observation should be easy.
                         - TODO: How do we look up the keys, key codes, and locations?
                         - TODO: What about `keypress` events for compatibility?
+                    - ✓ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`.
+                    - ✓ MD5-hash the key, and have like 3 observation or action cells.
+                    - ✓ On key down+up too quickly to register, still report the key for one frame.
                 - ✓ Pointer (mouse/touch).
                     - ✓ `pointers = 1`
                     - ✓ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this exact array with `Video` to be able to move virtual pointers.
@@ -308,11 +308,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Handler`:
             - TODO: So what do we do next?
                 - If easiest-first:
-                    - Pointers, WebRTC.
+                    - Keyboard, WebRTC.
                 - If most-important-first:
-                    - WebRTC, pointers.
+                    - WebRTC, keyboard.
             - TODO: Text in `README.md` (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
-                - TODO: Connect arbitrary sensors to a human brain and/or AI model.
+                - TODO: Tools for connecting humans and AI models to arbitrary sensors.
                 - TODO: Design constraints:
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
                     - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling)

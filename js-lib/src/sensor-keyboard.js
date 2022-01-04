@@ -41,6 +41,7 @@ Options:
         resume(opts) {
             if (!this.currentKeys)
                 this.currentKeys = new Set,
+                this.pastKeys = new Set, // For reporting blink-and-you'll-miss-it keypresses.
                 this.onkeydown = this.onkeydown.bind(this),
                 this.onkeyup = this.onkeyup.bind(this),
                 this.onkeyclear = this.onkeyclear.bind(this)
@@ -70,18 +71,26 @@ Options:
             }
         }
 
-        onkeydown(evt) { this.onkeyup(evt), this.currentKeys.add(evt.key) }
-        onkeyup(evt) { const m = this.currentKeys;  m.delete(evt.key), m.delete(evt.key.toLowerCase()), m.delete(evt.key.toUpperCase()) }
+        onkeydown(evt) {
+            this.onkeyup(evt), this.currentKeys.add(evt.key), this.pastKeys.add(evt.key)
+        }
+        onkeyup(evt) {
+            const m = this.currentKeys
+            m.delete(evt.key), m.delete(evt.key.toLowerCase()), m.delete(evt.key.toUpperCase())
+        }
         onkeyclear(evt) { this.currentKeys.clear() }
 
         static onValues(sensor, data) {
             const keys = sensor.keys, keySize = sensor.keySize
             let i = 0
-            sensor.currentKeys.forEach(key => {
+            const cur = sensor.currentKeys, past = sensor.pastKeys
+            cur.forEach(key => past.delete(key))
+            past.forEach(key => cur.add(key))
+            cur.forEach(key => {
                 if (i++ < keys) sensor.tokenToData(key, data, i*keySize, (i+1)*keySize)
-            })
-            data.fill(0, sensor.currentKeys.size * keySize)
-            // TODO: Zero-fill the rest.
+            }), data.fill(0, cur.size * keySize)
+            past.forEach(key => cur.delete(key))
+            past.clear()
             sensor.sendCallback(Keyboard.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
@@ -98,5 +107,4 @@ Options:
             // TODO: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
         }
     }
-    // (TODO: Also, how to report very-quickly-pressed keys, which would be especially good if our framerate is poor?…)
 }
