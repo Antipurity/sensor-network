@@ -205,14 +205,13 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ MD5-hash the key, and have like 3 observation or action cells.
                 - ⋯ Pointer (mouse/touch).
                     - ⋯ `pointers = 1`
-                    - ⋯ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this with `Video` to be able to move virtual pointers.
+                    - ⋯ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this exact array with `Video` to be able to move virtual pointers.
                         - ✓ `Video.pointers` → `Pointer.tab`.
-                        - ✓ Make `Pointer.tab()` return the exact same array if called many times, don't attach new event listeners.
-                            - ⋯ Optionally have `.set()`:
-                                - ⋯ Movement fires pointer move/over/out events; rising/falling `active` edge fires up/down events.
-                                - ⋯ The first item `.isPrimary` and `'mouse'`, the rest are `'touch'`.
-                                - ⋯ Dispatch not just pointer but mouse/touch events too (all with `{bubbles:true}`), since they aren't triggered automatically.
-                                - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
+                        - ⋯ Optionally have `.set()`:
+                            - ⋯ Movement fires pointer move/over/out events; rising/falling `active` edge fires up/down events.
+                            - ⋯ The first item `.isPrimary` and `'mouse'`, the rest are `'touch'`.
+                            - ⋯ Dispatch not just pointer but mouse/touch events too (all with `{bubbles:true}`), since they aren't triggered automatically.
+                            - ⋯ To display hover-states, use ancient magic: go through all CSS rules in all stylesheets and in every new stylesheet, and duplicate those with `:hover` to use a class, which main-mouse-movement sets.
                     - ⋯ `noFeedback = true`:
                         - ⋯ If an action: on feedback, update the `{x,y}` objects, and create [non-trusted](https://developer.mozilla.org/en-US/docs/Web/API/Event/isTrusted)[ pointer events](https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/PointerEvent) (the first item is primary and `'mouse'`, the rest are `'touch'`) if possible to make the DOM aware.
                         - ⋯ If an observation: a cell per pointer (dynamically created/destroyed), report x (0…1), y (0…1), is-it-pressed, isPrimary, pointerType, width (screen-fraction), height (screen-fraction), pressure, tangentialPressure, tiltX, tiltY, twist.
