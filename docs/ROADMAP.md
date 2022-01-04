@@ -197,15 +197,14 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ A better time-per-step estimation scheme than moving-average-over-32-steps (limited to *1.1+11). It was intended to make small deviations insignificant, but it takes too long to actually adjust to a new rhythm. Maybe, keep track of moving-average-over-4, and when that average is too consistent for 4 steps (so, 4-length subsequences of a 7-steps array have a small standard deviation), update the actual ms-per-step… Or maybe just median instead of mean.
             - ⋯ Keep track of the "bottleneck": on `Handler`s, have `.bottleneck` (0…1), exponentially-updated avg of 0/1, where the last-returning non-main handler is 1 and the rest are 0s (also, compare non/main handlers, and the fastest-returning one is 0). And make `UI` display a message when `.bottleneck>.99`.
     - ⋯ Reasonable defaults, decided by the user and not the handler, in separate `import`ed files, or maybe their own NPM modules (though they *are* small):
-        - ⋯ Make `main.js` import modules that import it and export classes that inherit sensors/transforms/handlers, by having getters that patch themselves on use.
+        - ✓ Make `main.js` import modules that import it and export classes that inherit sensors/transforms/handlers, by calling initialization functions.
         - ⋯ `.Sensor`:
-            - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
-                - ⋯ Keyboard.
+            - ✓ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
+                - ✓ Keyboard.
                     - ❌ Put all keys in one strip, in lexicographically-first order. Or use a spatially-grouped QWERTY key layout. Or have a separate cell for every possible key, for max precision. (Too data-inefficient.)
                     - ✓ `keys=3`, `keySize=16`.
-                    - ⋯ `noFeedback=true`: if `false`, dispatch events; else read.
+                    - ✓ `noFeedback=true`: if `false`, dispatch events & type; else read.
                         - ❌ If `false`, also know `.code` and `.location` and `.charCode` and `.keyCode` and `.which`. And dispatch `onkeypress` and `oninput`. (Enough browser reimplementations.)
-                        - TODO: ...What about actual typing?
                     - ✓ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`.
                     - ✓ MD5-hash the key, and have like 3 observation or action cells.
                     - ✓ On key down+up too quickly to register, still report the key for one frame.

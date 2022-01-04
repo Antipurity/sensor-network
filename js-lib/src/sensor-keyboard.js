@@ -15,7 +15,7 @@ Options:
             return {
                 noFeedback: {
                     Yes: true,
-                    No: false, // TODO: Test it.
+                    No: false,
                 },
                 keys: {
                     ['4×']: () => 4,
@@ -123,15 +123,20 @@ Options:
             const pastKeys = sensor._pastFBKeys
             const el = document.activeElement || document.body
             currentKeys.forEach(key => {
-                if (!pastKeys.has(key))
+                if (!pastKeys.has(key)) {
                     kbdOpts.key = key, el.dispatchEvent(new KeyboardEvent('keydown', kbdOpts))
+                    if ([...key].length === 1)
+                        document.execCommand('insertText', false, key)
+                    else if (key === 'Backspace')
+                        document.execCommand('delete', false, null)
+                    else if (key === 'Delete')
+                        document.execCommand('forwardDelete', false, null)
+                }
             })
             pastKeys.forEach(key => {
                 if (!currentKeys.has(key))
                     kbdOpts.key = key, el.dispatchEvent(new KeyboardEvent('keyup', kbdOpts))
             })
-            // TODO: What else do we do here?
-            //   TODO: What about document.execCommand?
         }
 
         static prefill(tokenToData) {
