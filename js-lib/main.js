@@ -16,12 +16,12 @@ export default (function(exports) {
     //   Edge    16
     //   Firefox 60
     //   Opera   48
-    //   Safari  10.1
+    //   Safari  13 (PointerEvent; without it, 10.1)
     //   WebView Android     61
     //   Chrome Android      61
     //   Firefox for Android 60
     //   Opera Android       45
-    //   Safari on iOS       10.3
+    //   Safari on iOS       13 (PointerEvent; without it, 10.1)
     //   Samsung Internet    8.0
     const E = exports, A = Object.assign
     const S = Object.create(null) // See `state(channel, cellShape, partSize)`.

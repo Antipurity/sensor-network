@@ -5,13 +5,17 @@ export default function init(sn) {
 
 Options:
 - \`name\`: heeded, augmented.
+- \`noFeedback = true\`: \`true\` to track, \`false\` to control.
 - \`pointers = 1\`: how many pointers to track/control. [Also see \`navigator.maxTouchPoints\`.](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/maxTouchPoints)
 - \`pointerSize = 16\`: how many numbers each pointer takes up.
-- \`targets = Pointer.tab()\`: the array of \`{x,y, data:[…], set()}\` objects to track or control.
-- TODO: \`noFeedback=true\`
+- \`targets = Pointer.tab(noFeedback ? 0 : pointers)\`: the array of \`{x,y, data:[…], set()}\` objects to track or control.
 ` }
         static options() {
             return {
+                noFeedback: {
+                    Yes: true,
+                    No: false,
+                },
                 pointers: {
                     ['1×']: () => 1,
                     ['2×']: () => 2,
@@ -27,25 +31,22 @@ Options:
                     ["Tab's pointers"]: () => sn.Sensor.Pointer.tab(),
                     // TODO: Also allow 2 extra virtual groups, which can be used by `Video` and `Text.readHover`.
                 },
-                // TODO: Also `noFeedback`.
             }
         }
         resume(opts) {
             if (opts) {
                 const pointers = opts.pointers || 1
                 const pointerSize = opts.pointerSize || 16
-                const targ = opts.targets || Pointer.tab()
                 sn._assertCounts('', pointers, pointerSize)
+                const targ = opts.targets || Pointer.tab(opts.noFeedback ? 0 : pointers)
                 const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
                 sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
-                // TODO: What about `noFeedback`?
                 opts.onValues = Pointer.onValues
                 opts.values = pointers * pointerSize
                 opts.name = [
                     'pointer',
                     ...name,
                 ]
-                opts.noFeedback = true
                 this.pointers = pointers, this.pointerSize = pointerSize
                 this.targets = targ
             }
@@ -53,10 +54,6 @@ Options:
         }
 
         static onValues(sensor, data) {
-            // Make sure to limit to one tile per cell, so that there's no misalignment.
-            const cellShape = sensor.cellShape()
-            if (!cellShape) return
-
             const targ = sensor._targets()
             for (let i = 0; i < sensor.pointers; ++i) {
                 const p = targ[i], d = p && p.data, sz = sensor.pointerSize, k = i * sz
@@ -70,9 +67,16 @@ Options:
         }
         static onFeedback(feedback, sensor) {
             if (!feedback || sensor.noFeedback) return
-            // Yep. Handle feedback here. Handle it good.
-            // TODO: Actually update those objects.
-            //   Iterate over `targ`s, set their x/y/data, and .set().
+            const targ = sensor._targets()
+            for (let i = 0; i < sensor.pointers; ++i) {
+                const p = targ[i], d = p && p.data, sz = sensor.pointerSize, k = i * sz
+                if (!p) continue
+                sn._dataNamer.unfill(feedback, k, 2+d.length, sz)
+                p.x = (feedback[k+0]+1)/2
+                p.y = (feedback[k+1]+1)/2
+                if (d) for (let i = 0; i < d.length; ++i) d[i] = (feedback[k+2+i]+1)/2
+                typeof p.set == 'function' && p.set()
+            }
         }
 
         _targets() {
@@ -81,60 +85,131 @@ Options:
             return targets
         }
     }, {
-        tab: A(function tab(n=0) { // TODO: Have all-props and `.set()`…
-            // TODO: How do we handle `n`? How to not remove if we're at `n` objects, and pre-fill up to `n` objects, and re-use the inert objects?
-            if (tab.result) return tab.result
-            const ps = []
-            const inds = new Map
+        tab: A(function tab(n=0) {
+            if (!n && tab.result) return tab.result
+            const ps = [] // i → {x,y, data:[…], set()}
+            const inds = new Map // .pointerId → i
             const passive = {passive:true}
-            let attached = false, lastRequest = performance.now()
+            let attached = false, lastRequest = performance.now(), lastEvent = null
             let id = setInterval(autodetach, 10000)
-            return tab.result = attachEvents
+            if (n) // Need pointer objects to write to.
+                for (let i = 0; i < n; ++i)
+                    indexOf({pointerId: 'n'+i})
+            return !n ? (tab.result = attachEvents) : attachEvents
             function autodetach() {
                 if (performance.now() - lastRequest > 15000)
                     detachEvents(), clearInterval(id), id = null
             }
             function clamp(x) { return Math.max(0, Math.min(x, 1)) }
-            function onpointerdown(evt) { // Add/update.
-                if (evt.pointerType === 'touch') return
-                if (evt.touches) return Array.from(evt.touches).forEach(onpointerdown)
-                const p = ps[indexOf(evt)]
+            function pointerGet(evt, p) {
                 p.x = clamp(evt.clientX / innerWidth)
                 p.y = clamp(evt.clientY / innerHeight)
-                p.data[0] = 1
-                p.data[1] = evt.isPrimary ? 1 : 0
-                p.data[2] = evt.pointerType === 'mouse' ? 0 : evt.pointerType === 'pen' ? .5 : 1
-                p.data[3] = clamp(evt.width / innerWidth)
-                p.data[4] = clamp(evt.height / innerHeight)
-                p.data[5] = clamp(evt.pressure)
-                p.data[6] = clamp((evt.tangentialPressure+1) / 2)
-                p.data[7] = clamp((evt.tiltX+90) / 180)
-                p.data[8] = clamp((evt.tiltY+90) / 180)
-                p.data[9] = clamp(evt.twist / 360)
+                p.data[0] = evt.buttons&1
+                p.data[1] = evt.buttons&2
+                p.data[2] = evt.buttons&4
+                p.data[3] = evt.isPrimary ? 1 : 0
+                p.data[4] = evt.pointerType === 'mouse' ? 0 : evt.pointerType === 'pen' ? .5 : 1
+                p.data[5] = clamp(evt.width / innerWidth)
+                p.data[6] = clamp(evt.height / innerHeight)
+                p.data[7] = clamp(evt.pressure)
+                p.data[8] = clamp((evt.tangentialPressure+1) / 2)
+                p.data[9] = clamp((evt.tiltX+90) / 180)
+                p.data[10] = clamp((evt.tiltY+90) / 180)
+                p.data[11] = clamp(evt.twist / 360)
+            }
+            function onpointerdown(evt) { // Add/update.
+                lastEvent = evt
+                if (evt.pointerType === 'touch') return
+                if (evt.touches) return Array.from(evt.touches).forEach(onpointerdown)
+                pointerGet(evt, ps[indexOf(evt)])
             }
             function onpointerup(evt) { // Remove.
+                lastEvent = evt
                 if (evt.pointerType === 'touch') return
                 if (!ps.length) return
                 if (evt.touches) {
                     ps.length = 0, inds.clear()
                     return Array.from(evt.touches).forEach(onpointerdown)
                 }
-                if (ps.length <= 1) return
                 const i = indexOf(evt), p = ps[i], j = ps.length-1
-                p.x = .5, p.y = .5, p.data.fill(0)
+                pointerGet(evt, p)
+                if (ps.length <= 1) return
                 ;[ps[i], ps[j]] = [ps[j], ps[i]]
                 ps.pop(), inds.delete(idOf(evt))
             }
             function pointerSet() {
-                const p = this
-                // TODO: How to update the '`this`-virtual-pointer' position via firing pointer/mouse/touch events?
-                //   TODO: Reverse `onpointerdown`'s getting.
+                // Reverse `onpointerdown`.
+                // This does not replicate browser behavior perfectly, but is usually good enough.
+                const p = this, d = p.data
+                const clientX = p.x * innerWidth, clientY = p.y * innerHeight
+                const button1 = d[0]>=.5
+                const button2 = d[1]>=.5
+                const button3 = d[2]>=.5
+                const isPrimary = d[3]>=.5
+                const pointerType = d[4]<1/3 ? 'mouse' : d[4]<2/3 ? 'pen' : 'touch'
+                const width = d[5] * innerWidth
+                const height = d[6] * innerHeight
+                const pressure = d[7]
+                const tangentialPressure = d[8]*2 - 1
+                const tiltX = d[9]*180 - 90
+                const tiltY = d[10]*180 - 90
+                const twist = d[11]*360
+                const el = document.elementFromPoint(clientX, clientY)
+                const buttons = button1 | (button2<<1) | (button3<<2), prev = p._prevButtons
+                const ptrOpts = {
+                    bubbles:true,
+                    // Mouse
+                    screenX: clientX, screenY: clientY,
+                    clientX, clientY,
+                    ctrlKey: lastEvent && lastEvent.ctrlKey,
+                    shiftKey: lastEvent && lastEvent.shiftKey,
+                    altKey: lastEvent && lastEvent.altKey,
+                    metaKey: lastEvent && lastEvent.metaKey,
+                    // (Note: ctrlKey, shiftKey, altKey, metaKey are not set.)
+                    button: prev & ~buttons ? 0 : buttons&4 ? 2 : buttons&2 ? 1 : 0,
+                    buttons,
+                    relatedTarget: null,
+                    // Pointer
+                    pointerId: typeof p.id == 'string' ? parseFloat(p.id.slice(1)) : p.id,
+                    width, height,
+                    pressure, tangentialPressure,
+                    tiltX, tiltY, twist,
+                    pointerType,
+                    isPrimary,
+                }
+                if (typeof PointerEvent != 'undefined') {
+                    el && el.dispatchEvent(new PointerEvent(~prev & buttons ? 'pointerdown' : prev & ~buttons ? 'pointerup' : 'pointermove', ptrOpts))
+                    const prevEl = p._target
+                    if (prevEl !== el) {
+                        ptrOpts.relatedTarget = el
+                        prevEl && prevEl.dispatchEvent(new PointerEvent('pointerout', ptrOpts))
+                        ptrOpts.relatedTarget = prevEl
+                        el && el.dispatchEvent(new PointerEvent('pointerover', ptrOpts))
+                        ptrOpts.bubbles = false
+                        ptrOpts.relatedTarget = el
+                        prevEl && prevEl.dispatchEvent(new PointerEvent('pointerleave', ptrOpts))
+                        el && el.dispatchEvent(new PointerEvent('pointerenter', ptrOpts))
+                        ptrOpts.relatedTarget = prevEl
+                        ptrOpts.bubbles = true
+                    }
+                }
+                if (isPrimary) { // 'click'
+                    button1 && !(prev&1) && (p._startTarget = el)
+                    !button1 && prev&1 && el === p._startTarget && el && el.click()
+                }
+                if (pointerType === 'mouse') {
+                    // TODO: How to dispatch those mouse events?
+                }
+                if (pointerType === 'touch') {
+                    // TODO: How to dispatch those touch events (after a bit of delay, to let all `.touch`es settle)?
+                }
+                p._prevButtons = buttons, p._target = el
             }
             function idOf(evt) { return evt.pointerId !== undefined ? evt.pointerId : 'identifier' in evt ? evt.identifier : 'mouse' }
             function indexOf(evt) {
                 const id = idOf(evt)
                 if (!inds.has(id))
-                    inds.set(id, ps.push({ x:.5, y:.5, data:[] })-1)
+                    inds.set(id, ps.push({ x:.5, y:.5, data:[], set:pointerSet, id, _prevButtons:0, _startTarget:null, _target:null })-1)
                 return inds.get(id)
             }
             function attachEvents() {
@@ -179,7 +254,7 @@ Options:
 
 The result is usable as the \`targets\` option for \`Video\` and \`Pointer\`, and as an arg of \`Text.readHover\`.
 
-Can pass it \`n=0\`: how many pointer objects are guaranteed to be kept alive (though inert).`,
+Can pass it \`n=0\`: how many writable pointer objects are guaranteed to be kept alive (but not updated).`,
         }),
     })
 }
