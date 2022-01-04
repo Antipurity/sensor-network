@@ -140,6 +140,7 @@ Options:
             function pointerSet() {
                 // Reverse `onpointerdown`.
                 // This does not replicate browser behavior perfectly, but is usually good enough.
+                //   (For example, touch events are not dispatched: Edge & Safari hardly support creating them.)
                 //   (There are enough browser implementations in the world.)
                 const p = this, d = p.data
                 const clientX = p.x * innerWidth, clientY = p.y * innerHeight
@@ -203,11 +204,8 @@ Options:
                     button1 && !(prev&1) && (p._startTarget = el)
                     !button1 && prev&1 && el === p._startTarget && el && el.click()
                 }
-                if (pointerType === 'touch') {
-                    // TODO: How to dispatch those touch events (after a bit of delay, to let all `.touch`es settle)?
-                }
                 p._prevButtons = buttons, p._target = el
-                function Do(target, cons, type, opts) { // TODO: Use this, for terseness.
+                function Do(target, cons, type, opts) {
                     target && cons && target.dispatchEvent(new cons(type, opts))
                 }
             }
