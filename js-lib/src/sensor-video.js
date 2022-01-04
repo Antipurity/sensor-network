@@ -69,7 +69,6 @@ Extra options:
         }
         resume(opts) {
             if (opts) {
-                const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
                 const td = opts.tileDimension || 8
                 const src = opts.source || Video.stitchTab()
                 const targ = opts.targets || Video.pointers()
@@ -87,7 +86,6 @@ Extra options:
                 this.source = src
                 this._tiles = (zoomSteps+1) * (tiling*tiling)
                 this.monochrome = opts.monochrome === undefined ? true : !!opts.monochrome
-                this.noFeedback = true
                 this.targets = targ
                 this._targetIndex = opts._targetIndex || 0
                 const A = Object.assign, C = Object.create
@@ -97,8 +95,10 @@ Extra options:
                 this.zoomSteps = zoomSteps
                 this.zoomStep = zoomStep
                 this.tiling = tiling
+                this._width = 1, this._height = 1
                 opts.emptyValues = 0
                 opts.onValues = Video.onValues
+                opts.noFeedback = true
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
                 const xyz = (dataStart, dataEnd, dataLen) => {
                     const cells = Math.ceil(dataLen / (dataEnd - dataStart))
@@ -114,14 +114,17 @@ Extra options:
                     const dx = Video._tileMove(false, tile % t2, tiling)
                     const dy = Video._tileMove(true, tile % t2, tiling)
                     const color = this.monochrome ? -1 : ((dataStart / valuesPerCell | 0) % 3 - 1)
-                    return {x: (x + dx*zoom*td)*2-1, y: (y + dy*zoom*td)*2-1, zoom, color}
+                    const x2 = clamp(x + dx*zoom*td/this._width)
+                    const y2 = clamp(y + dy*zoom*td/this._height)
+                    return {x: x2, y: y2, zoom, color}
+                    function clamp(x) { return Math.max(0, Math.min(x, 1)) }
                 }
+                const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : [String(td) + this.monochrome]
                 opts.name = [
                     'video',
                     ...name,
-                    typeof opts.name == 'string' ? opts.name : String(td) + this.monochrome,
-                    this.noFeedback ? 0 : (...args) => xyz(...args).x * 2 - 1,
-                    this.noFeedback ? 0 : (...args) => xyz(...args).y * 2 - 1,
+                    (...args) => xyz(...args).x * 2 - 1,
+                    (...args) => xyz(...args).y * 2 - 1,
                     !zoomSteps ? -1 : (...args) => Math.min(Math.log2(xyz(...args).zoom) / 5 - 1, 1),
                 ]
             }
@@ -231,8 +234,8 @@ Extra options:
             if (frame instanceof Promise)
                 return console.error(frame.error), this.pause(), false
             if (!frame) return null
-            let width = frame.videoWidth || frame.width
-            let height = frame.videoHeight || frame.height
+            let width = this._width = frame.videoWidth || frame.width || 1
+            let height = this._height = frame.videoHeight || frame.height || 1
             // Draw frame to canvas, get ImageData.
             const N = 2 // Delay read-back if slow.
             if (!this._canvas) {

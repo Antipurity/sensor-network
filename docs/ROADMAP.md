@@ -202,10 +202,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Actual sensors, with "observe the hardware" (no feedback) and "visualize effects in-page" (feedback, with data's error being `1`) modes, and UI visualization where possible:
                 - ⋯ Keyboard.
                     - ❌ Put all keys in one strip, in lexicographically-first order. Or use a spatially-grouped QWERTY key layout. Or have a separate cell for every possible key, for max precision. (Too data-inefficient.)
-                    - ⋯ One-hot-encode or MD5-hash the key, and have like 3 observation or action cells.
+                    - ⋯ MD5-hash the key, and have like 3 observation or action cells.
                 - ⋯ Pointer (mouse/touch).
                     - TODO: So, how do we do this? `Pointer.tab` is the most important, then we can make `onValues`/`onFeedback`, right?
                     - TODO: (Also, remove `sn.meta.save`, because we're not really writing code in that style.)
+                    - ⋯ `pointers = 1`
                     - ⋯ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this with `Video` to be able to move virtual pointers.
                         - ⋯ `Video.pointers` → `Pointer.tab`.
                         - ⋯ Make `Pointer.tab()` return the exact same array if called many times, don't attach new event listeners.

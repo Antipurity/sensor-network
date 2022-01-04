@@ -328,7 +328,7 @@ export default (function(exports) {
                     dst.prevEnd = now - 500 // Don't get too eager after being stalled.
                 if (dst.prevEnd > now + 500) // Don't get underexcited either.
                     dst.prevEnd = now + 500
-                const reallyNeedToWait = now - prevWait > 1000 // TODO: 100
+                const reallyNeedToWait = now - prevWait > 100
                 if (reallyNeedToWait || !tooFew && (needToWait > 5 || noData)) {
                     const delay = noData ? 500 : Math.max(needToWait, 0) // TODO: Measure & subtract overshooting. (As the median, of course.)
                     const expectedEnd = performance.now() + delay
@@ -1014,7 +1014,7 @@ Extra parameters:
                         parts.push(bytes), lastPartWasNumber = false
                     } else if (typeof part == 'number' || typeof part == 'function') {
                         if (typeof part == 'number' && (part !== part || part < -1 || part > 1))
-                            error("Name parts must be -1..1, got", part)
+                            error("NAME parts must be -1..1, got", part)
                         if (!lastPartWasNumber || parts[parts.length-1].length >= partSize)
                             parts.push([]), lastPartWasNumber = true
                         if (firstNumberIndex == null) firstNumberIndex = parts.length-1
