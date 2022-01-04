@@ -140,6 +140,7 @@ Options:
             function pointerSet() {
                 // Reverse `onpointerdown`.
                 // This does not replicate browser behavior perfectly, but is usually good enough.
+                //   (There are enough browser implementations in the world.)
                 const p = this, d = p.data
                 const clientX = p.x * innerWidth, clientY = p.y * innerHeight
                 const button1 = d[0]>=.5
@@ -177,33 +178,38 @@ Options:
                     pointerType,
                     isPrimary,
                 }
-                if (typeof PointerEvent != 'undefined') {
-                    el && el.dispatchEvent(new PointerEvent(~prev & buttons ? 'pointerdown' : prev & ~buttons ? 'pointerup' : 'pointermove', ptrOpts))
-                    const prevEl = p._target
-                    if (prevEl !== el) {
-                        ptrOpts.relatedTarget = el
-                        prevEl && prevEl.dispatchEvent(new PointerEvent('pointerout', ptrOpts))
-                        ptrOpts.relatedTarget = prevEl
-                        el && el.dispatchEvent(new PointerEvent('pointerover', ptrOpts))
-                        ptrOpts.bubbles = false
-                        ptrOpts.relatedTarget = el
-                        prevEl && prevEl.dispatchEvent(new PointerEvent('pointerleave', ptrOpts))
-                        el && el.dispatchEvent(new PointerEvent('pointerenter', ptrOpts))
-                        ptrOpts.relatedTarget = prevEl
-                        ptrOpts.bubbles = true
-                    }
+                // Dispatch pointer/mouse events.
+                const ms = pointerType === 'mouse' || isPrimary
+                Do(el, self.PointerEvent, ~prev & buttons ? 'pointerdown' : prev & ~buttons ? 'pointerup' : 'pointermove', ptrOpts)
+                ms && Do(el, MouseEvent, ~prev & buttons ? 'mousedown' : prev & ~buttons ? 'mouseup' : 'mousemove', ptrOpts)
+                const prevEl = p._target
+                if (prevEl !== el) {
+                    ptrOpts.relatedTarget = el
+                    Do(prevEl, self.PointerEvent, 'pointerout', ptrOpts)
+                    ms && Do(prevEl, MouseEvent, 'mouseout', ptrOpts)
+                    ptrOpts.relatedTarget = prevEl
+                    Do(el, self.PointerEvent, 'pointerover', ptrOpts)
+                    ms && Do(el, MouseEvent, 'mouseover', ptrOpts)
+                    ptrOpts.bubbles = false
+                    ptrOpts.relatedTarget = el
+                    Do(prevEl, self.PointerEvent, 'pointerleave', ptrOpts)
+                    ms && Do(prevEl, MouseEvent, 'mouseleave', ptrOpts)
+                    ptrOpts.relatedTarget = prevEl
+                    Do(el, self.PointerEvent, 'pointerenter', ptrOpts)
+                    ms && Do(el, MouseEvent, 'mouseenter', ptrOpts)
+                    ptrOpts.bubbles = true
                 }
                 if (isPrimary) { // 'click'
                     button1 && !(prev&1) && (p._startTarget = el)
                     !button1 && prev&1 && el === p._startTarget && el && el.click()
                 }
-                if (pointerType === 'mouse') {
-                    // TODO: How to dispatch those mouse events?
-                }
                 if (pointerType === 'touch') {
                     // TODO: How to dispatch those touch events (after a bit of delay, to let all `.touch`es settle)?
                 }
                 p._prevButtons = buttons, p._target = el
+                function Do(target, cons, type, opts) { // TODO: Use this, for terseness.
+                    target && cons && target.dispatchEvent(new cons(type, opts))
+                }
             }
             function idOf(evt) { return evt.pointerId !== undefined ? evt.pointerId : 'identifier' in evt ? evt.identifier : 'mouse' }
             function indexOf(evt) {
