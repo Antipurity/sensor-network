@@ -302,11 +302,6 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
             - ❌ Ask the user to rename cells using feedback. (Feedback is value-only, and besides, it's probably inferior to AI translation from meager user data to full feedback, which is already trivially achievable by observing the user, demanding actions, and a handler that defers to an AI model. BMI? Pfft, AI translation is superior.)
         - ⋯ `.Handler`:
-            - TODO: So what do we do next?
-                - If easiest-first:
-                    - Keyboard, WebRTC.
-                - If most-important-first:
-                    - WebRTC, keyboard.
             - TODO: Text in `README.md` (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
                 - TODO: Tools for connecting humans and AI models to arbitrary sensors.
                 - TODO: Design constraints:
@@ -326,6 +321,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Write to `indexedDB`, with visualization (`option()`?) allowing saving it all to a file.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ⋯ Write to Internet.
+                - TODO: Do WebRTC! Only Rust can store our data.
                 - ⋯ Take on the remote cellShape and partSize.
                 - ⋯ Preserve no-data-from-this-cell and no-feedback-to-this-cell arrays.
             - ⋯ Advertise this computer for search (sync with search-server URL/s if given), and when someone connects, write-to-Internet.
