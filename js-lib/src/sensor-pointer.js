@@ -29,7 +29,8 @@ Options:
                 },
                 targets: {
                     ["Tab's pointers"]: () => sn.Sensor.Pointer.tab(),
-                    // TODO: Also allow 2 extra virtual groups, which can be used by `Video` and `Text.readHover`.
+                    ["Virtual pointer 1"]: () => sn.Sensor.Pointer.pointer1(), // TODO: Make `Video` and `Text.readHover` also have these options.
+                    ["Virtual pointer 2"]: () => sn.Sensor.Pointer.pointer2(), // TODO: Make `Video` and `Text.readHover` also have these options.
                 },
             }
         }
@@ -260,5 +261,8 @@ The result is usable as the \`targets\` option for \`Video\` and \`Pointer\`, an
 
 Can pass it \`n=0\`: how many writable pointer objects are guaranteed to be kept alive (but not updated).`,
         }),
+
+        pointer1: function fn() { return fn.a || (fn.a = [{x:.5, y:.5, data:[]}]) },
+        pointer2: function fn() { return fn.a || (fn.a = [{x:.5, y:.5, data:[]}]) },
     })
 }
