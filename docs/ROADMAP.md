@@ -203,12 +203,9 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Keyboard.
                     - ❌ Put all keys in one strip, in lexicographically-first order. Or use a spatially-grouped QWERTY key layout. Or have a separate cell for every possible key, for max precision. (Too data-inefficient.)
                     - ✓ `keys=3`, `keySize=16`.
-                    - ⋯ `noFeedback=true`: if `false`, dispatch events.
-                        - TODO: Dispatch `keydown` and `keyup` events, based on how feedback-keys have changed since the last frame.
-                        - TODO: ...What about `input` events? ...And what about actual typing?
-                            - ...Okay, well, at least observation should be easy.
-                        - TODO: How do we look up the keys, key codes, and locations?
-                        - TODO: What about `keypress` events for compatibility?
+                    - ⋯ `noFeedback=true`: if `false`, dispatch events; else read.
+                        - ❌ If `false`, also know `.code` and `.location` and `.charCode` and `.keyCode` and `.which`. And dispatch `onkeypress` and `oninput`. (Enough browser reimplementations.)
+                        - TODO: ...What about actual typing?
                     - ✓ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`.
                     - ✓ MD5-hash the key, and have like 3 observation or action cells.
                     - ✓ On key down+up too quickly to register, still report the key for one frame.

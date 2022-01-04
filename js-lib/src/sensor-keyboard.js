@@ -15,7 +15,7 @@ Options:
             return {
                 noFeedback: {
                     Yes: true,
-                    No: false,
+                    No: false, // TODO: Test it.
                 },
                 keys: {
                     ['4×']: () => 4,
@@ -44,13 +44,15 @@ Options:
                 this.pastKeys = new Set, // For reporting blink-and-you'll-miss-it keypresses.
                 this.onkeydown = this.onkeydown.bind(this),
                 this.onkeyup = this.onkeyup.bind(this),
-                this.onkeyclear = this.onkeyclear.bind(this)
+                this.onkeyclear = this.onkeyclear.bind(this),
+                this._pastFBKeys = new Set // For feedback.
             if (opts) {
                 const keys = opts.keys || 4
                 const keySize = opts.keySize || 16
                 const tokenToData = sn.Sensor.Text.tokenToDataMD5
                 sn._assertCounts('', keys, keySize)
                 sn._assert(typeof tokenToData == 'function')
+                if (!opts.noFeedback) ;
                 Keyboard.prefill(tokenToData)
                 const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
                 opts.onValues = Keyboard.onValues
@@ -83,28 +85,62 @@ Options:
         static onValues(sensor, data) {
             const keys = sensor.keys, keySize = sensor.keySize
             let i = 0
-            const cur = sensor.currentKeys, past = sensor.pastKeys
+            const cur = sensor.currentKeys, past = sensor.pastKeys, fn = sensor.tokenToData
             cur.forEach(key => past.delete(key))
             past.forEach(key => cur.add(key))
             cur.forEach(key => {
-                if (i++ < keys) sensor.tokenToData(key, data, i*keySize, (i+1)*keySize)
+                if (i++ < keys) fn(key, data, i*keySize, (i+1)*keySize)
             }), data.fill(0, cur.size * keySize)
             past.forEach(key => cur.delete(key))
             past.clear()
             sensor.sendCallback(Keyboard.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
+            // Differences from browser behavior:
+            //   - No `.isTrusted` (no way to set it).
+            //   - No `.repeat`.
+            //   - No `onkeypress` (it's deprecated).
+            //   - No `oninput`.
+            //   - No .ctrlKey/.shiftKey/.altKey/.metaKey on *other* events (such as `Pointer` events).
             if (!feedback || sensor.noFeedback) return
-            // TODO: What do we do here?
+            // Get what keys are currently pressed.
+            const keys = sensor.keys, keySize = sensor.keySize
+            const fn = sensor.tokenToData.feedback
+            const currentKeys = new Set
+            for (let i = 0; i < keys && i*keySize < feedback.length; ++i) {
+                const key = fn(feedback, i*keySize, (i+1)*keySize)
+                if (key) currentKeys.add(key)
+            }
+            // Dispatch events.
+            const kbdOpts = {
+                bubbles: true,
+                key: '',
+                ctrlKey: currentKeys.has('Control'),
+                shiftKey: currentKeys.has('Shift'),
+                altKey: currentKeys.has('Alt'),
+                metaKey: currentKeys.has('Meta'),
+            }
+            const pastKeys = sensor._pastFBKeys
+            const el = document.activeElement || document.body
+            currentKeys.forEach(key => {
+                if (!pastKeys.has(key))
+                    kbdOpts.key = key, el.dispatchEvent(new KeyboardEvent('keydown', kbdOpts))
+            })
+            pastKeys.forEach(key => {
+                if (!currentKeys.has(key))
+                    kbdOpts.key = key, el.dispatchEvent(new KeyboardEvent('keyup', kbdOpts))
+            })
+            // TODO: What else do we do here?
+            //   TODO: What about document.execCommand?
         }
 
         static prefill(tokenToData) {
             // MD5 feedback has to have seen text to be able to invert it.
-            // So, here we feed it the entire keyboard.
+            // So, here we feed it practically the entire keyboard.
             if (tokenToData._keyboardFilled) return
             tokenToData._keyboardFilled = true
-            "".split(' ').forEach(s => tokenToData(s))
-            // TODO: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
+            // For a fuller list see: https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
+            ;[' ', ...("! \" # $ % & ' ( ) * + , - . / 0 1 2 3 4 5 6 7 8 9 : ; < = > ? @ A Alt ArrowDown ArrowLeft ArrowRight ArrowUp B Backspace C CapsLock Control D Delete E End Enter Escape F G H Home I J K L M N NumLock O P PageDown PageUp Q R S Shift T Tab U V W X Y Z [ \\ ] ^ _ ` a b c d e f g h i j k l m n o p q r s t u v w x y z { | } ~".split(' '))].forEach(s => tokenToData(s))
         }
     }
 }
