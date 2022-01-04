@@ -12,11 +12,22 @@ Options:
 ` }
         static options() {
             return {
-                // TODO: What do we want?
-                //   TODO: pointers=1
-                //   TODO: pointerSize=16
-                //   TODO: targets=Pointer.tab()
-                //      …Should also allow 2 extra virtual groups, which can be used by `Video` and `Text.readHover`, right?
+                pointers: {
+                    ['1×']: () => 1,
+                    ['2×']: () => 2,
+                    ['4×']: () => 4,
+                    ['8×']: () => 8,
+                },
+                pointerSize: {
+                    ['16 ']: () => 16,
+                    ['64 ']: () => 64,
+                    ['256 ']: () => 256,
+                },
+                targets: {
+                    ["Tab's pointers"]: () => sn.Sensor.Pointer.tab(),
+                    // TODO: Also allow 2 extra virtual groups, which can be used by `Video` and `Text.readHover`.
+                },
+                // TODO: Also `noFeedback`.
             }
         }
         resume(opts) {
@@ -30,7 +41,6 @@ Options:
                 // TODO: What about `noFeedback`?
                 opts.onValues = Pointer.onValues
                 opts.values = pointers * pointerSize
-                opts.emptyValues = 0
                 opts.name = [
                     'pointer',
                     ...name,
@@ -46,13 +56,17 @@ Options:
             // Make sure to limit to one tile per cell, so that there's no misalignment.
             const cellShape = sensor.cellShape()
             if (!cellShape) return
-            const dataSize = cellShape[cellShape.length-1]
-            const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
 
             const targ = sensor._targets()
-            // TODO: How to read {x,y}-object props?
-            //   ...Do we just iterate over all `targ`s...
-            //     I think we really do just do that.
+            for (let i = 0; i < sensor.pointers; ++i) {
+                const p = targ[i], d = p && p.data, sz = sensor.pointerSize, k = i * sz
+                if (!p) { data.fill(0, k, k+sz);  continue }
+                data[k+0] = p.x*2-1
+                data[k+1] = p.y*2-1
+                if (d) for (let i = 0; i < d.length; ++i) data[k+2+i] = d[i]*2-1
+                sn._dataNamer.fill(data, k, 2+d.length, sz)
+            }
+            sensor.sendCallback(Pointer.onFeedback, data)
         }
         static onFeedback(feedback, sensor) {
             if (!feedback || sensor.noFeedback) return
@@ -114,7 +128,7 @@ Options:
             function pointerSet() {
                 const p = this
                 // TODO: How to update the '`this`-virtual-pointer' position via firing pointer/mouse/touch events?
-                //   TODO: Reverse `onpointerdown`'s setting.
+                //   TODO: Reverse `onpointerdown`'s getting.
             }
             function idOf(evt) { return evt.pointerId !== undefined ? evt.pointerId : 'identifier' in evt ? evt.identifier : 'mouse' }
             function indexOf(evt) {
