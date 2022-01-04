@@ -208,8 +208,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - TODO: (Also, remove `sn.meta.save`, because we're not really writing code in that style.)
                     - ⋯ `pointers = 1`
                     - ⋯ `targets: [..., {x,y,active}, ...] = Video.pointers()`: the objects to update. Share this with `Video` to be able to move virtual pointers.
-                        - ⋯ `Video.pointers` → `Pointer.tab`.
-                        - ⋯ Make `Pointer.tab()` return the exact same array if called many times, don't attach new event listeners.
+                        - ✓ `Video.pointers` → `Pointer.tab`.
+                        - ✓ Make `Pointer.tab()` return the exact same array if called many times, don't attach new event listeners.
                         - ⋯ Optionally have `.update()`, set by `Pointer.tab()`:
                             - ⋯ Movement fires pointer move/over/out events; rising/falling `active` edge fires up/down events.
                             - ⋯ The first item `.isPrimary` and `'mouse'`, the rest are `'touch'`.

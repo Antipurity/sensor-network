@@ -75,7 +75,7 @@ Options:
                 },
                 text: {
                     ['Read selection']: () => sn.Sensor.Text.readSelection(),
-                    ['Read hovered-over text']: () => sn.Sensor.Text.readHover(sn.Sensor.Video.pointers()),
+                    ['Read hovered-over text']: () => sn.Sensor.Text.readHover(sn.Sensor.Pointer.tab()),
                     ['Write selection']: () => sn.Sensor.Text.writeSelection(),
                 },
             }
@@ -121,7 +121,7 @@ Options:
                 const tokens = sensor.textToTokens(str, sensor.tokens)
                 for (let i = 0; i < tokens.length; ++i)
                     sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
-                data.fill(0, tokens.length)
+                data.fill(0, tokens.length * valuesPerCell)
                 sensor.sendCallback(sensor.onFeedback, data)
             } else
                 sensor.sendCallback(sensor.onFeedback, null)
@@ -158,7 +158,7 @@ Options:
 
 Can pass the maximum returned string length, 2048 by default.`,
         }),
-        readHover: A(function readHover(pos = sn.Sensor.Video.pointers(), n=2048) {
+        readHover: A(function readHover(pos = sn.Sensor.Pointer.tab(), n=2048) {
             return function read() {
                 let p = pos
                 if (typeof p == 'function') p = p()
@@ -194,7 +194,7 @@ Can pass the maximum returned string length, 2048 by default.`,
         }, {
             docs:`Reads the text under the pointer.
 
-Can pass the \`{x,y}\` object or array/function to that object (\`Video.pointers()\` by default), and maximum returned string length, 2048 by default.`,
+Can pass the \`{x,y}\` object or array/function to that object (\`Pointer.tab()\` by default), and maximum returned string length, 2048 by default.`,
         }),
         writeSelection: A(function writeSelection() {
             return { feedback: function write(str) {

@@ -14,7 +14,7 @@ Extra options:
 - \`source = Video.stitchTab()\`: where to fetch image data from. \`MediaStream\` or \`<canvas>\` or \`<video>\` or \`<img>\` or a function to one of these.
     - Feedback is currently not implemented.
 - \`monochrome = true\`: make this \`true\` to only report [luminance](https://en.wikipedia.org/wiki/Relative_luminance) and use 3× less data.
-- \`targets = Video.pointers()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame.
+- \`targets = Pointer.tab()\`: what to focus rectangles' centers on. This is a live array of \`{x,y}\` objects with 0…1 viewport coordinates, or a function to that, called every frame.
     - If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
 - \`tiling = 2\`: how many vertical/horizontal repetitions there are per target or screen.
 - \`zoomSteps = 3\`: how many extra zoomed views to generate per target or screen.
@@ -29,16 +29,16 @@ Extra options:
                     ['4×4']: () => 4,
                 },
                 source: {
-                    ["Stitch the tab's canvas/video/img elements"]: () => Video.stitchTab(),
-                    ["Tab/window/screen"]: () => Video.requestDisplay(),
-                    ["Camera"]: () => Video.requestCamera(),
+                    ["Stitch the tab's canvas/video/img elements"]: () => sn.Sensor.Video.stitchTab(),
+                    ["Tab/window/screen"]: () => sn.Sensor.Video.requestDisplay(),
+                    ["Camera"]: () => sn.Sensor.Video.requestCamera(),
                 },
                 monochrome: {
                     Yes: true,
                     No: false,
                 },
                 targets: {
-                    ['Mouse/touch']: () => Video.pointers(),
+                    ['Mouse/touch']: () => sn.Sensor.Pointer.tab(),
                     ['None']: () => [],
                 },
                 tiling: {
@@ -71,7 +71,7 @@ Extra options:
             if (opts) {
                 const td = opts.tileDimension || 8
                 const src = opts.source || Video.stitchTab()
-                const targ = opts.targets || Video.pointers()
+                const targ = opts.targets || sn.Sensor.Pointer.tab()
                 const zoomSteps = opts.zoomSteps !== undefined ? opts.zoomSteps : 3
                 const zoomStep = opts.zoomStep !== undefined ? opts.zoomStep : 2
                 const tiling = opts.tiling !== undefined ? opts.tiling : 2
@@ -297,86 +297,6 @@ Extra options:
             return true
         }
     }, {
-        pointers: A(function pointers() {
-            const ps = []
-            const inds = new Map
-            const passive = {passive:true}
-            let attached = false, lastRequest = performance.now()
-            let id = setInterval(autodetach, 10000)
-            return attachEvents
-            function autodetach() {
-                if (performance.now() - lastRequest > 15000)
-                    detachEvents(), clearInterval(id), id = null
-            }
-            function onpointerdown(evt) { // Add/update.
-                if (evt.pointerType === 'touch') return
-                if (evt.touches) return Array.from(evt.touches).forEach(onpointerdown)
-                const p = ps[indexOf(evt)]
-                p.x = Math.max(0, Math.min(evt.clientX / innerWidth, 1))
-                p.y = Math.max(0, Math.min(evt.clientY / innerHeight, 1))
-            }
-            function onpointerup(evt) { // Remove.
-                if (evt.pointerType === 'touch') return
-                if (!ps.length) return
-                if (evt.touches) {
-                    ps.length = 0, inds.clear()
-                    return Array.from(evt.touches).forEach(onpointerdown)
-                }
-                if (ps.length <= 1) return
-                const i = indexOf(evt), j = ps.length-1
-                ;[ps[i], ps[j]] = [ps[j], ps[i]]
-                ps.pop(), inds.delete(idOf(evt))
-            }
-            function idOf(evt) { return evt.pointerId !== undefined ? evt.pointerId : 'identifier' in evt ? evt.identifier : 'mouse' }
-            function indexOf(evt) {
-                const id = idOf(evt)
-                if (!inds.has(id))
-                    inds.set(id, ps.push({ x:.5, y:.5 })-1)
-                return inds.get(id)
-            }
-            function attachEvents() {
-                lastRequest = performance.now()
-                if (attached) return ps
-                addEventListener('touchstart', onpointerdown, passive)
-                addEventListener('touchmove', onpointerdown, passive)
-                addEventListener('touchcancel', onpointerup, passive)
-                addEventListener('touchend', onpointerup, passive)
-                if (typeof PointerEvent == 'undefined') {
-                    addEventListener('mousedown', onpointerdown, passive)
-                    addEventListener('mousemove', onpointerdown, passive)
-                    addEventListener('mouseup', onpointerup, passive)
-                } else {
-                    addEventListener('pointerdown', onpointerdown, passive)
-                    addEventListener('pointermove', onpointerdown, passive)
-                    addEventListener('pointerup', onpointerup, passive)
-                }
-                if (id == null) setInterval(autodetach, 10000)
-                attached = true
-                return ps
-            }
-            function detachEvents() {
-                if (!attached) return
-                removeEventListener('touchstart', onpointerdown, passive)
-                removeEventListener('touchmove', onpointerdown, passive)
-                removeEventListener('touchcancel', onpointerup, passive)
-                removeEventListener('touchend', onpointerup, passive)
-                if (typeof PointerEvent == 'undefined') {
-                    removeEventListener('mousedown', onpointerdown, passive)
-                    removeEventListener('mousemove', onpointerdown, passive)
-                    removeEventListener('mouseup', onpointerup, passive)
-                } else {
-                    removeEventListener('pointerdown', onpointerdown, passive)
-                    removeEventListener('pointermove', onpointerdown, passive)
-                    removeEventListener('pointerup', onpointerup, passive)
-                }
-                attached = false
-            }
-        }, {
-            docs:`Returns a closure that returns the dynamic list of mouse/touch positions, \`[{x,y}]\`.
-
-The result is usable as the \`targets\` option for \`Video\`.`,
-        }),
-
         stitchTab: A(function stitchTab() {
             const _tab = sn.Sensor.Video._tab || (sn.Sensor.Video._tab = {})
             if (!_tab.canvas) {

@@ -8,6 +8,7 @@ import Text from './src/sensor-text.js'
 import Random from './src/handler-random.js'
 import Scroll from './src/sensor-scroll.js'
 import Audio from './src/sensor-audio.js'
+import Pointer from './src/sensor-pointer.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -831,44 +832,6 @@ Benchmarks are contained in \`.bench()\` near to code that they benchmark. Repor
 Those methods return objects (such as arrays) that contain start functions, which return stop functions.
 `,
             }),
-            save: A(function save(...fs) {
-                const entry = fs.map((_,i) => '_mainF'+i)
-                const dependencies = Object.create(null)
-                fs.forEach((f,i) => walk(entry[i], f))
-                const code = Object.keys(dependencies).map(k => `const ${k}=${dependencies[k]}`)
-                return code.join('\n') + `\nreturn [${entry}]`
-                function walk(k, v) {
-                    const s = typeof v == 'string' ? JSON.stringify(v) : ''+v
-                    if (typeof v == 'function' && s.slice(0,6) === 'class ') { // Bring classes into our `sn` fold.
-                        assert(v instanceof E.Sensor || v instanceof E.Transform || v instanceof E.Handler, "Unrecognized class prototype")
-                        const become = 'sn.' + (v instanceof E.Sensor ? 'Sensor' : v instanceof E.Transform ? 'Transform' : 'Handler')
-                        s = s.replace(/\s+extends\s+.+\s+{/, become)
-                    }
-                    const alreadyPresent = dependencies[k] !== undefined
-                    if (alreadyPresent) assert(dependencies[k] === s, "Same-name dependencies collide: "+k)
-                    dependencies[k] = s
-                    if (!alreadyPresent && v.save && typeof v.save == 'object')
-                        Object.keys(v.save).forEach(k => walk(k, v.save[k]))
-                }
-            }, {
-                docs:`Preserves closed-over dependencies, so that code can be loaded, via \`const [...funcs] = new Function('sn', result)(sensorNetwork)\`.
-
-Those dependencies do have to be explicitly preserved, such as via \`a => Object.assign(b => a+b, { save:{a} })\`.
-
-Note that directly-referenced methods (\`{ f(){} }\`) have to be written out fully (\`{ f: function(){} }\`), and sensor-network dependencies should not be specified.
-
-Safe to save+load if \`.toString\` is not overriden by any dependency, though not safe to use the loaded functions.`,
-                tests() {
-                    const fMaker = a => Object.assign(b => a+b, { save:{a} }), f = fMaker(13)
-                    return [
-                        [
-                            "Save-and-load a simple function",
-                            42,
-                            new Function('sn', E.meta.save(f))(E)[0](29),
-                        ],
-                    ]
-                },
-            }),
         },
         _dataNamer: A(function _dataNamer({ userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) {
             assertCounts('', userParts, nameParts, partSize)
@@ -1082,6 +1045,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         Text: Text(E),
         Video: Video(E),
         Audio: Audio(E),
+        Pointer: Pointer(E),
         Scroll: Scroll(E),
         Time: Time(E),
     })

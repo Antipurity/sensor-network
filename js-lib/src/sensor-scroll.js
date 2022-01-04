@@ -5,7 +5,7 @@ export default function init(sn) {
 Options:
 - \`name\`: heeded, augmented.
 - \`mode: 'read'|'write'|'move' = 'read'\`: can read, and either set or add-to scroll position.
-- \`target:{x,y} = Video.pointers()\`: where to get target-coordinates from (or a function, or an array). Many DOM elements can be scrollable, and \`Scroll\` tries to return the most relevant ones.
+- \`target:{x,y} = Pointer.tab()\`: where to get target-coordinates from (or a function, or an array). Many DOM elements can be scrollable, and \`Scroll\` tries to return the most relevant ones.
 `}
         static options() {
             return {
@@ -15,14 +15,14 @@ Options:
                     ['Read + move']: () => 'move',
                 },
                 target: {
-                    ['Mouse/touch']: () => sn.Sensor.Video.pointers(),
+                    ['Mouse/touch']: () => sn.Sensor.Pointer.tab(),
                 },
             }
         }
         resume(opts) {
             if (opts) {
                 const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
-                const target = opts.target || sn.Sensor.Video.pointers()
+                const target = opts.target || sn.Sensor.Pointer.tab()
                 const mode = opts.mode || 'read'
                 sn._assert(target && (typeof target == 'object' || typeof target == 'function'))
                 sn._assert(['read', 'write', 'move'].includes(mode))

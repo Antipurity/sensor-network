@@ -18,8 +18,10 @@ Options:
         resume(opts) {
             if (opts) {
                 const pointers = opts.pointers || 1
+                const targ = opts.targets || Pointer.tab()
                 sn._assertCounts('', pointers)
                 const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
+                sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
                 // TODO: What about `targets` and `noFeedback`?
                 opts.onValues = Pointer.onValues
                 opts.values = pointers * 123 // TODO: What's our value-count? ...Do we need to pass it in *again*…
@@ -29,6 +31,7 @@ Options:
                     ...name,
                 ]
                 opts.noFeedback = true
+                this.targets = targ
             }
             return super.resume(opts)
         }
@@ -54,14 +57,14 @@ Options:
             return targets
         }
     }, {
-        // TODO: Change every occurence of `Video.pointers` to `Pointer.tab`.
         tab: A(function tab() { // TODO: Have all-props and `.set()` and `.get()`…
+            if (tab.result) return tab.result
             const ps = []
             const inds = new Map
             const passive = {passive:true}
             let attached = false, lastRequest = performance.now()
             let id = setInterval(autodetach, 10000)
-            return attachEvents
+            return tab.result = attachEvents
             function autodetach() {
                 if (performance.now() - lastRequest > 15000)
                     detachEvents(), clearInterval(id), id = null
