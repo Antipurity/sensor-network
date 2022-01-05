@@ -10,6 +10,7 @@ import Scroll from './src/sensor-scroll.js'
 import Audio from './src/sensor-audio.js'
 import Pointer from './src/sensor-pointer.js'
 import Keyboard from './src/sensor-keyboard.js'
+import WebRTC from './src/webrtc.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1042,6 +1043,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     })
     // And set the most-common modules.
     E.meta.UI = UI(E)
+    const Internet = WebRTC(E)
     Object.assign(E.Sensor, {
         Text: Text(E),
         Video: Video(E),
@@ -1050,6 +1052,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         Pointer: Pointer(E),
         Scroll: Scroll(E),
         Time: Time(E),
+        Internet: Internet.sensor,
     })
     Object.assign(E.Transform, {
         Reward: Reward(E),
@@ -1057,6 +1060,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     Object.assign(E.Handler, {
         Sound: Sound(E),
         Random: Random(E),
+        Internet: Internet.handler,
     })
     return E
 

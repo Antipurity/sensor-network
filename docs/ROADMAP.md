@@ -274,6 +274,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
             - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
             - ✓ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
+                - ⋯ Possibly, replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings (in the `user` part of the name), so that learning doesn't *have* to do BPTT per-step (non-scalable beyond about a minute) but across time resolutions and even backwards.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
             - ⋯ Read from file.
@@ -318,10 +319,23 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
             - ❌ Sound input (microphone). Probably terrible, especially without an ML model to summarize it.
             - ✓ `Random` feedback. For debugging.
-            - ⋯ Write to `indexedDB`, with visualization (`option()`?) allowing saving it all to a file.
+            - ⋯ Write to `indexedDB`, with visualization (`options()`?) allowing saving it all to a file.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
-            - ⋯ Write to Internet.
+            - ⋯ Write to Internet. TODO:
                 - TODO: Do WebRTC! Only Rust can store our data.
+                - TODO: ...How do we do the actual connection... Need to research WebRTC thoroughly.
+                    - TODO: ...Why does WebRTC apparently limit to 800 data-channel bytes per message??? ...Up to 64KB is apparently reliable *now*; good. (65664b?)
+                - ⋯ `bytesPerValue=0`: transmit in f32 or u8 or u16.
+                - TODO: Byte-level layout of data & feedback (exactly the same) packets:
+                    - 2 bytes: packet ID.
+                    - 2 bytes: packet-part (each part is 2**15 bytes).
+                    - Content.
+                        - 2 bytes: prev-packet ID (for compression) or 0 if it can be decompressed by itself. (No requesting; dropping the 0-packet means dropping all its dependents.)
+                        - 2 bytes: shape ID. Content (split along "packet-parts") (compressible):
+                            - shapeId==0: new shape:
+                                - data (provide): shapeId (2b) & cellShape (4b length, 4b values) & partSize (4b) & cells (4b) & name (for each cell, values, numbered `sum(cellShape)-cellShape[-1]`; including the overwritten reward) & noData (1 bit per cell) & noFeedback (1 bit per cell)
+                                - feedback (ACKnowledgement; no ACK means that data has to resend the shape): shapeId (2b)
+                            - shapeId≥1: reward & data (for each cell, values, numbered `1 + cellShape[-1]`)
                 - ⋯ Take on the remote cellShape and partSize.
                 - ⋯ Preserve no-data-from-this-cell and no-feedback-to-this-cell arrays.
             - ⋯ Advertise this computer for search (sync with search-server URL/s if given), and when someone connects, write-to-Internet.
