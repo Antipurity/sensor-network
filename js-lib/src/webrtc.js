@@ -5,6 +5,7 @@ export default function init(sn) {
 Options:
 - TODO: \`iceServers = []\`
 - TODO: How do we allow signaling from anyone that connects?…
+    - TODO: A function, that returns {send, onmessage, close}?
 - TODO:
 - TODO: (Also, how do we allow developers to implement an authentication mechanism?)
 ` }
@@ -39,9 +40,9 @@ Options:
             //   ...What should we do on dropped, and on out-of-order messages?...
             //   TODO: this.peer.ondatachannel = evt => evt.channel??? TODO: What exactly do we do with the channel?
         }
-        static onValues(sensor, data) {
+        static onValues(sensor, data) { // TODO: …Oh yeah: no `sensor`, only `this`.
             // TODO: How to take all data from the queue?
-            //   TODO: Also, sensor.resize(values) and give per-cell noData/noFeedback bool arrays to sensor.sendCallback.
+            //   TODO: Also, sensor.resize(values) and give per-cell noData/noFeedback bool arrays to sensor.sendCallback. TODO: Actually, use `sensor.sendRawCallback` instead.
         }
         static onFeedback(feedback, sensor) {
             // TODO: How to send feedback to their appropriate connections?

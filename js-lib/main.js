@@ -375,17 +375,14 @@ export default (function(exports) {
                 if (ch.mainHandler) return ch.mainHandler.cellShape
                 return ch.cellShapes[0] && ch.cellShapes[0].cellShape || null
             }
-            sendCallback(then, values = null, error = null, reward = 0, cellNoData=null, cellNoFeedback=null) { // TODO: …We also want a 'raw' mode, don't we… …But what if there are many different cell-shapes?…
-                // In profiling, promises are the leading cause of garbage. So, use a callback.
+            sendRawCallback(then, name) {
+                // `name.call(this, {cellShape, partSize, summary}, namer, packet)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`. Returns `true` if it wrote any non-`noData` stuff.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
                 assert(then === null || typeof then == 'function')
-                assert(values === null || values instanceof Float32Array)
-                assert(error === null || error instanceof Float32Array)
-                values && assert(values.length === this.values, "Data size differs from the one in options")
-                error && assert(values && values.length === error.length)
+                assert(typeof name == 'function')
                 const ch = state(this.channel)
-                const removed = Sensor._removed || (Sensor._removed = new Set) // Probably fine to reuse the same object for this.
+                const removed = Sensor._removed || (Sensor._removed = new Set) // All sync, so, fine to reuse the same object for this.
                 for (let i = 0; i < ch.cellShapes.length; ++i) {
                     const {cellShape, partSize, summary} = ch.cellShapes[i]
                     const dst = ch.shaped[summary]
@@ -394,25 +391,39 @@ export default (function(exports) {
                         continue
                     }
                     const namer = packetNamer(this, this.dataNamers, cellShape, partSize, summary)
-                    const flatV = allocF32(namer.namedSize)
-                    const flatE = error ? allocF32(namer.namedSize) : null
-                    if (!values) flatV.fill(0)
-                    flatV && namer.name(values, flatV, 0, reward)
-                    flatE && namer.name(error, flatE, 0, 0, -1.)
-                    dst.nextPacket.send(this, flatV, flatE, cellNoData || values === null, cellNoFeedback || this.noFeedback)
+                    const wrote = name.call(this, ch.cellShapes[i], namer, dst.nextPacket)
 
                     // Wake up.
-                    values && dst.stepsNow <= 1 && dst.giveNextPacketNow && dst.giveNextPacketNow() // Wake up.
+                    wrote && dst.stepsNow <= 1 && dst.giveNextPacketNow && dst.giveNextPacketNow()
                 }
                 if (removed.size) {
                     ch.cellShapes = ch.cellShapes.filter(o => !removed.has(o))
                     removed.forEach(o => delete ch.shaped[o.summary])
                     removed.clear()
                 }
-                values && deallocF32(values), error && deallocF32(error)
                 this.feedbackCallbacks.push(then) // Called even if no feedback is registered, with `null`.
                 this.feedbackNoFeedback.push(this.noFeedback)
                 this.feedbackNamers.push(this.dataNamers)
+            }
+            sendCallback(then, values = null, error = null, reward = 0) {
+                // In profiling, promises are the leading cause of garbage. So, use a callback.
+                // Name+send to all handler shapes.
+                // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
+                assert(values === null || values instanceof Float32Array)
+                assert(error === null || error instanceof Float32Array)
+                values && assert(values.length === this.values, "Data size differs from the one in options")
+                error && assert(values && values.length === error.length)
+                this.sendRawCallback(then, function name({cellShape, partSize, summary}, namer, packet) {
+                    const values = Sensor._values, error = Sensor._error, reward = Sensor._reward
+                    const namedV = allocF32(namer.namedSize)
+                    const namedE = error ? allocF32(namer.namedSize) : null
+                    if (!values) namedV.fill(0)
+                    namedV && namer.name(values, namedV, 0, reward)
+                    namedE && namer.name(error, namedE, 0, 0, -1.)
+                    packet.send(this, namedV, namedE, values === null, this.noFeedback)
+                    return !!values
+                })
+                values && deallocF32(values), error && deallocF32(error)
             }
             send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
                 return new Promise((then, reject) => {
@@ -824,7 +835,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 return Object.keys(result).length ? result : undefined
                 function walk(x) {
                     if (!x || typeof x != 'object' && typeof x != 'function') return
-                    if (typeof x.bench == 'function' && x.bench !== E.meta.bench) {
+                    if (Object.prototype.hasOwnProperty.call(x, 'bench') && typeof x.bench == 'function' && x.bench !== E.meta.bench) {
                         const bs = x.bench()
                         for (let id of Object.keys(bs)) {
                             bench.push(bs[id])
