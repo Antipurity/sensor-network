@@ -3,23 +3,32 @@ export default function init(sn) {
         static docs() { return `Extends this network over the Internet.
 
 Options:
+- TODO: \`iceServers = []\`
+- TODO: How do we allow signaling from anyone that connects?…
 - TODO:
 - TODO: (Also, how do we allow developers to implement an authentication mechanism?)
 ` }
-        // TODO: What `options` do we have?
+        static options() {
+            return {
+                // TODO: iceServers:
+                //   TODO: []
+                //   TODO: ['stun.l.google.com:19302', 'stunserver.org:3478']
+            }
+        }
         resume(opts) {
             if (opts) {
+                this.iceServers = opts.iceServers || []
                 this.getPeer()
-                // TODO: Set opts.values... Should it be 0 initially, and re-initialized to whatever the connections suggest?…
-                //   Isn't it a bit inefficient to do a whole pause+resume cycle on nearly each packet?…
-                // TODO: Also set opts.name: ['internet']. Nothing fancy, right?
+                opts.values = 0
+                opts.name = ['internet'] // TODO: …No: should have funcs that defer to the received cells' names…
+                //   TODO: …But isn't it much better to be able to pass raw names to sensor.sendCallback?… Much less memory wasting, at least. And, much easier to actually establish a correspondence between cells and their names, especially across timesteps… And aren't functions in names only called once anyway, meaning that without raw access, we will create LOTS of F32A garbage…
                 // TODO: What else?
             }
             return super.resume(opts)
         }
         getPeer() {
             if (this.peer) return
-            this.peer = new RTCPeerConnection({iceServers:[]}) // TODO: An option for this.
+            this.peer = new RTCPeerConnection({iceServers:this.iceServers})
             // TODO: …When we're signaled:
             //   TODO: this.peer.setRemoteDescription({type:'offer', sdp:offer})
             //   TODO: this.peer.createAnswer().then(answer => { this.peer.setLocalDescription(answer), SIGNAL(answer.sdp) }).catch(console.error)
@@ -30,9 +39,9 @@ Options:
             //   ...What should we do on dropped, and on out-of-order messages?...
             //   TODO: this.peer.ondatachannel = evt => evt.channel??? TODO: What exactly do we do with the channel?
         }
-        // TODO: Have `sensor.resize(values)`, which does nothing if prev===next, else resizes data-namers and sets this.values.
         static onValues(sensor, data) {
             // TODO: How to take all data from the queue?
+            //   TODO: Also, sensor.resize(values) and give per-cell noData/noFeedback bool arrays to sensor.sendCallback.
         }
         static onFeedback(feedback, sensor) {
             // TODO: How to send feedback to their appropriate connections?
@@ -55,6 +64,7 @@ Options:
         }
         resume(opts) {
             if (opts) {
+                this.iceServers = opts.iceServers || []
                 this.getPeer()
                 // TODO: Also, this.peer.setConfiguration({iceServers}).
                 // TODO: What else?
@@ -64,7 +74,7 @@ Options:
         getPeer() {
             // Connects to another sensor network through WebRTC.
             if (this.peer) return
-            // TODO: this.peer = new RTCPeerConnection({iceServers:['stun.l.google.com:19302', 'stunserver.org:3478']})
+            // TODO: this.peer = new RTCPeerConnection({iceServers:this.iceServers})
             //   (The list should be an option. For example: https://gist.github.com/mondain/b0ec1cf5f60ae726202e)
             // TODO: this.dataChannel = this.peer.createDataChannel('sn-internet', {
             //   ordered: false,

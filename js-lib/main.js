@@ -101,22 +101,24 @@ export default (function(exports) {
             //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
             // `point` is a named Float32Array of named cells, and this function takes ownership of it.
             // `error` is its error (max abs(true - measurement) - 1) or null.
-            // `noFeedback`: bool. If true, `callback` is still called, possibly even with non-null `allFeedback`.
+            // `noData`: bool or a per-cell array of those.
+            // `noFeedback`: bool or a per-cell array of those. If true, `callback` is still called, possibly even with non-null `allFeedback`.
             assert(point instanceof Float32Array, "Data must be float32")
             assert(point.length % this.cellSize === 0, "Data must be divided into cells")
             assert(error == null || error instanceof Float32Array, "Error must be null or float32")
             assert(error == null || point.length === error.length, "Error must be per-data-point")
             const cells = point.length / this.cellSize | 0
-            if (!noFeedback) this.sensorNeedsFeedback = true
+            if (Array.isArray(noFeedback) ? noFeedback.some(b => !b) : !noFeedback)
+                this.sensorNeedsFeedback = true
             this.sensor.push(sensor)
             this.sensorData.push(point)
             if (error) this.sensorError[this.sensorError.length-1] = error
             this.sensorIndices.push(this.cells)
-            noData = !!noData, noFeedback = !!noFeedback
             for (let c = 0; c < cells; ++c)
-                this.noData.push(noData), this.noFeedback.push(noFeedback)
-            if (noData)
-                for (let c = 0; c < cells; ++c)
+                this.noData.push(Array.isArray(noData) ? !!noData[c] : !!noData),
+                this.noFeedback.push(Array.isArray(noFeedback) ? !!noFeedback[c] : !!noFeedback)
+            for (let c = 0; c < cells; ++c)
+                if (Array.isArray(noData) ? !!noData[c] : !!noData)
                     this.noDataIndices.push(this.cells + c)
             this.cells += point.length / this.cellSize | 0
         }
@@ -373,7 +375,8 @@ export default (function(exports) {
                 if (ch.mainHandler) return ch.mainHandler.cellShape
                 return ch.cellShapes[0] && ch.cellShapes[0].cellShape || null
             }
-            sendCallback(then, values = null, error = null, reward = 0) { // In profiling, promises are the leading cause of garbage.
+            sendCallback(then, values = null, error = null, reward = 0, cellNoData=null, cellNoFeedback=null) { // TODO: …We also want a 'raw' mode, don't we… …But what if there are many different cell-shapes?…
+                // In profiling, promises are the leading cause of garbage. So, use a callback.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
                 assert(then === null || typeof then == 'function')
@@ -396,7 +399,7 @@ export default (function(exports) {
                     if (!values) flatV.fill(0)
                     flatV && namer.name(values, flatV, 0, reward)
                     flatE && namer.name(error, flatE, 0, 0, -1.)
-                    dst.nextPacket.send(this, flatV, flatE, values === null, this.noFeedback)
+                    dst.nextPacket.send(this, flatV, flatE, cellNoData || values === null, cellNoFeedback || this.noFeedback)
 
                     // Wake up.
                     values && dst.stepsNow <= 1 && dst.giveNextPacketNow && dst.giveNextPacketNow() // Wake up.
@@ -416,6 +419,16 @@ export default (function(exports) {
                     try { this.sendCallback(then, values, error, reward) }
                     catch (err) { reject(err) }
                 })
+            }
+            resize(values, emptyValues=null) {
+                if (emptyValues == null) emptyValues = this.emptyValues
+                const prev = this.values, next = values
+                if (prev === next) return
+                // Already-in-flight feedback will still see `prevN`.
+                const prevN = this.dataNamers, nextN = Object.create(null)
+                for (let summary of Object.keys(prevN))
+                    nextN[summary] = prevN[summary].resized(values, emptyValues)
+                this.values = values, this.emptyValues = emptyValues, this.dataNamers = nextN
             }
             pause() {
                 if (this.paused !== false) return this
@@ -483,8 +496,8 @@ export default (function(exports) {
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
         - \`userName\`: the name of the machine that sources data. Makes it possible to reliably distinguish sources.
-        - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`._dataNamer.fill\`.
-        - \`hasher(…)(…)(…)\`: see \`._dataNamer.hasher\`. The default mainly hashes strings in \`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
+        - \`emptyValues\`: the guaranteed extra padding, for fractal folding. See \`sn._dataNamer.fill\`.
+        - \`hasher(…)(…)(…)\`: see \`sn._dataNamer.hasher\`. The default mainly hashes strings in \`userName\`/\`name\` with MD5 and rescales bytes into -1…1.
     - To change any of this, \`resume({…})\`.
 
 - \`cellShape() → [user, name, data] | null\`: returns the target's cell shape. Note that this may change rarely.
@@ -497,10 +510,13 @@ export default (function(exports) {
         - (Can use \`sn._allocF32(len)\` for efficient reuse.)
     - \`error\`: \`null\` or owned flat data, -1…1 \`Float32Array\` of length \`values.length\`: \`max abs(truth - observation) - 1\`. Do not perform ANY operations on it once called.
     - \`reward\`: every sensor can tell handlers what to maximize, -1…1. (What is closest in meaning for you? Localized pain and pleasure? Satisfying everyone's needs rather than the handler's? …Money? Either way, it sounds like a proper body.)
-        - Can be a number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
+        - Can be a number or a per-cell array or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
 
 - \`sendCallback(then(null|feedback, sensor), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise.
+
+- \`resize(newValues, newEmptyValues = emptyValues)\`: fast changing of flat-data length.
+    - (If used in \`onValues\`, do \`sn._deallocF32(data), data = sn._allocF32(newValues)\` for efficiency.)
 
 - \`pause()\`, \`resume(opts?)\`: for convenience, these return the object.
 
@@ -843,66 +859,63 @@ Those methods return objects (such as arrays) that contain start functions, whic
             // Values are distributed evenly per-cell, to maximize the benefit of fractal-folding.
             //   (The last cell may end up with less values than others. This slight inefficiency is made worth by the consistency.)
             const cellSize = (userParts + nameParts) * partSize + dataSize
-            let cells, valuesPerCell, userHasher, nameHashers = []
-            resized()
-            return {
-                cells,
-                namedSize: cells * cellSize,
-                cellShape: [userParts * partSize, nameParts * partSize, dataSize], // [user, name, data]
-                name(src, dst, dstOffset, reward = 0, skipNonData = null) { // flat → named
-                    for (let i = 0; i < cells; ++i) { // Fill out the whole cell.
-                        const start = dstOffset + i * cellSize
-                        const dataStart = start + (userParts + nameParts) * partSize
-                        if (skipNonData == null) {
-                            // User.
-                            userHasher(dst, start)
-                            // Name.
-                            nameHashers[i](dst, start + userParts * partSize)
-                            // Reward, overwriting the beginning.
-                            const r = typeof reward == 'number' ? reward : reward(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values)
-                            assert(r >= -1 && r <= 1)
-                            dst[start] = r
-                        } else dst.fill(skipNonData, start, dataStart)
-                        // Data.
-                        if (src) {
-                            const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
-                            for (let s = srcStart, d = dataStart; s < srcEnd; ++s, ++d) dst[d] = src[s]
-                        }
-                        E._dataNamer.fill(dst, dataStart, valuesPerCell, dataSize)
-                    }
-                    return dstOffset + cells * cellSize // Return the next `dstOffset`.
-                },
-                unname(src, srcOffset, dst) { // named → flat; `named` is consumed.
-                    if (src)
-                        for (let i = 0; i < cells; ++i) { // Extract data from the whole cell.
-                            const start = srcOffset + i * cellSize, dataStart = start + (userParts + nameParts) * partSize
-                            E._dataNamer.unfill(src, dataStart, valuesPerCell, dataSize)
-                            const dstStart = i * valuesPerCell, dstEnd = Math.min(dstStart + valuesPerCell, dst.length)
-                            for (let s = dataStart, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
-                        }
-                    return srcOffset + cells * cellSize // Return the next `srcOffset`.
-                },
-                resize(values2, emptyValues2 = emptyValues) {
-                    values = values2, emptyValues = emptyValues2
-                    resized()
-                    this.cells = cells, this.namedSize = cells * cellSize
-                },
-            }
-            function resized() {
-                cells = Math.ceil((emptyValues + values) / dataSize)
-                valuesPerCell = Math.ceil(values / cells)
-                userHasher = userHasherMaker(0, userParts * partSize, userParts * partSize)
-                nameHashers.length = cells
+            return resized(values, emptyValues)
+            function resized(values, emptyValues) {
+                const cells = Math.ceil((emptyValues + values) / dataSize)
+                const valuesPerCell = Math.ceil(values / cells)
+                const userHasher = userHasherMaker(0, userParts * partSize, userParts * partSize)
+                const nameHashers = new Array(cells)
                 for (let i = 0; i < cells; ++i)
                     // (We don't deinit the prev hasher, so resizing with-funcs-in-name namers will generate lots of garbage.)
                     nameHashers[i] = hasherMaker(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values)
+                return {
+                    cells,
+                    namedSize: cells * cellSize,
+                    cellShape: [userParts * partSize, nameParts * partSize, dataSize], // [user, name, data]
+                    name(src, dst, dstOffset, reward = 0, skipNonData = null) { // flat → named
+                        for (let i = 0; i < cells; ++i) { // Fill out the whole cell.
+                            const start = dstOffset + i * cellSize
+                            const dataStart = start + (userParts + nameParts) * partSize
+                            if (skipNonData == null) {
+                                // User.
+                                userHasher(dst, start)
+                                // Name.
+                                nameHashers[i](dst, start + userParts * partSize)
+                                // Reward, overwriting the beginning.
+                                const r = typeof reward == 'number' ? reward : Array.isArray(reward) ? reward[i] : reward(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values)
+                                assert(r >= -1 && r <= 1)
+                                dst[start] = r
+                            } else dst.fill(skipNonData, start, dataStart)
+                            // Data.
+                            if (src) {
+                                const srcStart = i * valuesPerCell, srcEnd = Math.min(srcStart + valuesPerCell, src.length)
+                                for (let s = srcStart, d = dataStart; s < srcEnd; ++s, ++d) dst[d] = src[s]
+                            }
+                            E._dataNamer.fill(dst, dataStart, valuesPerCell, dataSize)
+                        }
+                        return dstOffset + cells * cellSize // Return the next `dstOffset`.
+                    },
+                    unname(src, srcOffset, dst) { // named → flat; `named` is consumed.
+                        if (src)
+                            for (let i = 0; i < cells; ++i) { // Extract data from the whole cell.
+                                const start = srcOffset + i * cellSize, dataStart = start + (userParts + nameParts) * partSize
+                                E._dataNamer.unfill(src, dataStart, valuesPerCell, dataSize)
+                                const dstStart = i * valuesPerCell, dstEnd = Math.min(dstStart + valuesPerCell, dst.length)
+                                for (let s = dataStart, d = dstStart; d < dstEnd; ++s, ++d) dst[d] = src[s]
+                            }
+                        return srcOffset + cells * cellSize // Return the next `srcOffset`.
+                    },
+                    resized(values2, emptyValues2 = emptyValues) {
+                        return resized(values2, emptyValues2)
+                    },
+                }
             }
         }, {
             docs:`Implementation detail.
 
 Prepares to go between flat number arrays and named ones.
 
-- The result is \`{ cells, namedSize, cellShape, name(src, dst, dstOffset, reward=0, skipNonData=null)→dstOffset, unname(src, srcOffset, dst)→srcOffset, resize(values, emptyValues=…) }\`. \`name\` goes from flat to named, \`unname\` reverses this.
+- The result is \`{ cells, namedSize, cellShape, name(src, dst, dstOffset, reward=0, skipNonData=null)→dstOffset, unname(src, srcOffset, dst)→srcOffset, resized(values, emptyValues=…)→nextVersion }\`. \`name\` goes from flat to named, \`unname\` reverses this.
     - \`reward\` is either a -1…1 number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - If \`skipNonData\` is a -1…1 number, the non-data portions of each cell are replaced with that. (This is for "naming" data error with "no errors here".)
 
