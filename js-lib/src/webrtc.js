@@ -4,7 +4,7 @@ export default function init(sn) {
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-- \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
     - TODO: ...Or should it be some returner-of-these-objects, one for each incoming connection?...
 - TODO:
 - TODO: (Also, how do we allow developers to implement an authentication mechanism?)
@@ -62,7 +62,7 @@ Options:
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-- \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - TODO:
 ` }
         static options() {
@@ -88,31 +88,31 @@ Options:
             // Connects to another sensor network through WebRTC.
             if (this.metaChannel == null) {
                 const mc = this.metaChannel = this.signaler()
-                mc.onmessage = evt => {
-                    if (typeof evt.data != 'string') return
-                    const d = JSON.parse(evt.data)
-                    if (d.icecandidate) {
-                        if (this.peer) this.peer.addIceCandidate(new RTCIceCandidate(d.icecandidate) )
-                    } else if (typeof d.answer == 'string') {
-                        if (this.peer) this.peer.setRemoteDescription({ type:'answer', sdp: d.answer })
+                this._signal = new Promise((resolve, reject) => {
+                    mc.onopen = evt => { this._signal = null, resolve() }
+                    mc.onmessage = evt => {
+                        if (typeof evt.data != 'string') return
+                        const d = JSON.parse(evt.data)
+                        if (d.icecandidate) {
+                            if (this.peer) this.peer.addIceCandidate(new RTCIceCandidate(d.icecandidate) )
+                        } else if (typeof d.answer == 'string') {
+                            if (this.peer) this.peer.setRemoteDescription({ type:'answer', sdp: d.answer })
+                        }
                     }
-                }
-                mc.onclose = evt => this.metaChannel = null // When closed, reopen.
+                    mc.onclose = evt => { reject(), this._signal = this.metaChannel = null } // When closed, reopen.
+                })
             }
             if (this.peer == null) {
                 this.peer = new RTCPeerConnection({iceServers:this.iceServers})
                 this.peer.onicecandidate = evt => {
-                    if (evt.candidate && this.metaChannel.readyState === 'open') // TODO: ...Wait, but web sockets have `1` for 'open'... How to overcome this limitation?...
-                        //   Surely we cannot listen to mc.onopen, and return a promise if needed?........
-                        //     (With a function that handles sending meta-data for us........)
-                        this.metaChannel.send(JSON.stringify({ icecandidate: evt.candidate }))
+                    if (evt.candidate)
+                        this.signal(JSON.stringify({ icecandidate: evt.candidate }))
                 }
                 this.peer.onnegotiationneeded = evt => {
                     if (!this.peer) return
                     const p = this.peer
                     p.createOffer().then(offer => p.setLocalDescription(offer)).then(() => {
-                        // TODO: Have a func on `this` that takes a message, waits for this.metaChannel's onopen if needed, and call that here.
-                        this.metaChannel.send(p.localDescription)
+                        this.signal(JSON.stringify({offer: p.localDescription.sdp}))
                     }).catch(() => p.setRemoteDescription({type:'rollback'}))
                 }
                 this.peer.onconnectionstatechange = evt => {
@@ -134,6 +134,12 @@ Options:
                 }
                 dc.onclose = evt => this.dataChannel = null // When closed, reopen.
             }
+        }
+        signal(data) {
+            // Send `data`, waiting for the signaling channel to open.
+            if (!this.dataChannel) return
+            if (this._signal) this._signal.then(() => this.dataChannel.send(data))
+            else this.dataChannel.send(data)
         }
         static onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback) {
             // TODO: Check `this.dataChannel.readyState === 'open'`; if not open, just return.
