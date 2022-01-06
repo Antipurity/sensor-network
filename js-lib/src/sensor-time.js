@@ -23,16 +23,16 @@ It looks like this:
             if (opts) {
                 opts.name = ['time']
                 if (!opts.values) opts.values = 64
-                opts.onValues = Time.onValues
+                opts.onValues = this.onValues
                 opts.noFeedback = true
             }
             return super.resume(opts)
         }
-        static onValues(sensor, data) {
+        onValues(data) {
             const t = +new Date, tpi = t * Math.PI
             for (let i = 0, div = 1; i < data.length; ++i, div *= 1.4)
                 data[i] = Math.sin(tpi / div)
-            sensor.sendCallback(null, data)
+            this.sendCallback(null, data)
         }
     }
 }

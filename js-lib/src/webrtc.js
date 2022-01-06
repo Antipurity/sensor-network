@@ -3,26 +3,30 @@ export default function init(sn) {
         static docs() { return `Extends this network over the Internet.
 
 Options:
-- TODO: \`iceServers = []\`
-- TODO: How do we allow signaling from anyone that connects?…
-    - TODO: A function, that returns {send, onmessage, close}?
+- \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
+- \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - TODO:
 - TODO: (Also, how do we allow developers to implement an authentication mechanism?)
 ` }
         static options() {
             return {
-                // TODO: iceServers:
-                //   TODO: []
-                //   TODO: ['stun.l.google.com:19302', 'stunserver.org:3478']
+                iceServers: {
+                    ['None']: () => [],
+                    ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
+                },
+                // TODO: signaler
+                // TODO:
             }
         }
         resume(opts) {
             if (opts) {
                 this.iceServers = opts.iceServers || []
+                this.signaler = opts.signaler // TODO: …What's the default implementation?
                 this.getPeer()
+                this.peer.setConfiguration({iceServers:this.iceServers})
+                opts.onValues = this.onValues
                 opts.values = 0
-                opts.name = ['internet'] // TODO: …No: should have funcs that defer to the received cells' names…
-                //   TODO: …But isn't it much better to be able to pass raw names to sensor.sendCallback?… Much less memory wasting, at least. And, much easier to actually establish a correspondence between cells and their names, especially across timesteps… And aren't functions in names only called once anyway, meaning that without raw access, we will create LOTS of F32A garbage…
+                opts.name = []
                 // TODO: What else?
             }
             return super.resume(opts)
@@ -31,6 +35,7 @@ Options:
             if (this.peer) return
             this.peer = new RTCPeerConnection({iceServers:this.iceServers})
             // TODO: …When we're signaled:
+            //   TODO: (Need to call this.signaler to set up this.signal, right?)
             //   TODO: this.peer.setRemoteDescription({type:'offer', sdp:offer})
             //   TODO: this.peer.createAnswer().then(answer => { this.peer.setLocalDescription(answer), SIGNAL(answer.sdp) }).catch(console.error)
             // TODO: this.peer.onicecandidate = evt => evt.candidate && SIGNAL(evt.candidate) TODO: How to signal, exactly?
@@ -38,13 +43,17 @@ Options:
             // TODO: How to listen to incoming connections, preparing to send data for each one?
             // TODO: On connection's data, remember it.
             //   ...What should we do on dropped, and on out-of-order messages?...
-            //   TODO: this.peer.ondatachannel = evt => evt.channel??? TODO: What exactly do we do with the channel?
+            //   TODO: this.peer.ondatachannel = evt => evt.channel???
+            //     TODO: this.dataChannel.onopen = ???
+            //     TODO: this.dataChannel.onmessage = ???
+            //     TODO: this.dataChannel.onclose = ???
         }
-        static onValues(sensor, data) { // TODO: …Oh yeah: no `sensor`, only `this`.
+        onValues(data) {
             // TODO: How to take all data from the queue?
-            //   TODO: Also, sensor.resize(values) and give per-cell noData/noFeedback bool arrays to sensor.sendCallback. TODO: Actually, use `sensor.sendRawCallback` instead.
+            //   TODO: Also, this.resize(values) and give per-cell noData/noFeedback bool arrays to this.sendCallback. TODO: Actually, use `this.sendRawCallback` instead.
         }
-        static onFeedback(feedback, sensor) {
+        onFeedback(feedback) {
+            // TODO: Can we make `sensor.sendRawCallback` accept the deobfuscation function, so that here, we receive raw feedback, not un-named feedback?
             // TODO: How to send feedback to their appropriate connections?
         }
     }
@@ -52,44 +61,61 @@ Options:
         static docs() { return `Makes this environment a remote part of another sensor network.
 
 Options:
-- TODO: What options do we want?
-- TODO: \`iceServers = []\`
-- TODO: How do we allow both "signal another" and "accept data from there"? A function, that returns {send, onmessage, close}?
+- \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
+- \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+    - TODO: ...Or should it be some returner-of-these-objects, one for each incoming connection?...
+- TODO:
 ` }
         static options() {
             return {
-                // TODO: iceServers:
-                //   TODO: []
-                //   TODO: ['stun.l.google.com:19302', 'stunserver.org:3478']
+                iceServers: {
+                    ['None']: () => [],
+                    ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
+                },
+                // TODO:
             }
         }
         resume(opts) {
             if (opts) {
                 this.iceServers = opts.iceServers || []
+                this.signaler = opts.signaler // TODO: …What's the default implementation?
                 this.getPeer()
-                // TODO: Also, this.peer.setConfiguration({iceServers}).
+                this.peer.setConfiguration({iceServers:this.iceServers})
                 // TODO: What else?
             }
             return super.resume(opts)
         }
         getPeer() {
             // Connects to another sensor network through WebRTC.
-            if (this.peer) return
-            // TODO: this.peer = new RTCPeerConnection({iceServers:this.iceServers})
-            //   (The list should be an option. For example: https://gist.github.com/mondain/b0ec1cf5f60ae726202e)
-            // TODO: this.dataChannel = this.peer.createDataChannel('sn-internet', {
-            //   ordered: false,
-            //   maxRetransmits: 0,
-            // })
-            //   TODO: this.dataChannel.onopen = ???
-            //   TODO: this.dataChannel.onmessage = ???
-            //   TODO: this.dataChannel.onclose = ???
-            // TODO: this.peer.onicecandidate = evt => evt.candidate && SIGNAL(evt.candidate) TODO: How to signal, exactly?
-            //   TODO: When signaled, this.peer.addIceCandidate(that)
-            // TODO: this.peer.onnegotiationneeded = this.peer.createOffer().then(offer => this.peer.setLocalDescription(offer)).then(() => sendToSensor(this.peer.localDescription)).catch(console.error)
-            //   TODO: When signaled back, this.peer.setRemoteDescription({type:'answer', sdp})
-            //   TODO: On error, this.peer.setRemoteDescription({type:'rollback'})
-            // TODO: this.peer.onconnectionstatechange = this.peer.connectionState !== 'connected' && ??? TODO: What do we do, exactly? this.peer.close(), this.peer=null, so that `onValues` can attempt to re-open it?
+            if (this.metaChannel == null) {
+                const mc = this.metaChannel = this.signaler()
+                // TODO: mc.onopen = ???
+                // TODO: mc.onmessage = ???
+                //   TODO: When signaled {icecandidate}, this.peer.addIceCandidate(that)
+                //   TODO: When signaled {answer}, this.peer.setRemoteDescription({type:'answer', sdp})
+                mc.onclose = evt => this.metaChannel = null // When closed, reopen.
+            }
+            if (this.peer == null) {
+                this.peer = new RTCPeerConnection({iceServers:this.iceServers})
+                this.peer.onicecandidate = evt => {
+                    if (evt.candidate && this.metaChannel.readyState === 'open')
+                        this.metaChannel.send({ icecandidate: evt.candidate })
+                }
+                // TODO: this.peer.onnegotiationneeded = this.peer.createOffer().then(offer => this.peer.setLocalDescription(offer)).then(() => sendToSensor(this.peer.localDescription)).catch(console.error)
+                //   TODO: On error, this.peer.setRemoteDescription({type:'rollback'})
+                // TODO: this.peer.onconnectionstatechange = this.peer.connectionState !== 'connected' && ??? TODO: What do we do, exactly? this.peer.close(), this.peer=null, so that `onValues` can attempt to re-open it?
+            }
+            if (this.dataChannel == null) {
+                const dc = this.dataChannel = this.peer.createDataChannel('sn-internet', {
+                    ordered: false, // Unordered
+                    maxRetransmits: 0, // Unreliable
+                })
+                dc.binaryType = 'arraybuffer'
+                // TODO: dc.onopen = ???
+                //   TODO: ...Uh... do we do something special here, or?… Can't we just check this.dataChannel.readyState==='open'?
+                // TODO: dc.onmessage = ???
+                dc.onclose = evt => this.dataChannel = null // When closed, reopen.
+            }
         }
         static onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback) {
             // TODO: How to send values across `this.dataChannel`, and get some back?
@@ -97,7 +123,7 @@ Options:
             //   TODO: When to drop packets?
         }
     }
-    // TODO: What to use as signaling? Need options, which default to "the user will manually copy this".
+    // TODO: The default signaling option: "the user will manually copy this".
     //   TODO: But also have a WebSocket option. (Once we have a Rust server to test it on, I mean.)
     return {
         sensor: InternetSensor,

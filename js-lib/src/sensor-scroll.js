@@ -31,7 +31,7 @@ Options:
                 opts.values = 16
                 opts.emptyValues = 0
                 opts.name = ['scroll', ...name]
-                opts.onValues = Scroll.onValues
+                opts.onValues = this.onValues
                 opts.noFeedback = mode === 'read'
                 this.target = target, this.mode = mode
                 this.prevs = new WeakMap // el → [curX, curY]
@@ -39,8 +39,8 @@ Options:
             }
             return super.resume(opts)
         }
-        static onValues(sensor, data) {
-            const els = getScrollableElems(sensor.target), m = sensor.prevs
+        onValues(data) {
+            const els = getScrollableElems(this.target), m = this.prevs
             for (let i = 0; i*4 < data.length; ++i)
                 if (els[i]) {
                     const el = els[i]
@@ -54,13 +54,13 @@ Options:
                     data[i*4+3] = Math.max(-1, Math.min((curY - prev[1]) / innerHeight, 1))
                     prev[0] = curX, prev[1] = curY
                 }
-            sensor.els.push(els)
-            sensor.sendCallback(Scroll.onFeedback, data)
+                this.els.push(els)
+            this.sendCallback(this.onFeedback, data)
         }
-        static onFeedback(feedback, sensor) {
-            const els = sensor.els.shift()
-            if (!feedback || sensor.mode === 'read') return
-            const move = sensor.mode === 'move'
+        onFeedback(feedback) {
+            const els = this.els.shift()
+            if (!feedback || this.mode === 'read') return
+            const move = this.mode === 'move'
             for (let i = 0; i*4 < feedback.length; ++i)
                 if (els[i]) {
                     const el = els[i]

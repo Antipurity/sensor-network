@@ -102,7 +102,7 @@ Options:
                     (dStart, dEnd, dLen) => 2 * dEnd / dLen - 1,
                 ]
                 opts.emptyValues = 0
-                opts.onValues = Text.onValues
+                opts.onValues = this.onValues
                 opts.noFeedback = !haveTextFeedback
                 this.onFeedback = typeof text.feedback == 'function' ? Text.onFeedback : null
                 this.text = text, this.textToTokens = textToTokens, this.tokenToData = tokenToData
@@ -110,23 +110,23 @@ Options:
             }
             return super.resume(opts)
         }
-        static onValues(sensor, data) {
-            const cellShape = sensor.cellShape()
+        onValues(data) {
+            const cellShape = this.cellShape()
             if (!cellShape) return
             const dataSize = cellShape[cellShape.length-1]
-            const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
+            const valuesPerCell = dataSize // Since this.emptyValues === 0.
 
-            const txt = sensor.text
+            const txt = this.text
             const str = typeof txt == 'string' ? txt : isInputy(txt) ? txt.value : typeof txt == 'function' ? txt() : null
             if (str != null) {
                 sn._assert(typeof str == 'string')
-                const tokens = sensor.textToTokens(str, sensor.tokens)
+                const tokens = this.textToTokens(str, this.tokens)
                 for (let i = 0; i < tokens.length; ++i)
-                    sensor.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
+                    this.tokenToData(tokens[i], data, i*valuesPerCell, (i+1)*valuesPerCell)
                 data.fill(0, tokens.length * valuesPerCell)
-                sensor.sendCallback(sensor.onFeedback, data)
+                this.sendCallback(this.onFeedback, data)
             } else
-                sensor.sendCallback(sensor.onFeedback, null)
+                this.sendCallback(this.onFeedback, null)
         }
         static onFeedback(feedback, sensor) {
             if (!feedback) return

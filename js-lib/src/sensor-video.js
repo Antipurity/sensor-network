@@ -99,7 +99,7 @@ Extra options:
                 this.tiling = tiling
                 this._width = 1, this._height = 1
                 opts.emptyValues = 0
-                opts.onValues = Video.onValues
+                opts.onValues = this.onValues
                 opts.noFeedback = true
                 opts.values = this._tiles * td*td * (this.monochrome ? 1 : 3)
                 const xyz = (dataStart, dataEnd, dataLen) => {
@@ -171,12 +171,12 @@ Extra options:
             }
         }
 
-        static onValues(sensor, data) {
+        onValues(data) {
             // Make sure to limit to one tile per cell, so that there's no misalignment.
-            const cellShape = sensor.cellShape()
+            const cellShape = this.cellShape()
             if (!cellShape) return
             const dataSize = cellShape[cellShape.length-1]
-            const valuesPerCell = dataSize // Since sensor.emptyValues === 0.
+            const valuesPerCell = dataSize // Since this.emptyValues === 0.
 
             // Targeting stuff.
             const targets = this._targets()
@@ -191,11 +191,11 @@ Extra options:
             if (!nextTarget && this._nextTarget) // Destroy.
                 this._nextTarget.pause(), this._nextTarget = null
 
-            if (sensor._dataContext2d(data, valuesPerCell, target))
-                sensor.sendCallback(Video.onFeedback, data)
+            if (this._dataContext2d(data, valuesPerCell, target))
+                this.sendCallback(this.onFeedback, data)
         }
-        static onFeedback(feedback, sensor) {
-            if (!feedback || sensor.noFeedback) return
+        onFeedback(feedback) {
+            if (!feedback || this.noFeedback) return
             // Yep. Handle feedback here. Handle it good.
         }
 

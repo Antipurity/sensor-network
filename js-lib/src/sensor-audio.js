@@ -37,7 +37,7 @@ Options:
                     (dStart, dEnd, dLen) => 2 * dEnd / dLen - 1,
                 ]
                 opts.values = frequency ? fftSize/2|0 : fftSize
-                opts.onValues = Audio.onValues
+                opts.onValues = this.onValues
                 opts.noFeedback = true
                 this.source = source
                 this.frequency = frequency
@@ -60,20 +60,20 @@ Options:
             }
             return super.resume(opts)
         }
-        static onValues(sensor, data) {
-            const node = sensor.node
+        onValues(data) {
+            const node = this.node
             if (!node) return
-            if (typeof sensor.source == 'function' && sensor.ctx) sensor.source(sensor.ctx)
-            if (sensor.frequency) {
+            if (typeof this.source == 'function' && this.ctx) this.source(this.ctx)
+            if (this.frequency) {
                 node.getFloatFrequencyData(data)
-                const min = sensor.frequency.minDecibels, max = sensor.frequency.maxDecibels, rlen = 1 / (max - min)
+                const min = this.frequency.minDecibels, max = this.frequency.maxDecibels, rlen = 1 / (max - min)
                 for (let i = 0; i < data.length; ++i) { // Rescale to -1…1 manually.
                     const v01 = (data[i] - min) * rlen
                     data[i] = Math.max(-1, Math.min(v01*2-1, 1))
                 }
             } else
                 node.getFloatTimeDomainData(data)
-            sensor.sendCallback(null, data)
+            this.sendCallback(null, data)
         }
         static _connect(source, ctx) {
             const dst = ctx.destination

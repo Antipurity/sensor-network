@@ -42,7 +42,7 @@ Options:
                 const targ = opts.targets || Pointer.tab(opts.noFeedback ? 0 : pointers)
                 const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
                 sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
-                opts.onValues = Pointer.onValues
+                opts.onValues = this.onValues
                 opts.values = pointers * pointerSize
                 opts.name = [
                     'pointer',
@@ -54,23 +54,23 @@ Options:
             return super.resume(opts)
         }
 
-        static onValues(sensor, data) {
-            const targ = sensor._targets()
-            for (let i = 0; i < sensor.pointers; ++i) {
-                const p = targ[i], d = p && p.data, sz = sensor.pointerSize, k = i * sz
+        onValues(data) {
+            const targ = this._targets()
+            for (let i = 0; i < this.pointers; ++i) {
+                const p = targ[i], d = p && p.data, sz = this.pointerSize, k = i * sz
                 if (!p) { data.fill(0, k, k+sz);  continue }
                 data[k+0] = p.x*2-1
                 data[k+1] = p.y*2-1
                 if (d) for (let i = 0; i < d.length; ++i) data[k+2+i] = d[i]*2-1
                 sn._dataNamer.fill(data, k, 2+d.length, sz)
             }
-            sensor.sendCallback(Pointer.onFeedback, data)
+            this.sendCallback(this.onFeedback, data)
         }
-        static onFeedback(feedback, sensor) {
-            if (!feedback || sensor.noFeedback) return
-            const targ = sensor._targets()
-            for (let i = 0; i < sensor.pointers; ++i) {
-                const p = targ[i], d = p && p.data, sz = sensor.pointerSize, k = i * sz
+        onFeedback(feedback) {
+            if (!feedback || this.noFeedback) return
+            const targ = this._targets()
+            for (let i = 0; i < this.pointers; ++i) {
+                const p = targ[i], d = p && p.data, sz = this.pointerSize, k = i * sz
                 if (!p) continue
                 sn._dataNamer.unfill(feedback, k, 2+d.length, sz)
                 p.x = (feedback[k+0]+1)/2

@@ -301,7 +301,7 @@ export default (function(exports) {
                         for (let i = 0; i < ch.sensors.length; ++i) {
                             const s = ch.sensors[i]
                             const data = allocF32(s.values)
-                            try { s.onValues(s, data) }
+                            try { s.onValues.call(s, data) }
                             catch (err) { console.error(err) }
                         }
                 }
@@ -379,7 +379,7 @@ export default (function(exports) {
                 // `name.call(this, {cellShape, partSize, summary}, namer, packet)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`. Returns `true` if it wrote any non-`noData` stuff.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
-                assert(then === null || typeof then == 'function')
+                assert(then === null || typeof then == 'function', "Bad callback")
                 assert(typeof name == 'function')
                 const ch = state(this.channel)
                 const removed = Sensor._removed || (Sensor._removed = new Set) // All sync, so, fine to reuse the same object for this.
@@ -414,7 +414,6 @@ export default (function(exports) {
                 values && assert(values.length === this.values, "Data size differs from the one in options")
                 error && assert(values && values.length === error.length)
                 this.sendRawCallback(then, function name({cellShape, partSize, summary}, namer, packet) {
-                    const values = Sensor._values, error = Sensor._error, reward = Sensor._reward
                     const namedV = allocF32(namer.namedSize)
                     const namedE = error ? allocF32(namer.namedSize) : null
                     if (!values) namedV.fill(0)
@@ -501,7 +500,7 @@ export default (function(exports) {
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
     - \`values\`: how many -1…1 numbers this sensor exposes.
         - Usually a good idea to keep this to powers-of-2, and squares. Such as 64.
-    - \`onValues(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
+    - \`onValues.call(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
         - To run faster, use \`sensor.sendCallback(fn(feedback, sensor), data, …)\` with a static function.
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
@@ -524,7 +523,7 @@ export default (function(exports) {
         - Can be a number or a per-cell array or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
 
-- \`sendCallback(then(null|feedback, sensor), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise.
+- \`sendCallback(then.call(sensor, null|feedback), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise, which is more efficient.
 
 - \`resize(newValues, newEmptyValues = emptyValues)\`: fast changing of flat-data length.
     - (If used in \`onValues\`, do \`sn._deallocF32(data), data = sn._allocF32(newValues)\` for efficiency.)
@@ -694,9 +693,9 @@ export default (function(exports) {
                         const from = new E.Sensor({
                             name: ['some', 'kinda', 'name'],
                             values: cells*dataSize,
-                            onValues(sensor, data) {
+                            onValues(data) {
                                 data.fill(1)
-                                sensor.sendCallback(onSensorFeedback, data)
+                                this.sendCallback(onSensorFeedback, data)
                             },
                         })
                         const to = new E.Handler({
@@ -1151,9 +1150,9 @@ Makes only the sign matter for low-frequency numbers.` }),
                 const flatV = allocF32(data.length)
                 const namer = packetNamer(T, namers, cellShape, partSize, summary)
                 namer.unname(allFeedback, fbOffset, flatV)
-                then && then(flatV, T)
+                then && then.call(T, flatV)
             } else
-                then && then(null, T)
+                then && then.call(T, null)
         } finally { deallocF32(data), error && deallocF32(error) }
     }
     function packetNamer(T, dataNamers, cellShape, partSize, summary) {

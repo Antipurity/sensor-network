@@ -28,7 +28,7 @@ Options:
                 keySize: {
                     ['16 ']: () => 16,
                     ['64 ']: () => 64,
-                    ['256']: () => 256,
+                    ['256 ']: () => 256,
                 },
             }
         }
@@ -55,7 +55,7 @@ Options:
                 if (!opts.noFeedback) ;
                 Keyboard.prefill(tokenToData)
                 const name = Array.isArray(opts.name) ? opts.name : typeof opts.name == 'string' ? [opts.name] : []
-                opts.onValues = Keyboard.onValues
+                opts.onValues = this.onValues
                 opts.values = keys * keySize
                 opts.name = [
                     'keyboard',
@@ -82,30 +82,31 @@ Options:
         }
         onkeyclear(evt) { this.currentKeys.clear() }
 
-        static onValues(sensor, data) {
-            const keys = sensor.keys, keySize = sensor.keySize
+        onValues(data) {
+            const keys = this.keys, keySize = this.keySize
             let i = 0
-            const cur = sensor.currentKeys, past = sensor.pastKeys, fn = sensor.tokenToData
+            const cur = this.currentKeys, past = this.pastKeys, fn = this.tokenToData
             cur.forEach(key => past.delete(key))
             past.forEach(key => cur.add(key))
             cur.forEach(key => {
-                if (i++ < keys) fn(key, data, i*keySize, (i+1)*keySize)
+                if (i < keys) fn(key, data, i*keySize, (i+1)*keySize)
+                ++i
             }), data.fill(0, cur.size * keySize)
             past.forEach(key => cur.delete(key))
             past.clear()
-            sensor.sendCallback(Keyboard.onFeedback, data)
+            this.sendCallback(this.onFeedback, data)
         }
-        static onFeedback(feedback, sensor) {
+        onFeedback(feedback) {
             // Differences from browser behavior:
             //   - No `.isTrusted` (no way to set it).
             //   - No `.repeat`.
             //   - No `onkeypress` (it's deprecated).
             //   - No `oninput`.
             //   - No .ctrlKey/.shiftKey/.altKey/.metaKey on *other* events (such as `Pointer` events).
-            if (!feedback || sensor.noFeedback) return
+            if (!feedback || this.noFeedback) return
             // Get what keys are currently pressed.
-            const keys = sensor.keys, keySize = sensor.keySize
-            const fn = sensor.tokenToData.feedback
+            const keys = this.keys, keySize = this.keySize
+            const fn = this.tokenToData.feedback
             const currentKeys = new Set
             for (let i = 0; i < keys && i*keySize < feedback.length; ++i) {
                 const key = fn(feedback, i*keySize, (i+1)*keySize)
@@ -120,7 +121,7 @@ Options:
                 altKey: currentKeys.has('Alt'),
                 metaKey: currentKeys.has('Meta'),
             }
-            const pastKeys = sensor._pastFBKeys
+            const pastKeys = this._pastFBKeys
             const el = document.activeElement || document.body
             currentKeys.forEach(key => {
                 if (!pastKeys.has(key)) {
