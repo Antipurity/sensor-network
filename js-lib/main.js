@@ -838,13 +838,13 @@ Those methods return objects (such as arrays) that contain start functions, whic
         _dataNamer: A(function _dataNamer({ userName=[], userParts=1, nameParts=3, partSize=8, name, values, emptyValues=0, dataSize=64, hasher=E._dataNamer.hasher }) {
             assertCounts('', userParts, nameParts, partSize)
             const hasherMaker = hasher(name, nameParts, partSize)
+            // (This re-hashes the user for each new sensor, which might be slow.)
+            const userHasherMaker = hasher(userName, userParts, partSize)
             // Values are distributed evenly per-cell, to maximize the benefit of fractal-folding.
             //   (The last cell may end up with less values than others. This slight inefficiency is made worth by the consistency.)
-            const cells = Math.ceil((emptyValues + values) / dataSize), valuesPerCell = Math.ceil(values / cells)
             const cellSize = (userParts + nameParts) * partSize + dataSize
-            // (This re-hashes the user for each new sensor.)
-            const userHasher = hasher(userName, userParts, partSize)(0, userParts * partSize, userParts * partSize)
-            const nameHashers = new Array(cells).fill().map((_,i) => hasherMaker(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values))
+            let cells, valuesPerCell, userHasher, nameHashers = []
+            resized()
             return {
                 cells,
                 namedSize: cells * cellSize,
@@ -882,18 +882,32 @@ Those methods return objects (such as arrays) that contain start functions, whic
                         }
                     return srcOffset + cells * cellSize // Return the next `srcOffset`.
                 },
+                resize(values2, emptyValues2 = emptyValues) {
+                    values = values2, emptyValues = emptyValues2
+                    resized()
+                    this.cells = cells, this.namedSize = cells * cellSize
+                },
+            }
+            function resized() {
+                cells = Math.ceil((emptyValues + values) / dataSize)
+                valuesPerCell = Math.ceil(values / cells)
+                userHasher = userHasherMaker(0, userParts * partSize, userParts * partSize)
+                nameHashers.length = cells
+                for (let i = 0; i < cells; ++i)
+                    // (We don't deinit the prev hasher, so resizing with-funcs-in-name namers will generate lots of garbage.)
+                    nameHashers[i] = hasherMaker(i * valuesPerCell, Math.min((i+1) * valuesPerCell, values), values)
             }
         }, {
             docs:`Implementation detail.
 
 Prepares to go between flat number arrays and named ones.
 
-- The result is \`{ name(src, dst, dstOffset, reward=0, skipNonData=null)→dstOffset, unname(src, srcOffset, dst)→srcOffset }\`. \`name\` goes from flat to named, \`unname\` reverses this.
+- The result is \`{ cells, namedSize, cellShape, name(src, dst, dstOffset, reward=0, skipNonData=null)→dstOffset, unname(src, srcOffset, dst)→srcOffset, resize(values, emptyValues=…) }\`. \`name\` goes from flat to named, \`unname\` reverses this.
     - \`reward\` is either a -1…1 number or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - If \`skipNonData\` is a -1…1 number, the non-data portions of each cell are replaced with that. (This is for "naming" data error with "no errors here".)
 
 Main parameters, in the one object that serves as arguments:
-- \`name\`: describes this interface to handlers, such as with a string. See \`._dataNamer.hasher\`.
+- \`name\`: describes this interface to handlers, such as with a string. See \`sn._dataNamer.hasher\`.
 - \`values\`: how many flat numbers there will be.
 
 Extra parameters:
@@ -903,8 +917,8 @@ Extra parameters:
         - \`userParts = 1\`
         - \`nameParts = 3\`
     - \`dataSize = 64\`
-- \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`._dataNamer.fill\`.
-- \`hasher = ._dataNamer.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
+- \`emptyValues = 0\`: how many fake \`values\` to insert, so that values are fractally folded more; see \`sn._dataNamer.fill\`.
+- \`hasher = sn._dataNamer.hasher\`: defines how names are transformed into \`-1\`…\`1\` numbers.
 `,
             tests() {
                 const F32 = Float32Array

@@ -275,6 +275,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
             - ✓ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
                 - ⋯ Possibly, replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings (in the `user` part of the name), so that learning doesn't *have* to do BPTT per-step (non-scalable beyond about a minute) but across time resolutions and even backwards.
+                - ⋯ Possibly, make handlers know the sending's timestamp, to make latency accounted-for.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
             - ⋯ Read from file.

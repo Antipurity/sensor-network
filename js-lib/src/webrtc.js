@@ -30,6 +30,7 @@ Options:
             //   ...What should we do on dropped, and on out-of-order messages?...
             //   TODO: this.peer.ondatachannel = evt => evt.channel??? TODO: What exactly do we do with the channel?
         }
+        // TODO: Have `sensor.resize(values)`, which does nothing if prev===next, else resizes data-namers and sets this.values.
         static onValues(sensor, data) {
             // TODO: How to take all data from the queue?
         }
@@ -70,6 +71,7 @@ Options:
             //   maxRetransmits: 0,
             // })
             //   TODO: this.dataChannel.onopen = ???
+            //   TODO: this.dataChannel.onmessage = ???
             //   TODO: this.dataChannel.onclose = ???
             // TODO: this.peer.onicecandidate = evt => evt.candidate && SIGNAL(evt.candidate) TODO: How to signal, exactly?
             //   TODO: When signaled, this.peer.addIceCandidate(that)
