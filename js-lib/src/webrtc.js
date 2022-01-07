@@ -70,30 +70,20 @@ TODO: Make note of browser compatibility.
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
                 const packetData = Object.create(null) // id → [remainingParts, prevPacketId, shapeId, ...partData]
-                dataChannel.onmessage = evt => {
-                    if (!(evt.data instanceof ArrayBuffer)) return
-                    const dv = new DataView(evt.data)
-                    const packetId = dv.getUint16(0), packetPart = dv.getUint16(2)
-                    if (packetPart === 0) {
-                        const packetPartLength = dv.getUint16(4)
-                        const prevPacketId = dv.getUint16(6), shapeId = dv.getUint16(8)
-                        packetData[packetId] = allocArray(3 + packetPartLength)
-                        packetData[packetId][0] = packetPartLength
-                        packetData[packetId][1] = prevPacketId
-                        packetData[packetId][2] = shapeId
-                        // TODO: ...Wait, also set prevPacketId and shapeId...
-                        // TODO: Set the remaining data.
-                        //   ...How, exactly? Just push `evt.data`? `dv`? Or a new byte-array? What's best for concatenation?
-                        --packetData[packetId][0]
+                dataChannel.onmessage = evt => messageUnpacker(data => {
+                    if (data.length < 2) return
+                    const shapeId = data[0]*256 + data[1] // TODO: What if `data` is `null`?
+                    if (shapeId === 0) {
+                        // TODO: Remember (need global-ish vars: prev-shape-id and prev-shape) and send acknowledgement.
                     } else {
-                        // TODO: Set the data. And decrement the remaining-packet-length.
+                        // TODO: Fetch shape ID (or request if we don't know it… Wait, do we need a packet queue to not drop these maybe-packets?)
+                        // TODO: Turn reward & data (& shape info) into a raw array of, uh, f32...
+                        //   ...No, need to decompress first...
                     }
-                    // TODO: Also, if no packet parts are remaining, concat into data.
-                    // TODO: We want an object from packetId to its data, right? ...What about the completion percentage?…
-                    //   What's the exact format... {packetId:[...partData]}.
-                    // TODO: If we have a continuous path from a previous packet, or it took too long, decompress & emit data.
-                } // TODO: Put `messageUnpacker(…)` here.
+                    // Do we want a JS object for the shape info?
+                })
                 //   TODO: ...What is its `onpacket`?…
+                //     How do we encode prevPacketId and shapeId, and do de/compression, and requesting of shapes and composition of shapes with data to create the actual cells...
                 dataChannel.onclose = evt => peer.close() // Hopefully not fired on mere instability.
             }
         }
@@ -293,5 +283,47 @@ Options:
                 tooLong = false
             }
         }
+    }
+    function quantize(f32a, bpv = 0) {
+        // From floats to an array of bytes, quantized to lower-but-still-`-1…1` resolutions.
+        sn._assert(f32a instanceof Float32Array)
+        if (!bpv) return bigEndian(new Uint8Array(f32a.buffer, f32a.byteOffset, f32a.byteLength), bpv, false, true)
+        sn._assert(bpv === 1 || bpv === 2)
+        const r = bpv === 1 ? new Uint8Array(f32a.byteLength) : new Uint16Array(f32a.byteLength / 2 | 0)
+        const scale = bpv === 1 ? 255 : 65535
+        for (let i = 0; i < r.length; ++i)
+            r[i] = Math.max(0, Math.min(Math.round((f32a[i]+1)/2 * scale), 255))
+        return bpv === 1 ? r : bigEndian(new Uint8Array(r.buffer, r.byteOffset, r.byteLength), bpv, false, true)
+    }
+    function unquantize(a, bpv = 0) {
+        if (!bpv) {
+            a = bigEndian(a, bpv, true)
+            return new Float32Array(a.buffer, a.byteOffset, a.byteLength / 4 | 0)
+        }
+        sn._assert(bpv === 1 || bpv === 2)
+        if (bpv === 2) a = new Uint16Array(bigEndian(a, bpv, true))
+        const r = new Float32Array(a.length)
+        const scale = bpv === 1 ? 255 : 65535
+        for (let i = 0; i < r.length; ++i)
+            r[i] = a[i]/scale * 2 - 1
+        return r
+    }
+    function bigEndian(a, bpv, backToNative = false, inPlace = false) {
+        // `a` is copied unless `inPlace`.
+        if (bigEndian.bigEnd === undefined) {
+            const x = new ArrayBuffer(2), y = new Uint16Array(x), z = new Uint8Array(x)
+            y[0] = 0x0102
+            bigEndian.bigEnd = z[0] === 0x01
+        }
+        sn._assert(a instanceof Uint8Array)
+        if (bigEndian.bigEnd !== backToNative || bpv === 1) return a
+        if (!inPlace) a = new Uint8Array(a)
+        if (bpv === 2)
+            for (let i = 0; i < a.length; i += 2)
+                [a[i+0], a[i+1]] = [a[i+1], a[i+0]]
+        else if (bpv === 0 || bpv === 4)
+            for (let i = 0; i < a.length; i += 4)
+                [a[i+0], a[i+1], a[i+2], a[i+3]] = [a[i+3], a[i+2], a[i+1], a[i+0]]
+        return a
     }
 }

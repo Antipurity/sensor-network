@@ -324,8 +324,6 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ⋯ Write to Internet. TODO:
                 - TODO: Do WebRTC! Only Rust can store our data.
-                - TODO: ...How do we do the actual connection... Need to research WebRTC thoroughly.
-                    - TODO: ...Why does WebRTC apparently limit to 800 data-channel bytes per message??? ...Up to 64KB is apparently reliable *now*; good. (65664b?)
                 - ⋯ `bytesPerValue=0`: transmit in f32 or u8 or u16.
                 - TODO: Byte-level layout of data & feedback (exactly the same) packets:
                     - 2 bytes: packet ID.
@@ -335,8 +333,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - 2 bytes: prev-packet ID (for compression) or 0 if it can be decompressed by itself. (No requesting; dropping the 0-packet means dropping all its dependents.)
                         - 2 bytes: shape ID. Content (split along "packet-parts") (compressible):
                             - shapeId==0: new shape:
-                                - data (provide): shapeId (2b) & cellShape (4b length, 4b values) & partSize (4b) & cells (4b) & name (for each cell, values, numbered `sum(cellShape)-cellShape[-1]`; including the overwritten reward) & noData (1 bit per cell) & noFeedback (1 bit per cell)
-                                - feedback (ACKnowledgement; no ACK means that data has to resend the shape): shapeId (2b)
+                                - handler data (provide): shapeId (2b) & cellShape (4b length, 4b values) & partSize (4b) & cells (4b) & name (for each cell, values, numbered `sum(cellShape)-cellShape[-1]`; including the overwritten reward) & noData (1 bit per cell) & noFeedback (1 bit per cell)
+                                - sensor feedback (ACKnowledgement; no ACK means that data has to resend the shape): shapeId (2b)
                             - shapeId≥1: reward & data (for each cell, values, numbered `1 + cellShape[-1]`)
                 - ⋯ Take on the remote cellShape and partSize.
                 - ⋯ Preserve no-data-from-this-cell and no-feedback-to-this-cell arrays.
