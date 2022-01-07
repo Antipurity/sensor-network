@@ -191,14 +191,15 @@ export default (function(exports) {
                             }
                     } T.stage = 4;  case 4: { // Call all non-main handlers at once.
                         const hs = dst.handlers
+                        const mh = T.mainHandler
                         T.handlersLeft = 0
                         for (let i = 0; i < hs.length; ++i)
-                            if (hs[i] !== T.mainHandler && typeof hs[i].onValues == 'function')
+                            if (hs[i] !== mh && typeof hs[i].onValues == 'function')
                                 ++T.handlersLeft
                         if (T.handlersLeft) {
                             T.stage = 5
                             for (let i = 0; i < hs.length; ++i)
-                                if (hs[i] !== T.mainHandler && typeof hs[i].onValues == 'function')
+                                if (hs[i] !== mh && typeof hs[i].onValues == 'function')
                                     try { hs[i].onValues(T.handleStateMachine, T.input) }
                                     catch (err) { console.error(err) }
                             return
@@ -375,12 +376,14 @@ export default (function(exports) {
                 if (ch.mainHandler) return ch.mainHandler.cellShape
                 return ch.cellShapes[0] && ch.cellShapes[0].cellShape || null
             }
-            sendRawCallback(then, name) {
+            sendRawCallback(then, name, unname) {
                 // `name.call(this, {cellShape, partSize, summary}, namer, packet)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`. Returns `true` if it wrote any non-`noData` stuff.
+                // `unname(namer, allFeedback, fbOffset, flatV)`
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
                 assert(then === null || typeof then == 'function', "Bad callback")
                 assert(typeof name == 'function')
+                assert(typeof unname == 'function')
                 const ch = state(this.channel)
                 const removed = Sensor._removed || (Sensor._removed = new Set) // All sync, so, fine to reuse the same object for this.
                 for (let i = 0; i < ch.cellShapes.length; ++i) {
@@ -404,6 +407,10 @@ export default (function(exports) {
                 this.feedbackCallbacks.push(then) // Called even if no feedback is registered, with `null`.
                 this.feedbackNoFeedback.push(this.noFeedback)
                 this.feedbackNamers.push(this.dataNamers)
+                this.feedbackUnnamer.push(unname)
+            }
+            static _unnameFeedback(namer, allFeedback, fbOffset, flatV) {
+                namer.unname(allFeedback, fbOffset, flatV)
             }
             sendCallback(then, values = null, error = null, reward = 0) {
                 // In profiling, promises are the leading cause of garbage. So, use a callback.
@@ -421,7 +428,7 @@ export default (function(exports) {
                     namedE && namer.name(error, namedE, 0, 0, -1.)
                     packet.send(this, namedV, namedE, values === null, this.noFeedback)
                     return !!values
-                })
+                }, Sensor._unnameFeedback)
                 values && deallocF32(values), error && deallocF32(error)
             }
             send(values, error = null, reward = 0) { // Returns a promise of feedback (no reward) or null.
@@ -481,6 +488,7 @@ export default (function(exports) {
                         this.feedbackCallbacks = []
                         this.feedbackNoFeedback = []
                         this.feedbackNamers = []
+                        this.feedbackUnnamer = []
                     }
                 }
                 if (!this.paused) return this
@@ -1146,10 +1154,11 @@ Makes only the sign matter for low-frequency numbers.` }),
             const then = T.feedbackCallbacks.shift()
             const noFeedback = T.feedbackNoFeedback.shift()
             const namers = T.feedbackNamers.shift()
+            const unnamer = T.feedbackUnnamer.shift()
             if (allFeedback && !noFeedback) {
                 const flatV = allocF32(data.length)
                 const namer = packetNamer(T, namers, cellShape, partSize, summary)
-                namer.unname(allFeedback, fbOffset, flatV)
+                unnamer(namer, allFeedback, fbOffset, flatV)
                 then && then.call(T, flatV)
             } else
                 then && then.call(T, null)
