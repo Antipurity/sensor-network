@@ -331,6 +331,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - 2 bytes: packet ID.
                     - 2 bytes: packet-part (each part is 2**15 bytes).
                     - Content.
+                        - 2 bytes: packet-part-length.
                         - 2 bytes: prev-packet ID (for compression) or 0 if it can be decompressed by itself. (No requesting; dropping the 0-packet means dropping all its dependents.)
                         - 2 bytes: shape ID. Content (split along "packet-parts") (compressible):
                             - shapeId==0: new shape:

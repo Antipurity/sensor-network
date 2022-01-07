@@ -1,4 +1,5 @@
 export default function init(sn) {
+    const arrayCache = []
     class InternetSensor extends sn.Sensor {
         static docs() { return `Extends this network over the Internet.
 
@@ -26,8 +27,8 @@ TODO: Make note of browser compatibility.
                 opts.onValues = this.onValues
                 opts.values = 0, opts.emptyValues = 0
                 opts.name = []
+                this._data = [], this._feedback = [] // The main adjustable data queue.
                 // TODO: What else?
-                // TODO: We also want this._data=[] (floats) and this._feedback=[] (callbacks), for finalized data waiting for feedback.
             }
             return super.resume(opts)
         }
@@ -68,22 +69,45 @@ TODO: Make note of browser compatibility.
             }
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
+                const packetData = Object.create(null) // id → [remainingParts, prevPacketId, shapeId, ...partData]
                 dataChannel.onmessage = evt => {
                     if (!(evt.data instanceof ArrayBuffer)) return
                     const dv = new DataView(evt.data)
-                    // TODO: And how do we parse this packet? Packet ID, packet part, shape ID...
-                    // TODO: If we have a continuous path from a previous packet, or it took too long, emit data.
-                }
+                    const packetId = dv.getUint16(0), packetPart = dv.getUint16(2)
+                    if (packetPart === 0) {
+                        const packetPartLength = dv.getUint16(4)
+                        const prevPacketId = dv.getUint16(6), shapeId = dv.getUint16(8)
+                        packetData[packetId] = allocArray(3 + packetPartLength)
+                        packetData[packetId][0] = packetPartLength
+                        packetData[packetId][1] = prevPacketId
+                        packetData[packetId][2] = shapeId
+                        // TODO: ...Wait, also set prevPacketId and shapeId...
+                        // TODO: Set the remaining data.
+                        //   ...How, exactly? Just push `evt.data`? `dv`? Or a new byte-array? What's best for concatenation?
+                        --packetData[packetId][0]
+                    } else {
+                        // TODO: Set the data. And decrement the remaining-packet-length.
+                    }
+                    // TODO: Also, if no packet parts are remaining, concat into data.
+                    // TODO: We want an object from packetId to its data, right? ...What about the completion percentage?…
+                    //   What's the exact format... {packetId:[...partData]}.
+                    // TODO: If we have a continuous path from a previous packet, or it took too long, decompress & emit data.
+                } // TODO: Put `messageUnpacker(…)` here.
+                //   TODO: ...What is its `onpacket`?…
                 dataChannel.onclose = evt => peer.close() // Hopefully not fired on mere instability.
             }
         }
         onValues(data) {
+            sn._deallocF32(data)
             // TODO: How to take all data from the queue?
             //   TODO: Also, this.resize(values) and give per-cell noData/noFeedback bool arrays to this.sendCallback. TODO: Actually, use `this.sendRawCallback` instead.
+            //   ...What are the values though? Can be inferred by summing up this._data's lengths, right?
+            // TODO: How to remember to adjust what we have?
         }
         onFeedback(feedback) {
-            // TODO: Can we make `sensor.sendRawCallback` accept the deobfuscation function, so that here, we receive raw feedback, not un-named feedback? (We do want to send back reward feedback.)
             // TODO: How to send feedback to their appropriate connections?
+            //   Also, isn't *this* code largely shared between sensing and handling too?
+            //     (Not in shape giving/requesting, though.)
         }
     }
     class InternetHandler extends sn.Handler {
@@ -109,6 +133,7 @@ Options:
                 this.signaler = opts.signaler // TODO: What's the default implementation?
                 this.getPeer()
                 this.peer.setConfiguration({iceServers:this.iceServers})
+                this._data = [], this._feedback = [] // The main adjustable data queue.
                 // TODO: What else?
             }
             return super.resume(opts)
@@ -184,5 +209,89 @@ Options:
     return {
         sensor: InternetSensor,
         handler: InternetHandler,
+    }
+    function allocArray() { return arrayCache.length ? arrayCache.pop() : [] }
+    function deallocArray(a) { Array.isArray(a) && arrayCache.length < 16 && (a.length = 0, arrayCache.push(a)) }
+    function messagePacker(channel, maxPacketBytes=16*1024*1024) {
+        // Sends maybe-large messages over unordered & unreliable channels.
+        // Use `messageUnpacker` to re-assemble messages on the other end.
+        let nextId = 0
+        const maxPartLen = 65536, partBuf = new Uint8Array(maxPartLen)
+        const partView = new DataView(partBuf.buffer, partBuf.byteOffset, partBuf.byteLength)
+        return function message(data) { // Uint8Array
+            sn._assert(data.length <= maxPacketBytes, "Message is too long!")
+            const partSize = maxPartLen - 4
+            const parts = Math.ceil((data.length - 2) / partSize)
+            for (let part = 0, atData = 0; part < parts; ++part) {
+                partView.setUint16(0, nextId)
+                partView.setUint16(2, part)
+                if (part === 0) partView.setUint16(4, parts)
+                const header = (part === 0 ? 6 : 4)
+                for (let i = header; i < partBuf.length && atData < data.length; ++i, ++atData)
+                    partBuf[i] = data[atData]
+                channel.send(partBuf)
+            }
+            ++nextId, nextId >= 65536 && (nextId = 0)
+        }
+    }
+    function messageUnpacker(onpacket, timeoutMs=50, maxPacketBytes=16*1024*1024) {
+        // Set the result of this as `dataChannel.onmessage`.
+        // `onpacket(null | Uint8Array)` will be called with full packet data, in the ID-always-increasing-by-1 order, or `null` if taking too long.
+        const packs = Object.create(null) // id → [remainingParts, ...partData]
+        let nextId = 0, prevAt = null
+        function superseded() {
+            for (let i = nextId + 1; i <= nextId + 16; ++i)
+                if (packs[i & 65535]) return true
+            return false
+        }
+        return function onmessage(evt) {
+            // (Allows arbitrary-length packets to be encoded in `maxLength`-sized network packets, unordered and unreliable made ordered and reliable.)
+            // (4 bytes of overhead per network packet, plus 2 bytes per actual packet.)
+            if (!(evt.data instanceof ArrayBuffer)) return
+            const dv = new DataView(evt.data)
+            const id = dv.getUint16(0), part = dv.getUint16(2)
+            if (id < nextId) return // You're too late.
+            let p
+            if (part === 0) { // Packet start.
+                const parts = dv.getUint16(4)
+                if (!parts || parts * (dv.length-6) > maxPacketBytes) return
+                if (packs[id]) deallocArray(packs[id])
+                p = packs[id] = allocArray(1 + parts)
+                p[0] = parts
+                p[0] && !p[1+part] && --p[0], p[1+part] = dv
+            } else { // The rest of the packet.
+                if ((1+part+1) * (dv.length-4) > maxPacketBytes) return
+                if (!packs[id]) packs[id] = allocArray(1 + part + 1), packs[id][0] = null
+                p = packs[id]
+                p[0] && !p[1+part] && --p[0], p[1+part] = dv
+            }
+            if (id > prevId && prevAt == null) prevAt = performance.now()
+            // Send off the next packet, in-order or on-timeout if there are packets after this one.
+            let tooLong = prevAt != null && performance.now() - prevAt > timeoutMs && superseded()
+            while (packs[nextId] && packs[nextId][0] === 0 || tooLong) {
+                const p = packs[nextId]
+                if (Array.isArray(p) && p[0] === 0) { // Copy parts into one buffer.
+                    // (A copy. And generates garbage. As garbage as JS is.)
+                    let len = 0
+                    for (let i = 1; i < p.length; ++i)
+                        len += (i === 1 ? p[i].byteLength-6 : p[i].byteLength-4)
+                    const b = new Uint8Array(len)
+                    for (let i = 1, off = 0; i < p.length; ++i) {
+                        const header = (i === 1 ? 6 : 4)
+                        const sublen = p[i].byteLength - header
+                        for (let j = 0; j < sublen; ++j)
+                            b[off + j] = p[i].getUint8(header + j)
+                        off += sublen
+                    }
+                    deallocArray(packs[nextId]), packs[nextId] = null
+                    onpacket(b)
+                } else {
+                    if (packs[nextId]) deallocArray(packs[nextId]), packs[nextId] = null
+                    onpacket(null)
+                }
+                ++nextId, nextId >= 65536 && (nextId = 0)
+                tooLong = false
+            }
+        }
     }
 }
