@@ -95,7 +95,7 @@ export default (function(exports) {
             const dst = state(T.channel, T.cellShape, T.partSize, T.summary)
             if (dst.packetCache.length < 64) dst.packetCache.push(T)
         }
-        send(sensor, point, error, noData, noFeedback) {
+        send(sensor, then, unname, point, error, noData, noFeedback) {
             // `sensor` is a `E.Sensor`.
             //   The actual number-per-number feedback can be constructed as `allFeedback.subarray(fbOffset, fbOffset + data.length)`
             //     (but that's inefficient; instead, index as `allFeedback[fbOffset + i]`).
@@ -107,6 +107,7 @@ export default (function(exports) {
             assert(point.length % this.cellSize === 0, "Data must be divided into cells")
             assert(error == null || error instanceof Float32Array, "Error must be null or float32")
             assert(error == null || point.length === error.length, "Error must be per-data-point")
+            sensor.feedbackCallbacks.push(then), sensor.feedbackNoFeedback.push(sensor.noFeedback), sensor.feedbackNamers.push(sensor.dataNamers), sensor.feedbackUnnamer.push(unname)
             const cells = point.length / this.cellSize | 0
             if (Array.isArray(noFeedback) ? noFeedback.some(b => !b) : !noFeedback)
                 this.sensorNeedsFeedback = true
@@ -377,8 +378,7 @@ export default (function(exports) {
                 return ch.cellShapes[0] && ch.cellShapes[0].cellShape || null
             }
             sendRawCallback(then, name, unname) {
-                // `name.call(this, {cellShape, partSize, summary}, namer, packet, then, unname)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
-                //   Also `this.feedbackCallbacks.push(then), this.feedbackNoFeedback.push(this.noFeedback), this.feedbackNamers.push(this.dataNamers), this.feedbackUnnamer.push(unname)`
+                // `name.call(this, {cellShape, partSize, summary}, namer, packet, then, unname)→bool`: does `packet.send(this, then, unname, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
                 // `unname(namer, allFeedback, fbOffset, flatV)`
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
@@ -423,8 +423,7 @@ export default (function(exports) {
                     if (!values) namedV.fill(0)
                     namedV && namer.name(values, namedV, 0, reward)
                     namedE && namer.name(error, namedE, 0, 0, -1.)
-                    this.feedbackCallbacks.push(then), this.feedbackNoFeedback.push(this.noFeedback), this.feedbackNamers.push(this.dataNamers), this.feedbackUnnamer.push(unname)
-                    packet.send(this, namedV, namedE, values === null, this.noFeedback)
+                    packet.send(this, then, unname, namedV, namedE, values === null, this.noFeedback)
                     return !!values
                 }, Sensor._unnameFeedback)
                 values && deallocF32(values), error && deallocF32(error)
@@ -507,7 +506,7 @@ export default (function(exports) {
     - \`values\`: how many -1…1 numbers this sensor exposes.
         - Usually a good idea to keep this to powers-of-2, and squares. Such as 64.
     - \`onValues.call(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
-        - To run faster, use \`sensor.sendCallback(fn(feedback, sensor), data, …)\` with a static function.
+        - To run faster, use \`sensor.sendCallback(fn.call(sensor, feedback, cellShape, partSize), data, …)\` with a static function.
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
@@ -1149,8 +1148,6 @@ Makes only the sign matter for low-frequency numbers.` }),
     function gotPacketFeedback(T, data, error, allFeedback, fbOffset, cellShape, partSize, summary) {
         // Fulfill the promise of `.send`.
         try {
-            // TODO: Here, we are assuming that `T.feedback*` items are pushed exactly once per packet-sending. Can we not, though?
-            //   (This isn't even robust to multiple cell shapes, right? BUG)
             const then = T.feedbackCallbacks.shift()
             const noFeedback = T.feedbackNoFeedback.shift()
             const namers = T.feedbackNamers.shift()
@@ -1159,9 +1156,9 @@ Makes only the sign matter for low-frequency numbers.` }),
                 const flatV = allocF32(data.length)
                 const namer = packetNamer(T, namers, cellShape, partSize, summary)
                 unnamer(namer, allFeedback, fbOffset, flatV)
-                then && then.call(T, flatV)
+                then && then.call(T, flatV, cellShape, partSize)
             } else
-                then && then.call(T, null)
+                then && then.call(T, null, cellShape, partSize)
         } finally { deallocF32(data), error && deallocF32(error) }
     }
     function packetNamer(T, dataNamers, cellShape, partSize, summary) {
