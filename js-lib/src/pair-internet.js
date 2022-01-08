@@ -8,9 +8,8 @@ Methods:
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-- TODO:
 
-TODO: Make note of browser compatibility.
+Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)
 ` }
         static options() {
             return {
@@ -18,7 +17,6 @@ TODO: Make note of browser compatibility.
                     ['None']: () => [],
                     ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
                 },
-                // TODO:
             }
         }
         static tests() {
@@ -46,7 +44,6 @@ TODO: Make note of browser compatibility.
                 opts.onValues = this.onValues
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
                 this._data = [], this._feedback = [] // The main adjustable data queue.
-                // TODO: What else? ...Nothing?? No options?
             }
             return super.resume(opts)
         }
