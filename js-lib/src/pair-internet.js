@@ -86,10 +86,11 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             }
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
+                // Assuming that `dataChannel` is already opened.
                 const packer = messagePacker(dataChannel)
                 const feedback = (fb, bpv, partSize, cellShape) => { // Float32Array, 0|1|2
                     const bytes = quantize(fb, bpv)
-                    const header = 2 + 4 + 2 + 4*cellShape.length
+                    const header = 2 + 4 + 2+4*cellShape.length
                     const bytes2 = new Uint8Array(header + bytes.length)
                     const dv = new DataView(bytes2)
                     dv.setUint16(0, bpv)
@@ -265,35 +266,55 @@ Options:
                 }
             }
             if (this.dataChannel == null) {
+                this._dataSend = null
                 const dc = this.dataChannel = this.peer.createDataChannel('sn-internet', {
                     ordered: false, // Unordered
                     maxRetransmits: 0, // Unreliable
                 })
-                // TODO: Wait for `dc.onopen`.
                 dc.binaryType = 'arraybuffer'
-                // const packer = messagePacker(dc) // TODO: We should set this on `this`, so that `onValues` can call it, right? Well, set a wrapper, anyway.
-                //   cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
-                //     TODO: ...So what args do we want, exactly?... {data, noData, noFeedback, cellShape, partSize}, bpv.
-                //   Then, dc.send(bytes).
-                dc.onmessage = messageUnpacker((packet, packetId) => {
-                    // TODO: bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
-                    // TODO: Set this._remotePartSize  and this._remoteCellShape.
-                    //   TODO: Also, pause+resume if they differ. (Hopefully, no errors surface.)
-                    // TODO: Read from the `onValues`-filled queue, and fill `feedback` and execute `then`.
-                })
-                dc.onclose = evt => this.dataChannel = null // When closed, reopen.
+                dc.onopen = evt => {
+                    const packer = messagePacker(dc)
+                    this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
+                        // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
+                        const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
+                        const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
+                        const bytes = new Uint8Array(totalSize), dv = new DataView(bytes)
+                        let offset = 0
+                        dv.setUint32(offset, cells), offset += 4
+                        dv.setUint32(offset, partSize), offset += 4
+                        dv.setUint16(offset, cellShape.length), offset += 2
+                        for (let i = 0; i < cellShape.length; ++i)
+                            dv.setUint32(offset, cellShape[i]), offset += 4
+                        dv.setUint16(offset, bpv), offset += 2
+                        const qData = quantize(data, bpv)
+                        const bNoData = toBits(noData)
+                        const bNoFeedback = toBits(noFeedback)
+                        bytes.set(qData, offset), offset += qData.length
+                        bytes.set(bNoData, offset), offset += bNoData.length
+                        bytes.set(bNoFeedback, offset), offset += bNoFeedback.length
+                        sn._assert(offset === totalSize, "totalSize miscounts")
+                        packer(bytes)
+                    }
+                    dc.onmessage = messageUnpacker((packet, packetId) => {
+                        // TODO: bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
+                        // TODO: Set this._remotePartSize  and this._remoteCellShape.
+                        //   TODO: Also, pause+resume if they differ. (Hopefully, no errors surface.)
+                        // TODO: Read from the `onValues`-filled queue, and fill `feedback` and execute `then`.
+                    })
+                    dc.onclose = evt => this.dataChannel = null // When closed, reopen.
+                }
             }
         }
         
         static onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback) {
-            // TODO: Check `this.dataChannel.readyState === 'open'`; if not open, just return. ...No, should use this.signal. ...No, should use `this.dataChannel` somehow; should create its `messagePacker` wrapper…
-            // TODO: How to send values across `this.dataChannel`, and get some back (writing into `feedback` and calling `then`)?
-            //   We need a `messagePacker`, probably created in `this.getPeer()`…
+            // TODO: this._dataSend({data, noData, noFeedback, cellShape, partSize}, bpv)
+            //   (If it doesn't exist, simply return, 0-filling `feedback`, calling `then` along the way.)
             // TODO: Push `then` into a queue of callbacks (possibly along with stuff like `feedback`).
         }
     }
     // TODO: The default signaling option: "the user will manually copy this".
     //   ...What, from JS console? And into JS console? This is so unrefined…
+    //     `() => msg => console.log(msg)`
     //   TODO: But also have a WebSocket option. (Once we have a Rust server to test it on, I mean.)
     return {
         sensor: InternetSensor,
