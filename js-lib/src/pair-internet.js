@@ -1,4 +1,5 @@
 export default function init(sn) {
+    // (Reading/writing may be quite unoptimized here.)
     const arrayCache = []
     class InternetSensor extends sn.Sensor {
         static docs() { return `Extends this network over the Internet.
@@ -38,6 +39,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 ],
             ]
         }
+        // TODO: A benchmark, that connects a sensor to a different-channel handler through localhost, and measures throughput and latency and dropped packets.
         resume(opts) {
             if (opts) {
                 this.iceServers = opts.iceServers || []
@@ -85,25 +87,35 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
                 const packer = messagePacker(dataChannel)
-                const feedback = (fb, bpv) => { // Float32Array, 0|1|2
+                const feedback = (fb, bpv, partSize, cellShape) => { // Float32Array, 0|1|2
                     const bytes = quantize(fb, bpv)
+                    const header = 2 + 4 + 2 + 4*cellShape.length
+                    const bytes2 = new Uint8Array(header + bytes.length)
+                    const dv = new DataView(bytes2)
+                    dv.setUint16(0, bpv)
+                    dv.setUint32(2, partSize)
+                    dv.setUint16(6, cellShape.length)
+                    let offset = 8
+                    for (let i = 0; i < cellShape.length; ++i)
+                        dv.setUint32(offset, cellShape[i]), offset += 4
+                    bytes2.set(bytes, header)
                     packer(bytes)
                 }
-                dataChannel.onmessage = evt => messageUnpacker((data, packetId) => {
+                dataChannel.onmessage = messageUnpacker((data, packetId) => {
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
                         if (data.length < 2) return
                         const dv = new DataView(data.buffer)
                         // Read the shape.
-                        const partSize = dv.getUint32(0)
-                        const cells = dv.getUint32(4)
+                        const cells = dv.getUint32(0)
+                        const partSize = dv.getUint32(4)
                         const cellShapeLen = dv.getUint16(8)
-                        if (cellShapeLen !== 4) return
+                        if (cellShapeLen !== 3) return
                         const cellShape = allocArray(cellShapeLen)
                         let offset = 10
                         for (let i = 0; i < cellShapeLen; ++i)
                             cellShape[i] = dv.getUint32(offset), offset += 4
-                        const bpv = dv.getUint8(offset);  offset += 1
+                        const bpv = dv.getUint16(offset);  offset += 2
                         if (bpv !== 0 && bpv !== 1 && bpv !== 2) return
                         const nameSize = cells * (cellShape.reduce((a,b) => a+b) - cellShape[cellShape.length-1])
                         const nameBytes = data.subarray(offset, offset += nameSize)
@@ -164,7 +176,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             if (rawData === undefined) { // Dropped.
                 const f = sn._allocF32(1)
                 f[0] = 0
-                feedback(f, bpv)
+                feedback(f, bpv, partSize, cellShape)
             } else { // Respond to the packet.
                 const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
                 const realCellSize = realCellShape.reduce((a,b)=>a+b)
@@ -174,7 +186,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     for (let i = 0; i < cellSize; ++i)
                         back[offsetReal + i] = feedbackData[offsetTarg + i]
                 }
-                feedback(back, bpv)
+                feedback(back, bpv, partSize, cellShape)
             }
             deallocArray(fbPoint)
             realCellShape && deallocArray(realCellShape)
@@ -233,11 +245,11 @@ Options:
                 const peer = this.peer = new RTCPeerConnection({iceServers:this.iceServers})
                 peer.onicecandidate = evt => {
                     if (evt.candidate)
-                        this.signal(JSON.stringify({ icecandidate: evt.candidate }))
+                        signal(JSON.stringify({ icecandidate: evt.candidate }))
                 }
                 peer.onnegotiationneeded = evt => {
                     peer.createOffer().then(offer => peer.setLocalDescription(offer)).then(() => {
-                        this.signal(JSON.stringify({offer: peer.localDescription.sdp}))
+                        signal(JSON.stringify({offer: peer.localDescription.sdp}))
                     }).catch(() => peer.setRemoteDescription({type:'rollback'}))
                 }
                 peer.onconnectionstatechange = evt => {
@@ -245,35 +257,39 @@ Options:
                     const state = peer.connectionState
                     if (state === 'failed' || state === 'closed') this.peer = null // Reopen.
                 }
+                function signal(data) {
+                    // Send `data`, waiting for the signaling channel to open.
+                    if (!this.metaChannel) return
+                    if (this._signal) this._signal.then(() => this.metaChannel.send(data))
+                    else this.metaChannel.send(data)
+                }
             }
             if (this.dataChannel == null) {
                 const dc = this.dataChannel = this.peer.createDataChannel('sn-internet', {
                     ordered: false, // Unordered
                     maxRetransmits: 0, // Unreliable
                 })
+                // TODO: Wait for `dc.onopen`.
                 dc.binaryType = 'arraybuffer'
-                dc.onmessage = evt => {
-                    if (!(evt.data instanceof ArrayBuffer)) return
-                    const dv = new DataView(evt.data)
-                    // TODO: And how do we parse this packet? Packet ID, packet part, shape ID...
-                    // TODO: If we have a continuous path from a previous packet, or it took too long, emit data.
-                    // TODO: …Need to parse and add to queue…
-                    //   ...This code is kinda shared among got-sensor-data & got-handler-feedback, isn't it?... Can we extract it to a common function?
-                }
+                // const packer = messagePacker(dc) // TODO: We should set this on `this`, so that `onValues` can call it, right? Well, set a wrapper, anyway.
+                //   cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
+                //     TODO: ...So what args do we want, exactly?... {data, noData, noFeedback, cellShape, partSize}, bpv.
+                //   Then, dc.send(bytes).
+                dc.onmessage = messageUnpacker((packet, packetId) => {
+                    // TODO: bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
+                    // TODO: Set this._remotePartSize  and this._remoteCellShape.
+                    //   TODO: Also, pause+resume if they differ. (Hopefully, no errors surface.)
+                    // TODO: Read from the `onValues`-filled queue, and fill `feedback` and execute `then`.
+                })
                 dc.onclose = evt => this.dataChannel = null // When closed, reopen.
             }
         }
-        signal(data) {
-            // Send `data`, waiting for the signaling channel to open.
-            if (!this.dataChannel) return
-            if (this._signal) this._signal.then(() => this.dataChannel.send(data))
-            else this.dataChannel.send(data)
-        }
+        
         static onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback) {
-            // TODO: Check `this.dataChannel.readyState === 'open'`; if not open, just return. ...No, should use this.signal.
-            // TODO: How to send values across `this.dataChannel`, and get some back?
-            //   TODO: How to accumulate out-of-order packets, waiting reasonably?
-            //   TODO: When to drop packets?
+            // TODO: Check `this.dataChannel.readyState === 'open'`; if not open, just return. ...No, should use this.signal. ...No, should use `this.dataChannel` somehow; should create its `messagePacker` wrapper…
+            // TODO: How to send values across `this.dataChannel`, and get some back (writing into `feedback` and calling `then`)?
+            //   We need a `messagePacker`, probably created in `this.getPeer()`…
+            // TODO: Push `then` into a queue of callbacks (possibly along with stuff like `feedback`).
         }
     }
     // TODO: The default signaling option: "the user will manually copy this".
