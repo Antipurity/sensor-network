@@ -70,60 +70,38 @@ TODO: Make note of browser compatibility.
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
                 dataChannel.onmessage = evt => messageUnpacker((data, packetId) => {
-                    sn._assert(data instanceof Uint8Array)
-                    if (data.length < 2) return
-                    // TODO: What if `data` is `null`?
-                    //   What do we want to do, abstractly? A failed packet... How to send this failure on?
-                    //   TODO: (…Wait: if we'll be treating shape-updates the same as data-packets via `packetId`, then won't this mean that we'll have an extra data+feedback step for each shape-update? Or is this tolerable?)
-                    const dv = new DataView(data.buffer)
-                    const shapeId = dv.getUint16(0)
-                    if (shapeId === 0) {
+                    if (data) {
+                        sn._assert(data instanceof Uint8Array)
+                        if (data.length < 2) return
+                        const dv = new DataView(data.buffer)
                         // Read the shape.
-                        // TODO: (Maybe, should be 2 functions that read & write the same C struct?… For symmetry…)
-                        //   `readCellShape(Uint8Array)→obj`, `writeCellShape(obj)→Uint8Array`.
-                        const partSize = dv.getUint32(2)
-                        const cells = dv.getUint32(6)
-                        const cellShapeLen = dv.getUint16(10)
+                        const partSize = dv.getUint32(0)
+                        const cells = dv.getUint32(4)
+                        const cellShapeLen = dv.getUint16(8)
                         if (cellShapeLen !== 4) return
-                        const cellShape = new Array(cellShapeLen)
-                        let offset = 12
+                        const cellShape = allocArray(cellShapeLen)
+                        let offset = 10
                         for (let i = 0; i < cellShapeLen; ++i)
-                            cellShape[i] = dv.getUint32(), offset += 4
+                            cellShape[i] = dv.getUint32(offset), offset += 4
                         const bpv = dv.getUint8(offset);  offset += 1
                         if (bpv !== 0 && bpv !== 1 && bpv !== 2) return
                         const nameSize = cells * (cellShape.reduce((a,b) => a+b) - cellShape[cellShape.length-1])
                         const nameBytes = data.subarray(offset, offset += nameSize)
                         const noDataBytes = data.subarray(offset, offset += Math.ceil(cells / 8))
                         const noFeedbackBytes = data.subarray(offset, offset += Math.ceil(cells / 8))
-                        const name = unquantize(nameBytes, bpv)
+                        const rawData = unquantize(nameBytes, bpv)
+                        const rawError = unquantizeError(rawData.length, bpv)
                         const noData = fromBits(noDataBytes)
                         const noFeedback = fromBits(noFeedbackBytes)
-                        // TODO: Remember (need global-ish vars: prev-shape-id and prev-shape).
-                        //   ...Don't we want to remember more shapes than 1... Maybe 3 previous shapes... Stored in a [..., shapeId, shapeObject, ...]
-                        // Acknowledge.
-                        {
-                            const dv = new DataView(new ArrayBuffer(12))
-                            dv.setUint16(0, packetId)
-                            dv.setUint16(2, 0) // part
-                            dv.setUint16(4, 1) // parts
-                            dv.setUint16(6, 0) // prev packet id // TODO: Maybe, this should be on a separate layer which will wrap our own, after the message is here but before decoding? (This way, we don't *have* to waste space here for functionality that's not guaranteed to be implemented anyway.)
-                            dv.setUint16(8, 0) // shape id (ACK)
-                            dv.setUint16(10, shapeId) // shape id (what we ACK)
-                            signal(new Uint8Array(dv.buffer))
-                        }
+                        const a = allocArray(8)
+                        ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback]
+                        this._data.push(a)
+                        // TODO: What func do we push to this._feedback?
                     } else {
-                        // TODO: Fetch shape ID (or request if we don't know it… Wait, do we need a packet queue to not drop these maybe-packets?)
-                        // TODO: Turn reward & data (& shape info) into a raw array of, uh, f32...
-                        //   ...No, need to decompress first...
-                        // (Also, do `unquantize` on all value arrays.)
+                        this._data.push(null)
+                        // TODO: What func do we push to this._feedback?
                     }
-                    // TODO: Do we want a JS object for the shape info?
-                    // TODO: Need functions for shapely send/receive, right? (*Then*, we can do shapeliness+compression.)
-                    //   They only need cellShape and raw data/feedback. And they can already do un/qunatization.
-                    //   ...We really need shape handling here, tho. And those funcs are trivial anyway.
                 })
-                //   TODO: ...What is its `onpacket`?…
-                //     How do we encode prevPacketId and shapeId, and do de/compression, and requesting of shapes and composition of shapes with data to create the actual cells...
                 dataChannel.onclose = evt => peer.close() // Hopefully not fired on mere instability.
             }
         }
@@ -329,24 +307,46 @@ Options:
         sn._assert(f32a instanceof Float32Array)
         if (!bpv) return bigEndian(new Uint8Array(f32a.buffer, f32a.byteOffset, f32a.byteLength), bpv, false, true)
         sn._assert(bpv === 1 || bpv === 2)
-        const r = bpv === 1 ? new Uint8Array(f32a.byteLength) : new Uint16Array(f32a.byteLength / 2 | 0)
+        const r = bpv === 1 ? new Uint8Array(f32a.length) : new Uint16Array(f32a.length)
         const scale = bpv === 1 ? 255 : 65535
         for (let i = 0; i < r.length; ++i)
             r[i] = Math.max(0, Math.min(Math.round((f32a[i]+1)/2 * scale), 255))
         return bpv === 1 ? r : bigEndian(new Uint8Array(r.buffer, r.byteOffset, r.byteLength), bpv, false, true)
     }
     function unquantize(a, bpv = 0) {
+        sn._assert(a instanceof Uint8Array)
         if (!bpv) {
             a = bigEndian(a, bpv, true)
             return new Float32Array(a.buffer, a.byteOffset, a.byteLength / 4 | 0)
         }
         sn._assert(bpv === 1 || bpv === 2)
-        if (bpv === 2) a = new Uint16Array(bigEndian(a, bpv, true))
+        if (bpv === 2) a = new Uint16Array(bigEndian(a, bpv, true).buffer)
         const r = new Float32Array(a.length)
         const scale = bpv === 1 ? 255 : 65535
         for (let i = 0; i < r.length; ++i)
             r[i] = a[i]/scale * 2 - 1
         return r
+    }
+    function unquantizeError(a, bpv = 0) {
+        // `a`: pre-existing error; un/quantization error is added to that.
+        if (!bpv) return a
+        const scale = bpv === 1 ? 255 : 65535
+        if (typeof a == 'number') a = new Float32Array(a), a.fill(1 / scale - 1)
+        else for (let i = 0; i < a.length; ++i) a[i] += 1 / scale
+        return a
+    }
+    function checkError(a, bpv = 0) { // TODO: Have a unit-test that does this.
+        if (typeof a == 'number') {
+            a = new Float32Array(a)
+            for (let i = 0; i < a.length; ++i) a[i] = Math.random()*2-1
+        }
+        const b = unquantize(quantize(a, bpv), bpv)
+        const e = unquantizeError(a.length, bpv)
+        sn._assert(a.length === b.length, "Unequal lengths: " + a.length + " ≠ " + b.length)
+        for (let i = 0; i < a.length; ++i)
+            sn._assert(Math.abs(a[i] - b[i]) <= e[i]+1, a[i] + " ≠ " + b[i])
+            ,e[i] = Math.abs(a[i] - b[i]) - (e[i]+1)
+        console.log(e)
     }
     function bigEndian(a, bpv, backToNative = false, inPlace = false) {
         // `a` is copied unless `inPlace`.
@@ -355,7 +355,7 @@ Options:
             y[0] = 0x0102
             bigEndian.bigEnd = z[0] === 0x01
         }
-        sn._assert(a instanceof Uint8Array)
+        sn._assert(a instanceof Uint8Array, "Bad byte-array")
         if (bigEndian.bigEnd !== backToNative || bpv === 1) return a
         if (!inPlace) a = new Uint8Array(a)
         if (bpv === 2)
@@ -375,7 +375,7 @@ Options:
         return b
     }
     function fromBits(b) { // Uint8Array → Array<bool>
-        const a = new Array(b.length * 8) // The length is a bit inexact, which is not important for us.
+        const a = allocArray(b.length * 8) // The length is a bit inexact, which is not important for us.
         for (let i = 0; i < b.length; ++i) {
             const j = 8*i
             a[j+0] = b[i] & (1<<7)

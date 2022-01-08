@@ -279,11 +279,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
             - ⋯ Read from file.
-                - ⋯ Allow `noFeedback=false`. Research dataset distillation: loop: do several iterations of learning on adjustable data points (preserving all gradient graphs), then evaluate on the bigger dataset (not learning model weights), accumulating gradient and finally adjusting the data points. (Might be a bit strange for autoregressive tasks.) (ML-based compression: the more you live, the more you know and the faster you learn.)
+                - ⋯ Allow `noFeedback=false`. Research dataset distillation: loop: do several iterations of learning on adjustable data points (preserving all gradient graphs), then evaluate on the bigger dataset (not learning model weights), accumulating gradient and finally adjusting the data points. (Might be a bit strange for autoregressive tasks.) (ML-based compression: the more you live, the more you know and the faster you learn.) (For mesa-optimizer-learning, could simply give learned experience first, then target experience. No need to wait for gradient updates to learn at inference time. And if learned actions improve prediction, then they are predicted too, and it's all a feedback loop. Tho for accuracy, might want to only compress beginnings of single episodes, not all data.)
             - ⋯ In extension, read from tabs.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
-                - ⋯ Each data packet (1+ cells) references its meta-data (cellShape & partSize & noData & noFeedback) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost).
-                - ⋯ To communicate userName/name, fill them with closures, that read from received data.
+                - ⋯ Each data packet references its meta-data (names and such) by ID; when meta-data changes, it's re-sent until the other side acknowledges it.
+                - ⋯ Support de/compression, able to hold the previous-packet's data if needed.
                 - ⋯ Discourage disengagements: on user disconnect, hold its last cell (now `0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
             - ⋯ Search: in a distributed database (sync with search-server URL/s if given, updating a few fitting entries on demand), lookup the nearest-neighbor of values' feedback (the label) (must not be linked elsewhere), and connect via read-from-Internet.
@@ -335,6 +335,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                         - 2 bytes: shape ID. Content (split along "packet-parts") (compressible):
                             - shapeId==0: new shape:
                                 - handler data (provide): shapeId (2b) & partSize (4b) & cells (4b) & cellShape (2b length, 4b values) & bytesPerValue (1b) & name (for each cell, values, numbered `sum(cellShape)-cellShape[-1]`; including the overwritten reward) & noData (1 bit per cell) & noFeedback (1 bit per cell)
+                                    - TODO: ...Since we'll be compressing everything anyway (eventually), can we just not bother with this split into shapes and data... No premature optimization, perhaps?...
                                 - sensor feedback (ACKnowledgement; no ACK means that data has to resend the shape): shapeId (2b)
                             - shapeId≥1: reward & data (for each cell, values, numbered `1 + cellShape[-1]`)
                 - ⋯ Take on the remote cellShape and partSize.
