@@ -52,7 +52,7 @@ TODO: Make note of browser compatibility.
             }
             return super.resume(opts)
         }
-        signal(metaChannel, maxCells=65536) {
+        signal(metaChannel, maxCells=65536) { // TODO: ...What about `maxCells`?
             let metaData = []
             const signal = data => {
                 if (metaData) metaData.push(data)
@@ -89,6 +89,11 @@ TODO: Make note of browser compatibility.
             }
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
+                const packer = messagePacker(dataChannel)
+                const feedback = (fb, bpv) => { // Float32Array, 0|1|2
+                    const bytes = quantize(fb, bpv)
+                    packer(fb)
+                }
                 dataChannel.onmessage = evt => messageUnpacker((data, packetId) => {
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
@@ -113,13 +118,13 @@ TODO: Make note of browser compatibility.
                         const rawError = unquantizeError(rawData.length, bpv)
                         const noData = fromBits(noDataBytes)
                         const noFeedback = fromBits(noFeedbackBytes)
-                        const a = allocArray(8)
-                        ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback]
+                        const a = allocArray(9)
+                        ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
                         this._data.push(a)
-                        // TODO: What func do we push to this._feedback?
                     } else {
-                        this._data.push(allocArray(0))
-                        // TODO: What func do we push to this._feedback?
+                        const a = allocArray(9)
+                        a.fill(undefined), a[8] = feedback
+                        this._data.push(a)
                     }
                 })
                 dataChannel.onclose = evt => peer.close() // Hopefully not fired on mere instability.
@@ -127,33 +132,58 @@ TODO: Make note of browser compatibility.
         }
         _name({cellShape, partSize, summary}, namer, packet) {
             // Copy the data point into the actual data stream.
-            let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback] = this._dataPoint
-            if (rawData === undefined) { // Dropped packet. Synthetic data.
-                cells = 0, bpv = 0
-                rawData = sn._allocF32(0), rawError = null
-                noData = noFeedback = true
+            const fb = allocArray(0)
+            for (let i = 0; i < this._data.length; ++i) {
+                let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = this._data[i]
+                fb.push(this._data[i])
+                // TODO: ...Wait, now, how to concat all data points together?
+                //   Or maybe we can `send` each individually? We'll receive many `onFeedback` calls though, right? ...Or not?... No, only one call will happen.
+                if (rawData === undefined) { // Dropped packet. Synthetic data.
+                    cells = 0, bpv = 0
+                    rawData = sn._allocF32(0), rawError = null
+                    noData = noFeedback = true
+                }
+                const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
+                const realCellSize = realCellShape.reduce((a,b)=>a+b)
+                const namedV = sn._allocF32(namedSize), namedE = rawError && sn._allocF32(namedSize)
+                for (let c = 0; c < cells; ++c) { // Naïvely reshape.
+                    const offsetTarg = c * cellSize, offsetReal = c * realCellSize
+                    for (let i = 0; i < cellSize; ++i)
+                        namedV[offsetTarg + i] = rawData[offsetReal + i]
+                }
+                // TODO: Also this.feedbackCallbacks.push(then), this.feedbackNoFeedback.push(this.noFeedback), this.feedbackNamers.push(this.dataNamers), this.feedbackUnnamer.push(unname)
+                packet.send(this, namedV, namedE || null, noData || true, noFeedback || true)
+                //   TODO: ...Wait, is it even legal to call this many times per raw-feedback?
+                //     No: currently, it will cause a BUG.
             }
-            const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
-            const realCellSize = realCellShape.reduce((a,b)=>a+b), realNamedSize = cells * realCellSize
-            const namedV = sn._allocF32(namedSize), namedE = rawError && sn._allocF32(namedSize)
-            for (let c = 0; c < cells; ++c) { // Naively reshape.
-                const offsetTarg = c * cellSize, offsetReal = c * realCellSize
-                for (let i = 0; i < namedSize; ++i)
-                    namedV[offsetTarg + i] = rawData[offsetReal + i]
-            }
-            packet.send(this, rawData, rawError || null, noData || true, noFeedback || true)
+            this._data.length = 0
+            this._feedback.push(fb) // TODO: Can we push not the whole array but each sent data point? Feedback would arrive in the order of data, right? ...No, but the feedback *array* will only arrive once...
         }
         _unname(namer, allFeedback, fbOffset, flatV) {}
         onValues(data) {
             sn._deallocF32(data)
             this._dataPoint = this._data.shift()
+            // TODO: ...Wait, but what if we have more than one data-point already? What if we have 10 connections, and each gives us 10 data points per connection? Shouldn't we push all, and remember that fact in `this._feedback` ourselves?
+            //   Have to handle & remember all.
             if (!this._dataPoint) return
             this.sendRawCallback(this.onFeedback, this._name, this._unname)
         }
-        onFeedback(feedback) {
+        onFeedback(feedbackData) {
+            // Send feedback back.
+            const fbPoint = this._feedback.shift()
+            if (!fbPoint) return
+            let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = fbPoint
+            if (rawData === undefined) { // Dropped.
+                const f = sn._allocF32(1)
+                f[0] = 0
+                feedback(f, bpv)
+            } else {
+                // TODO: Naïvely reshape, and send to `feedback`.
+                //   …What's the target cell-shape, tho… Only `this._unname` can know… How to communicate…
+            }
             // TODO: How to send feedback parts to their appropriate connections?
-            //   Just call this._feedback.shift()?
-            //     But what if we reshaped it previously, and have to reshape it back, here...
+            // TODO: What to do on dropped packets? What 'feedback' do we synthesize? ...Literally nothing? One byte, maybe.
+            // TODO: Also dealloc fbPoint, and if-not-null realCellShape noData and noFeedback.
         }
     }
     class InternetHandler extends sn.Handler {

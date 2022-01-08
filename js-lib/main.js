@@ -377,7 +377,8 @@ export default (function(exports) {
                 return ch.cellShapes[0] && ch.cellShapes[0].cellShape || null
             }
             sendRawCallback(then, name, unname) {
-                // `name.call(this, {cellShape, partSize, summary}, namer, packet)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
+                // `name.call(this, {cellShape, partSize, summary}, namer, packet, then, unname)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
+                //   Also `this.feedbackCallbacks.push(then), this.feedbackNoFeedback.push(this.noFeedback), this.feedbackNamers.push(this.dataNamers), this.feedbackUnnamer.push(unname)`
                 // `unname(namer, allFeedback, fbOffset, flatV)`
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
@@ -394,7 +395,7 @@ export default (function(exports) {
                         continue
                     }
                     const namer = packetNamer(this, this.dataNamers, cellShape, partSize, summary)
-                    const wrote = name.call(this, ch.cellShapes[i], namer, dst.nextPacket)
+                    const wrote = name.call(this, ch.cellShapes[i], namer, dst.nextPacket, then, unname)
 
                     // Wake up.
                     wrote && dst.stepsNow <= 1 && dst.giveNextPacketNow && dst.giveNextPacketNow()
@@ -404,10 +405,6 @@ export default (function(exports) {
                     removed.forEach(o => delete ch.shaped[o.summary])
                     removed.clear()
                 }
-                this.feedbackCallbacks.push(then) // Called even if no feedback is registered, with `null`.
-                this.feedbackNoFeedback.push(this.noFeedback)
-                this.feedbackNamers.push(this.dataNamers)
-                this.feedbackUnnamer.push(unname)
             }
             static _unnameFeedback(namer, allFeedback, fbOffset, flatV) {
                 namer.unname(allFeedback, fbOffset, flatV)
@@ -420,12 +417,13 @@ export default (function(exports) {
                 assert(error === null || error instanceof Float32Array)
                 values && assert(values.length === this.values, "Data size differs from the one in options")
                 error && assert(values && values.length === error.length)
-                this.sendRawCallback(then, function name({cellShape, partSize, summary}, namer, packet) {
+                this.sendRawCallback(then, function name({cellShape, partSize, summary}, namer, packet, then, unname) {
                     const namedV = allocF32(namer.namedSize)
                     const namedE = error ? allocF32(namer.namedSize) : null
                     if (!values) namedV.fill(0)
                     namedV && namer.name(values, namedV, 0, reward)
                     namedE && namer.name(error, namedE, 0, 0, -1.)
+                    this.feedbackCallbacks.push(then), this.feedbackNoFeedback.push(this.noFeedback), this.feedbackNamers.push(this.dataNamers), this.feedbackUnnamer.push(unname)
                     packet.send(this, namedV, namedE, values === null, this.noFeedback)
                     return !!values
                 }, Sensor._unnameFeedback)
@@ -1151,6 +1149,8 @@ Makes only the sign matter for low-frequency numbers.` }),
     function gotPacketFeedback(T, data, error, allFeedback, fbOffset, cellShape, partSize, summary) {
         // Fulfill the promise of `.send`.
         try {
+            // TODO: Here, we are assuming that `T.feedback*` items are pushed exactly once per packet-sending. Can we not, though?
+            //   (This isn't even robust to multiple cell shapes, right? BUG)
             const then = T.feedbackCallbacks.shift()
             const noFeedback = T.feedbackNoFeedback.shift()
             const namers = T.feedbackNamers.shift()
