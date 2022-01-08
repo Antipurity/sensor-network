@@ -1,11 +1,12 @@
 export default function init(sn) {
     // (Reading/writing may be quite unoptimized here.)
+    const A = Object.assign
     const arrayCache = []
     class InternetSensor extends sn.Sensor {
         static docs() { return `Extends this network over the Internet.
 
 Methods:
-- \`signal(metaChannel: { send(Uint8Array), close(), onopen, onmessage, onclose }, maxCells=65536)\`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [over a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- \`signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)\`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [over a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
@@ -200,7 +201,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-- \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - \`bytesPerValue=2\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
 ` }
         static options() {
@@ -222,7 +223,7 @@ Options:
                 sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
                 opts.onValues = this.onValues
                 this.iceServers = opts.iceServers || []
-                this.signaler = opts.signaler // TODO: What's the default implementation?
+                this.signaler = opts.signaler || InternetHandler.consoleLog
                 this.getPeer()
                 this.peer.setConfiguration({iceServers:this.iceServers})
                 this._feedback = [] // What receiving a feedback-packet will have to do.
@@ -234,7 +235,7 @@ Options:
         getPeer() {
             // Connects to another sensor network through WebRTC.
             if (this.metaChannel == null) {
-                const mc = this.metaChannel = this.signaler()
+                const mc = this.metaChannel = this.signaler(true)
                 this._signal = new Promise((resolve, reject) => {
                     mc.onopen = evt => { this._signal = null, resolve() }
                     mc.onmessage = evt => {
@@ -345,10 +346,29 @@ Options:
             this._feedback.push([feedback, then])
         }
     }
-    // TODO: The default signaling option: "the user will manually copy this".
-    //   ...What, from JS console? And into JS console? This is so unrefined…
-    //     `() => msg => console.log(msg)`
-    //   TODO: But also have a WebSocket option. (Once we have a Rust server to test it on, I mean.)
+    InternetHandler.consoleLog = A(function signalViaConsole(isHandler = false) {
+        const obj = {
+            send(msg) { console.log(msg) },
+            close() {},
+        }
+        setTimeout(() => {
+            obj.onopen && obj.onopen()
+            console.log("Carry around WebRTC messages manually, through the JS console.")
+            console.log("    On the sensor, call \`.signal(sn.Sensor.InternetHandler.consoleLog())\` first.")
+            console.log("    On request from the handler, do \`internetSensor(string)\`.")
+            console.log("    On response from the sensor, do \`internetHandler(string)\`.")
+            const k = isHandler ? 'internetHandler' : 'internetSensor'
+            self[k] = msg => obj.onmessage && obj.onmessage({data:msg})
+        }, 0)
+        return obj
+    }, {
+        docs:`The simplest option: [\`console.log\`](https://developer.mozilla.org/en-US/docs/Web/API/Console/log) and \`self.snInternet(messageString)\` is used to make the user carry signals around.`,
+    })
+    InternetHandler.webSocket = A(function signalViaWS(url) {
+        return () => new WebSocket(url)
+    }, {
+        docs:`Signals via a [Web Socket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). Have to pass it the URL before passing it as the \`signaler\` option.`,
+    })
     return {
         sensor: InternetSensor,
         handler: InternetHandler,
