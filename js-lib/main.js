@@ -808,6 +808,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 const result = Object.create(null)
                 if (typeof onBenchFinished != 'function') onBenchFinished = (obj, id, got, progress) => {
                     // got[key] → result[name][key][id]
+                    if (!obj) return
                     const name = obj.name || '—'
                     const into = result[name] || (result[name] = Object.create(null))
                     for (let key of Object.keys(got)) {
@@ -834,8 +835,7 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                             onBenchFinished(benchOwner[i], benchIndex[i], cb, (i+1) / bench.length)
                         } catch (err) { console.error(err) }
                 }
-                if (!bench.length)
-                    onBenchFinished(null, null, null, 1)
+                onBenchFinished(null, null, null, 1)
                 currentBenchmark = null
                 return Object.keys(result).length ? result : undefined
                 function walk(x) {
