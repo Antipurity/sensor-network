@@ -201,8 +201,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
-- TODO: \`bytesPerValue=2\`
-- TODO:
+- \`bytesPerValue=2\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
 ` }
         static options() {
             return {
@@ -210,17 +209,25 @@ Options:
                     ['None']: () => [],
                     ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
                 },
-                // TODO:
+                bytesPerValue: {
+                    ['float32 (4× size)']: () => 0,
+                    ['uint16 (2× size)']: () => 2,
+                    ['uint8 (1× size)']: () => 1,
+                },
             }
         }
         resume(opts) {
             if (opts) {
+                const bpv = opts.bytesPerValue || 0
+                sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
+                opts.onValues = this.onValues
                 this.iceServers = opts.iceServers || []
                 this.signaler = opts.signaler // TODO: What's the default implementation?
                 this.getPeer()
                 this.peer.setConfiguration({iceServers:this.iceServers})
-                this._data = [], this._feedback = [] // The main adjustable data queue.
-                // TODO: What else?
+                this._feedback = [] // What receiving a feedback-packet will have to do.
+                this._opts = Object.assign(Object.create(null), opts)
+                this.bytesPerValue = bpv
             }
             return super.resume(opts)
         }
@@ -297,6 +304,8 @@ Options:
                     }
                     dc.onmessage = messageUnpacker((bytes, packetId) => {
                         // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
+                        const fb = this._feedback.shift()
+                        if (!fb) return
                         const dv = new DataView(bytes.buffer)
                         let offset = 0
                         const bpv = dv.getUint16(offset);  offset += 2
@@ -304,20 +313,36 @@ Options:
                         const cellShape = allocArray(dv.getUint16(offset));  offset += 2
                         for (let i = 0; i < cellShape.length; ++i)
                             cellShape[i] = dv.getUint32(offset), offset += 4
-                        const feedback = unquantize(bytes.subarray(offset), bpv)
-                        // TODO: Set this._remotePartSize  and this._remoteCellShape.
-                        //   TODO: Also, pause+resume if they differ. (Hopefully, no errors surface.)
-                        // TODO: Read from the `onValues`-filled queue, and fill its `feedback` and execute `then`.
+                        let gotFeedback = unquantize(bytes.subarray(offset), bpv)
+                        // Handle what we got.
+                        if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._cellShape)) {
+                            this._remotePartSize = partSize
+                            this._remoteCellShape = cellShape
+                            this._opts.partSize = partSize
+                            this._opts.userParts = cellShape[0] / partSize | 0
+                            this._opts.nameParts = cellShape[1] / partSize | 0
+                            this._opts.dataSize = cellShape[cellShape.length-1]
+                            this.resume(this._opts)
+                        }
+                        const [feedback, then] = fb
+                        if (feedback) {
+                            if (gotFeedback.length > feedback.length)
+                                gotFeedback = gotFeedback.subarray(0, feedback.length)
+                            feedback.set(gotFeedback)
+                            if (feedback.length > gotFeedback.length)
+                                feedback.fill(0, gotFeedback.length)
+                        }
+                        then()
                     })
                     dc.onclose = evt => this.dataChannel = null // When closed, reopen.
                 }
             }
         }
         
-        static onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback) {
-            // TODO: this._dataSend({data, noData, noFeedback, cellShape, partSize}, bpv)
-            //   (If it doesn't exist, simply return, 0-filling `feedback`, calling `then` along the way.)
-            // TODO: Push `then` into a queue of callbacks (possibly along with stuff like `feedback`).
+        onValues(then, input, feedback) {
+            if (!this._dataSend) feedback && feedback.fill(0), then(true)
+            this._dataSend(input, this.bytesPerValue)
+            this._feedback.push([feedback, then])
         }
     }
     // TODO: The default signaling option: "the user will manually copy this".
@@ -498,5 +523,10 @@ Options:
             a[j+7] = b[i] & (1<<0)
         }
         return a
+    }
+    function arrayEqual(a,b) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+        for (let i = 0; i < a.length; ++i) if (a[i] !== b[i]) return false
+        return true
     }
 }
