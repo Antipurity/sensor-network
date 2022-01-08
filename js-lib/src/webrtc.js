@@ -21,6 +21,25 @@ TODO: Make note of browser compatibility.
                 // TODO:
             }
         }
+        static tests() {
+            return [
+                [
+                    "Quantization error is correct, f32",
+                    checkError(65536, 0),
+                    true,
+                ],
+                [
+                    "Quantization error is correct, u8",
+                    checkError(65536, 1),
+                    true,
+                ],
+                [
+                    "Quantization error is correct, u16",
+                    checkError(65536, 2),
+                    true,
+                ],
+            ]
+        }
         resume(opts) {
             if (opts) {
                 this.iceServers = opts.iceServers || []
@@ -305,22 +324,22 @@ Options:
     function quantize(f32a, bpv = 0) {
         // From floats to an array of bytes, quantized to lower-but-still-`-1…1` resolutions.
         sn._assert(f32a instanceof Float32Array)
-        if (!bpv) return bigEndian(new Uint8Array(f32a.buffer, f32a.byteOffset, f32a.byteLength), bpv, false, true)
+        if (!bpv) return bigEndian(new Uint8Array(f32a.buffer, f32a.byteOffset, f32a.byteLength), bpv)
         sn._assert(bpv === 1 || bpv === 2)
         const r = bpv === 1 ? new Uint8Array(f32a.length) : new Uint16Array(f32a.length)
         const scale = bpv === 1 ? 255 : 65535
         for (let i = 0; i < r.length; ++i)
-            r[i] = Math.max(0, Math.min(Math.round((f32a[i]+1)/2 * scale), 255))
-        return bpv === 1 ? r : bigEndian(new Uint8Array(r.buffer, r.byteOffset, r.byteLength), bpv, false, true)
+            r[i] = Math.max(0, Math.min(Math.round((f32a[i]+1)/2 * scale), scale))
+        return bpv === 1 ? r : bigEndian(new Uint8Array(r.buffer, r.byteOffset, r.byteLength), bpv, true)
     }
     function unquantize(a, bpv = 0) {
         sn._assert(a instanceof Uint8Array)
         if (!bpv) {
-            a = bigEndian(a, bpv, true)
+            a = bigEndian(a, bpv)
             return new Float32Array(a.buffer, a.byteOffset, a.byteLength / 4 | 0)
         }
         sn._assert(bpv === 1 || bpv === 2)
-        if (bpv === 2) a = new Uint16Array(bigEndian(a, bpv, true).buffer)
+        if (bpv === 2) a = new Uint16Array(bigEndian(a, bpv).buffer)
         const r = new Float32Array(a.length)
         const scale = bpv === 1 ? 255 : 65535
         for (let i = 0; i < r.length; ++i)
@@ -329,26 +348,26 @@ Options:
     }
     function unquantizeError(a, bpv = 0) {
         // `a`: pre-existing error; un/quantization error is added to that.
-        if (!bpv) return a
+        if (!bpv) return typeof a == 'number' ? new Float32Array(a).fill(-1) : a
         const scale = bpv === 1 ? 255 : 65535
         if (typeof a == 'number') a = new Float32Array(a), a.fill(1 / scale - 1)
         else for (let i = 0; i < a.length; ++i) a[i] += 1 / scale
         return a
     }
-    function checkError(a, bpv = 0) { // TODO: Have a unit-test that does this.
+    function checkError(a, bpv = 0) {
         if (typeof a == 'number') {
             a = new Float32Array(a)
             for (let i = 0; i < a.length; ++i) a[i] = Math.random()*2-1
         }
         const b = unquantize(quantize(a, bpv), bpv)
         const e = unquantizeError(a.length, bpv)
-        sn._assert(a.length === b.length, "Unequal lengths: " + a.length + " ≠ " + b.length)
+        sn._assert(a.length === b.length, "Unequal lengths")
         for (let i = 0; i < a.length; ++i)
-            sn._assert(Math.abs(a[i] - b[i]) <= e[i]+1, a[i] + " ≠ " + b[i])
-            ,e[i] = Math.abs(a[i] - b[i]) - (e[i]+1)
-        console.log(e)
+            if (!(Math.abs(a[i] - b[i]) <= e[i]+1))
+                return a[i] + " ≠ " + b[i]
+        return true
     }
-    function bigEndian(a, bpv, backToNative = false, inPlace = false) {
+    function bigEndian(a, bpv, inPlace = false) {
         // `a` is copied unless `inPlace`.
         if (bigEndian.bigEnd === undefined) {
             const x = new ArrayBuffer(2), y = new Uint16Array(x), z = new Uint8Array(x)
@@ -356,7 +375,7 @@ Options:
             bigEndian.bigEnd = z[0] === 0x01
         }
         sn._assert(a instanceof Uint8Array, "Bad byte-array")
-        if (bigEndian.bigEnd !== backToNative || bpv === 1) return a
+        if (bigEndian.bigEnd || bpv === 1) return a
         if (!inPlace) a = new Uint8Array(a)
         if (bpv === 2)
             for (let i = 0; i < a.length; i += 2)
