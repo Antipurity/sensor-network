@@ -69,18 +69,58 @@ TODO: Make note of browser compatibility.
             }
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
-                const packetData = Object.create(null) // id → [remainingParts, prevPacketId, shapeId, ...partData]
-                dataChannel.onmessage = evt => messageUnpacker(data => {
+                dataChannel.onmessage = evt => messageUnpacker((data, packetId) => {
+                    sn._assert(data instanceof Uint8Array)
                     if (data.length < 2) return
-                    const shapeId = data[0]*256 + data[1] // TODO: What if `data` is `null`?
+                    // TODO: What if `data` is `null`?
+                    //   What do we want to do, abstractly? A failed packet... How to send this failure on?
+                    //   TODO: (…Wait: if we'll be treating shape-updates the same as data-packets via `packetId`, then won't this mean that we'll have an extra data+feedback step for each shape-update? Or is this tolerable?)
+                    const dv = new DataView(data.buffer)
+                    const shapeId = dv.getUint16(0)
                     if (shapeId === 0) {
-                        // TODO: Remember (need global-ish vars: prev-shape-id and prev-shape) and send acknowledgement.
+                        // Read the shape.
+                        // TODO: (Maybe, should be 2 functions that read & write the same C struct?… For symmetry…)
+                        //   `readCellShape(Uint8Array)→obj`, `writeCellShape(obj)→Uint8Array`.
+                        const partSize = dv.getUint32(2)
+                        const cells = dv.getUint32(6)
+                        const cellShapeLen = dv.getUint16(10)
+                        if (cellShapeLen !== 4) return
+                        const cellShape = new Array(cellShapeLen)
+                        let offset = 12
+                        for (let i = 0; i < cellShapeLen; ++i)
+                            cellShape[i] = dv.getUint32(), offset += 4
+                        const bpv = dv.getUint8(offset);  offset += 1
+                        if (bpv !== 0 && bpv !== 1 && bpv !== 2) return
+                        const nameSize = cells * (cellShape.reduce((a,b) => a+b) - cellShape[cellShape.length-1])
+                        const nameBytes = data.subarray(offset, offset += nameSize)
+                        const noDataBytes = data.subarray(offset, offset += Math.ceil(cells / 8))
+                        const noFeedbackBytes = data.subarray(offset, offset += Math.ceil(cells / 8))
+                        const name = unquantize(nameBytes, bpv)
+                        const noData = fromBits(noDataBytes)
+                        const noFeedback = fromBits(noFeedbackBytes)
+                        // TODO: Remember (need global-ish vars: prev-shape-id and prev-shape).
+                        //   ...Don't we want to remember more shapes than 1... Maybe 3 previous shapes... Stored in a [..., shapeId, shapeObject, ...]
+                        // Acknowledge.
+                        {
+                            const dv = new DataView(new ArrayBuffer(12))
+                            dv.setUint16(0, packetId)
+                            dv.setUint16(2, 0) // part
+                            dv.setUint16(4, 1) // parts
+                            dv.setUint16(6, 0) // prev packet id // TODO: Maybe, this should be on a separate layer which will wrap our own, after the message is here but before decoding? (This way, we don't *have* to waste space here for functionality that's not guaranteed to be implemented anyway.)
+                            dv.setUint16(8, 0) // shape id (ACK)
+                            dv.setUint16(10, shapeId) // shape id (what we ACK)
+                            signal(new Uint8Array(dv.buffer))
+                        }
                     } else {
                         // TODO: Fetch shape ID (or request if we don't know it… Wait, do we need a packet queue to not drop these maybe-packets?)
                         // TODO: Turn reward & data (& shape info) into a raw array of, uh, f32...
                         //   ...No, need to decompress first...
+                        // (Also, do `unquantize` on all value arrays.)
                     }
-                    // Do we want a JS object for the shape info?
+                    // TODO: Do we want a JS object for the shape info?
+                    // TODO: Need functions for shapely send/receive, right? (*Then*, we can do shapeliness+compression.)
+                    //   They only need cellShape and raw data/feedback. And they can already do un/qunatization.
+                    //   ...We really need shape handling here, tho. And those funcs are trivial anyway.
                 })
                 //   TODO: ...What is its `onpacket`?…
                 //     How do we encode prevPacketId and shapeId, and do de/compression, and requesting of shapes and composition of shapes with data to create the actual cells...
@@ -226,7 +266,7 @@ Options:
     }
     function messageUnpacker(onpacket, timeoutMs=50, maxPacketBytes=16*1024*1024) {
         // Set the result of this as `dataChannel.onmessage`.
-        // `onpacket(null | Uint8Array)` will be called with full packet data, in the ID-always-increasing-by-1 order, or `null` if taking too long.
+        // `onpacket(null | Uint8Array, packetId)` will be called with full packet data, in the ID-always-increasing-by-1 order, or `null` if taking too long.
         const packs = Object.create(null) // id → [remainingParts, ...partData]
         let nextId = 0, prevAt = null
         function superseded() {
@@ -274,10 +314,10 @@ Options:
                         off += sublen
                     }
                     deallocArray(packs[nextId]), packs[nextId] = null
-                    onpacket(b)
+                    onpacket(b, nextId)
                 } else {
                     if (packs[nextId]) deallocArray(packs[nextId]), packs[nextId] = null
-                    onpacket(null)
+                    onpacket(null, nextId)
                 }
                 ++nextId, nextId >= 65536 && (nextId = 0)
                 tooLong = false
@@ -324,6 +364,29 @@ Options:
         else if (bpv === 0 || bpv === 4)
             for (let i = 0; i < a.length; i += 4)
                 [a[i+0], a[i+1], a[i+2], a[i+3]] = [a[i+3], a[i+2], a[i+1], a[i+0]]
+        return a
+    }
+    function toBits(a) { // Array<bool> → Uint8Array
+        const b = new Uint8Array(Math.ceil(a.length / 8))
+        for (let i = 0; i < b.length; ++i) {
+            const j = 8*i
+            b[i] = (a[j+0]<<7) | (a[j+1]<<6) | (a[j+2]<<5) | (a[j+3]<<4) | (a[j+4]<<3) | (a[j+5]<<2) | (a[j+6]<<1) | (a[j+7]<<0)
+        }
+        return b
+    }
+    function fromBits(b) { // Uint8Array → Array<bool>
+        const a = new Array(b.length * 8) // The length is a bit inexact, which is not important for us.
+        for (let i = 0; i < b.length; ++i) {
+            const j = 8*i
+            a[j+0] = b[i] & (1<<7)
+            a[j+1] = b[i] & (1<<6)
+            a[j+2] = b[i] & (1<<5)
+            a[j+3] = b[i] & (1<<4)
+            a[j+4] = b[i] & (1<<3)
+            a[j+5] = b[i] & (1<<2)
+            a[j+6] = b[i] & (1<<1)
+            a[j+7] = b[i] & (1<<0)
+        }
         return a
     }
 }

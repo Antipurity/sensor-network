@@ -279,6 +279,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
             - ⋯ Read from file.
+                - ⋯ Allow `noFeedback=false`. Research dataset distillation: loop: do several iterations of learning on adjustable data points (preserving all gradient graphs), then evaluate on the bigger dataset (not learning model weights), accumulating gradient and finally adjusting the data points. (Might be a bit strange for autoregressive tasks.) (ML-based compression: the more you live, the more you know and the faster you learn.)
             - ⋯ In extension, read from tabs.
             - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
                 - ⋯ Each data packet (1+ cells) references its meta-data (cellShape & partSize & noData & noFeedback) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost).
@@ -329,11 +330,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - 2 bytes: packet ID.
                     - 2 bytes: packet-part (each part is 2**15 bytes).
                     - Content.
-                        - 2 bytes: packet-part-length.
+                        - 2 bytes: total packet-part.
                         - 2 bytes: prev-packet ID (for compression) or 0 if it can be decompressed by itself. (No requesting; dropping the 0-packet means dropping all its dependents.)
                         - 2 bytes: shape ID. Content (split along "packet-parts") (compressible):
                             - shapeId==0: new shape:
-                                - handler data (provide): shapeId (2b) & cellShape (4b length, 4b values) & partSize (4b) & cells (4b) & name (for each cell, values, numbered `sum(cellShape)-cellShape[-1]`; including the overwritten reward) & noData (1 bit per cell) & noFeedback (1 bit per cell)
+                                - handler data (provide): shapeId (2b) & partSize (4b) & cells (4b) & cellShape (2b length, 4b values) & bytesPerValue (1b) & name (for each cell, values, numbered `sum(cellShape)-cellShape[-1]`; including the overwritten reward) & noData (1 bit per cell) & noFeedback (1 bit per cell)
                                 - sensor feedback (ACKnowledgement; no ACK means that data has to resend the shape): shapeId (2b)
                             - shapeId≥1: reward & data (for each cell, values, numbered `1 + cellShape[-1]`)
                 - ⋯ Take on the remote cellShape and partSize.
