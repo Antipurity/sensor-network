@@ -295,11 +295,19 @@ Options:
                         sn._assert(offset === totalSize, "totalSize miscounts")
                         packer(bytes)
                     }
-                    dc.onmessage = messageUnpacker((packet, packetId) => {
-                        // TODO: bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
+                    dc.onmessage = messageUnpacker((bytes, packetId) => {
+                        // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
+                        const dv = new DataView(bytes.buffer)
+                        let offset = 0
+                        const bpv = dv.getUint16(offset);  offset += 2
+                        const partSize = dv.getUint32(offset);  offset += 4
+                        const cellShape = allocArray(dv.getUint16(offset));  offset += 2
+                        for (let i = 0; i < cellShape.length; ++i)
+                            cellShape[i] = dv.getUint32(offset), offset += 4
+                        const feedback = unquantize(bytes.subarray(offset), bpv)
                         // TODO: Set this._remotePartSize  and this._remoteCellShape.
                         //   TODO: Also, pause+resume if they differ. (Hopefully, no errors surface.)
-                        // TODO: Read from the `onValues`-filled queue, and fill `feedback` and execute `then`.
+                        // TODO: Read from the `onValues`-filled queue, and fill its `feedback` and execute `then`.
                     })
                     dc.onclose = evt => this.dataChannel = null // When closed, reopen.
                 }
