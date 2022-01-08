@@ -377,7 +377,7 @@ export default (function(exports) {
                 return ch.cellShapes[0] && ch.cellShapes[0].cellShape || null
             }
             sendRawCallback(then, name, unname) {
-                // `name.call(this, {cellShape, partSize, summary}, namer, packet)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`. Returns `true` if it wrote any non-`noData` stuff.
+                // `name.call(this, {cellShape, partSize, summary}, namer, packet)→bool`: does `packet.send(this, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
                 // `unname(namer, allFeedback, fbOffset, flatV)`
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.

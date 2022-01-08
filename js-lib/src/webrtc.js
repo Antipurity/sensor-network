@@ -46,6 +46,7 @@ TODO: Make note of browser compatibility.
                 opts.onValues = this.onValues
                 opts.values = 0, opts.emptyValues = 0
                 opts.name = []
+                this._dataPoint = null
                 this._data = [], this._feedback = [] // The main adjustable data queue.
                 // TODO: What else?
             }
@@ -117,24 +118,42 @@ TODO: Make note of browser compatibility.
                         this._data.push(a)
                         // TODO: What func do we push to this._feedback?
                     } else {
-                        this._data.push(null)
+                        this._data.push(allocArray(0))
                         // TODO: What func do we push to this._feedback?
                     }
                 })
                 dataChannel.onclose = evt => peer.close() // Hopefully not fired on mere instability.
             }
         }
+        _name({cellShape, partSize, summary}, namer, packet) {
+            // Copy the data point into the actual data stream.
+            let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback] = this._dataPoint
+            if (rawData === undefined) { // Dropped packet. Synthetic data.
+                cells = 0, bpv = 0
+                rawData = sn._allocF32(0), rawError = null
+                noData = noFeedback = true
+            }
+            const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
+            const realCellSize = realCellShape.reduce((a,b)=>a+b), realNamedSize = cells * realCellSize
+            const namedV = sn._allocF32(namedSize), namedE = rawError && sn._allocF32(namedSize)
+            for (let c = 0; c < cells; ++c) { // Naively reshape.
+                const offsetTarg = c * cellSize, offsetReal = c * realCellSize
+                for (let i = 0; i < namedSize; ++i)
+                    namedV[offsetTarg + i] = rawData[offsetReal + i]
+            }
+            packet.send(this, rawData, rawError || null, noData || true, noFeedback || true)
+        }
+        _unname(namer, allFeedback, fbOffset, flatV) {}
         onValues(data) {
             sn._deallocF32(data)
-            // TODO: How to take all data from the queue?
-            //   TODO: Also, this.resize(values) and give per-cell noData/noFeedback bool arrays to this.sendCallback. TODO: Actually, use `this.sendRawCallback` instead.
-            //   ...What are the values though? Can be inferred by summing up this._data's lengths, right?
-            // TODO: How to remember to adjust what we have?
+            this._dataPoint = this._data.shift()
+            if (!this._dataPoint) return
+            this.sendRawCallback(this.onFeedback, this._name, this._unname)
         }
         onFeedback(feedback) {
-            // TODO: How to send feedback to their appropriate connections?
-            //   Also, isn't *this* code largely shared between sensing and handling too?
-            //     (Not in shape giving/requesting, though.)
+            // TODO: How to send feedback parts to their appropriate connections?
+            //   Just call this._feedback.shift()?
+            //     But what if we reshaped it previously, and have to reshape it back, here...
         }
     }
     class InternetHandler extends sn.Handler {
@@ -143,6 +162,7 @@ TODO: Make note of browser compatibility.
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - \`signaler = …\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- TODO: \`bytesPerValue=2\`
 - TODO:
 ` }
         static options() {
@@ -224,7 +244,7 @@ Options:
             else this.dataChannel.send(data)
         }
         static onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback) {
-            // TODO: Check `this.dataChannel.readyState === 'open'`; if not open, just return.
+            // TODO: Check `this.dataChannel.readyState === 'open'`; if not open, just return. ...No, should use this.signal.
             // TODO: How to send values across `this.dataChannel`, and get some back?
             //   TODO: How to accumulate out-of-order packets, waiting reasonably?
             //   TODO: When to drop packets?
