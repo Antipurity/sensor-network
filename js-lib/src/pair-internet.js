@@ -353,10 +353,12 @@ Options:
         }
         setTimeout(() => {
             obj.onopen && obj.onopen()
-            console.log("Carry around WebRTC messages manually, through the JS console.")
-            console.log("    On the sensor, call \`.signal(sn.Sensor.InternetHandler.consoleLog())\` first.")
-            console.log("    On request from the handler, do \`internetSensor(string)\`.")
-            console.log("    On response from the sensor, do \`internetHandler(string)\`.")
+            if (isHandler && !self.internetHandler) {
+                console.log("Carry around WebRTC messages manually, through the JS console.")
+                console.log("    On the sensor, call \`.signal(sn.Sensor.InternetHandler.consoleLog())\` first.")
+                console.log("    On request from the handler, do \`internetSensor(string)\`.")
+                console.log("    On response from the sensor, do \`internetHandler(string)\`.")
+            }
             const k = isHandler ? 'internetHandler' : 'internetSensor'
             self[k] = msg => obj.onmessage && obj.onmessage({data:msg})
         }, 0)
