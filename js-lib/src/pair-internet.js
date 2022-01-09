@@ -268,7 +268,7 @@ Options:
                 this.iceServers = opts.iceServers || []
                 this.signaler = opts.signaler || InternetHandler.consoleLog
                 this.getPeer()
-                this.peer.setConfiguration({iceServers:this.iceServers})
+                this.peer.setConfiguration && this.peer.setConfiguration({iceServers:this.iceServers})
                 this._feedback = [] // What receiving a feedback-packet will have to do.
                 this._opts = Object.assign(Object.create(null), opts)
                 this.bytesPerValue = bpv
