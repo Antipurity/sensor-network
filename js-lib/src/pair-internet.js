@@ -386,7 +386,7 @@ Options:
         }
         
         onValues(then, input, feedback) {
-            if (!this._dataSend) feedback && feedback.fill(0), then(true)
+            if (!this._dataSend) return feedback && feedback.fill(0), then(true)
             this._dataSend(input, this.bytesPerValue)
             this._feedback.push([feedback, then])
         }
