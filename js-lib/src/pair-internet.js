@@ -48,14 +48,15 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 const dataSize = 64
                 function onSensorFeedback(feedback) {
                     if (feedback)
+                        // console.log(feedback[0]), // TODO: ...What are we receiving then?? No WebRTC connection?… Hm…
                         feedback.fill(.5439828952837), // "Read" it.
                         sn._deallocF32(feedback) // Reuse it.
                 }
                 return function start() {
                     const signal1 = {
-                        send(msg) { signal2.onmessage && signal2.onmessage(msg) },
+                        send(msg) { console.log('s1→s2 msg', msg, !!signal2.onmessage), signal2.onmessage && signal2.onmessage({data:msg}) }, // TODO: ...Wait, why is nothing being printed here... Why no messages?...
                     }, signal2 = {
-                        send(msg) { signal1.onmessage && signal1.onmessage(msg) },
+                        send(msg) { console.log('s2→s1 msg', msg, !!signal2.onmessage), signal1.onmessage && signal1.onmessage({data:msg}) }, // TODO:
                     }
                     const aFrom = new sn.Sensor({
                         channel: 'a',
@@ -78,6 +79,8 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         },
                     })
                     bFrom.signal(signal2)
+                    signal1.onopen && signal1.onopen()
+                    signal2.onopen && signal2.onopen()
                     return function stop() {
                         aFrom.pause()
                         aTo.pause(), bFrom.pause()
@@ -132,13 +135,15 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             }
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
+                console.log('sensor got data channel', dataChannel) // TODO:
+                dataChannel.binaryType = 'arraybuffer'
                 // Assuming that `dataChannel` is already opened.
                 const packer = messagePacker(dataChannel)
                 const feedback = (fb, bpv, partSize, cellShape) => { // Float32Array, 0|1|2
                     const bytes = quantize(fb, bpv)
                     const header = 2 + 4 + 2+4*cellShape.length
                     const bytes2 = new Uint8Array(header + bytes.length)
-                    const dv = new DataView(bytes2)
+                    const dv = new DataView(bytes2.buffer, bytes2.byteOffset, bytes2.byteLength)
                     dv.setUint16(0, bpv)
                     dv.setUint32(2, partSize)
                     dv.setUint16(6, cellShape.length)
@@ -149,10 +154,11 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     packer(bytes)
                 }
                 dataChannel.onmessage = messageUnpacker((data, packetId) => {
+                    console.log('sensor receives data', data) // TODO: ...Why nothing beyond this?
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
                         if (data.length < 2) return
-                        const dv = new DataView(data.buffer)
+                        const dv = new DataView(data.buffer, data.byteOffset, data.byteLength)
                         // Read the shape.
                         const cells = dv.getUint32(0)
                         const partSize = dv.getUint32(4)
@@ -176,6 +182,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         const noFeedback = fromBits(noFeedbackBytes)
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
+                        console.log('PUSH') // TODO: ...Why is there only one PUSH?... ...There's only one data packet received too...
                         this._data.push(a)
                     } else {
                         const a = allocArray(9)
@@ -247,7 +254,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
-- \`bytesPerValue=2\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
+- \`bytesPerValue=0\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
 ` }
         static options() {
             return {
@@ -307,7 +314,7 @@ Options:
                     }).catch(() => peer.setRemoteDescription({type:'rollback'}))
                 }
                 peer.onconnectionstatechange = evt => {
-                    if (!peer) return
+                    console.log('handler onconnectionstatechange', evt) // TODO:
                     const state = peer.connectionState
                     if (state === 'failed' || state === 'closed') this.peer = null // Reopen.
                 }
@@ -326,12 +333,14 @@ Options:
                 })
                 dc.binaryType = 'arraybuffer'
                 dc.onopen = evt => {
+                    console.log('handler, data channel opened, OK', evt) // TODO: ...If it opens, then why does no data flow...
                     const packer = messagePacker(dc)
                     this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
+                        console.log('handler sends data') // TODO: ...But why is nothing being received? ...And why is it only sent on the first iteration??
                         // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
                         const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
                         const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
-                        const bytes = new Uint8Array(totalSize), dv = new DataView(bytes)
+                        const bytes = new Uint8Array(totalSize), dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
                         let offset = 0
                         dv.setUint32(offset, cells), offset += 4
                         dv.setUint32(offset, partSize), offset += 4
@@ -349,10 +358,11 @@ Options:
                         packer(bytes)
                     }
                     dc.onmessage = messageUnpacker((bytes, packetId) => {
+                        console.log('handler receives data') // TODO:
                         // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
                         const fb = this._feedback.shift()
                         if (!fb) return
-                        const dv = new DataView(bytes.buffer)
+                        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
                         let offset = 0
                         const bpv = dv.getUint16(offset);  offset += 2
                         const partSize = dv.getUint32(offset);  offset += 4
@@ -386,6 +396,8 @@ Options:
         }
         
         onValues(then, input, feedback) {
+            console.log('handler onValues', !!this._dataSend) // TODO:
+            // TODO: ...Is it all because interpreter loops sleep when they have no data, so we must have `sensor.wake()` and `handler.wake()` to fix this bug...
             if (!this._dataSend) return feedback && feedback.fill(0), then(true)
             this._dataSend(input, this.bytesPerValue)
             this._feedback.push([feedback, then])
@@ -480,7 +492,7 @@ Options:
                 p = packs[id]
                 p[0] && !p[1+part] && --p[0], p[1+part] = dv
             }
-            if (id > prevId && prevAt == null) prevAt = performance.now()
+            if (id > nextId && prevAt == null) prevAt = performance.now()
             // Send off the next packet, in-order or on-timeout if there are packets after this one.
             let tooLong = prevAt != null && performance.now() - prevAt > timeoutMs && superseded()
             while (packs[nextId] && packs[nextId][0] === 0 || tooLong) {
