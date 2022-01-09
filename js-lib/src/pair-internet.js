@@ -40,8 +40,8 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 ],
             ]
         }
-        static bench() {
-            // TODO: Run & fix.
+        static bench() { // Extends a virtual sensor/handler pair over a localhost connection.
+            // TODO: Measure how many bytes we actually send down the line, for future compression measurement.
             const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
             return cellCounts.map(river) // See how throughput changes with input size.
             function river(cells) {
@@ -58,6 +58,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         send(msg) { signal1.onmessage && signal1.onmessage(msg) },
                     }
                     const aFrom = new sn.Sensor({
+                        channel: 'a',
                         name: ['remote', 'data', 'source'],
                         values: cells*dataSize,
                         onValues(data) {
@@ -67,11 +68,12 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     const aTo = new sn.Handler.Internet({ channel:'a', signaler: () => signal1 })
                     const bFrom = new sn.Sensor.Internet({ channel:'b' })
                     const bTo = new sn.Handler({
+                        channel: 'b',
                         dataSize,
                         onValues(then, {data}, feedback) {
                             try {
                                 data.fill(.489018922485) // "Read" it.
-                                if (feedback) feedback.fill(-1)
+                                if (feedback) feedback.fill(-.97)
                             } finally { then() }
                         },
                     })
@@ -430,16 +432,21 @@ Options:
             sn._assert(data.length <= maxPacketBytes, "Message is too long!")
             const partSize = maxPartLen - 4
             const parts = Math.ceil((data.length - 2) / partSize)
+            let sent = 0
             for (let part = 0, atData = 0; part < parts; ++part) {
                 partView.setUint16(0, nextId)
                 partView.setUint16(2, part)
                 if (part === 0) partView.setUint16(4, parts)
                 const header = (part === 0 ? 6 : 4)
-                for (let i = header; i < partBuf.length && atData < data.length; ++i, ++atData)
+                let i
+                for (i = header; i < partBuf.length && atData < data.length; ++i, ++atData)
                     partBuf[i] = data[atData]
-                channel.send(partBuf)
+                sent += i
+                channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
             }
             ++nextId, nextId >= 65536 && (nextId = 0)
+            console.log('sent') // TODO:
+            sn.meta.metric('sent, bytes', sent) // TODO: ...Where's the sending?! ...And we're receiving another channel's data too... Yep, things are extremely bad.
         }
     }
     function messageUnpacker(onpacket, timeoutMs=50, maxPacketBytes=16*1024*1024) {
