@@ -49,7 +49,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 function onSensorFeedback(feedback) {
                     if (feedback)
                         feedback.fill(.5439828952837), // "Read" it.
-                        E._deallocF32(feedback) // Reuse it.
+                        sn._deallocF32(feedback) // Reuse it.
                 }
                 return function start() {
                     const signal1 = {
