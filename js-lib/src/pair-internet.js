@@ -297,11 +297,11 @@ Options:
                 const peer = this.peer = new RTCPeerConnection({iceServers:this.iceServers})
                 peer.onicecandidate = evt => {
                     if (evt.candidate)
-                        signal(JSON.stringify({ icecandidate: evt.candidate }))
+                        signal.call(this, JSON.stringify({ icecandidate: evt.candidate }))
                 }
                 peer.onnegotiationneeded = evt => {
                     peer.createOffer().then(offer => peer.setLocalDescription(offer)).then(() => {
-                        signal(JSON.stringify({offer: peer.localDescription.sdp}))
+                        signal.call(this, JSON.stringify({offer: peer.localDescription.sdp}))
                     }).catch(() => peer.setRemoteDescription({type:'rollback'}))
                 }
                 peer.onconnectionstatechange = evt => {
