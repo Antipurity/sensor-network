@@ -54,9 +54,9 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 }
                 return function start() {
                     const signal1 = {
-                        send(msg) { console.log('s1→s2 msg', msg, !!signal2.onmessage), signal2.onmessage && signal2.onmessage({data:msg}) }, // TODO: ...Wait, why is nothing being printed here... Why no messages?...
+                        send(msg) { 0&&console.log('s1→s2 msg', msg, !!signal2.onmessage), signal2.onmessage && signal2.onmessage({data:msg}) }, // TODO: ...Wait, why is nothing being printed here... Why no messages?...
                     }, signal2 = {
-                        send(msg) { console.log('s2→s1 msg', msg, !!signal2.onmessage), signal1.onmessage && signal1.onmessage({data:msg}) }, // TODO:
+                        send(msg) { 0&&console.log('s2→s1 msg', msg, !!signal2.onmessage), signal1.onmessage && signal1.onmessage({data:msg}) }, // TODO:
                     }
                     const aFrom = new sn.Sensor({
                         channel: 'a',
@@ -92,7 +92,6 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
         resume(opts) {
             if (opts) {
                 this.iceServers = opts.iceServers || []
-                opts.onValues = this.onValues
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
                 this._data = [], this._feedback = [] // The main adjustable data queue.
             }
@@ -150,11 +149,12 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     let offset = 8
                     for (let i = 0; i < cellShape.length; ++i)
                         dv.setUint32(offset, cellShape[i]), offset += 4
+                    sn._assert(offset === header)
                     bytes2.set(bytes, header)
-                    packer(bytes)
+                    packer(bytes2)
                 }
                 dataChannel.onmessage = messageUnpacker((data, packetId) => {
-                    console.log('sensor receives data', data) // TODO: ...Why nothing beyond this?
+                    console.log('sensor receives data', data) // TODO:
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
                         if (data.length < 2) return
@@ -182,12 +182,15 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         const noFeedback = fromBits(noFeedbackBytes)
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
-                        console.log('PUSH') // TODO: ...Why is there only one PUSH?... ...There's only one data packet received too...
+                        console.log('PUSH') // TODO: Why are there so few 'PUSH'es and many more 'sent's?
                         this._data.push(a)
+                        this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     } else {
                         const a = allocArray(9)
                         a.fill(undefined), a[8] = feedback
+                        console.log('DROP') // TODO:
                         this._data.push(a)
+                        this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     }
                 })
                 dataChannel.onclose = evt => peer.close() // Hopefully not fired on mere instability.
@@ -199,12 +202,12 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             for (let i = 0; i < this._data.length; ++i) {
                 let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = this._data[i]
                 if (rawData === undefined) { // Dropped packet. Synthetic data.
-                    cells = 0, bpv = 0
+                    cells = 0
                     rawData = sn._allocF32(0), rawError = null
                     noData = noFeedback = true
                 }
                 const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
-                const realCellSize = realCellShape.reduce((a,b)=>a+b)
+                const realCellSize = realCellShape && realCellShape.reduce((a,b)=>a+b)
                 const namedV = sn._allocF32(namedSize), namedE = rawError && sn._allocF32(namedSize)
                 for (let c = 0; c < cells; ++c) { // Naïvely reshape.
                     const offsetTarg = c * cellSize, offsetReal = c * realCellSize
@@ -217,11 +220,6 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             this._data.length = 0
         }
         _unname(namer, allFeedback, fbOffset, flatV) {}
-        onValues(data) {
-            sn._deallocF32(data)
-            if (!this._data.length) return
-            this.sendRawCallback(this.onFeedback, this._name, this._unname)
-        }
         onFeedback(feedbackData, cellShape, partSize) {
             // Send feedback back.
             const fbPoint = this._feedback.shift()
@@ -230,6 +228,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             if (rawData === undefined) { // Dropped.
                 const f = sn._allocF32(1)
                 f[0] = 0
+                console.log('####### sensor packet dropped, giving 0 feedback') // TODO:
                 feedback(f, bpv, partSize, cellShape)
             } else { // Respond to the packet.
                 const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
@@ -268,6 +267,11 @@ Options:
                     ['uint8 (1× size)']: () => 1,
                 },
             }
+        }
+        pause() {
+            // this.dataChannel && this.dataChannel.close() // TODO: How to stop receiving data when paused forever, but still receive when temporarily paused?
+            //   Do we need a bool for "are we inside `resume`"?...
+            return super.pause()
         }
         resume(opts) {
             if (opts) {
@@ -333,10 +337,9 @@ Options:
                 })
                 dc.binaryType = 'arraybuffer'
                 dc.onopen = evt => {
-                    console.log('handler, data channel opened, OK', evt) // TODO: ...If it opens, then why does no data flow...
                     const packer = messagePacker(dc)
                     this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
-                        console.log('handler sends data') // TODO: ...But why is nothing being received? ...And why is it only sent on the first iteration??
+                        console.log('handler sends data') // TODO: Why do later iterations get next to nothing?
                         // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
                         const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
                         const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
@@ -358,36 +361,40 @@ Options:
                         packer(bytes)
                     }
                     dc.onmessage = messageUnpacker((bytes, packetId) => {
-                        console.log('handler receives data') // TODO:
+                        console.log('handler receives data, bytes', bytes && bytes.length) // TODO:
                         // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
                         const fb = this._feedback.shift()
                         if (!fb) return
-                        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-                        let offset = 0
-                        const bpv = dv.getUint16(offset);  offset += 2
-                        const partSize = dv.getUint32(offset);  offset += 4
-                        const cellShape = allocArray(dv.getUint16(offset));  offset += 2
-                        for (let i = 0; i < cellShape.length; ++i)
-                            cellShape[i] = dv.getUint32(offset), offset += 4
-                        let gotFeedback = unquantize(bytes.subarray(offset), bpv)
-                        // Handle what we got.
-                        if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._cellShape)) {
-                            this._remotePartSize = partSize
-                            this._remoteCellShape = cellShape
-                            this._opts.partSize = partSize
-                            this._opts.userParts = cellShape[0] / partSize | 0
-                            this._opts.nameParts = cellShape[1] / partSize | 0
-                            this._opts.dataSize = cellShape[cellShape.length-1]
-                            this.resume(this._opts)
+                        let gotFeedback
+                        if (bytes && bytes.length > 8) {
+                            const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+                            let offset = 0
+                            const bpv = dv.getUint16(offset);  offset += 2
+                            const partSize = dv.getUint32(offset);  offset += 4
+                            const cellShape = allocArray(dv.getUint16(offset));  offset += 2
+                            for (let i = 0; i < cellShape.length; ++i)
+                                cellShape[i] = dv.getUint32(offset), offset += 4
+                            if (bpv !== 0 && bpv !== 1 && bpv !== 2) console.log('BAD', 'bpv', bpv, 'partSize', partSize, 'cellShape', cellShape, 'bytes', bytes, 'packetId', packetId) // TODO: Yep, everything is screwed up here... But why?
+                            gotFeedback = unquantize(bytes.subarray(offset), bpv)
+                            // Handle what we got.
+                            if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._cellShape)) {
+                                this._remotePartSize = partSize
+                                this._remoteCellShape = cellShape
+                                this._opts.partSize = partSize
+                                this._opts.userParts = cellShape[0] / partSize | 0
+                                this._opts.nameParts = cellShape[1] / partSize | 0
+                                this._opts.dataSize = cellShape[cellShape.length-1]
+                                this.resume(this._opts)
+                            }
                         }
                         const [feedback, then] = fb
-                        if (feedback) {
+                        if (feedback && gotFeedback) {
                             if (gotFeedback.length > feedback.length)
                                 gotFeedback = gotFeedback.subarray(0, feedback.length)
                             feedback.set(gotFeedback)
                             if (feedback.length > gotFeedback.length)
                                 feedback.fill(0, gotFeedback.length)
-                        }
+                        } else if (feedback) feedback.fill(0)
                         then()
                     })
                     dc.onclose = evt => this.dataChannel = null // When closed, reopen.
@@ -396,8 +403,8 @@ Options:
         }
         
         onValues(then, input, feedback) {
-            console.log('handler onValues', !!this._dataSend) // TODO:
-            // TODO: ...Is it all because interpreter loops sleep when they have no data, so we must have `sensor.wake()` and `handler.wake()` to fix this bug...
+            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip') // TODO:
+            // TODO: ...Is it all because interpreter loops sleep when they have no data, so we should have `handler.wake()` to fix this bug...
             if (!this._dataSend) return feedback && feedback.fill(0), then(true)
             this._dataSend(input, this.bytesPerValue)
             this._feedback.push([feedback, then])
@@ -454,10 +461,11 @@ Options:
                 for (i = header; i < partBuf.length && atData < data.length; ++i, ++atData)
                     partBuf[i] = data[atData]
                 sent += i
+                // console.log('sent', nextId, part, i, 'bytes', ...partBuf.subarray(0,8), 'data bytes', ...data.subarray(0,8), [0,0,0,0,0,0,0,0,0,0,0,new Error().stack]) // TODO:
+                //   TODO: ...Wait, is it receiving the previous iteration's packets on error?...
                 channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
             }
             ++nextId, nextId >= 65536 && (nextId = 0)
-            console.log('sent') // TODO:
             sn.meta.metric('sent, bytes', sent) // TODO: ...Where's the sending?! ...And we're receiving another channel's data too... Yep, things are extremely bad.
         }
     }
@@ -477,6 +485,7 @@ Options:
             if (!(evt.data instanceof ArrayBuffer)) return
             const dv = new DataView(evt.data)
             const id = dv.getUint16(0), part = dv.getUint16(2)
+            // console.log('rcv', id, part, evt.data.byteLength, 'bytes', ...new Uint8Array(evt.data).subarray(0,8)) // TODO:
             if (id < nextId) return // You're too late.
             let p
             if (part === 0) { // Packet start.
@@ -538,7 +547,7 @@ Options:
             a = bigEndian(a, bpv)
             return new Float32Array(a.buffer, a.byteOffset, a.byteLength / 4 | 0)
         }
-        sn._assert(bpv === 1 || bpv === 2)
+        sn._assert(bpv === 1 || bpv === 2, bpv)
         if (bpv === 2) a = new Uint16Array(bigEndian(a, bpv).buffer)
         const r = new Float32Array(a.length)
         const scale = bpv === 1 ? 255 : 65535
