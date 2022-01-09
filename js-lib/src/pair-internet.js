@@ -66,7 +66,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     })
                     const aTo = new sn.Handler.Internet({ channel:'a', signaler: () => signal1 })
                     const bFrom = new sn.Sensor.Internet({ channel:'b' })
-                    const bTo = new E.Handler({
+                    const bTo = new sn.Handler({
                         dataSize,
                         onValues(then, {data}, feedback) {
                             try {
