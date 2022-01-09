@@ -10,7 +10,7 @@ import Scroll from './src/sensor-scroll.js'
 import Audio from './src/sensor-audio.js'
 import Pointer from './src/sensor-pointer.js'
 import Keyboard from './src/sensor-keyboard.js'
-import WebRTC from './src/webrtc.js'
+import WebRTC from './src/pair-internet.js'
 
 export default (function(exports) {
     // Browser compatibility (import):

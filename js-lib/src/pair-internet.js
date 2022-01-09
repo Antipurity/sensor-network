@@ -40,7 +40,50 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 ],
             ]
         }
-        // TODO: A benchmark, that connects a sensor to a different-channel handler through localhost, and measures throughput and latency and dropped packets.
+        static bench() {
+            // TODO: Run & fix.
+            const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
+            return cellCounts.map(river) // See how throughput changes with input size.
+            function river(cells) {
+                const dataSize = 64
+                function onSensorFeedback(feedback) {
+                    if (feedback)
+                        feedback.fill(.5439828952837), // "Read" it.
+                        E._deallocF32(feedback) // Reuse it.
+                }
+                return function start() {
+                    const signal1 = {
+                        send(msg) { signal2.onmessage && signal2.onmessage(msg) },
+                    }, signal2 = {
+                        send(msg) { signal1.onmessage && signal1.onmessage(msg) },
+                    }
+                    const aFrom = new sn.Sensor({
+                        name: ['remote', 'data', 'source'],
+                        values: cells*dataSize,
+                        onValues(data) {
+                            data.fill(1), this.sendCallback(onSensorFeedback, data)
+                        },
+                    })
+                    const aTo = new sn.Handler.Internet({ channel:'a', signaler: () => signal1 })
+                    const bFrom = new sn.Sensor.Internet({ channel:'b' })
+                    const bTo = new E.Handler({
+                        dataSize,
+                        onValues(then, {data}, feedback) {
+                            try {
+                                data.fill(.489018922485) // "Read" it.
+                                if (feedback) feedback.fill(-1)
+                            } finally { then() }
+                        },
+                    })
+                    bFrom.signal(signal2)
+                    return function stop() {
+                        aFrom.pause()
+                        aTo.pause(), bFrom.pause()
+                        bTo.pause()
+                    }
+                }
+            }
+        }
         resume(opts) {
             if (opts) {
                 this.iceServers = opts.iceServers || []
