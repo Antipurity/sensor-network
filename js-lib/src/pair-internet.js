@@ -128,8 +128,9 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     signal(JSON.stringify({ icecandidate: evt.candidate }))
             }
             peer.onconnectionstatechange = evt => {
-                if (!peer) return
                 const state = peer.connectionState
+                console.log('# connection state changed to', state) // TODO: Why does it never change... (For that matter, why did all 10 WebRTC connections fail, eventually?... DESPITE RECEIVING SOME DATA)
+                // TODO: What are we doing wrong in our ICE? Do we need to close the ICE candidate list or something...
                 if (state === 'failed' || state === 'closed') 'be not sad, but glad that it happened'
             }
             peer.ondatachannel = evt => {
@@ -182,13 +183,13 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         const noFeedback = fromBits(noFeedbackBytes)
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
-                        console.log('PUSH') // TODO: Why are there so few 'PUSH'es and many more 'sent's?
+                        console.log('sensor sends feedback') // TODO:
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     } else {
                         const a = allocArray(9)
                         a.fill(undefined), a[8] = feedback
-                        console.log('DROP') // TODO:
+                        console.log('sensor drops feedback') // TODO:
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     }
@@ -269,8 +270,10 @@ Options:
             }
         }
         pause() {
-            // this.dataChannel && this.dataChannel.close() // TODO: How to stop receiving data when paused forever, but still receive when temporarily paused?
+            !this._isInResume && this.dataChannel && console.log('handler closed its channel') // TODO:
+            !this._isInResume && this.dataChannel && (this.dataChannel.close(), this.dataChannel = null) // TODO: How to stop receiving data when paused forever, but still receive when temporarily paused?
             //   Do we need a bool for "are we inside `resume`"?...
+            //   TODO: ...Why the FUCK does this destroy all communication ever?!
             return super.pause()
         }
         resume(opts) {
@@ -285,8 +288,11 @@ Options:
                 this._feedback = [] // What receiving a feedback-packet will have to do.
                 this._opts = Object.assign(Object.create(null), opts)
                 this.bytesPerValue = bpv
+                this._isInResume = false
             }
-            return super.resume(opts)
+            try { this._isInResume = true
+                return super.resume(opts)
+            } finally { this._isInResume = false }
         }
         getPeer() {
             // Connects to another sensor network through WebRTC.
@@ -361,7 +367,7 @@ Options:
                         packer(bytes)
                     }
                     dc.onmessage = messageUnpacker((bytes, packetId) => {
-                        console.log('handler receives data, bytes', bytes && bytes.length) // TODO:
+                        console.log('handler receives feedback, bytes', bytes && bytes.length) // TODO:
                         // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
                         const fb = this._feedback.shift()
                         if (!fb) return
@@ -374,7 +380,6 @@ Options:
                             const cellShape = allocArray(dv.getUint16(offset));  offset += 2
                             for (let i = 0; i < cellShape.length; ++i)
                                 cellShape[i] = dv.getUint32(offset), offset += 4
-                            if (bpv !== 0 && bpv !== 1 && bpv !== 2) console.log('BAD', 'bpv', bpv, 'partSize', partSize, 'cellShape', cellShape, 'bytes', bytes, 'packetId', packetId) // TODO: Yep, everything is screwed up here... But why?
                             gotFeedback = unquantize(bytes.subarray(offset), bpv)
                             // Handle what we got.
                             if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._cellShape)) {
@@ -387,7 +392,7 @@ Options:
                                 this.resume(this._opts)
                             }
                         }
-                        const [feedback, then] = fb
+                        const [feedback, then, start] = fb
                         if (feedback && gotFeedback) {
                             if (gotFeedback.length > feedback.length)
                                 gotFeedback = gotFeedback.subarray(0, feedback.length)
@@ -395,6 +400,7 @@ Options:
                             if (feedback.length > gotFeedback.length)
                                 feedback.fill(0, gotFeedback.length)
                         } else if (feedback) feedback.fill(0)
+                        sn.meta.metric('processing latency, ms', performance.now() - start)
                         then()
                     })
                     dc.onclose = evt => this.dataChannel = null // When closed, reopen.
@@ -405,9 +411,10 @@ Options:
         onValues(then, input, feedback) {
             console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip') // TODO:
             // TODO: ...Is it all because interpreter loops sleep when they have no data, so we should have `handler.wake()` to fix this bug...
+            //   ...But does it even make sense to have such a thing?... Aren't we feedback-ing as soon as possible?
             if (!this._dataSend) return feedback && feedback.fill(0), then(true)
             this._dataSend(input, this.bytesPerValue)
-            this._feedback.push([feedback, then])
+            this._feedback.push([feedback, then, performance.now()])
         }
     }
     InternetHandler.consoleLog = A(function signalViaConsole(isHandler = false) {
@@ -463,10 +470,12 @@ Options:
                 sent += i
                 // console.log('sent', nextId, part, i, 'bytes', ...partBuf.subarray(0,8), 'data bytes', ...data.subarray(0,8), [0,0,0,0,0,0,0,0,0,0,0,new Error().stack]) // TODO:
                 //   TODO: ...Wait, is it receiving the previous iteration's packets on error?...
-                channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
+                try {
+                    channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
+                } catch (err) {} // Drop the packet on error.
             }
             ++nextId, nextId >= 65536 && (nextId = 0)
-            sn.meta.metric('sent, bytes', sent) // TODO: ...Where's the sending?! ...And we're receiving another channel's data too... Yep, things are extremely bad.
+            sn.meta.metric('sent, bytes', sent)
         }
     }
     function messageUnpacker(onpacket, timeoutMs=50, maxPacketBytes=16*1024*1024) {

@@ -398,6 +398,7 @@ export default (function(exports) {
                     const wrote = name.call(this, ch.cellShapes[i], namer, dst.nextPacket, then, unname)
 
                     // Wake up.
+                    if (!dst.looping) _Packet.handleLoop(this.channel, cellShape, partSize, summary)
                     wrote && dst.stepsNow <= 1 && dst.giveNextPacketNow && dst.giveNextPacketNow()
                 }
                 if (removed.size) {
