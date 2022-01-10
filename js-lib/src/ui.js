@@ -8,7 +8,7 @@ export default function init(sn) {
         const js = dom([{tag:'textarea', readonly:true, style:'width:100%; resize:vertical'}])
         const r = dom([
             // (This double-saves each time. Might want to throttle saving.)
-            { onchange: stateMaybeChanged, onclick: stateMaybeChanged }, //
+            { onchange: stateMaybeChanged, onclick: stateMaybeChanged },
             UI.collapsed(
                 ' As JS',
                 js,
@@ -201,7 +201,7 @@ CSS not included. Markdown parsing not included.
                     title:'Currently active',
                     onchange() { if (el) selected[active] = this.checked, this.checked ? el.resume() : el.pause() },
                 }])
-                if (running && selected[active]) running.click()
+                if (running && selected[active]) setTimeout(() => running.click(), 0)
                 if (!selected[active]) selected[active] = false
                 return A(UI.collapsed(
                     [running ? {

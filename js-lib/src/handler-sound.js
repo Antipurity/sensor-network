@@ -67,11 +67,12 @@ export default function init(sn) {
 
 In Chrome, users might have to first click on the page for sound to play.
 
+(This handler normalizes output frequencies to be zero-mean, so provide a diverse picture rather than a single number with a varying magnitude.)
+
 - Extra options, for \`constructor\` and \`resume\`:
     - \`volume = .3\`: amplitude of sound output.
     - \`minFrequency = 1000\`, \`maxFrequency = 13000\`: how well you can hear. [From 20 or 50, to 16000 or 20000 is reasonable.](https://en.wikipedia.org/wiki/Hearing_range) The wider the range, the higher the bandwidth.
     - \`nameImportance = .5\`: multiplier of cell names. Non-1 to make it easier on your ears, and emphasize data.
-    - \`centerIsZero = false\`: by default, -1 values are silent; to make 0s silent instead, use \`true\`.
     - \`debug = false\`: if set, visualizes frequency data in a \`<canvas>\`. (Usable for quickly testing \`.Sensor.Video\`.)
 ` }
         static options() {
@@ -99,10 +100,6 @@ In Chrome, users might have to first click on the page for sound to play.
                     ['100%']: () => 1,
                     ['0%']: () => 0,
                 },
-                centerIsZero: {
-                    No: false,
-                    Yes: true,
-                },
                 debug: {
                     No: false,
                     Yes: true,
@@ -116,7 +113,6 @@ In Chrome, users might have to first click on the page for sound to play.
                 this.volume = typeof opts.volume == 'number' && opts.volume >= 0 && opts.volume <= 1 ? opts.volume : .3
                 this.minFrequency = opts.minFrequency !== undefined ? opts.minFrequency : 1000
                 this.maxFrequency = opts.maxFrequency || 13000
-                this.centerIsZero = opts.centerIsZero !== undefined ? opts.centerIsZero : false
                 this.nameImportance = opts.nameImportance !== undefined ? opts.nameImportance : .5
                 this.debug = opts.debug
             }
@@ -204,7 +200,7 @@ In Chrome, users might have to first click on the page for sound to play.
             const buf = Sound.ctx.createBuffer(channels, soundLen, sampleRate)
             const start = Math.max(Sound.next, Sound.ctx.currentTime + delay)
             const offset = this.minFrequency / sampleRate * soundLen
-            writeData(data, buf.getChannelData(0), this.volume, offset, this.nameImportance, !this.centerIsZero, 0)
+            writeData.call(this, data, buf.getChannelData(0), this.volume, offset, this.nameImportance, 0)
             const src = Sound.ctx.createBufferSource()
             src.buffer = buf
             sn.meta.metric('gap in sound, bool', start !== Sound.next ? 1 : 0)
@@ -222,7 +218,7 @@ In Chrome, users might have to first click on the page for sound to play.
                 }, needToWait)
             } else then()
 
-            function writeData(src, dst, volume, offset, p, renorm, phase) {
+            function writeData(src, dst, volume, offset, p, phase) {
                 const nameSize = cellSize - cellShape[cellShape.length-1]
                 dst.fill(0)
                 const off = Math.floor(offset)
@@ -237,7 +233,7 @@ In Chrome, users might have to first click on the page for sound to play.
                     for (let i = 0; i < src.length; ++i) {
                         const isName = (i % cellSize) < nameSize, cell = i / cellSize | 0
                         const v = isName ? p*src[i]+(1-p)*avgPerCell[cell] : src[i]
-                        dst[off + i] = renorm ? (v+1)/2 : v
+                        dst[off + i] = v
                     }
                     sn._deallocF32(avgPerCell)
                 } else if (off + src.length <= src.length)
@@ -245,8 +241,14 @@ In Chrome, users might have to first click on the page for sound to play.
                 else
                     for (let i = 0; i < src.length && off + i < dst.length; ++i)
                         dst[off + i] = src[i]
+                // Normalize `dst` to have mean=0. (Too much clicking otherwise.)
+                let mean = (dst.length > 2 ? dst.reduce((a,b)=>a+b) : 1) / dst.length
+                if (!this.mean) this.mean = mean // Gradually.
+                else this.mean = .9*this.mean + .1*mean
+                for (let i = 0; i < dst.length; ++i)
+                    dst[i] -= this.mean
+
                 const real = ifft(dst, phase)
-                real.fill(0, 0, real.length/10|0) // A hack, but fixes a lot of the clicking.
                 dst.set(real)
                 for (let i = 0; i < dst.length; ++i) dst[i] *= volume
                 sn._deallocF32(real)
