@@ -11,6 +11,8 @@ Methods:
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 
+- TODO: In Firefox, do we need \`media.peerconnection.ice.loopback\`?...
+
 Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)
 ` }
         static options() {
@@ -46,6 +48,8 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             return cellCounts.map(river) // See how throughput changes with input size.
             function river(cells) {
                 const dataSize = 64
+                const iceServers = [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}] // TODO: …Why does it still fail ICE…
+                //   TODO: Also, in Chrome, why "ICE server parse failed"?
                 function onSensorFeedback(feedback) {
                     if (feedback)
                         // console.log(feedback[0]), // TODO: ...What are we receiving then?? No WebRTC connection?… Hm…
@@ -66,8 +70,8 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                             data.fill(1), this.sendCallback(onSensorFeedback, data)
                         },
                     })
-                    const aTo = new sn.Handler.Internet({ channel:'a', signaler: () => signal1 })
-                    const bFrom = new sn.Sensor.Internet({ channel:'b' })
+                    const aTo = new sn.Handler.Internet({ channel:'a', iceServers, signaler: () => signal1 })
+                    const bFrom = new sn.Sensor.Internet({ channel:'b', iceServers })
                     const bTo = new sn.Handler({
                         channel: 'b',
                         dataSize,
@@ -129,13 +133,14 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             }
             peer.onconnectionstatechange = evt => {
                 const state = peer.connectionState
-                console.log('# connection state changed to', state) // TODO: Why does it never change... (For that matter, why did all 10 WebRTC connections fail, eventually?... DESPITE RECEIVING SOME DATA)
-                // TODO: What are we doing wrong in our ICE? Do we need to close the ICE candidate list or something...
+                console.log('# sensor connection state changed to', state) // TODO: Why does it never change... (For that matter, why did all 10 WebRTC connections fail, eventually?... DESPITE RECEIVING SOME DATA)
+                // TODO: What are we doing wrong in our ICE?? And in WebRTC in general???
                 if (state === 'failed' || state === 'closed') 'be not sad, but glad that it happened'
             }
+            console.log('…');  const START = performance.now() // TODO:
             peer.ondatachannel = evt => {
                 const dataChannel = evt.channel
-                console.log('sensor got data channel', dataChannel) // TODO:
+                console.log('sensor got data channel, after', performance.now()-START, 'ms') // TODO:
                 dataChannel.binaryType = 'arraybuffer'
                 // Assuming that `dataChannel` is already opened.
                 const packer = messagePacker(dataChannel)
@@ -155,7 +160,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     packer(bytes2)
                 }
                 dataChannel.onmessage = messageUnpacker((data, packetId) => {
-                    console.log('sensor receives data', data) // TODO:
+                    console.log('sensor receives data', data && data.length) // TODO:
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
                         if (data.length < 2) return
@@ -183,7 +188,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         const noFeedback = fromBits(noFeedbackBytes)
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
-                        console.log('sensor sends feedback') // TODO:
+                        console.log('sensor sends feedback', cells * cellShape.reduce((a,b)=>a+b)) // TODO:
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     } else {
@@ -271,7 +276,7 @@ Options:
         }
         pause() {
             !this._isInResume && this.dataChannel && console.log('handler closed its channel') // TODO:
-            !this._isInResume && this.dataChannel && (this.dataChannel.close(), this.dataChannel = null) // TODO: How to stop receiving data when paused forever, but still receive when temporarily paused?
+            !this._isInResume && this.dataChannel && setTimeout(() => (this.dataChannel.close(), this.dataChannel = null), 10000) // TODO: How to stop receiving data when paused forever, but still receive when temporarily paused?
             //   Do we need a bool for "are we inside `resume`"?...
             //   TODO: ...Why the FUCK does this destroy all communication ever?!
             return super.pause()
@@ -324,8 +329,8 @@ Options:
                     }).catch(() => peer.setRemoteDescription({type:'rollback'}))
                 }
                 peer.onconnectionstatechange = evt => {
-                    console.log('handler onconnectionstatechange', evt) // TODO:
                     const state = peer.connectionState
+                    console.log('# handler connection state changed to', state) // TODO:
                     if (state === 'failed' || state === 'closed') this.peer = null // Reopen.
                 }
                 function signal(data) {
@@ -345,7 +350,6 @@ Options:
                 dc.onopen = evt => {
                     const packer = messagePacker(dc)
                     this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
-                        console.log('handler sends data') // TODO: Why do later iterations get next to nothing?
                         // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
                         const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
                         const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
@@ -364,13 +368,15 @@ Options:
                         bytes.set(bNoData, offset), offset += bNoData.length
                         bytes.set(bNoFeedback, offset), offset += bNoFeedback.length
                         sn._assert(offset === totalSize, "totalSize miscounts")
+                        console.log('handler sends data', bytes.length) // TODO: Why do later iterations get next to nothing?
                         packer(bytes)
                     }
                     dc.onmessage = messageUnpacker((bytes, packetId) => {
-                        console.log('handler receives feedback, bytes', bytes && bytes.length) // TODO:
+                        console.log('handler receives feedback', bytes && bytes.length) // TODO: ...why is there nothing after this... no data... no feedback... what the heck are those sensors even doing?
                         // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
                         const fb = this._feedback.shift()
-                        if (!fb) return
+                        if (!fb) return console.log('oh no', bytes, dc.readyState) // TODO: Why is this triggered 4 times?? THIS IS BAD, RIGHT
+                        //   TODO: ...This is so not right: it's receiving some old packet's data, seems like.
                         let gotFeedback
                         if (bytes && bytes.length > 8) {
                             const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -409,10 +415,11 @@ Options:
         }
         
         onValues(then, input, feedback) {
-            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip') // TODO:
+            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length) // TODO:
+            //   TODO: ...Why is there ever only one real iteration after the first sensor ends...
             // TODO: ...Is it all because interpreter loops sleep when they have no data, so we should have `handler.wake()` to fix this bug...
             //   ...But does it even make sense to have such a thing?... Aren't we feedback-ing as soon as possible?
-            if (!this._dataSend) return feedback && feedback.fill(0), then(true)
+            if (!this._dataSend) return feedback && feedback.fill(0), then(true) // TODO: …No: when skipping, should really wait for data (or .paused), not just fake-return and add fake-throughput to metrics.
             this._dataSend(input, this.bytesPerValue)
             this._feedback.push([feedback, then, performance.now()])
         }
@@ -456,6 +463,7 @@ Options:
         const partView = new DataView(partBuf.buffer, partBuf.byteOffset, partBuf.byteLength)
         return function message(data) { // Uint8Array
             sn._assert(data.length <= maxPacketBytes, "Message is too long!")
+            if (channel.readyState === 'closing' || channel.readyState === 'closed') return
             const partSize = maxPartLen - 4
             const parts = Math.ceil((data.length - 2) / partSize)
             let sent = 0
@@ -468,11 +476,10 @@ Options:
                 for (i = header; i < partBuf.length && atData < data.length; ++i, ++atData)
                     partBuf[i] = data[atData]
                 sent += i
-                // console.log('sent', nextId, part, i, 'bytes', ...partBuf.subarray(0,8), 'data bytes', ...data.subarray(0,8), [0,0,0,0,0,0,0,0,0,0,0,new Error().stack]) // TODO:
-                //   TODO: ...Wait, is it receiving the previous iteration's packets on error?...
-                try {
+                if (channel.readyState !== 'open') console.log('trying to send on a', channel.readyState, 'channel') // TODO:
+                // try { // TODO:
                     channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
-                } catch (err) {} // Drop the packet on error.
+                // } catch (err) {} // Drop the packet on error.
             }
             ++nextId, nextId >= 65536 && (nextId = 0)
             sn.meta.metric('sent, bytes', sent)
@@ -494,7 +501,6 @@ Options:
             if (!(evt.data instanceof ArrayBuffer)) return
             const dv = new DataView(evt.data)
             const id = dv.getUint16(0), part = dv.getUint16(2)
-            // console.log('rcv', id, part, evt.data.byteLength, 'bytes', ...new Uint8Array(evt.data).subarray(0,8)) // TODO:
             if (id < nextId) return // You're too late.
             let p
             if (part === 0) { // Packet start.
@@ -515,11 +521,12 @@ Options:
             let tooLong = prevAt != null && performance.now() - prevAt > timeoutMs && superseded()
             while (packs[nextId] && packs[nextId][0] === 0 || tooLong) {
                 const p = packs[nextId]
+                // TODO: Also check that `p` doesn't have nulls, because too-long packets will cause that.
                 if (Array.isArray(p) && p[0] === 0) { // Copy parts into one buffer.
                     // (A copy. And generates garbage. As garbage as JS is.)
                     let len = 0
                     for (let i = 1; i < p.length; ++i)
-                        len += (i === 1 ? p[i].byteLength-6 : p[i].byteLength-4)
+                        len += p[i].byteLength - (i === 1 ? 6 : 4)
                     const b = new Uint8Array(len)
                     for (let i = 1, off = 0; i < p.length; ++i) {
                         const header = (i === 1 ? 6 : 4)
@@ -528,14 +535,15 @@ Options:
                             b[off + j] = p[i].getUint8(header + j)
                         off += sublen
                     }
+                    // TODO: ...Why is literally all feedback of a length that wasn't even sent?!
                     deallocArray(packs[nextId]), packs[nextId] = null
                     onpacket(b, nextId)
                 } else {
                     if (packs[nextId]) deallocArray(packs[nextId]), packs[nextId] = null
                     onpacket(null, nextId)
                 }
-                ++nextId, nextId >= 65536 && (nextId = 0)
-                tooLong = false
+                nextId = (nextId + 1) & 65535
+                tooLong = false, prevAt = null
             }
         }
     }
