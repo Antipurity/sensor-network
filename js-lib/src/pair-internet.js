@@ -2,6 +2,24 @@ export default function init(sn) {
     // (Reading/writing may be quite unoptimized here.)
     const A = Object.assign
     const arrayCache = []
+
+
+
+    function importSimplePeer() { // Manual use of WebRTC is just not working out.
+        // TODO: In docs, mention that we import this on use.
+        if (importSimplePeer.did) return importSimplePeer.did
+        return importSimplePeer.did = new Promise(resolve => {
+            const el = document.createElement('script')
+            el.src = 'https://unpkg.com/simple-peer@9.11.0/simplepeer.min.js'
+            document.head.append(el)
+            const id = setInterval(() => {
+                if (self.SimplePeer) clearInterval(id), resolve(self.SimplePeer)
+            }, 50)
+        })
+    }
+
+
+
     class InternetSensor extends sn.Sensor {
         static docs() { return `Extends this network over the Internet.
 
@@ -43,13 +61,11 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             ]
         }
         static bench() { // Extends a virtual sensor/handler pair over a localhost connection.
-            // TODO: Measure how many bytes we actually send down the line, for future compression measurement.
-            const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
+            const cellCounts = new Array(1).fill().map((_,i) => (i+1)*10) // TODO: 10, not 1.
             return cellCounts.map(river) // See how throughput changes with input size.
             function river(cells) {
                 const dataSize = 64
-                const iceServers = [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}] // TODO: …Why does it still fail ICE…
-                //   TODO: Also, in Chrome, why "ICE server parse failed"?
+                const iceServers = []
                 function onSensorFeedback(feedback) {
                     if (feedback)
                         // console.log(feedback[0]), // TODO: ...What are we receiving then?? No WebRTC connection?… Hm…
@@ -58,9 +74,9 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 }
                 return function start() {
                     const signal1 = {
-                        send(msg) { 0&&console.log('s1→s2 msg', msg, !!signal2.onmessage), signal2.onmessage && signal2.onmessage({data:msg}) }, // TODO: ...Wait, why is nothing being printed here... Why no messages?...
+                        send(msg) { 0&&console.log('s1→s2 msg', msg, !!signal2.onmessage), signal2.onmessage && signal2.onmessage({data:msg}) }, // TODO:
                     }, signal2 = {
-                        send(msg) { 0&&console.log('s2→s1 msg', msg, !!signal2.onmessage), signal1.onmessage && signal1.onmessage({data:msg}) }, // TODO:
+                        send(msg) { 0&&console.log('s2→s1 msg', msg, !!signal1.onmessage), signal1.onmessage && signal1.onmessage({data:msg}) }, // TODO:
                     }
                     const aFrom = new sn.Sensor({
                         channel: 'a',
@@ -70,7 +86,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                             data.fill(1), this.sendCallback(onSensorFeedback, data)
                         },
                     })
-                    const aTo = new sn.Handler.Internet({ channel:'a', iceServers, signaler: () => signal1 })
+                    const aTo = new sn.Handler.Internet({ channel:'a', iceServers, signaler: () => signal1, untrustedWorkaround: true })
                     const bFrom = new sn.Sensor.Internet({ channel:'b', iceServers })
                     const bTo = new sn.Handler({
                         channel: 'b',
@@ -101,54 +117,40 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             }
             return super.resume(opts)
         }
-        signal(metaChannel, maxCells=65536) {
-            let metaData = []
+        signal(metaChannel, maxCells=65536) { // TODO: Maybe, we should really transition to a `onsignal:fn(data)` + `.signal(data)` model, to make things more intuitive for WebRTC-users? Not like it adds more than like 2 lines of code for a WebSocket connection.
+            // (Could double-init because getting `SimplePeer` is async.)
+            let peer, inMetaData = [], outMetaData = []
             const signal = data => {
-                if (metaData) metaData.push(data)
+                if (outMetaData) outMetaData.push(data)
                 else metaChannel.send(data)
             }
             metaChannel.onopen = evt => {
-                metaData && metaData.forEach(data => metaChannel.send(data))
-                metaData = null
-            }
-            // Ignore `metaChannel.onclose`.
-
-            const peer = new RTCPeerConnection({iceServers:this.iceServers})
-            metaChannel.onmessage = evt => {
-                if (typeof evt.data != 'string') return
-                const d = JSON.parse(evt.data)
-                if (d.icecandidate) {
-                    peer.addIceCandidate(new RTCIceCandidate(d.icecandidate) )
-                } else if (typeof d.offer == 'string') {
-                    peer.setRemoteDescription({ type:'offer', sdp: d.offer })
-                    peer.createAnswer().then(answer => {
-                        peer.setLocalDescription(answer)
-                        signal(JSON.stringify({ answer: answer.sdp }))
-                    }).catch(() => peer.close())
+                outMetaData && outMetaData.forEach(data => metaChannel.send(data))
+                outMetaData = null
+                metaChannel.onmessage = evt => {
+                    if (typeof evt.data != 'string') return
+                    const d = JSON.parse(evt.data)
+                    peer ? peer.signal(d) : inMetaData.push(d)
                 }
+                // Ignore `metaChannel.onclose`.
             }
-            peer.onicecandidate = evt => {
-                if (evt.candidate)
-                    signal(JSON.stringify({ icecandidate: evt.candidate }))
-            }
-            peer.onconnectionstatechange = evt => {
-                const state = peer.connectionState
-                console.log('# sensor connection state changed to', state) // TODO: Why does it never change... (For that matter, why did all 10 WebRTC connections fail, eventually?... DESPITE RECEIVING SOME DATA)
-                // TODO: What are we doing wrong in our ICE?? And in WebRTC in general???
-                if (state === 'failed' || state === 'closed') 'be not sad, but glad that it happened'
-            }
-            console.log('…');  const START = performance.now() // TODO:
-            peer.ondatachannel = evt => {
-                const dataChannel = evt.channel
-                console.log('sensor got data channel, after', performance.now()-START, 'ms') // TODO:
-                dataChannel.binaryType = 'arraybuffer'
-                // Assuming that `dataChannel` is already opened.
-                const packer = messagePacker(dataChannel)
+            importSimplePeer().then(SimplePeer => {
+                peer = new SimplePeer({
+                    config: {iceServers:this.iceServers},
+                })
+                peer.on('error', console.error)
+                peer.on('signal', data => {
+                    signal(JSON.stringify(data))
+                })
+                peer.on('connect', () => {
+                    console.log('sensor is connected', peer) // TODO:
+                })
+                const packer = messagePacker(peer)
                 const feedback = (fb, bpv, partSize, cellShape) => { // Float32Array, 0|1|2
-                    const bytes = quantize(fb, bpv)
+                    const quant = quantize(fb, bpv)
                     const header = 2 + 4 + 2+4*cellShape.length
-                    const bytes2 = new Uint8Array(header + bytes.length)
-                    const dv = new DataView(bytes2.buffer, bytes2.byteOffset, bytes2.byteLength)
+                    const bytes = new Uint8Array(header + quant.length)
+                    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
                     dv.setUint16(0, bpv)
                     dv.setUint32(2, partSize)
                     dv.setUint16(6, cellShape.length)
@@ -156,10 +158,11 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     for (let i = 0; i < cellShape.length; ++i)
                         dv.setUint32(offset, cellShape[i]), offset += 4
                     sn._assert(offset === header)
-                    bytes2.set(bytes, header)
-                    packer(bytes2)
+                    bytes.set(quant, header)
+                    console.log('sensor sends feedback', bytes.length) // TODO:
+                    packer(bytes)
                 }
-                dataChannel.onmessage = messageUnpacker((data, packetId) => {
+                peer.on('data', messageUnpacker((data, packetId) => {
                     console.log('sensor receives data', data && data.length) // TODO:
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
@@ -188,7 +191,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         const noFeedback = fromBits(noFeedbackBytes)
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
-                        console.log('sensor sends feedback', cells * cellShape.reduce((a,b)=>a+b)) // TODO:
+                        console.log('sensor prepares to send feedback', 4+24 + 4 * cells * cellShape.reduce((a,b)=>a+b)) // TODO:
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     } else {
@@ -198,9 +201,13 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     }
-                })
-                dataChannel.onclose = evt => peer.close() // Hopefully not fired on mere instability.
-            }
+                }))
+                if (inMetaData.length) {
+                    for (let data of inMetaData)
+                        peer.signal(data)
+                    inMetaData.length = 0
+                }
+            })
         }
         _name({cellShape, partSize, summary}, namer, packet, then, unname) {
             // Copy all data points into the actual data stream.
@@ -260,6 +267,7 @@ Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - \`bytesPerValue=0\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
+- \`untrustedWorkaround = false\`: if set, will request a microphone stream and do nothing with it, so that a WebRTC connection can connect. The need for this was determined via alchemy, so its exact need-to-use is unknown.
 ` }
         static options() {
             return {
@@ -275,10 +283,15 @@ Options:
             }
         }
         pause() {
-            !this._isInResume && this.dataChannel && console.log('handler closed its channel') // TODO:
-            !this._isInResume && this.dataChannel && setTimeout(() => (this.dataChannel.close(), this.dataChannel = null), 10000) // TODO: How to stop receiving data when paused forever, but still receive when temporarily paused?
-            //   Do we need a bool for "are we inside `resume`"?...
-            //   TODO: ...Why the FUCK does this destroy all communication ever?!
+            if (!this._isInResume) {
+                if (this.peer) this.peer.destroy(), this.peer = null
+                if (this._feedback && this._feedback.length) {
+                    for (let [feedback, then, start] of this._feedback)
+                        feedback && feedback.fill(0), then()
+                    this._feedback.length = 0
+                    this._dataToSend && (this._dataToSend.length = 0)
+                }
+            }
             return super.pause()
         }
         resume(opts) {
@@ -288,12 +301,16 @@ Options:
                 opts.onValues = this.onValues
                 this.iceServers = opts.iceServers || []
                 this.signaler = opts.signaler || InternetHandler.consoleLog
-                this.getPeer()
-                this.peer.setConfiguration && this.peer.setConfiguration({iceServers:this.iceServers})
+                this.untrustedWorkaround = !!opts.untrustedWorkaround
+                // TODO: ...These hidden options should be refreshed, not set-each-time, right?
                 this._feedback = [] // What receiving a feedback-packet will have to do.
                 this._opts = Object.assign(Object.create(null), opts)
                 this.bytesPerValue = bpv
                 this._isInResume = false
+                console.log('setting _dataSend to null') // TODO: Why does this happen on every iteration?
+                this._dataSend = null, this._dataToSend = []
+                this.getPeer()
+                this.peer && this.peer.setConfiguration && this.peer.setConfiguration({iceServers:this.iceServers})
             }
             try { this._isInResume = true
                 return super.resume(opts)
@@ -301,126 +318,123 @@ Options:
         }
         getPeer() {
             // Connects to another sensor network through WebRTC.
+            // (Could double-init initially, though.)
             if (this.metaChannel == null) {
                 const mc = this.metaChannel = this.signaler(true)
                 this._signal = new Promise((resolve, reject) => {
                     mc.onopen = evt => { this._signal = null, resolve() }
                     mc.onmessage = evt => {
+                        if (this.peer == null) return console.warn('dropping signal', evt.data)
                         if (typeof evt.data != 'string') return
                         const d = JSON.parse(evt.data)
-                        if (d.icecandidate) {
-                            if (this.peer) this.peer.addIceCandidate(new RTCIceCandidate(d.icecandidate) )
-                        } else if (typeof d.answer == 'string') {
-                            if (this.peer) this.peer.setRemoteDescription({ type:'answer', sdp: d.answer })
-                        }
+                        this.peer.signal(d)
                     }
                     mc.onclose = evt => { reject(), this._signal = this.metaChannel = null } // When closed, reopen.
                 })
             }
             if (this.peer == null) {
-                const peer = this.peer = new RTCPeerConnection({iceServers:this.iceServers})
-                peer.onicecandidate = evt => {
-                    if (evt.candidate)
-                        signal.call(this, JSON.stringify({ icecandidate: evt.candidate }))
-                }
-                peer.onnegotiationneeded = evt => {
-                    peer.createOffer().then(offer => peer.setLocalDescription(offer)).then(() => {
-                        signal.call(this, JSON.stringify({offer: peer.localDescription.sdp}))
-                    }).catch(() => peer.setRemoteDescription({type:'rollback'}))
-                }
-                peer.onconnectionstatechange = evt => {
-                    const state = peer.connectionState
-                    console.log('# handler connection state changed to', state) // TODO:
-                    if (state === 'failed' || state === 'closed') this.peer = null // Reopen.
-                }
-                function signal(data) {
-                    // Send `data`, waiting for the signaling channel to open.
-                    if (!this.metaChannel) return
-                    if (this._signal) this._signal.then(() => this.metaChannel.send(data))
-                    else this.metaChannel.send(data)
-                }
-            }
-            if (this.dataChannel == null) {
                 this._dataSend = null
-                const dc = this.dataChannel = this.peer.createDataChannel('sn-internet', {
-                    ordered: false, // Unordered
-                    maxRetransmits: 0, // Unreliable
-                })
-                dc.binaryType = 'arraybuffer'
-                dc.onopen = evt => {
-                    const packer = messagePacker(dc)
-                    this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
-                        // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
-                        const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
-                        const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
-                        const bytes = new Uint8Array(totalSize), dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-                        let offset = 0
-                        dv.setUint32(offset, cells), offset += 4
-                        dv.setUint32(offset, partSize), offset += 4
-                        dv.setUint16(offset, cellShape.length), offset += 2
-                        for (let i = 0; i < cellShape.length; ++i)
-                            dv.setUint32(offset, cellShape[i]), offset += 4
-                        dv.setUint16(offset, bpv), offset += 2
-                        const qData = quantize(data, bpv)
-                        const bNoData = toBits(noData)
-                        const bNoFeedback = toBits(noFeedback)
-                        bytes.set(qData, offset), offset += qData.length
-                        bytes.set(bNoData, offset), offset += bNoData.length
-                        bytes.set(bNoFeedback, offset), offset += bNoFeedback.length
-                        sn._assert(offset === totalSize, "totalSize miscounts")
-                        console.log('handler sends data', bytes.length) // TODO: Why do later iterations get next to nothing?
-                        packer(bytes)
-                    }
-                    dc.onmessage = messageUnpacker((bytes, packetId) => {
-                        console.log('handler receives feedback', bytes && bytes.length) // TODO: ...why is there nothing after this... no data... no feedback... what the heck are those sensors even doing?
-                        // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
-                        const fb = this._feedback.shift()
-                        if (!fb) return console.log('oh no', bytes, dc.readyState) // TODO: Why is this triggered 4 times?? THIS IS BAD, RIGHT
-                        //   TODO: ...This is so not right: it's receiving some old packet's data, seems like.
-                        let gotFeedback
-                        if (bytes && bytes.length > 8) {
-                            const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-                            let offset = 0
-                            const bpv = dv.getUint16(offset);  offset += 2
-                            const partSize = dv.getUint32(offset);  offset += 4
-                            const cellShape = allocArray(dv.getUint16(offset));  offset += 2
-                            for (let i = 0; i < cellShape.length; ++i)
-                                cellShape[i] = dv.getUint32(offset), offset += 4
-                            gotFeedback = unquantize(bytes.subarray(offset), bpv)
-                            // Handle what we got.
-                            if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._cellShape)) {
-                                this._remotePartSize = partSize
-                                this._remoteCellShape = cellShape
-                                this._opts.partSize = partSize
-                                this._opts.userParts = cellShape[0] / partSize | 0
-                                this._opts.nameParts = cellShape[1] / partSize | 0
-                                this._opts.dataSize = cellShape[cellShape.length-1]
-                                this.resume(this._opts)
+                const p = this.untrustedWorkaround ? navigator.mediaDevices.getUserMedia({audio:true}) : Promise.resolve()
+                p.then(() => {throw null}).catch(() => {
+                    importSimplePeer().then(SimplePeer => {
+                        const peer = this.peer = new SimplePeer({
+                            initiator: true,
+                            config: {iceServers:this.iceServers},
+                            channelConfig: {
+                                ordered: false, // Unordered
+                                maxRetransmits: 0, // Unreliable
+                            },
+                        })
+                        peer.on('error', console.error)
+                        peer.on('signal', data => {
+                            signal.call(this, JSON.stringify(data))
+                        })
+                        peer.on('connect', () => {
+                            const packer = messagePacker(peer)
+                            this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
+                                // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
+                                const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
+                                const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
+                                const bytes = new Uint8Array(totalSize), dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+                                let offset = 0
+                                dv.setUint32(offset, cells), offset += 4
+                                dv.setUint32(offset, partSize), offset += 4
+                                dv.setUint16(offset, cellShape.length), offset += 2
+                                for (let i = 0; i < cellShape.length; ++i)
+                                    dv.setUint32(offset, cellShape[i]), offset += 4
+                                dv.setUint16(offset, bpv), offset += 2
+                                const qData = quantize(data, bpv)
+                                const bNoData = toBits(noData)
+                                const bNoFeedback = toBits(noFeedback)
+                                bytes.set(qData, offset), offset += qData.length
+                                bytes.set(bNoData, offset), offset += bNoData.length
+                                bytes.set(bNoFeedback, offset), offset += bNoFeedback.length
+                                sn._assert(offset === totalSize, "totalSize miscounts")
+                                console.log('handler sends data', bytes.length) // TODO:
+                                packer(bytes)
                             }
+                            if (this._dataToSend.length) {
+                                for (let [input, bpv] of this._dataToSend)
+                                    this._dataSend(input, bpv)
+                                this._dataToSend.length = 0
+                            }
+                            console.log('handler has connected', this) // TODO:
+                        })
+                        // `data` is feedback here.
+                        peer.on('data', messageUnpacker((bytes, packetId) => {
+                            console.log('handler receives feedback', bytes && bytes.length) // TODO:
+                            // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
+                            const fb = this._feedback.shift()
+                            if (!fb) return console.log('oh no', bytes) // TODO:
+                            let gotFeedback
+                            if (bytes && bytes.length > 8) {
+                                const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+                                let offset = 0
+                                const bpv = dv.getUint16(offset);  offset += 2
+                                const partSize = dv.getUint32(offset);  offset += 4
+                                const cellShape = allocArray(dv.getUint16(offset));  offset += 2
+                                for (let i = 0; i < cellShape.length; ++i)
+                                    cellShape[i] = dv.getUint32(offset), offset += 4
+                                gotFeedback = unquantize(bytes.subarray(offset), bpv)
+                                // Handle what we got.
+                                if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._cellShape)) {
+                                    this._remotePartSize = partSize
+                                    this._remoteCellShape = cellShape
+                                    this._opts.partSize = partSize
+                                    this._opts.userParts = cellShape[0] / partSize | 0
+                                    this._opts.nameParts = cellShape[1] / partSize | 0
+                                    this._opts.dataSize = cellShape[cellShape.length-1]
+                                    this.resume(this._opts)
+                                }
+                            }
+                            const [feedback, then, start] = fb
+                            if (feedback && gotFeedback) {
+                                if (gotFeedback.length > feedback.length)
+                                    gotFeedback = gotFeedback.subarray(0, feedback.length)
+                                feedback.set(gotFeedback)
+                                if (feedback.length > gotFeedback.length)
+                                    feedback.fill(0, gotFeedback.length)
+                            } else if (feedback) feedback.fill(0)
+                            sn.meta.metric('processing latency, ms', performance.now() - start)
+                            then()
+                        }))
+                        function signal(data) {
+                            // Send `data`, waiting for the signaling channel to open.
+                            if (!this.metaChannel) return
+                            if (this._signal) this._signal.then(() => this.metaChannel.send(data))
+                            else this.metaChannel.send(data)
                         }
-                        const [feedback, then, start] = fb
-                        if (feedback && gotFeedback) {
-                            if (gotFeedback.length > feedback.length)
-                                gotFeedback = gotFeedback.subarray(0, feedback.length)
-                            feedback.set(gotFeedback)
-                            if (feedback.length > gotFeedback.length)
-                                feedback.fill(0, gotFeedback.length)
-                        } else if (feedback) feedback.fill(0)
-                        sn.meta.metric('processing latency, ms', performance.now() - start)
-                        then()
                     })
-                    dc.onclose = evt => this.dataChannel = null // When closed, reopen.
-                }
+                })
             }
         }
         
         onValues(then, input, feedback) {
-            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length) // TODO:
-            //   TODO: ...Why is there ever only one real iteration after the first sensor ends...
-            // TODO: ...Is it all because interpreter loops sleep when they have no data, so we should have `handler.wake()` to fix this bug...
-            //   ...But does it even make sense to have such a thing?... Aren't we feedback-ing as soon as possible?
-            if (!this._dataSend) return feedback && feedback.fill(0), then(true) // TODO: …No: when skipping, should really wait for data (or .paused), not just fake-return and add fake-throughput to metrics.
-            this._dataSend(input, this.bytesPerValue)
+            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length, 'values', 'this:', this) // TODO: ...Why are we skipping after we've allegedly connected...
+            if (this._dataSend)
+                this._dataSend(input, this.bytesPerValue)
+            else
+                this._dataToSend.push([input, this.bytesPerValue])
             this._feedback.push([feedback, then, performance.now()])
         }
     }
@@ -476,10 +490,7 @@ Options:
                 for (i = header; i < partBuf.length && atData < data.length; ++i, ++atData)
                     partBuf[i] = data[atData]
                 sent += i
-                if (channel.readyState !== 'open') console.log('trying to send on a', channel.readyState, 'channel') // TODO:
-                // try { // TODO:
-                    channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
-                // } catch (err) {} // Drop the packet on error.
+                channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
             }
             ++nextId, nextId >= 65536 && (nextId = 0)
             sn.meta.metric('sent, bytes', sent)
@@ -498,7 +509,10 @@ Options:
         return function onmessage(evt) {
             // (Allows arbitrary-length packets to be encoded in `maxLength`-sized network packets, unordered and unreliable made ordered and reliable.)
             // (4 bytes of overhead per network packet, plus 2 bytes per actual packet.)
-            if (!(evt.data instanceof ArrayBuffer)) return
+            if (evt instanceof Uint8Array) // SimplePeer
+                sn._assert(!evt.byteOffset), evt = {data:evt.buffer}
+            if (evt.data instanceof Blob) return evt.data.arrayBuffer().then(ab => onmessage({data:ab}))
+            sn._assert(evt.data instanceof ArrayBuffer, "Got non-ArrayBuffer data")
             const dv = new DataView(evt.data)
             const id = dv.getUint16(0), part = dv.getUint16(2)
             if (id < nextId) return // You're too late.
@@ -535,7 +549,6 @@ Options:
                             b[off + j] = p[i].getUint8(header + j)
                         off += sublen
                     }
-                    // TODO: ...Why is literally all feedback of a length that wasn't even sent?!
                     deallocArray(packs[nextId]), packs[nextId] = null
                     onpacket(b, nextId)
                 } else {
