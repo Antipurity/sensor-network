@@ -113,7 +113,9 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             if (opts) {
                 this.iceServers = opts.iceServers || []
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
-                this._data = [], this._feedback = [] // The main adjustable data queue.
+                if (!this._data) { // Only once.
+                    this._data = [], this._feedback = [] // The main adjustable data queue.
+                }
             }
             return super.resume(opts)
         }
@@ -303,14 +305,12 @@ Options:
                 this.signaler = opts.signaler || InternetHandler.consoleLog
                 this.untrustedWorkaround = !!opts.untrustedWorkaround
                 if (opts !== this._opts) this._opts = Object.assign(Object.create(null), opts)
-                // TODO: ...These hidden options should be refreshed, not set-each-time, right?
-                //   (Especially since different-cell-shape will resize each handler, and might happen often.)
-                //   Even setting everything to null one extra time destroys everything!
-                this._feedback = [] // What receiving a feedback-packet will have to do.
-                this.bytesPerValue = bpv
-                this._isInResume = false
-                console.log('setting _dataSend to null', new Error().stack) // TODO:
-                this._dataSend = null, this._dataToSend = []
+                if (!this._feedback) { // Only init once.
+                    this._feedback = [] // What receiving a feedback-packet will have to do.
+                    this.bytesPerValue = bpv
+                    this._isInResume = false
+                    this._dataSend = null, this._dataToSend = []
+                }
                 this.getPeer()
                 this.peer && this.peer.setConfiguration && this.peer.setConfiguration({iceServers:this.iceServers})
             }
@@ -433,7 +433,7 @@ Options:
         }
         
         onValues(then, input, feedback) {
-            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length, 'values', 'this:', this) // TODO: ...Why are we skipping after we've allegedly connected...
+            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length, 'values') // TODO:
             if (this._dataSend)
                 this._dataSend(input, this.bytesPerValue)
             else
