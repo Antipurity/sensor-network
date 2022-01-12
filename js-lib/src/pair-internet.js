@@ -65,23 +65,25 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 const dataSize = 64
                 const iceServers = []
                 function onSensorFeedback(feedback) {
-                    if (feedback)
+                    if (feedback) {
                         console.log(feedback[0]), // TODO: Why is this mostly 0s with only occasional -1s? (…And some rare .5439 from here, and .4890 from handler-data-filling. ...And, wait, it's supposed to be -.97, not -1, so it literally never succeeds in delivering feedback.)
-                        feedback.fill(.5439828952837), // "Read" it.
+                        // TODO: Also, assert that it's filled with .97 (or values close enough to that).
+                        feedback.fill(.5439828952837) // "Read" it.
                         sn._deallocF32(feedback) // Reuse it.
+                    }
                 }
                 return function start() {
                     const signal1 = {
-                        send(msg) { 0&&console.log('s1→s2 msg', msg, !!signal2.onmessage), signal2.onmessage && signal2.onmessage({data:msg}) }, // TODO:
+                        send(msg) { signal2.onmessage && signal2.onmessage({data:msg}) },
                     }, signal2 = {
-                        send(msg) { 0&&console.log('s2→s1 msg', msg, !!signal1.onmessage), signal1.onmessage && signal1.onmessage({data:msg}) }, // TODO:
+                        send(msg) { signal1.onmessage && signal1.onmessage({data:msg}) },
                     }
                     const aFrom = new sn.Sensor({
                         channel: 'a',
                         name: ['remote', 'data', 'source'],
                         values: cells*dataSize,
                         onValues(data) {
-                            data.fill(1), this.sendCallback(onSensorFeedback, data)
+                            data.fill(.99), this.sendCallback(onSensorFeedback, data)
                         },
                     })
                     const aTo = new sn.Handler.Internet({ channel:'a', iceServers, signaler: () => signal1, untrustedWorkaround: true })
@@ -91,8 +93,10 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         dataSize,
                         onValues(then, {data}, feedback) {
                             try {
+                                // TODO: Assert that data[64] is close-enough-to .99.
                                 data.fill(.489018922485) // "Read" it.
                                 if (feedback) feedback.fill(-.97)
+                                Math.random()<.1 && console.log('central handler fills feedback', feedback) // TODO: This clearly happens, so why does the Internet sensor not see it?
                             } finally { then() }
                         },
                     })
@@ -160,7 +164,6 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     packer(bytes)
                 }
                 peer.on('data', messageUnpacker((data, packetId) => {
-                    // console.log('sensor receives data', data && data.length) // TODO:
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
                         if (data.length < 2) return
@@ -176,19 +179,18 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                             cellShape[i] = dv.getUint32(offset), offset += 4
                         const bpv = dv.getUint16(offset);  offset += 2
                         if (bpv !== 0 && bpv !== 1 && bpv !== 2) return
-                        const nameSize = cells * (cellShape.reduce((a,b) => a+b) - cellShape[cellShape.length-1])
-                        const nameBytes = data.subarray(offset, offset += nameSize)
+                        const namedSize = cells * cellShape.reduce((a,b) => a+b)
+                        const namedBytes = data.subarray(offset, offset += namedSize * (bpv||4))
                         const noDataBytes = data.subarray(offset, offset += Math.ceil(cells / 8))
                         const noFeedbackBytes = data.subarray(offset, offset += Math.ceil(cells / 8))
-                        if (nameBytes.length > maxCells * (nameSize / cells | 0) * (bpv+1))
-                            nameBytes = nameBytes.subarray(0, maxCells * (nameSize / cells | 0) * (bpv+1))
-                        const rawData = unquantize(nameBytes, bpv)
+                        if (namedBytes.length > maxCells * (namedSize / cells | 0) * (bpv+1))
+                            namedBytes = namedBytes.subarray(0, maxCells * (namedSize / cells | 0) * (bpv+1))
+                        const rawData = unquantize(namedBytes, bpv)
                         const rawError = unquantizeError(rawData.length, bpv)
                         const noData = fromBits(noDataBytes)
                         const noFeedback = fromBits(noFeedbackBytes)
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
-                        // console.log('sensor prepares to send feedback', 4+24 + 4 * cells * cellShape.reduce((a,b)=>a+b)) // TODO:
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     } else {
@@ -232,6 +234,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
         _unname(namer, allFeedback, fbOffset, flatV) {}
         onFeedback(feedbackData, cellShape, partSize) {
             // Send feedback back.
+            Math.random()<.1 && console.log('sensor feedback', feedbackData.ID || (feedbackData.ID = String(Math.random()).slice(2)), feedbackData) // TODO: ...Uhhh, why is it 0-filled?... That can't be right!
             const fbPoint = this._feedback.shift()
             if (!fbPoint) return
             let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = fbPoint
@@ -379,7 +382,7 @@ Options:
                         })
                         // `data` is feedback here.
                         peer.on('data', messageUnpacker((bytes, packetId) => {
-                            console.log('handler receives feedback', bytes && bytes.length) // TODO: What, are these bytes misshapen or something?
+                            Math.random()<.01 && console.log('handler receives feedback', bytes && bytes.length, bytes) // TODO: What, are these bytes misshapen or something? ...No; I can't believe this: why are they zero-filled?
                             // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
                             const fb = this._feedback.shift()
                             if (!fb) return console.log('oh no', bytes) // TODO:
@@ -636,14 +639,14 @@ Options:
         const a = allocArray(b.length * 8) // The length is a bit inexact, which is not important for us.
         for (let i = 0; i < b.length; ++i) {
             const j = 8*i
-            a[j+0] = b[i] & (1<<7)
-            a[j+1] = b[i] & (1<<6)
-            a[j+2] = b[i] & (1<<5)
-            a[j+3] = b[i] & (1<<4)
-            a[j+4] = b[i] & (1<<3)
-            a[j+5] = b[i] & (1<<2)
-            a[j+6] = b[i] & (1<<1)
-            a[j+7] = b[i] & (1<<0)
+            a[j+0] = !!(b[i] & (1<<7))
+            a[j+1] = !!(b[i] & (1<<6))
+            a[j+2] = !!(b[i] & (1<<5))
+            a[j+3] = !!(b[i] & (1<<4))
+            a[j+4] = !!(b[i] & (1<<3))
+            a[j+5] = !!(b[i] & (1<<2))
+            a[j+6] = !!(b[i] & (1<<1))
+            a[j+7] = !!(b[i] & (1<<0))
         }
         return a
     }
