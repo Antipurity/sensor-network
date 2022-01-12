@@ -96,7 +96,6 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                                 // TODO: Assert that data[64] is close-enough-to .99.
                                 data.fill(.489018922485) // "Read" it.
                                 if (feedback) feedback.fill(-.97)
-                                Math.random()<.1 && console.log('central handler fills feedback', feedback) // TODO: This clearly happens, so why does the Internet sensor not see it?
                             } finally { then() }
                         },
                     })
@@ -231,10 +230,13 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             }
             this._data.length = 0
         }
-        _unname(namer, allFeedback, fbOffset, flatV) {}
+        _unname(namer, allFeedback, fbOffset, dataLen) {
+            const vals = sn._allocF32(allFeedback.length) // Technically unnecessary (if `main.js` doesn't deallocate `feedbackData` but `onFeedback` can decide), but unless this becomes a bottleneck, better safe than sorry.
+            vals.set(allFeedback)
+            return vals
+        }
         onFeedback(feedbackData, cellShape, partSize) {
             // Send feedback back.
-            Math.random()<.1 && console.log('sensor feedback', feedbackData.ID || (feedbackData.ID = String(Math.random()).slice(2)), feedbackData) // TODO: ...Uhhh, why is it 0-filled?... That can't be right!
             const fbPoint = this._feedback.shift()
             if (!fbPoint) return
             let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = fbPoint
@@ -254,6 +256,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 }
                 feedback(back, bpv, partSize, cellShape)
             }
+            sn._deallocF32(feedbackData)
             deallocArray(fbPoint)
             realCellShape && deallocArray(realCellShape)
             noData && deallocArray(noData)

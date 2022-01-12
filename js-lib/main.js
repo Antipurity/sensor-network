@@ -377,9 +377,10 @@ export default (function(exports) {
                 if (ch.mainHandler) return ch.mainHandler.cellShape
                 return ch.cellShapes[0] && ch.cellShapes[0].cellShape || null
             }
-            sendRawCallback(then, name, unname) {
+            sendRawCallback(then, name, unname) { // Low-level. Dangerous. But fast.
                 // `name.call(this, {cellShape, partSize, summary}, namer, packet, then, unname)→bool`: does `packet.send(this, then, unname, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
-                // `unname(namer, allFeedback, fbOffset, flatV)`
+                // `unname(namer, allFeedback, fbOffset, dataLen) → flatV`
+                //   `allFeedback` is a non-owned f32a, which is copied into the owned `flatV`.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
                 assert(then === null || typeof then == 'function', "Bad callback")
@@ -407,8 +408,10 @@ export default (function(exports) {
                     removed.clear()
                 }
             }
-            static _unnameFeedback(namer, allFeedback, fbOffset, flatV) {
+            static _unnameFeedback(namer, allFeedback, fbOffset, dataLen) {
+                const flatV = allocF32(dataLen)
                 namer.unname(allFeedback, fbOffset, flatV)
+                return flatV
             }
             sendCallback(then, values = null, error = null, reward = 0) {
                 // In profiling, promises are the leading cause of garbage. So, use a callback.
@@ -1155,9 +1158,8 @@ Makes only the sign matter for low-frequency numbers.` }),
             const namers = T.feedbackNamers.shift()
             const unnamer = T.feedbackUnnamer.shift()
             if (allFeedback && !noFeedback) {
-                const flatV = allocF32(data.length)
                 const namer = packetNamer(T, namers, cellShape, partSize, summary)
-                unnamer(namer, allFeedback, fbOffset, flatV)
+                const flatV = unnamer(namer, allFeedback, fbOffset, data.length)
                 then && then.call(T, flatV, cellShape, partSize)
             } else
                 then && then.call(T, null, cellShape, partSize)
