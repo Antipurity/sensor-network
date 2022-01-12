@@ -302,12 +302,14 @@ Options:
                 this.iceServers = opts.iceServers || []
                 this.signaler = opts.signaler || InternetHandler.consoleLog
                 this.untrustedWorkaround = !!opts.untrustedWorkaround
+                if (opts !== this._opts) this._opts = Object.assign(Object.create(null), opts)
                 // TODO: ...These hidden options should be refreshed, not set-each-time, right?
+                //   (Especially since different-cell-shape will resize each handler, and might happen often.)
+                //   Even setting everything to null one extra time destroys everything!
                 this._feedback = [] // What receiving a feedback-packet will have to do.
-                this._opts = Object.assign(Object.create(null), opts)
                 this.bytesPerValue = bpv
                 this._isInResume = false
-                console.log('setting _dataSend to null') // TODO: Why does this happen on every iteration?
+                console.log('setting _dataSend to null', new Error().stack) // TODO:
                 this._dataSend = null, this._dataToSend = []
                 this.getPeer()
                 this.peer && this.peer.setConfiguration && this.peer.setConfiguration({iceServers:this.iceServers})
@@ -397,7 +399,8 @@ Options:
                                     cellShape[i] = dv.getUint32(offset), offset += 4
                                 gotFeedback = unquantize(bytes.subarray(offset), bpv)
                                 // Handle what we got.
-                                if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._cellShape)) {
+                                if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._remoteCellShape)) {
+                                    console.log('handler is reshaped:', this._remotePartSize+':'+this._remoteCellShape, '→', partSize+':'+cellShape) // TODO:
                                     this._remotePartSize = partSize
                                     this._remoteCellShape = cellShape
                                     this._opts.partSize = partSize
@@ -467,7 +470,7 @@ Options:
         sensor: InternetSensor,
         handler: InternetHandler,
     }
-    function allocArray() { return arrayCache.length ? arrayCache.pop() : [] }
+    function allocArray(n) { return arrayCache.length ? (arrayCache[arrayCache.length-1].length = n, arrayCache.pop()) : new Array(n) }
     function deallocArray(a) { Array.isArray(a) && arrayCache.length < 16 && (a.length = 0, arrayCache.push(a)) }
     function messagePacker(channel, maxPacketBytes=16*1024*1024) {
         // Sends maybe-large messages over unordered & unreliable channels.

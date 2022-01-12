@@ -1127,7 +1127,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         const c = f32aCache[len]
         if (c.length < 16) c.push(a)
     }
-    function allocArray() { return arrayCache.length ? arrayCache.pop() : [] }
+    function allocArray(n) { return arrayCache.length ? (arrayCache[arrayCache.length-1].length = n, arrayCache.pop()) : new Array(n) }
     function deallocArray(a) { Array.isArray(a) && arrayCache.length < 16 && (a.length = 0, arrayCache.push(a)) }
 
     function debug(k, v) {
