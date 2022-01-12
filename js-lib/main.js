@@ -1122,6 +1122,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     function deallocF32(a) {
         // Makes `allocF32` re-use `a` when allocating an array of the same size. Usually.
         assert(a instanceof Float32Array)
+        return // TODO: Oh no: this fixes a visible bug. So we have to implement optional double-dealloc-prevention.
         const len = a.length
         if (!f32aCache[len]) f32aCache[len] = []
         const c = f32aCache[len]

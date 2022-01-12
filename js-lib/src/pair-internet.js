@@ -21,15 +21,13 @@ export default function init(sn) {
 
 
     class InternetSensor extends sn.Sensor {
-        static docs() { return `Extends this network over the Internet.
+        static docs() { return `Extends this network over the Internet, to control others.
 
 Methods:
 - \`signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)\`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [over a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-
-- TODO: In Firefox, do we need \`media.peerconnection.ice.loopback\`?...
 
 Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)
 ` }
@@ -68,7 +66,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 const iceServers = []
                 function onSensorFeedback(feedback) {
                     if (feedback)
-                        // console.log(feedback[0]), // TODO: ...What are we receiving then?? No WebRTC connection?… Hm…
+                        console.log(feedback[0]), // TODO: Why is this mostly 0s with only occasional -1s? (…And some rare .5439 from here, and .4890 from handler-data-filling. ...And, wait, it's supposed to be -.97, not -1, so it literally never succeeds in delivering feedback.)
                         feedback.fill(.5439828952837), // "Read" it.
                         sn._deallocF32(feedback) // Reuse it.
                 }
@@ -144,9 +142,6 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                 peer.on('signal', data => {
                     signal(JSON.stringify(data))
                 })
-                peer.on('connect', () => {
-                    console.log('sensor is connected', peer) // TODO:
-                })
                 const packer = messagePacker(peer)
                 const feedback = (fb, bpv, partSize, cellShape) => { // Float32Array, 0|1|2
                     const quant = quantize(fb, bpv)
@@ -161,11 +156,11 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         dv.setUint32(offset, cellShape[i]), offset += 4
                     sn._assert(offset === header)
                     bytes.set(quant, header)
-                    console.log('sensor sends feedback', bytes.length) // TODO:
+                    // console.log('sensor sends feedback', bytes.length) // TODO:
                     packer(bytes)
                 }
                 peer.on('data', messageUnpacker((data, packetId) => {
-                    console.log('sensor receives data', data && data.length) // TODO:
+                    // console.log('sensor receives data', data && data.length) // TODO:
                     if (data) {
                         sn._assert(data instanceof Uint8Array)
                         if (data.length < 2) return
@@ -193,7 +188,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         const noFeedback = fromBits(noFeedbackBytes)
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
-                        console.log('sensor prepares to send feedback', 4+24 + 4 * cells * cellShape.reduce((a,b)=>a+b)) // TODO:
+                        // console.log('sensor prepares to send feedback', 4+24 + 4 * cells * cellShape.reduce((a,b)=>a+b)) // TODO:
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     } else {
@@ -263,7 +258,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
         }
     }
     class InternetHandler extends sn.Handler {
-        static docs() { return `Makes this environment a remote part of another sensor network.
+        static docs() { return `Makes this environment a remote part of another sensor network, to be controlled.
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
@@ -372,7 +367,7 @@ Options:
                                 bytes.set(bNoData, offset), offset += bNoData.length
                                 bytes.set(bNoFeedback, offset), offset += bNoFeedback.length
                                 sn._assert(offset === totalSize, "totalSize miscounts")
-                                console.log('handler sends data', bytes.length) // TODO:
+                                // console.log('handler sends data', bytes.length) // TODO:
                                 packer(bytes)
                             }
                             if (this._dataToSend.length) {
@@ -384,7 +379,7 @@ Options:
                         })
                         // `data` is feedback here.
                         peer.on('data', messageUnpacker((bytes, packetId) => {
-                            console.log('handler receives feedback', bytes && bytes.length) // TODO:
+                            console.log('handler receives feedback', bytes && bytes.length) // TODO: What, are these bytes misshapen or something?
                             // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
                             const fb = this._feedback.shift()
                             if (!fb) return console.log('oh no', bytes) // TODO:
@@ -433,7 +428,7 @@ Options:
         }
         
         onValues(then, input, feedback) {
-            console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length, 'values') // TODO:
+            // console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length, 'values') // TODO:
             if (this._dataSend)
                 this._dataSend(input, this.bytesPerValue)
             else
@@ -493,7 +488,9 @@ Options:
                 for (i = header; i < partBuf.length && atData < data.length; ++i, ++atData)
                     partBuf[i] = data[atData]
                 sent += i
-                channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
+                try {
+                    channel.send(i >= partBuf.length ? partBuf : partBuf.subarray(0, i))
+                } catch (err) { console.warn('Packet-part-sending failed', err) }
             }
             ++nextId, nextId >= 65536 && (nextId = 0)
             sn.meta.metric('sent, bytes', sent)
