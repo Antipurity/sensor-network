@@ -6,7 +6,6 @@ export default function init(sn) {
 
 
     function importSimplePeer() { // Manual use of WebRTC is just not working out.
-        // TODO: In docs, mention that we import this on use.
         if (importSimplePeer.did) return importSimplePeer.did
         return importSimplePeer.did = new Promise(resolve => {
             const el = document.createElement('script')
@@ -24,12 +23,14 @@ export default function init(sn) {
         static docs() { return `Extends this network over the Internet, to control others.
 
 Methods:
-- \`signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)\`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [over a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- \`signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)\`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [of a \`WebSocket\` which can be passed directly](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 
 Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)
+
+Imports [100 KiB](https://github.com/feross/simple-peer) on use.
 ` }
         static options() {
             return {
@@ -59,15 +60,14 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             ]
         }
         static bench() { // Extends a virtual sensor/handler pair over a localhost connection.
-            const cellCounts = new Array(1).fill().map((_,i) => (i+1)*10) // TODO: 10, not 1.
+            const cellCounts = new Array(10).fill().map((_,i) => (i+1)*10)
             return cellCounts.map(river) // See how throughput changes with input size.
             function river(cells) {
                 const dataSize = 64
                 const iceServers = []
                 function onSensorFeedback(feedback) {
                     if (feedback) {
-                        console.log(feedback[0]), // TODO: Why is this mostly 0s with only occasional -1s? (…And some rare .5439 from here, and .4890 from handler-data-filling. ...And, wait, it's supposed to be -.97, not -1, so it literally never succeeds in delivering feedback.)
-                        // TODO: Also, assert that it's filled with .97 (or values close enough to that).
+                        sn.meta.metric('feedback-is-correct fraction', +(this.paused || Math.abs(feedback[0] - -.97) < .01))
                         feedback.fill(.5439828952837) // "Read" it.
                         sn._deallocF32(feedback) // Reuse it.
                     }
@@ -91,10 +91,10 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                     const bTo = new sn.Handler({
                         channel: 'b',
                         dataSize,
-                        onValues(then, {data}, feedback) {
+                        onValues(then, {data, noData}, feedback) {
                             try {
-                                // TODO: Assert that data[64] is close-enough-to .99.
-                                data.fill(.489018922485) // "Read" it.
+                                data && data.length && sn._assert(Math.abs(data[64] - .99) < .01, data[64])
+                                data && data.fill(.489018922485) // "Read" it.
                                 if (feedback) feedback.fill(-.97)
                             } finally { then() }
                         },
@@ -120,7 +120,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             }
             return super.resume(opts)
         }
-        signal(metaChannel, maxCells=65536) { // TODO: Maybe, we should really transition to a `onsignal:fn(data)` + `.signal(data)` model, to make things more intuitive for WebRTC-users? Not like it adds more than like 2 lines of code for a WebSocket connection.
+        signal(metaChannel, maxCells=65536) {
             // (Could double-init because getting `SimplePeer` is async.)
             let peer, inMetaData = [], outMetaData = []
             const signal = data => {
@@ -159,8 +159,7 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         dv.setUint32(offset, cellShape[i]), offset += 4
                     sn._assert(offset === header)
                     bytes.set(quant, header)
-                    // console.log('sensor sends feedback', bytes.length) // TODO:
-                    packer(bytes)
+                    if (!this.paused) packer(bytes)
                 }
                 peer.on('data', messageUnpacker((data, packetId) => {
                     if (data) {
@@ -192,10 +191,9 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
-                    } else {
+                    } else { // Drop.
                         const a = allocArray(9)
                         a.fill(undefined), a[8] = feedback
-                        console.log('sensor drops feedback') // TODO:
                         this._data.push(a)
                         this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     }
@@ -240,23 +238,25 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
             const fbPoint = this._feedback.shift()
             if (!fbPoint) return
             let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = fbPoint
-            if (rawData === undefined) { // Dropped.
+            if (rawData === undefined) { // Data was dropped, so drop feedback.
                 const f = sn._allocF32(1)
                 f[0] = 0
-                console.log('####### sensor packet dropped, giving 0 feedback') // TODO:
                 feedback(f, bpv, partSize, cellShape)
             } else { // Respond to the packet.
                 const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
                 const realCellSize = realCellShape.reduce((a,b)=>a+b)
                 const back = sn._allocF32(namedSize)
-                for (let c = 0; c < cells; ++c) { // Naïvely reshape back.
-                    const offsetTarg = c * cellSize, offsetReal = c * realCellSize
-                    for (let i = 0; i < cellSize; ++i)
-                        back[offsetReal + i] = feedbackData[offsetTarg + i]
-                }
+                if (feedbackData)
+                    for (let c = 0; c < cells; ++c) { // Naïvely reshape back.
+                        const offsetTarg = c * cellSize, offsetReal = c * realCellSize
+                        for (let i = 0; i < cellSize; ++i)
+                            back[offsetReal + i] = feedbackData[offsetTarg + i]
+                    }
+                else
+                    back.fill(0)
                 feedback(back, bpv, partSize, cellShape)
             }
-            sn._deallocF32(feedbackData)
+            feedbackData && sn._deallocF32(feedbackData)
             deallocArray(fbPoint)
             realCellShape && deallocArray(realCellShape)
             noData && deallocArray(noData)
@@ -268,9 +268,11 @@ Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/A
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-- \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [a \`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [\`new WebSocket(url)\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - \`bytesPerValue=0\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
 - \`untrustedWorkaround = false\`: if set, will request a microphone stream and do nothing with it, so that a WebRTC connection can connect. The need for this was determined via alchemy, so its exact need-to-use is unknown.
+
+Imports [100 KiB](https://github.com/feross/simple-peer) on use.
 ` }
         static options() {
             return {
@@ -373,22 +375,19 @@ Options:
                                 bytes.set(bNoData, offset), offset += bNoData.length
                                 bytes.set(bNoFeedback, offset), offset += bNoFeedback.length
                                 sn._assert(offset === totalSize, "totalSize miscounts")
-                                // console.log('handler sends data', bytes.length) // TODO:
-                                packer(bytes)
+                                if (!this.paused) packer(bytes)
                             }
                             if (this._dataToSend.length) {
                                 for (let [input, bpv] of this._dataToSend)
                                     this._dataSend(input, bpv)
                                 this._dataToSend.length = 0
                             }
-                            console.log('handler has connected', this) // TODO:
                         })
                         // `data` is feedback here.
                         peer.on('data', messageUnpacker((bytes, packetId) => {
-                            Math.random()<.01 && console.log('handler receives feedback', bytes && bytes.length, bytes) // TODO: What, are these bytes misshapen or something? ...No; I can't believe this: why are they zero-filled?
                             // bpv 2b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, quantized feedback.
                             const fb = this._feedback.shift()
-                            if (!fb) return console.log('oh no', bytes) // TODO:
+                            if (!fb) return console.warn('got feedback that we did not give data for')
                             let gotFeedback
                             if (bytes && bytes.length > 8) {
                                 const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -401,7 +400,6 @@ Options:
                                 gotFeedback = unquantize(bytes.subarray(offset), bpv)
                                 // Handle what we got.
                                 if (partSize !== this._remotePartSize || !arrayEqual(cellShape, this._remoteCellShape)) {
-                                    console.log('handler is reshaped:', this._remotePartSize+':'+this._remoteCellShape, '→', partSize+':'+cellShape) // TODO:
                                     this._remotePartSize = partSize
                                     this._remoteCellShape = cellShape
                                     this._opts.partSize = partSize
@@ -434,7 +432,6 @@ Options:
         }
         
         onValues(then, input, feedback) {
-            // console.log('handler onValues,', !!this._dataSend ? 'real' : 'skip', input.data.length, 'values') // TODO:
             if (this._dataSend)
                 this._dataSend(input, this.bytesPerValue)
             else
@@ -462,10 +459,18 @@ Options:
     }, {
         docs:`The simplest option: [\`console.log\`](https://developer.mozilla.org/en-US/docs/Web/API/Console/log) and \`self.snInternet(messageString)\` is used to make the user carry signals around.`,
     })
+    // TODO: Maybe we really should have a BroadcastChannel here, just so that users don't get bored, and can actually test WebRTC code locally (and besides, a separate sensor just for this seems a bit excessive, since we won't use it anyway).
+    // TODO: Add an option for broadcast-channel WebRTC. And make it the default option, for convenience.
+    InternetHandler.broadcastChannel = A(function signalViaBC() { // TODO: Test it.
+        const bc = new BroadcastChannel()
+        return bc
+    }, {
+        docs:`Signals via a [\`BroadcastChannel\`](https://developer.mozilla.org/en-US/docs/Web/API/Broadcast_Channel_API). (Not in Safari.)`,
+    })
     InternetHandler.webSocket = A(function signalViaWS(url) {
         return () => new WebSocket(url)
     }, {
-        docs:`Signals via a [Web Socket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). Have to pass it the URL before passing it as the \`signaler\` option.`,
+        docs:`Signals via a [\`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). Have to pass it the URL before passing it as the \`signaler\` option.`,
     })
     return {
         sensor: InternetSensor,
@@ -499,7 +504,7 @@ Options:
                 } catch (err) { console.warn('Packet-part-sending failed', err) }
             }
             ++nextId, nextId >= 65536 && (nextId = 0)
-            sn.meta.metric('sent, bytes', sent)
+            sn.meta.metric('sent, bytes/step', sent)
         }
     }
     function messageUnpacker(onpacket, timeoutMs=50, maxPacketBytes=16*1024*1024) {
@@ -541,8 +546,11 @@ Options:
             let tooLong = prevAt != null && performance.now() - prevAt > timeoutMs && superseded()
             while (packs[nextId] && packs[nextId][0] === 0 || tooLong) {
                 const p = packs[nextId]
-                // TODO: Also check that `p` doesn't have nulls, because too-long packets will cause that.
-                if (Array.isArray(p) && p[0] === 0) { // Copy parts into one buffer.
+                let ok = Array.isArray(p) && p[0] === 0
+                if (ok)
+                    for (let i = 1; i < p.length; ++i)
+                        if (!p[i]) { ok = false;  break }
+                if (ok) { // Copy parts into one buffer.
                     // (A copy. And generates garbage. As garbage as JS is.)
                     let len = 0
                     for (let i = 1; i < p.length; ++i)
