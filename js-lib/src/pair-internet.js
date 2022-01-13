@@ -268,7 +268,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-- \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [\`new WebSocket(url)\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
+- \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [\`new WebSocket(url)\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). // TODO: Another signaler by default.
 - \`bytesPerValue=0\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
 - \`untrustedWorkaround = false\`: if set, will request a microphone stream and do nothing with it, so that a WebRTC connection can connect. The need for this was determined via alchemy, so its exact need-to-use is unknown.
 
@@ -279,6 +279,10 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 iceServers: {
                     ['None']: () => [],
                     ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
+                },
+                signaler: {
+                    ['Console']: () => InternetHandler.consoleLog,
+                    ['Tabs']: () => InternetHandler.broadcastChannel, // TODO: ...Wait, it's not enough to just provide this on the handler, because the sensor would also like to know... So how do we do the sensor's broadcast channel --- ideally in a way that opens a new WebRTC connection for each connected tab...
                 },
                 bytesPerValue: {
                     ['float32 (4× size)']: () => 0,
@@ -457,15 +461,26 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         }, 0)
         return obj
     }, {
-        docs:`The simplest option: [\`console.log\`](https://developer.mozilla.org/en-US/docs/Web/API/Console/log) and \`self.snInternet(messageString)\` is used to make the user carry signals around.`,
+        docs:`[\`console.log\`](https://developer.mozilla.org/en-US/docs/Web/API/Console/log) and \`self.internetSensor(messageString)\` and \`self.internetHandler(messageString)\` is used to make the user carry signals around.`,
     })
     // TODO: Maybe we really should have a BroadcastChannel here, just so that users don't get bored, and can actually test WebRTC code locally (and besides, a separate sensor just for this seems a bit excessive, since we won't use it anyway).
     // TODO: Add an option for broadcast-channel WebRTC. And make it the default option, for convenience.
     InternetHandler.broadcastChannel = A(function signalViaBC() { // TODO: Test it.
-        const bc = new BroadcastChannel()
-        return bc
+        const tabId = signalViaBC.id || (signalViaBC.id = String(Math.random()).slice(2) + String(Math.random()).slice(2))
+        const bc = new BroadcastChannel('sn-internet-broadcast-channel')
+        const obj = {
+            send(msg) { bc.postMessage({ tabId, msg }) },
+            close() { bc.close() },
+            onopen:null, onmessage:null, onclose:null,
+        }
+        bc.onmessage = evt => {
+            const d = JSON.parse(evt.data)
+            if (d.tabId !== tabId) obj.onmessage && obj.onmessage()
+        }
+        setTimeout(() => bc.onopen && bc.onopen(), 0)
+        return obj
     }, {
-        docs:`Signals via a [\`BroadcastChannel\`](https://developer.mozilla.org/en-US/docs/Web/API/Broadcast_Channel_API). (Not in Safari.)`,
+        docs:`Connects to all browser tabs. Signals via a [\`BroadcastChannel\`](https://developer.mozilla.org/en-US/docs/Web/API/Broadcast_Channel_API). (Not in Safari.)`,
     })
     InternetHandler.webSocket = A(function signalViaWS(url) {
         return () => new WebSocket(url)
