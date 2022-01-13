@@ -27,6 +27,7 @@ Methods:
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
+- \`signaler\`: a convenience: on construction, does \`sensor.signal(signaler(sensor))\` for you. Props of \`sn.Handler.Internet\` go well here.
 
 Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)
 
@@ -37,6 +38,11 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 iceServers: {
                     ['None']: () => [],
                     ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
+                },
+                signaler: {
+                    ['None']: () => undefined,
+                    ['Browser tabs']: () => sn.Handler.Internet.broadcastChannel,
+                    ['JS console (F12)']: () => sn.Handler.Internet.consoleLog,
                 },
             }
         }
@@ -116,12 +122,17 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
                 if (!this._data) { // Only once.
                     this._data = [], this._feedback = [] // The main adjustable data queue.
+                    const auto = opts.signaler
+                    if (typeof auto == 'function')
+                        Promise.resolve().then(() => auto(this))
                 }
             }
             return super.resume(opts)
         }
         signal(metaChannel, maxCells=65536) {
             // (Could double-init because getting `SimplePeer` is async.)
+            if (!metaChannel) return
+            sn._assert(typeof metaChannel.send == 'function')
             let peer, inMetaData = [], outMetaData = []
             const signal = data => {
                 if (outMetaData) outMetaData.push(data)
@@ -268,7 +279,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
 
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
-- \`signaler = InternetHandler.consoleLog\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [\`new WebSocket(url)\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). // TODO: Another signaler by default.
+- \`signaler = sn.Handler.Internet.broadcastChannel\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [\`new WebSocket(url)\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - \`bytesPerValue=0\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
 - \`untrustedWorkaround = false\`: if set, will request a microphone stream and do nothing with it, so that a WebRTC connection can connect. The need for this was determined via alchemy, so its exact need-to-use is unknown.
 
@@ -281,13 +292,18 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                     ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
                 },
                 signaler: {
+                    // TODO: Test both of these.
+                    ['Tabs']: () => InternetHandler.broadcastChannel,
                     ['Console']: () => InternetHandler.consoleLog,
-                    ['Tabs']: () => InternetHandler.broadcastChannel, // TODO: ...Wait, it's not enough to just provide this on the handler, because the sensor would also like to know... So how do we do the sensor's broadcast channel --- ideally in a way that opens a new WebRTC connection for each connected tab...
                 },
                 bytesPerValue: {
                     ['float32 (4× size)']: () => 0,
                     ['uint16 (2× size)']: () => 2,
                     ['uint8 (1× size)']: () => 1,
+                },
+                untrustedWorkaround: {
+                    No: false,
+                    Yes: true,
                 },
             }
         }
@@ -309,7 +325,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
                 opts.onValues = this.onValues
                 this.iceServers = opts.iceServers || []
-                this.signaler = opts.signaler || InternetHandler.consoleLog
+                this.signaler = opts.signaler || sn.Handler.Internet.broadcastChannel
                 this.untrustedWorkaround = !!opts.untrustedWorkaround
                 if (opts !== this._opts) this._opts = Object.assign(Object.create(null), opts)
                 if (!this._feedback) { // Only init once.
@@ -329,7 +345,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             // Connects to another sensor network through WebRTC.
             // (Could double-init initially, though.)
             if (this.metaChannel == null) {
-                const mc = this.metaChannel = this.signaler(true)
+                const mc = this.metaChannel = this.signaler()
                 this._signal = new Promise((resolve, reject) => {
                     mc.onopen = evt => { this._signal = null, resolve() }
                     mc.onmessage = evt => {
@@ -443,49 +459,79 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             this._feedback.push([feedback, then, performance.now()])
         }
     }
-    InternetHandler.consoleLog = A(function signalViaConsole(isHandler = false) {
-        const obj = {
-            send(msg) { console.log(msg) },
-            close() {},
-        }
-        setTimeout(() => {
-            obj.onopen && obj.onopen()
-            if (isHandler && !self.internetHandler) {
-                console.log("Carry around WebRTC messages manually, through the JS console.")
-                console.log("    On the sensor, call \`.signal(sn.Sensor.InternetHandler.consoleLog())\` first.")
-                console.log("    On request from the handler, do \`internetSensor(string)\`.")
-                console.log("    On response from the sensor, do \`internetHandler(string)\`.")
+    A(InternetHandler, {
+        broadcastChannel: A(function signalViaBC(sensor=null) { // TODO: Test it.
+            const tabId = signalViaBC.id || (signalViaBC.id = String(Math.random()).slice(2) + String(Math.random()).slice(2))
+            const bc = new BroadcastChannel('sn-internet-broadcast-channel')
+            let interval, objs
+            const obj = {
+                send(msg, dst=null) { bc.postMessage({ tabId, dst, msg }) },
+                close() {
+                    clearInterval(interval)
+                    bc.close()
+                    objs && objs.forEach(o => o.onclose && o.onclose())
+                },
+                onopen:null, onmessage:null, onclose:null,
             }
-            const k = isHandler ? 'internetHandler' : 'internetSensor'
-            self[k] = msg => obj.onmessage && obj.onmessage({data:msg})
-        }, 0)
-        return obj
-    }, {
-        docs:`[\`console.log\`](https://developer.mozilla.org/en-US/docs/Web/API/Console/log) and \`self.internetSensor(messageString)\` and \`self.internetHandler(messageString)\` is used to make the user carry signals around.`,
-    })
-    // TODO: Maybe we really should have a BroadcastChannel here, just so that users don't get bored, and can actually test WebRTC code locally (and besides, a separate sensor just for this seems a bit excessive, since we won't use it anyway).
-    // TODO: Add an option for broadcast-channel WebRTC. And make it the default option, for convenience.
-    InternetHandler.broadcastChannel = A(function signalViaBC() { // TODO: Test it.
-        const tabId = signalViaBC.id || (signalViaBC.id = String(Math.random()).slice(2) + String(Math.random()).slice(2))
-        const bc = new BroadcastChannel('sn-internet-broadcast-channel')
-        const obj = {
-            send(msg) { bc.postMessage({ tabId, msg }) },
-            close() { bc.close() },
-            onopen:null, onmessage:null, onclose:null,
-        }
-        bc.onmessage = evt => {
-            const d = JSON.parse(evt.data)
-            if (d.tabId !== tabId) obj.onmessage && obj.onmessage()
-        }
-        setTimeout(() => bc.onopen && bc.onopen(), 0)
-        return obj
-    }, {
-        docs:`Connects to all browser tabs. Signals via a [\`BroadcastChannel\`](https://developer.mozilla.org/en-US/docs/Web/API/Broadcast_Channel_API). (Not in Safari.)`,
-    })
-    InternetHandler.webSocket = A(function signalViaWS(url) {
-        return () => new WebSocket(url)
-    }, {
-        docs:`Signals via a [\`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). Have to pass it the URL before passing it as the \`signaler\` option.`,
+            bc.onmessage = evt => {
+                const d = JSON.parse(evt.data)
+                if (d.dst == null || d.dst === tabId)
+                    if (d.tabId !== tabId)
+                        obj.onmessage && obj.onmessage({data:d.msg}, d.tabId)
+            }
+            setTimeout(() => bc.onopen && bc.onopen(), 0)
+            if (sensor) {
+                // One connection per connected tab.
+                objs = Object.create(null) // tabId → {send(msg), …}
+                interval = setInterval(() => { // Garbage-collect.
+                    const now = performance.now()
+                    for (let tabId of Object.keys(objs)) {
+                        const o = objs[tabId]
+                        if (now - o.lastTouched > 60000)
+                            delete objs[tabId], o.onclose && o.onclose()
+                    }
+                }, 60000)
+                obj.onmessage = (evt, tabId) => {
+                    if (!objs[tabId])
+                        sensor.signal(objs[tabId] = {
+                            tabId,
+                            lastTouched: 0,
+                            send(msg) { obj.send(msg, this.tabId) },
+                            close() { delete objs[this.tabId] },
+                            onopen:null, onmessage:null, onclose:null,
+                        })
+                    objs[tabId].lastTouched = performance.now()
+                    objs[tabId].onmessage && objs[tabId].onmessage(evt)
+                }
+            } else return obj
+        }, {
+            docs:`Connects to all browser tabs, one connection per handler. Signals via a [\`BroadcastChannel\`](https://developer.mozilla.org/en-US/docs/Web/API/Broadcast_Channel_API). (Not in Safari.)`,
+        }),
+        consoleLog: A(function signalViaConsole(sensor=null) {
+            const obj = {
+                send(msg) { console.log(msg) },
+                close() {},
+            }
+            setTimeout(() => {
+                obj.onopen && obj.onopen()
+                if (!sensor && !self.internetHandler) {
+                    console.log("Carry around WebRTC signals manually, through the JS console.")
+                    console.log("    On the sensor, call \`.signal(sn.Sensor.InternetHandler.consoleLog())\` first.")
+                    console.log("    On request from the handler, do \`internetSensor(string)\`.")
+                    console.log("    On response from the sensor, do \`internetHandler(string)\`.")
+                }
+                const k = !sensor ? 'internetHandler' : 'internetSensor'
+                self[k] = msg => obj.onmessage && obj.onmessage({data:msg})
+            }, 0)
+            return obj
+        }, {
+            docs:`[\`console.log\`](https://developer.mozilla.org/en-US/docs/Web/API/Console/log) and \`self.internetSensor(messageString)\` and \`self.internetHandler(messageString)\` is used to make the user carry signals around.`,
+        }),
+        webSocket: A(function signalViaWS(url) {
+            return sensor => new WebSocket(url)
+        }, {
+            docs:`Signals via a [\`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). Have to pass it the URL before passing it as the \`signaler\` option.`,
+        }),
     })
     return {
         sensor: InternetSensor,
