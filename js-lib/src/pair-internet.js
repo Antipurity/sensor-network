@@ -273,7 +273,6 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             noFeedback && deallocArray(noFeedback)
         }
     }
-    // TODO: Can we make these classes' names just `Internet`?
     class InternetHandler extends sn.Handler {
         static docs() { return `Makes this environment a remote part of another sensor network, to be controlled.
 
@@ -533,6 +532,8 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             docs:`Signals via a [\`WebSocket\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket). Have to pass it the URL before passing it as the \`signaler\` option.`,
         }),
     })
+    Object.defineProperty(InternetSensor, 'name', {value:'Internet', configurable:true, writable:true})
+    Object.defineProperty(InternetHandler, 'name', {value:'Internet', configurable:true, writable:true})
     return {
         sensor: InternetSensor,
         handler: InternetHandler,
