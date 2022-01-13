@@ -275,7 +275,7 @@ CSS not included. Markdown parsing not included.
                         A(opts, selectedToJS(item))
                         const prettier = k => {
                             let js = opts[k]
-                            if (js === 'false' || js === 'true') return `${k}:${js}`
+                            if (typeof js == 'boolean' || js === 'false' || js === 'true') return `${k}:${js}`
                             if (js.slice(0,4) === '()=>') js = '() ' + js.slice(2)
                             if (js.slice(0,5) === '() =>') {
                                 js = js.slice(5).trim()

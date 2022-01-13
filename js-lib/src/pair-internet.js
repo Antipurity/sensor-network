@@ -359,7 +359,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 this._dataSend = null
                 const p = this.untrustedWorkaround ? navigator.mediaDevices.getUserMedia({audio:true}) : Promise.resolve()
                 this.peer = p.then(() => {throw null}).catch(() => {
-                    importSimplePeer().then(SimplePeer => {
+                    return importSimplePeer().then(SimplePeer => {
                         const peer = this.peer = new SimplePeer({
                             initiator: true,
                             config: {iceServers:this.iceServers},
@@ -444,6 +444,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                             if (this._signal) this._signal.then(() => this.metaChannel.send(data))
                             else this.metaChannel.send(data)
                         }
+                        return peer
                     })
                 })
             }

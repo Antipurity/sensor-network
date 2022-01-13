@@ -11,6 +11,7 @@ import Audio from './src/sensor-audio.js'
 import Pointer from './src/sensor-pointer.js'
 import Keyboard from './src/sensor-keyboard.js'
 import WebRTC from './src/pair-internet.js'
+import LimitFPS from './src/transform-limit-fps.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1103,6 +1104,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     })
     Object.assign(E.Transform, {
         Reward: Reward(E),
+        LimitFPS: LimitFPS(E),
     })
     Object.assign(E.Handler, {
         Sound: Sound(E),

@@ -293,15 +293,15 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ⋯ `.Transform`:
             - ✓ `Reward`, filling `0`s of 0th numbers of cells with the numeric result of calling a function unless it's `0` too.
                 - ✓ By default, make Ctrl+Up/Ctrl+Down give +1/-1 reward.
-            - ⋯ `RewardFeedback`, which waits 8 steps to get feedback then calls its function to get the reward. The most natural function is a discriminator between data & feedback, or a simple difference if lazy. (Really empathize with other AI models.)
-                - ⋯ Allow inserting more cells, for discrimination between mechanisms.
-                - ⋯ Collect a dataset with the sensor network, and replay it to train. Should be able to learn to predict at least 1 cell reasonably well, and from there it's just about getting better and scaling up, right?
+            - ❌ `RewardFeedback`, which waits 8 steps to get feedback then calls its function to get the reward. The most natural function is a discriminator between data & feedback, or a simple difference if lazy. (Why, is actual prediction too hard? Or too easy, have to meta-learn it through reward too? `(a-b).abs().backward()` is probably more robust.)
+            - ✓ Limiter: ✓ by-FPS, ❌ by-bandwidth (quite specific, and humans usually think in terms of FPS rather than throughput).
+            - ⋯ Start & end timestamps of an observation. (This is the only way we can do things like "resample at a different framerate" and "summarize an interval such that down-the-line predictions are most predictive", which is how we move from the fragile next-frame prediction to something far more robust.)
+                - TODO: Where exactly are they situated? In particular, what if we only have one `user` part? How to squeeze a usable timestamp into just 4 numbers?
             - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name (by turning names into byte-strings, and pre-constructing regexes from sensors' names), so that even old and remote data is visualizable.
                 - ⋯ `Visualize.all()({data, cellShape})`, which returns a `<canvas>` on which green=1 black=0 red=-1 4×4 pixels are drawn, with empty pixels between reward/user/name and data.
-            - ⋯ Shuffle cells.
+            - ⋯ Shuffle cells (for non-Transformer consumption); sort cells (for human consumption).
             - ⋯ Add `-error…error` random numbers to `data`, if there is error.
             - ⋯ To save feedback of even non-noData cells, a transform that splits such cells into `noData` and `noFeedback` cells. (Also set `cell[1]` to -1 for no-feedback and 1 for no-data, to put past-like actions first and adaptation second.)
-            - ⋯ Limiter: by-FPS, by-bandwidth.
             - ⋯ Try an echo-state network, and see whether that makes `Sound` better or worse.
                 - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)
                 - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
@@ -311,8 +311,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - TODO: Tools for connecting humans and AI models to arbitrary sensors: differentiable [subscribe/publish](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern).
                 - TODO: Design constraints:
                     - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
-                    - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling)
+                    - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling) (TODO: But if we don't quantize, I don't think we actually limit the raw values anywhere. So is this a real limitation?)
                     - That's all. A human can use it. AGI can use it.
+                - TODO: # You can: ???
+                    - TODO: Not worry about efficiency (& a link to benchmarks)
+                - TODO: # You should eventually be able to: ???
             - ✓ No-feedback sound output (speakers).
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
@@ -325,7 +328,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `Random` feedback. For debugging.
             - ⋯ Write to `indexedDB`, with visualization (`options()`?) allowing saving it all to a file.
                 - TODO: Write a database! Doing a Rust backend for this would take too long, and the data format seems very simple since we probably don't care about splitting data into experiences anymore: just write everything all the time (and let compression sort things out), into chunks of 64KB, with an integer count of cells in each chunk.
-                - TODO: Also, have the time-transform, so that we can start collecting reasonable data immediately. (And maybe the FPS limiter.)
+                - TODO: Also, have the time-transform, so that we can start collecting reasonable data immediately.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ✓ Write to Internet.
                 - ✓ `bytesPerValue=0`: transmit in f32 or u8 or u16.
