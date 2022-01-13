@@ -130,7 +130,6 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             return super.resume(opts)
         }
         signal(metaChannel, maxCells=65536) {
-            // (Could double-init because getting `SimplePeer` is async.)
             if (!metaChannel) return
             sn._assert(typeof metaChannel.send == 'function')
             let peer, inMetaData = [], outMetaData = []
@@ -274,6 +273,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             noFeedback && deallocArray(noFeedback)
         }
     }
+    // TODO: Can we make these classes' names just `Internet`?
     class InternetHandler extends sn.Handler {
         static docs() { return `Makes this environment a remote part of another sensor network, to be controlled.
 
@@ -293,8 +293,8 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 },
                 signaler: {
                     // TODO: Test both of these.
-                    ['Tabs']: () => InternetHandler.broadcastChannel,
-                    ['Console']: () => InternetHandler.consoleLog,
+                    ['Tabs']: () => sn.Handler.Internet.broadcastChannel,
+                    ['Console']: () => sn.Handler.Internet.consoleLog,
                 },
                 bytesPerValue: {
                     ['float32 (4× size)']: () => 0,
@@ -309,7 +309,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         }
         pause() {
             if (!this._isInResume) {
-                if (this.peer) this.peer.destroy(), this.peer = null
+                if (this.peer) Promise.resolve(this.peer).then(p => (p.destroy(), this.peer = null))
                 if (this._feedback && this._feedback.length) {
                     for (let [feedback, then, start] of this._feedback)
                         feedback && feedback.fill(0), then()
@@ -335,7 +335,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                     this._dataSend = null, this._dataToSend = []
                 }
                 this.getPeer()
-                this.peer && this.peer.setConfiguration && this.peer.setConfiguration({iceServers:this.iceServers})
+                // Haven't seen a way to update the ICE-servers list in SimplePeer, so no `.setConfiguration`.
             }
             try { this._isInResume = true
                 return super.resume(opts)
@@ -343,7 +343,6 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         }
         getPeer() {
             // Connects to another sensor network through WebRTC.
-            // (Could double-init initially, though.)
             if (this.metaChannel == null) {
                 const mc = this.metaChannel = this.signaler()
                 this._signal = new Promise((resolve, reject) => {
@@ -352,7 +351,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                         if (this.peer == null) return console.warn('dropping signal', evt.data)
                         if (typeof evt.data != 'string') return
                         const d = JSON.parse(evt.data)
-                        this.peer.signal(d)
+                        this.peer instanceof Promise ? this.peer.then(p => p.signal(d)) : this.peer.signal(d)
                     }
                     mc.onclose = evt => { reject(), this._signal = this.metaChannel = null } // When closed, reopen.
                 })
@@ -360,7 +359,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             if (this.peer == null) {
                 this._dataSend = null
                 const p = this.untrustedWorkaround ? navigator.mediaDevices.getUserMedia({audio:true}) : Promise.resolve()
-                p.then(() => {throw null}).catch(() => {
+                this.peer = p.then(() => {throw null}).catch(() => {
                     importSimplePeer().then(SimplePeer => {
                         const peer = this.peer = new SimplePeer({
                             initiator: true,
@@ -461,6 +460,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
     }
     A(InternetHandler, {
         broadcastChannel: A(function signalViaBC(sensor=null) { // TODO: Test it.
+            // TODO: Why isn't it working?
             const tabId = signalViaBC.id || (signalViaBC.id = String(Math.random()).slice(2) + String(Math.random()).slice(2))
             const bc = new BroadcastChannel('sn-internet-broadcast-channel')
             let interval, objs
@@ -508,19 +508,19 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             docs:`Connects to all browser tabs, one connection per handler. Signals via a [\`BroadcastChannel\`](https://developer.mozilla.org/en-US/docs/Web/API/Broadcast_Channel_API). (Not in Safari.)`,
         }),
         consoleLog: A(function signalViaConsole(sensor=null) {
+            // TODO: Make this work.
+            const k = !sensor ? 'internetHandler' : 'internetSensor'
             const obj = {
-                send(msg) { console.log(msg) },
+                send(msg) { console.log(`${k}(${msg})`) },
                 close() {},
             }
             setTimeout(() => {
                 obj.onopen && obj.onopen()
-                if (!sensor && !self.internetHandler) {
+                if (!signalViaConsole.did) {
                     console.log("Carry around WebRTC signals manually, through the JS console.")
-                    console.log("    On the sensor, call \`.signal(sn.Sensor.InternetHandler.consoleLog())\` first.")
-                    console.log("    On request from the handler, do \`internetSensor(string)\`.")
-                    console.log("    On response from the sensor, do \`internetHandler(string)\`.")
+                    console.log("    Please triple-click and copy each message, then paste at the other end.")
+                    signalViaConsole.did = true
                 }
-                const k = !sensor ? 'internetHandler' : 'internetSensor'
                 self[k] = msg => obj.onmessage && obj.onmessage({data:msg})
             }, 0)
             return obj
