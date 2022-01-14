@@ -127,18 +127,20 @@ Options:
                 if (!cells) return
 
                 const data = sn._allocF32(cells * cellSize)
-                const dv = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-                const dataStart = 0, dataEnd = cells * cellSize
-                const chStart = 0, chEnd = cells * fileCellSize
-                const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
-                const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
-                for (let i = chStart, j = dataStart; i < chNameEnd && j < dataNameEnd; ++i, ++j)
-                    data[j] = dv.getFloat32(i) // Copy the name. Don't resize parts.
-                for (let i = chNameEnd, j = dataNameEnd; i < chEnd && j < dataEnd; ++i, ++j)
-                    data[j] = dv.getFloat32(i) // Copy data.
-                console.log('data sum:', data.reduce((a,b)=>a+b)) // TODO: Why is this still NaN?
-                // TODO: Print the raw data.
-                // TODO: ...If chunk is clearly not-all-zeros, then why is data clearly all-zeros...
+                const dv = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength) // TODO: But what if we have bpv===1 or bpv===2?
+                for (let c = 0; c < cells; ++c) {
+                    const dataStart = c * cellSize, dataEnd = dataStart + cellSize
+                    const chStart = c * fileCellSize, chEnd = chStart + fileCellSize
+                    const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
+                    const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
+                    for (let i = chStart, j = dataStart; i < chNameEnd && j < dataNameEnd; ++i, ++j)
+                        data[j] = dv.getFloat32(i*4) // Copy the name. Don't resize parts.
+                    for (let i = chNameEnd, j = dataNameEnd; i < chEnd && j < dataEnd; ++i, ++j)
+                        data[j] = dv.getFloat32(i*4) // Copy data.
+                }
+                // console.log('data sum:', data.reduce((a,b)=>a+b)) // TODO: Why is this still NaN?
+                // console.log('data:', data) // TODO: Okay, someone is definitely screwing up, since it's either 0 or 1e-38 or NaN: is it loading or saving?
+                //   …This data ain't right… Not even the conversion…
 
                 const error = unquantizeError(cells * cellSize, this._bytesPerValue)
                 packet.send(this, then, unname, data, error, noData, noFeedback)
