@@ -1,7 +1,6 @@
 import './yamd5.js' // self.YaMD5
 import Sound from './src/handler-sound.js'
 import Video from './src/sensor-video.js'
-import Time from './src/sensor-time.js'
 import Reward from './src/transform-reward.js'
 import UI from './src/ui.js'
 import Text from './src/sensor-text.js'
@@ -12,6 +11,7 @@ import Pointer from './src/sensor-pointer.js'
 import Keyboard from './src/sensor-keyboard.js'
 import WebRTC from './src/pair-internet.js'
 import LimitFPS from './src/transform-limit-fps.js'
+import Time from './src/transform-time.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1099,10 +1099,10 @@ Makes only the sign matter for low-frequency numbers.` }),
         Keyboard: Keyboard(E),
         Pointer: Pointer(E),
         Scroll: Scroll(E),
-        Time: Time(E),
         Internet: Internet.sensor,
     })
     Object.assign(E.Transform, {
+        Time: Time(E),
         Reward: Reward(E),
         LimitFPS: LimitFPS(E),
     })

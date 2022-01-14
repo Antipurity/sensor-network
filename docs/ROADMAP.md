@@ -273,21 +273,20 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
             - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
-            - ✓ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
-                - ⋯ Possibly, replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings (in the `user` part of the name), so that learning doesn't *have* to do BPTT per-step (non-scalable beyond about a minute) but across time resolutions and even backwards.
-                - ⋯ Possibly, make handlers know the sending's timestamp, to make latency accounted-for.
+            - ❌ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
+                - ✓ Replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings in the `user` part of the name, so that learning doesn't *have* to do BPTT per-step (non-scalable beyond about a minute) but across time resolutions.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
             - ⋯ Read from file.
                 - ⋯ Allow `noFeedback=false`. Research dataset distillation: loop: do several iterations of learning on adjustable data points (preserving all gradient graphs), then evaluate on the bigger dataset (not learning model weights), accumulating gradient and finally adjusting the data points. (Might be a bit strange for autoregressive tasks.) (ML-based compression: the more you live, the more you know and the faster you learn.) (For mesa-optimizer-learning, could simply give learned experience first, then target experience. No need to wait for gradient updates to learn at inference time. And if learned actions improve prediction, then they are predicted too, and it's all a feedback loop. Tho for accuracy, might want to only compress beginnings of single episodes, not all data.)
                 - ⋯ Research continuous model distillation (basically [Iterated Amplification](https://www.lesswrong.com/posts/vhfATmAoJcN8RqGg6/a-guide-to-iterated-amplification-and-debate)), because restarting sucks: making models not just out of dense layers `f(f(x))` but something like `(f(f(x)) + zeroGrad(g(x))) * .5`, where `g(x)` predicts `f(f(x))`. `g` is also self-distilled, and the result is too, until there's only 1 layer for the whole network, or maybe ½ or less layers via matrix factorization: `x@A → x@a@b`. (Seems too simple to not have been tried. [This](https://2021.ecmlpkdd.org/wp-content/uploads/2021/07/sub_676.pdf) also does not let teachers diverge too far from students, though without `+` and on weights rather than on outputs. No match was found.) (…Or just do [BYOL](https://arxiv.org/abs/2006.07733) with different online/target histories, possibly randomly dropping observations, or dropping them based on their hashes: `x@W < 0`.)
             - ⋯ In extension, read from tabs.
-            - ⋯ Read from Internet, with WebRTC, RabbitMQ preferable.
-                - ⋯ Each data packet references its meta-data (names and such) by ID; when meta-data changes, it's re-sent until the other side acknowledges it.
+            - ✓ Read from Internet, with WebRTC, ❌ RabbitMQ preferable.
+                - ❌ Each data packet references its meta-data (names and such) by ID; when meta-data changes, it's re-sent until the other side acknowledges it. (Just send everything and rely on compression.)
                 - ⋯ Support de/compression, able to hold the previous-packet's data if needed.
                 - ⋯ Discourage disengagements: on user disconnect, hold its last cell (now `0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
-                - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
-                - ⋯ [`BroadcastChannel`](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel/postMessage) for convenience.
+                - ✓ Benchmark throughput, over localhost.
+                - ✓ [`BroadcastChannel`](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel/postMessage) for convenience.
             - ⋯ Search: in a distributed database (sync with search-server URL/s if given, updating a few fitting entries on demand), lookup the nearest-neighbor of values' feedback (the label) (must not be linked elsewhere), and connect via read-from-Internet.
             - ⋯ In-extension [tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`. (Though, if we have bandwidth for that, then we might as well expose some proper programming language and/or rewriting system for direct use.)
         - ⋯ `.Transform`:
@@ -295,16 +294,14 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ By default, make Ctrl+Up/Ctrl+Down give +1/-1 reward.
             - ❌ `RewardFeedback`, which waits 8 steps to get feedback then calls its function to get the reward. The most natural function is a discriminator between data & feedback, or a simple difference if lazy. (Why, is actual prediction too hard? Or too easy, have to meta-learn it through reward too? `(a-b).abs().backward()` is probably more robust.)
             - ✓ Limiter: ✓ by-FPS, ❌ by-bandwidth (quite specific, and humans usually think in terms of FPS rather than throughput).
-            - ⋯ Start & end timestamps of an observation. (This is the only way we can do things like "resample at a different framerate" and "summarize an interval such that down-the-line predictions are most predictive", which is how we move from the fragile next-frame prediction to something far more robust.)
-                - TODO: Where exactly are they situated? In particular, what if we only have one `user` part? How to squeeze a usable timestamp into just 4 numbers?
+            - ✓ Start & end timestamps of an observation. (The only way to do things like "users have different framerates and network connectivity" and "training can skip as much as it wants", to move from fragile next-frame prediction to something far more robust that can scale beyond about 1 minute.)
             - ⋯ `Visualize`, with a list of `Sensor`s on which to call `.visualize({data, cellShape}, DOMelem)`, so that humans can match data to a familiar format and thus learn a new representation of it. Infer sensors by name (by turning names into byte-strings, and pre-constructing regexes from sensors' names), so that even old and remote data is visualizable.
                 - ⋯ `Visualize.all()({data, cellShape})`, which returns a `<canvas>` on which green=1 black=0 red=-1 4×4 pixels are drawn, with empty pixels between reward/user/name and data.
             - ⋯ Shuffle cells (for non-Transformer consumption); sort cells (for human consumption).
             - ⋯ Add `-error…error` random numbers to `data`, if there is error.
             - ⋯ To save feedback of even non-noData cells, a transform that splits such cells into `noData` and `noFeedback` cells. (Also set `cell[1]` to -1 for no-feedback and 1 for no-data, to put past-like actions first and adaptation second.)
-            - ⋯ Try an echo-state network, and see whether that makes `Sound` better or worse.
-                - ⋯ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Procedural music.)
-                - ⋯ Also try mangling feedback, and having keyboard and camera input and camera-with-some-SSL-NN. See whether we can get something even remotely passable to work. (And have the visualization UI that first collects feedback, trains a model on it when asked, and when ready, actually uses the model.)
+            - ⋯ With a semi-trained-by-SSL RNN (such as [BYOL](https://arxiv.org/abs/2006.07733) with [Transformer-like transitions](https://arxiv.org/pdf/2102.11174.pdf)), hook its output at a few points to `Sound`. Hopefully, with the variance captured, it will sound much better and can fit much more info into the same bandwidth.
+                - ❌ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Why, bored?)
             - ❌ Ask the user to rename cells using feedback. (Feedback is value-only, and besides, it's probably inferior to AI translation from meager user data to full feedback, which is already trivially achievable by observing the user, demanding actions, and a handler that defers to an AI model. BMI? Pfft, AI translation is superior.)
         - ⋯ `.Handler`:
             - TODO: Text in `README.md` (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
@@ -326,9 +323,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
             - ❌ Sound input (microphone). Probably terrible, especially without an ML model to summarize it.
             - ✓ `Random` feedback. For debugging.
-            - ⋯ Write to `indexedDB`, with visualization (`options()`?) allowing saving it all to a file.
+            - ⋯ Write chunks to `indexedDB`, with visualization (extend `options()` to allow HTML elements?) allowing saving it all to a file.
                 - TODO: Write a database! Doing a Rust backend for this would take too long, and the data format seems very simple since we probably don't care about splitting data into experiences anymore: just write everything all the time (and let compression sort things out), into chunks of 64KB, with an integer count of cells in each chunk.
-                - TODO: Also, have the time-transform, so that we can start collecting reasonable data immediately.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ✓ Write to Internet.
                 - ✓ `bytesPerValue=0`: transmit in f32 or u8 or u16.
