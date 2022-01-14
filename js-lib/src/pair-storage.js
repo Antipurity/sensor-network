@@ -83,9 +83,11 @@ Options:
             }
         }
         pause() {
-            // TODO: Should flush our accumulated cell-data to the database.
-            //   TODO: `this._flush(end = this._chunks.length-1)` which saves & forgets all accumulated chunks?
-            // TODO: Also this.file.close() and this.file = null. …Unless in `resume`…
+            if (!this._isInResume) {
+                while (this._chunks.length > 0)
+                    this.saveChunk(this._chunks.shift())
+                this.file && Promise.resolve(this.file).then(f => f.close()), this.file = null
+            }
             return super.pause()
         }
         resume(opts) {
@@ -99,9 +101,11 @@ Options:
                 if (!this._chunks)
                     this._chunks = []
             }
+            this._isInResume = true
             try {
                 return super.resume(opts)
             } finally {
+                this._isInResume = false
                 // Connect to the indexedDB 'file'.
                 if (filename !== this.filename) {
                     this._warned = false
