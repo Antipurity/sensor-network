@@ -1,4 +1,4 @@
-export default function init(sn) { // TODO: Import these.
+export default function init(sn) {
     const A = Object.assign
     const arrayCache = []
 
@@ -91,9 +91,9 @@ Options:
             return super.pause()
         }
         resume(opts) {
+            const filename = (opts ? opts.filename : this.filename) || 'sn'
             if (opts) {
                 const bpv = opts.bytesPerValue || 0
-                const filename = opts.filename || 'sn'
                 sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
                 sn._assert(typeof filename == 'string')
                 opts.onValues = this.onValues
@@ -113,12 +113,12 @@ Options:
                     this.file = openFile(filename)
                     this.init = this.file.then(async f => {
                         // Read metadata, and/or create it if needed.
-                        let ch = await loadChunk(f, 0)
+                        let ch = await loadChunk(f, 0), dv
                         if (!ch) {
-                            ch = allocChunk()
+                            ch = allocChunk().fill(0)
                             dv = new DataView(ch.buffer, ch.byteOffset, ch.byteLength)
                             let offset = 0
-                            dv.setUint16(offset, bpv), offset += 2
+                            dv.setUint16(offset, this.bytesPerValue), offset += 2
                             dv.setUint32(offset, this.partSize), offset += 4
                             dv.setUint16(offset, this.cellShape.length), offset += 2
                             for (let i = 0; i < this.cellShape.length; ++i)
@@ -135,9 +135,11 @@ Options:
                         this._bytesPerValue = bpv
                         this._partSize = partSize
                         this._cellShape = cellShape
+                        const cellSize = cellShape.reduce((a,b)=>a+b)
                         this._chunkCells = Math.floor(8*chunkSize / (8 * (bpv||4) * cellSize + 2))
-                        this.nextChunk = await countChunks(this.file)
+                        this.nextChunk = await countChunks(f)
                         this.nextCell = 999999999
+                        this.file = f
                         this.init = null
                     })
                 }

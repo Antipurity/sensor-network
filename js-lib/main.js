@@ -12,6 +12,7 @@ import Keyboard from './src/sensor-keyboard.js'
 import WebRTC from './src/pair-internet.js'
 import LimitFPS from './src/transform-limit-fps.js'
 import Time from './src/transform-time.js'
+import Storage from './src/pair-storage.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1092,6 +1093,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     // And set the most-common modules.
     E.meta.UI = UI(E)
     const Internet = WebRTC(E)
+    const Store = Storage(E)
     Object.assign(E.Sensor, {
         Text: Text(E),
         Video: Video(E),
@@ -1099,6 +1101,7 @@ Makes only the sign matter for low-frequency numbers.` }),
         Keyboard: Keyboard(E),
         Pointer: Pointer(E),
         Scroll: Scroll(E),
+        Storage: Store.sensor,
         Internet: Internet.sensor,
     })
     Object.assign(E.Transform, {
@@ -1109,6 +1112,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     Object.assign(E.Handler, {
         Sound: Sound(E),
         Random: Random(E),
+        Storage: Store.handler,
         Internet: Internet.handler,
     })
     return E
