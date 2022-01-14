@@ -40,6 +40,7 @@ Options:
             }
             return super.resume(opts)
         }
+        // TODO: How would we decide whether to go from the start, or from a random position, and when to switch to a random position?
         _name({cellShape, partSize, summary}, namer, packet, then, unname) {
             // TODO: What do we do here? Maybe we should do nothing? …Or, rather, just pass through... But what do we pass through?
             // Copy all data points into the actual data stream.
@@ -70,30 +71,85 @@ Options:
         static docs() { return `TODO:
 
 Options:
-- TODO: What do we want?
+- \`filename = 'sn'\`: which file to append to.
+- TODO: What else do we want?
 ` }
         static options() {
+            // TODO: Make `options`, when it encounters `x instanceof Node`, just put it into the result. (So that we can have buttons.)
             return {
+                // TODO: A button that does navigator.storage.persist()
+                // TODO: Also a button that deletes the file. (And maybe also show its current size, based on the chunk-count, updating every second?)
             }
         }
         pause() {
             // TODO: Should flush our accumulated cell-data to the database.
+            //   TODO: `this._flush(end = this._chunks.length-1)` which saves & forgets all accumulated chunks?
+            // TODO: Also this.file.close() and this.file = null. …Unless in `resume`…
             return super.pause()
         }
         resume(opts) {
             if (opts) {
                 const bpv = opts.bytesPerValue || 0
+                const filename = opts.filename || 'sn'
                 sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
+                sn._assert(typeof filename == 'string')
                 opts.onValues = this.onValues
                 this.bytesPerValue = bpv
-                // TODO: We want a uint8array for the chunk, right?
-                //   And/or a DataView?
+                if (!this._chunks)
+                    this._chunks = []
                 // TODO: What else do we save?
             }
-            return super.resume(opts)
+            try {
+                return super.resume(opts)
+            } finally {
+                // Connect to the indexedDB 'file'.
+                if (filename !== this.filename) {
+                    this._warned = false
+                    this.file && Promise.resolve(this.file).then(f => f.close())
+                    this.file = openFile(filename)
+                    this.init = this.file.then(async f => {
+                        // Read metadata, and/or create it if needed.
+                        let ch = await loadChunk(f, 0)
+                        if (!ch) {
+                            ch = allocChunk()
+                            dv = new DataView(ch.buffer, ch.byteOffset, ch.byteLength)
+                            let offset = 0
+                            dv.setUint16(offset, bpv), offset += 2
+                            dv.setUint32(offset, this.partSize), offset += 4
+                            dv.setUint16(offset, this.cellShape.length), offset += 2
+                            for (let i = 0; i < this.cellShape.length; ++i)
+                                dv.setUint32(offset, this.cellShape[i]), offset += 4
+                            await saveChunk(f, 0, ch)
+                        } else dv = new DataView(ch.buffer, ch.byteOffset, ch.byteLength)
+                        let offset = 0
+                        const bpv = dv.getUint16(offset);  offset += 2
+                        const partSize = dv.getUint32(offset);  offset += 4
+                        const cellShape = new Array(dv.getUint16(offset));  offset += 2
+                        for (let i = 0; i < cellShape.length; ++i)
+                            cellShape[i] = dv.getUint32(offset), offset += 4
+                        sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
+                        this._bytesPerValue = bpv
+                        this._partSize = partSize
+                        this._cellShape = cellShape
+                        this._chunkCells = Math.floor(8*chunkSize / (8 * (bpv||4) * cellSize + 2))
+                        this.next = await countChunks(this.file)
+                        this.init = null
+                    })
+                }
+                this.filename = filename
+            }
         }
-        onValues(then, {data, cellShape, partSize}) {
+        async onValues(then, {data, noData, noFeedback, cellShape, partSize}) {
+            if (this.init) await this.init
+            if (!this._warned && (partSize !== this._partSize || !arrayEqual(cellShape, this._cellShape))) {
+                console.warn("Cell shape differs from what it is in the file.")
+                this._warned = true
+            }
+            // TODO: Should we reshape cells if the format differs?...
             // TODO: How to save `data`?
+            //   TODO: How put `data` into `this._chunks` at the end…
+            //     We need a pointer of which cell we're currently writing...
+            //     TODO: …But what about noData and noFeedback…
             then()
         }
     }
@@ -214,6 +270,15 @@ Options:
                 const db = evt.target.result
                 resolve(db)
             }
+        })
+    }
+    function countChunks(file) {
+        const transaction = file.transaction('sn-storage', 'readonly')
+        const store = transaction.objectStore('sn-storage')
+        return new Promise((resolve, reject) => {
+            const req = store.count()
+            req.onsuccess = () => resolve(req.result)
+            req.onerror = reject
         })
     }
     function loadChunk(file, index) { // → Promise<chunk> (Uint8Array)
