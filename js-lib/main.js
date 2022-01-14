@@ -451,7 +451,7 @@ export default (function(exports) {
                     nextN[summary] = prevN[summary].resized(values, emptyValues)
                 this.values = values, this.emptyValues = emptyValues, this.dataNamers = nextN
             }
-            pause() {
+            pause(inResume = false) {
                 if (this.paused !== false) return this
                 if (typeof this.onValues == 'function') {
                     const ch = state(this.channel)
@@ -462,7 +462,7 @@ export default (function(exports) {
             }
             resume(opts) {
                 if (opts) {
-                    this.pause()
+                    this.pause(true)
                     const { name, values, onValues=null, channel='', noFeedback=false, userName=[], emptyValues=0, hasher=undefined } = opts
                     assert(typeof name == 'string' || Array.isArray(name), 'Must have a name')
                     assertCounts('Must have the value-count', values)
@@ -546,7 +546,7 @@ export default (function(exports) {
         }),
         Transform: A(class Transform {
             constructor(opts) { opts && this.resume(opts) }
-            pause() {
+            pause(inResume = false) {
                 if (this.paused !== false) return this
                 const ch = state(this.channel)
                 ch.transforms = ch.transforms.filter(v => v !== this)
@@ -555,7 +555,7 @@ export default (function(exports) {
             }
             resume(opts) {
                 if (opts) {
-                    this.pause()
+                    this.pause(true)
                     const { onValues=null, onFeedback=null, priority=0, channel='' } = opts
                     assert(typeof priority == 'number' && priority === priority, "Bad `priority`")
                     assert(onValues == null || typeof onValues == 'function', "Bad `onValues`")
@@ -600,7 +600,7 @@ export default (function(exports) {
         }),
         Handler: A(class Handler {
             constructor(opts) { opts && this.resume(opts) }
-            pause() {
+            pause(inResume = false) {
                 if (this.paused !== false) return this
                 const ch = state(this.channel), dst = state(this.channel, this.cellShape, this.partSize, this.summary)
                 dst.handlers = dst.handlers.filter(v => v !== this)
@@ -616,7 +616,7 @@ export default (function(exports) {
             }
             resume(opts) {
                 if (opts) {
-                    this.pause()
+                    this.pause(true)
                     const { onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' } = opts
                     assert(typeof onValues == 'function', "Handlers must have `onValues` listeners")
                     assertCounts('', partSize, userParts, nameParts, dataSize)

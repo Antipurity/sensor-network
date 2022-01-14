@@ -2,7 +2,7 @@ export default function init(sn) {
     const A = Object.assign
     const arrayCache = []
 
-    // Storage is split into equal-sized chunks.
+    // Storage is split into equal-sized chunks, 1MiB each.
     //   The first chunk is special:
     //     2b: bpv (0|1|2)
     //     4b: partSize
@@ -15,7 +15,7 @@ export default function init(sn) {
     //   (There's no separation between different sessions or even different time steps.)
     //     (Reading happens in-order.)
     //     (Use `sn.Transform.Time` to be able to distinguish time steps.)
-    const chunkSize = 65536
+    const chunkSize = 1024*1024
     const chunkCache = []
 
 
@@ -68,25 +68,27 @@ Options:
         _unname(namer, allFeedback, fbOffset, dataLen) {}
     }
     class StorageHandler extends sn.Handler {
-        // TODO: Test that this writes stuff.
         static docs() { return `TODO:
 
 Options:
 - \`filename = 'sn'\`: which file to append to.
-- TODO: What else do we want?
+- TODO: \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32.
+- TODO: What else do we want? ...Nothing?
 ` }
         static options() {
             // TODO: Make `options`, when it encounters `x instanceof Node`, just put it into the result. (So that we can have buttons.)
             return {
+                // TODO: bytesPerValue.
                 // TODO: A button that does navigator.storage.persist()
                 // TODO: Also a button that deletes the file. (And maybe also show its current size, based on the chunk-count, updating every second?)
             }
         }
-        pause() {
-            if (!this._isInResume) {
+        pause(inResume = false) {
+            if (!inResume) {
                 while (this._chunks.length > 0)
                     this.saveChunk(this._chunks.shift())
-                this.file && Promise.resolve(this.file).then(f => f.close()), this.file = null
+                this.file && Promise.resolve(this.file).then(f => f.close())
+                this.file = this.filename = null
             }
             return super.pause()
         }
@@ -101,19 +103,20 @@ Options:
                 if (!this._chunks)
                     this._chunks = []
             }
-            this._isInResume = true
             try {
                 return super.resume(opts)
             } finally {
-                this._isInResume = false
                 // Connect to the indexedDB 'file'.
                 if (filename !== this.filename) {
                     this._warned = false
+                    this._initResolve && this._initResolve()
+                    this._initPromise = new Promise(resolve => this._initResolve = resolve)
                     this.file && Promise.resolve(this.file).then(f => f.close())
-                    this.file = openFile(filename)
-                    this.init = this.file.then(async f => {
+                    const p = this.file = openFile(filename).then(async f => {
+                        if (p !== this.file) return f
                         // Read metadata, and/or create it if needed.
                         let ch = await loadChunk(f, 0), dv
+                        if (p !== this.file) return f
                         if (!ch) {
                             ch = allocChunk().fill(0)
                             dv = new DataView(ch.buffer, ch.byteOffset, ch.byteLength)
@@ -124,6 +127,7 @@ Options:
                             for (let i = 0; i < this.cellShape.length; ++i)
                                 dv.setUint32(offset, this.cellShape[i]), offset += 4
                             await saveChunk(f, 0, ch)
+                            if (p !== this.file) return f
                         } else dv = new DataView(ch.buffer, ch.byteOffset, ch.byteLength)
                         let offset = 0
                         const bpv = dv.getUint16(offset);  offset += 2
@@ -138,16 +142,19 @@ Options:
                         const cellSize = cellShape.reduce((a,b)=>a+b)
                         this._chunkCells = Math.floor(8*chunkSize / (8 * (bpv||4) * cellSize + 2))
                         this.nextChunk = await countChunks(f)
+                        if (p !== this.file) return f
                         this.nextCell = 999999999
-                        this.file = f
-                        this.init = null
+                        this._initPromise = null
+                        this._initResolve()
+                        return this.file = f
                     })
                 }
                 this.filename = filename
             }
         }
         async onValues(then, {data, noData, noFeedback, cellShape, partSize}) {
-            if (this.init) await this.init
+            if (this._initPromise) await this._initPromise
+            if (!this.filename) return then()
             const mustReshape = partSize !== this._partSize || !arrayEqual(cellShape, this._cellShape)
             if (!this._warned && mustReshape) {
                 console.warn("Cell shape differs from what it is in the file: got", partSize, cellShape, "but had", this._partSize, this._cellShape)
@@ -159,7 +166,7 @@ Options:
             const ndOffset = this._chunkCells * fileCellSize*bpv
             const nfOffset = ndOffset + Math.ceil(this._chunkCells / 8)
             for (let c = 0; c < cells; ++c) {
-                if (this.nextCell >= this._chunkCells)
+                if (this.nextCell >= this._chunkCells || !this._chunks.length)
                     this._chunks.push(allocChunk().fill(0)), this.nextCell = 0
                 // Save name and data.
                 const chunk = this._chunks[this._chunks.length-1]

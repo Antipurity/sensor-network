@@ -105,7 +105,7 @@ CSS not included. Markdown parsing not included.
                     function onchange() {
                         selected[k] = typeof this.checked == 'boolean' ? this.checked : this.value
                         optsFor(vars, selected)
-                        if (instance) instance.paused === false && (instance.pause(), instance.resume(opts))
+                        if (instance) instance.paused === false && (instance.pause(true), instance.resume(opts))
                     }
                 }
                 into.push(table)
@@ -199,7 +199,7 @@ CSS not included. Markdown parsing not included.
                     type:'checkbox',
                     class:'checkboxRunning',
                     title:'Currently active',
-                    onchange() { if (el) selected[active] = this.checked, this.checked ? el.resume() : el.pause() },
+                    onchange(evt) { if (el) selected[active] = this.checked, this.checked ? el.resume() : el.pause() },
                 }])
                 if (running && selected[active]) setTimeout(() => running.click(), 0)
                 if (!selected[active]) selected[active] = false
