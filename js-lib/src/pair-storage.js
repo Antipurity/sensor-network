@@ -88,17 +88,22 @@ Options:
         // TODO: Maybe, a method to pick `this.nextChunk` randomly (or set it to an index, or even get it)?
         onValues(data) {
             sn._deallocF32(data)
-            if (this.file instanceof Promise || !this.filename) return
+            if (!this.file || this.file instanceof Promise || !this.filename) return
             // Fill up the buffer.
             while (this._chunks.length + this._chunksToGet < 8) {
-                loadChunks.then(chunk => { this._chunks.push(chunk), --this._chunksToGet })
+                loadChunk(this.file, this.nextChunk++).then(chunk => { this._chunks.push(chunk), --this._chunksToGet })
+                if (this.nextChunk >= this.maxChunks) this.nextChunk = 1
+                if (Math.random()<.01) {
+                    const f = this.file
+                    countChunks(f).then(ch => this.file === f && (this.maxChunks = ch))
+                }
                 ++this._chunksToGet
             }
             // Send off a chunk from the buffer. (A whole chunk each time, no regards for step boundaries.)
             if (!this._chunks.length) return
             const chunk = this._chunks.shift()
             this.sendRawCallback(null, function name({cellShape, partSize, summary}, namer, packet, then, unname) {
-                const cellSize = cellShape.reduce((a,b)=>a+b), cells = data.length / cellSize | 0
+                const cellSize = cellShape.reduce((a,b)=>a+b)
                 const bpv = this._bytesPerValue || 4
                 const fileCellSize = this._cellShape.reduce((a,b)=>a+b)
                 const values = this._chunkCells * fileCellSize
