@@ -97,7 +97,6 @@ Options:
                 this.bytesPerValue = bpv
                 if (!this._chunks)
                     this._chunks = []
-                // TODO: What else do we save?
             }
             try {
                 return super.resume(opts)
@@ -132,7 +131,8 @@ Options:
                         this._partSize = partSize
                         this._cellShape = cellShape
                         this._chunkCells = Math.floor(8*chunkSize / (8 * (bpv||4) * cellSize + 2))
-                        this.next = await countChunks(this.file)
+                        this.nextChunk = await countChunks(this.file)
+                        this.nextCell = 999999999
                         this.init = null
                     })
                 }
@@ -141,16 +141,40 @@ Options:
         }
         async onValues(then, {data, noData, noFeedback, cellShape, partSize}) {
             if (this.init) await this.init
-            if (!this._warned && (partSize !== this._partSize || !arrayEqual(cellShape, this._cellShape))) {
-                console.warn("Cell shape differs from what it is in the file.")
+            const mustReshape = partSize !== this._partSize || !arrayEqual(cellShape, this._cellShape)
+            if (!this._warned && mustReshape) {
+                console.warn("Cell shape differs from what it is in the file: got", partSize, cellShape, "but had", this._partSize, this._cellShape)
                 this._warned = true
             }
-            // TODO: Should we reshape cells if the format differs?...
-            // TODO: How to save `data`?
-            //   TODO: How put `data` into `this._chunks` at the end…
-            //     We need a pointer of which cell we're currently writing...
-            //     TODO: …But what about noData and noFeedback…
+            const cellSize = cellShape.reduce((a,b)=>a+b), cells = data.length / cellSize | 0
+            const bpv = this._bytesPerValue || 4
+            for (let c = 0; c < cells; ++c) {
+                if (this.nextCell >= this._chunkCells)
+                    this._chunks.push(allocChunk().fill(0)), this.nextCell = 0
+                const chunk = this._chunks[this._chunks.length-1]
+                const dataStart = c * cellSize, dataEnd = (c+1) * cellSize
+                const chStart = this.nextCell * cellSize
+                if (!mustReshape)
+                    for (let i = chStart*bpv, j = dataStart*bpv; j < dataEnd*bpv; ++i, ++j)
+                        chunk[i] = data[j]
+                else {
+                    // TODO: How to reshape?
+                    //   TODO: How to reshape the name?
+                    //   TODO: How to reshape the data?
+                }
+                // TODO: Save noData and noFeedback, via bitwise operations near the end of the chunk.
+                //   TODO: At what indices do we start writing?
+            }
+            while (this._chunks.length > 1)
+                this.saveChunk(this._chunks.shift())
             then()
+        }
+        saveChunk(chunk) { // Saves a Uint8Array chunk (consuming it) to the file.
+            if (!this.file) return
+            sn._assert(!(this.file instanceof Promise))
+            const bpv = this._bytesPerValue, cellSize = this._cellShape.reduce((a,b)=>a+b), cells = this._chunkCells
+            bigEndian(chunk.subarray(0, cells * cellSize), bpv, true)
+            saveChunk(this.file, this.nextChunk++, chunk)
         }
     }
     Object.defineProperty(StorageSensor, 'name', {value:'Storage', configurable:true, writable:true})
