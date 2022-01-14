@@ -148,9 +148,14 @@ Options:
             }
             const cellSize = cellShape.reduce((a,b)=>a+b), cells = data.length / cellSize | 0
             const bpv = this._bytesPerValue || 4
+            // TODO: cells = this._chunkCells
+            const fileCellSize = this._cellShape.reduce((a,b)=>a+b)
+            const ndOffset = this._chunkCells * fileCellSize
+            const nfOffset = ndOffset + Math.ceil(this._chunkCells / 8)
             for (let c = 0; c < cells; ++c) {
                 if (this.nextCell >= this._chunkCells)
-                    this._chunks.push(allocChunk().fill(0)), this.nextCell = 0
+                    this._chunks.push(allocChunk().fill(255)), this.nextCell = 0
+                // Save name and data.
                 const chunk = this._chunks[this._chunks.length-1]
                 const dataStart = c * cellSize, dataEnd = (c+1) * cellSize
                 const chStart = this.nextCell * cellSize
@@ -162,8 +167,11 @@ Options:
                     //   TODO: How to reshape the name?
                     //   TODO: How to reshape the data?
                 }
-                // TODO: Save noData and noFeedback, via bitwise operations near the end of the chunk.
-                //   TODO: At what indices do we start writing?
+                // Save noData and noFeedback.
+                const nd = noData[c], nf = noFeedback[c]
+                const byte = c >>> 3, bit = c & 7
+                if (nd === false) chunk[ndOffset + byte] = chunk[ndOffset + byte] & ~(1 << bit)
+                if (nf === false) chunk[nfOffset + byte] = chunk[nfOffset + byte] & ~(1 << bit)
             }
             while (this._chunks.length > 1)
                 this.saveChunk(this._chunks.shift())
