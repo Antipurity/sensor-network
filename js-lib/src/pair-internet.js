@@ -449,7 +449,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 })
             }
         }
-        
+
         onValues(then, input, feedback) {
             if (this._dataSend)
                 this._dataSend(input, this.bytesPerValue)

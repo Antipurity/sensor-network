@@ -312,6 +312,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - That's all. A human can use it. AGI can use it.
                 - TODO: # You can: ???
                     - TODO: Not worry about efficiency (& a link to benchmarks)
+                    - TODO: Control your computer interaction data: collect it (& a link to sensors), store it (& a link to the database), share it (& a link to the Internet handler)
                 - TODO: # You should eventually be able to: ???
             - ✓ No-feedback sound output (speakers).
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
@@ -325,6 +326,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ✓ `Random` feedback. For debugging.
             - ⋯ Write chunks to `indexedDB`, with visualization (extend `options()` to allow HTML elements?) allowing saving it all to a file.
                 - TODO: Write a database! Doing a Rust backend for this would take too long, and the data format seems very simple since we probably don't care about splitting data into experiences anymore: just write everything all the time (and let compression sort things out), into chunks of 64KB, with an integer count of cells in each chunk.
+                    - …In fact, each chunk just concatenates/splits cells, with not even time-steps being separate since we now can do that… This really is just "we got data, WRITE IT DOWN WRITE IT DOWN".
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ✓ Write to Internet.
                 - ✓ `bytesPerValue=0`: transmit in f32 or u8 or u16.
