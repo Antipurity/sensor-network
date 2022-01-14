@@ -1112,9 +1112,9 @@ Makes only the sign matter for low-frequency numbers.` }),
     })
     Object.assign(E.Handler, {
         Sound: Sound(E),
-        Random: Random(E),
         Storage: Store.handler,
         Internet: Internet.handler,
+        Random: Random(E),
     })
     return E
 

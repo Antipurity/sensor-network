@@ -21,7 +21,7 @@ export default function init(sn) {
 
 
     class StorageSensor extends sn.Sensor {
-        static docs() { return `TODO:
+        static docs() { return `Loads data from storage.
 
 Options:
 - TODO: \`filename = 'sn'\`
@@ -45,6 +45,7 @@ Options:
                 sn._assert(typeof filename == 'string')
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
                 opts.onValues = this.onValues
+                opts.noFeedback = true
                 if (!this._chunks) // Only once.
                     this._chunks = [], this._chunksToGet = 0
             }
@@ -91,7 +92,8 @@ Options:
             if (!this.file || this.file instanceof Promise || !this.filename) return
             // Fill up the buffer.
             while (this._chunks.length + this._chunksToGet < 8) {
-                loadChunk(this.file, this.nextChunk++).then(chunk => { this._chunks.push(chunk), --this._chunksToGet })
+                console.log('will load', this.nextChunk, '/', this.maxChunks) // TODO: Why is it loading the same chunk?! ...Why is maxChunks 2?! ...Oh, we were just saving very little data, and thought we would be saving more chunks because chunkSize was 64KB and is now 1MB, that's all.
+                loadChunk(this.file, this.nextChunk++).then(chunk => { chunk && this._chunks.push(chunk), --this._chunksToGet })
                 if (this.nextChunk >= this.maxChunks) this.nextChunk = 1
                 if (Math.random()<.01) {
                     const f = this.file
@@ -102,6 +104,8 @@ Options:
             // Send off a chunk from the buffer. (A whole chunk each time, no regards for step boundaries.)
             if (!this._chunks.length) return
             const chunk = this._chunks.shift()
+            let SUM = chunk.reduce((a,b)=>a+b) // TODO:
+            console.log('chunk', chunk, 'sum', SUM) // TODO: Why does it all have the same sum?! No, not all. It's conceivable that pointers are the same, so, *maybe*?
             this.sendRawCallback(null, function name({cellShape, partSize, summary}, namer, packet, then, unname) {
                 const cellSize = cellShape.reduce((a,b)=>a+b)
                 const bpv = this._bytesPerValue || 4
@@ -117,6 +121,9 @@ Options:
                 noData.length = cells, noFeedback.length = cells
                 while (cells && noData[cells-1] && noFeedback[cells-1])
                     --cells, noData.pop(), noFeedback.pop()
+                // console.log('noData', noData.slice(), 'noFeedback', noFeedback.slice(), 'ndOffset', ndOffset, 'nfOffset', nfOffset) // TODO: Why is most of it true, with occasional specks of false? It shouldn't be all-true at the beginning...
+                //   (Is it the saving's fault, or the loading's?)
+                //   TODO: …And why is every chunk looking the same in noData and noFeedback?... Okay, I think noData is now fixed.
                 if (!cells) return
 
                 const data = sn._allocF32(cells * cellSize)
@@ -126,20 +133,26 @@ Options:
                 const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
                 const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
                 for (let i = chStart, j = dataStart; i < chNameEnd && j < dataNameEnd; ++i, ++j)
-                    data[j] = dv[i] // Copy the name. Don't resize parts.
+                    data[j] = dv.getFloat32(i) // Copy the name. Don't resize parts.
                 for (let i = chNameEnd, j = dataNameEnd; i < chEnd && j < dataEnd; ++i, ++j)
-                    data[j] = dv[i] // Copy data.
+                    data[j] = dv.getFloat32(i) // Copy data.
+                console.log('data sum:', data.reduce((a,b)=>a+b)) // TODO: Why is this still NaN?
+                // TODO: Print the raw data.
+                // TODO: ...If chunk is clearly not-all-zeros, then why is data clearly all-zeros...
 
                 const error = unquantizeError(cells * cellSize, this._bytesPerValue)
                 packet.send(this, then, unname, data, error, noData, noFeedback)
+                // TODO: Also, dealloc chunk.
             })
         }
     }
     class StorageHandler extends sn.Handler {
-        static docs() { return `TODO:
+        static docs() { return `Saves data to storage.
+
+Data of no-data cells is replaced with feedback, if the main handler is present to give 
 
 Options:
-- \`filename = 'sn'\`: which file to append to.
+- \`filename = 'sn'\`: which file to append to. TODO: Mention indexedDB.
 - \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32. Only relevant when first creating the file.
 - TODO: What else do we want? ...Nothing?
 ` }
@@ -168,6 +181,7 @@ Options:
                 sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
                 sn._assert(typeof filename == 'string')
                 opts.onValues = this.onValues
+                opts.noFeedback = true
                 this.bytesPerValue = bpv
                 if (!this._chunks)
                     this._chunks = []
@@ -254,8 +268,9 @@ Options:
                 }
                 // Save noData and noFeedback.
                 if (this.nextCell === 1) chunk.fill(255, ndOffset)
+                const C = this.nextCell-1 // Imagine confusing `c` for `C`. Imagine using an editor that can't highlight variables.
                 const nd = noData[c], nf = noFeedback[c]
-                const byte = c >>> 3, bit = c & 7
+                const byte = C >>> 3, bit = C & 7
                 if (nd === false) chunk[ndOffset + byte] = chunk[ndOffset + byte] & ~(1 << bit)
                 if (nf === false) chunk[nfOffset + byte] = chunk[nfOffset + byte] & ~(1 << bit)
             }
@@ -343,26 +358,18 @@ Options:
                 [a[i+0], a[i+1], a[i+2], a[i+3]] = [a[i+3], a[i+2], a[i+1], a[i+0]]
         return a
     }
-    function toBits(a) { // Array<bool> → Uint8Array
-        const b = new Uint8Array(Math.ceil(a.length / 8))
-        for (let i = 0; i < b.length; ++i) {
-            const j = 8*i
-            b[i] = (a[j+0]<<7) | (a[j+1]<<6) | (a[j+2]<<5) | (a[j+3]<<4) | (a[j+4]<<3) | (a[j+5]<<2) | (a[j+6]<<1) | (a[j+7]<<0)
-        }
-        return b
-    }
     function fromBits(b) { // Uint8Array → Array<bool>
-        const a = allocArray(b.length * 8) // The length is a bit inexact, which is not important for us.
+        const a = new Array(b.length * 8) // The length is a bit inexact, which is not important for us.
         for (let i = 0; i < b.length; ++i) {
             const j = 8*i
-            a[j+0] = !!(b[i] & (1<<7))
-            a[j+1] = !!(b[i] & (1<<6))
-            a[j+2] = !!(b[i] & (1<<5))
-            a[j+3] = !!(b[i] & (1<<4))
-            a[j+4] = !!(b[i] & (1<<3))
-            a[j+5] = !!(b[i] & (1<<2))
-            a[j+6] = !!(b[i] & (1<<1))
-            a[j+7] = !!(b[i] & (1<<0))
+            a[j+0] = !!(b[i] & (1<<0))
+            a[j+1] = !!(b[i] & (1<<1))
+            a[j+2] = !!(b[i] & (1<<2))
+            a[j+3] = !!(b[i] & (1<<3))
+            a[j+4] = !!(b[i] & (1<<4))
+            a[j+5] = !!(b[i] & (1<<5))
+            a[j+6] = !!(b[i] & (1<<6))
+            a[j+7] = !!(b[i] & (1<<7))
         }
         return a
     }

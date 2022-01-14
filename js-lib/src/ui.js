@@ -184,7 +184,10 @@ CSS not included. Markdown parsing not included.
             docs = docs && docs.split('\n\n')
             docs = docs && (docs.length > 1 ? UI.collapsed([{style:'display:inline-block'}, UI.docsTransformer(docs[0])], [UI.docsTransformer(docs.slice(1).join('\n\n'))]) : dom(docs))
             const isClass = UI.groupOf(x) !== 'object'
-            const name = ' ' + UI.nameOf(x)
+            let name = ' ' + UI.nameOf(x)
+            if (name === ' Sensor') name = ' Sensor →'
+            if (name === ' Transform') name = ' → Transform →'
+            if (name === ' Handler') name = ' → Handler'
             return isClass ? UI.oneOrMore(anItem, selected) : anItem(null, selected[0] || (selected[0] = {}))
             function anItem(btn, selected) {
                 const el = UI.options(x, selected, parentOpts)
