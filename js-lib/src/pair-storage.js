@@ -68,6 +68,7 @@ Options:
         _unname(namer, allFeedback, fbOffset, dataLen) {}
     }
     class StorageHandler extends sn.Handler {
+        // TODO: Test that this writes stuff.
         static docs() { return `TODO:
 
 Options:
@@ -148,26 +149,29 @@ Options:
             }
             const cellSize = cellShape.reduce((a,b)=>a+b), cells = data.length / cellSize | 0
             const bpv = this._bytesPerValue || 4
-            // TODO: cells = this._chunkCells
             const fileCellSize = this._cellShape.reduce((a,b)=>a+b)
-            const ndOffset = this._chunkCells * fileCellSize
+            const ndOffset = this._chunkCells * fileCellSize*bpv
             const nfOffset = ndOffset + Math.ceil(this._chunkCells / 8)
             for (let c = 0; c < cells; ++c) {
                 if (this.nextCell >= this._chunkCells)
-                    this._chunks.push(allocChunk().fill(255)), this.nextCell = 0
+                    this._chunks.push(allocChunk().fill(0)), this.nextCell = 0
                 // Save name and data.
                 const chunk = this._chunks[this._chunks.length-1]
                 const dataStart = c * cellSize, dataEnd = (c+1) * cellSize
-                const chStart = this.nextCell * cellSize
+                const chStart = this.nextCell * fileCellSize, chEnd = ++this.nextCell * fileCellSize
                 if (!mustReshape)
-                    for (let i = chStart*bpv, j = dataStart*bpv; j < dataEnd*bpv; ++i, ++j)
+                    for (let i = chStart*bpv, j = dataStart*bpv; i < chEnd*bpv && j < dataEnd*bpv; ++i, ++j)
                         chunk[i] = data[j]
-                else {
-                    // TODO: How to reshape?
-                    //   TODO: How to reshape the name?
-                    //   TODO: How to reshape the data?
+                else { // Reshape if needed. (Make some effort, at least.)
+                    const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
+                    const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
+                    for (let i = chStart*bpv, j = datastart*bpv; i < chNameEnd*bpv && j < dataNameEnd*bpv; ++i, ++j)
+                        chunk[i] = data[j] // Copy the name. Don't resize parts.
+                    for (let i = chNameEnd*bpv, j = dataNameEnd*bpv; i < chEnd*bpv && j < dataEnd*bpv; ++i, ++j)
+                        chunk[i] = data[j] // Copy data.
                 }
                 // Save noData and noFeedback.
+                if (this.nextCell === 1) chunk.fill(255, ndOffset)
                 const nd = noData[c], nf = noFeedback[c]
                 const byte = c >>> 3, bit = c & 7
                 if (nd === false) chunk[ndOffset + byte] = chunk[ndOffset + byte] & ~(1 << bit)
