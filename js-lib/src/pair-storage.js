@@ -25,13 +25,20 @@ export default function init(sn) {
 
 Options:
 - TODO: \`filename = 'sn'\`
-- TODO: What do we want? \`filename\`?
+- TODO: What else do we want?
 ` }
         static options() {
             return {
+                // TODO: filename. Like 5 options.
             }
         }
-        // TODO: On pause, close the file.
+        pause(inResume = false) {
+            if (!inResume) {
+                this.file && Promise.resolve(this.file).then(f => f.close())
+                this.file = this.filename = null
+            }
+            return super.pause()
+        }
         resume(opts) {
             const filename = (opts ? opts.filename : this.filename) || 'sn'
             if (opts) {
@@ -90,33 +97,37 @@ Options:
             // Send off a chunk from the buffer. (A whole chunk each time, no regards for step boundaries.)
             if (!this._chunks.length) return
             const chunk = this._chunks.shift()
-            // TODO: How to process this chunk?
-            // TODO: this.sendRawCallback(null, this._name)
-        }
-        _name({cellShape, partSize, summary}, namer, packet, then, unname) {
-            // TODO: What do we do here? Maybe we should do nothing? …Or, rather, just pass through... But what do we pass through?
-            //   TODO: …Somewhere here, send(sensor, then, unname, point, error, noData, noFeedback)…
-            // Copy all data points into the actual data stream.
-            //   `this.onFeedback` will be called for each sending.
-            for (let i = 0; i < this._data.length; ++i) {
-                let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = this._data[i]
-                if (rawData === undefined) { // Dropped packet. Synthetic data.
-                    cells = 0
-                    rawData = sn._allocF32(0), rawError = null
-                    noData = noFeedback = true
-                }
-                const cellSize = cellShape.reduce((a,b)=>a+b), namedSize = cells * cellSize
-                const realCellSize = realCellShape && realCellShape.reduce((a,b)=>a+b)
-                const namedV = sn._allocF32(namedSize), namedE = rawError && sn._allocF32(namedSize)
-                for (let c = 0; c < cells; ++c) { // Naïvely reshape.
-                    const offsetTarg = c * cellSize, offsetReal = c * realCellSize
-                    for (let i = 0; i < cellSize; ++i)
-                        namedV[offsetTarg + i] = rawData[offsetReal + i]
-                }
-                packet.send(this, then, unname, namedV, namedE || null, noData || true, noFeedback || true)
-                this._feedback.push(this._data[i])
-            }
-            this._data.length = 0
+            this.sendRawCallback(null, function name({cellShape, partSize, summary}, namer, packet, then, unname) {
+                const cellSize = cellShape.reduce((a,b)=>a+b), cells = data.length / cellSize | 0
+                const bpv = this._bytesPerValue || 4
+                const fileCellSize = this._cellShape.reduce((a,b)=>a+b)
+                const values = this._chunkCells * fileCellSize
+                const bitLen = Math.ceil(this._chunkCells / 8)
+                const ndOffset = values*bpv
+                const nfOffset = ndOffset + bitLen
+
+                const noData = fromBits(chunk.subarray(ndOffset, nfOffset))
+                const noFeedback = fromBits(chunk.subarray(nfOffset, nfOffset + bitLen))
+                let cells = values / fileCellSize | 0
+                noData.length = cells, noFeedback.length = cells
+                while (cells && noData[cells-1] && noFeedback[cells-1])
+                    --cells, noData.pop(), noFeedback.pop()
+                if (!cells) return
+
+                const data = sn._allocF32(cells * cellSize)
+                const dv = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+                const dataStart = 0, dataEnd = cells * cellSize
+                const chStart = 0, chEnd = cells * fileCellSize
+                const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
+                const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
+                for (let i = chStart, j = dataStart; i < chNameEnd && j < dataNameEnd; ++i, ++j)
+                    data[j] = dv[i] // Copy the name. Don't resize parts.
+                for (let i = chNameEnd, j = dataNameEnd; i < chEnd && j < dataEnd; ++i, ++j)
+                    data[j] = dv[i] // Copy data.
+
+                const error = unquantizeError(cells * cellSize, this._bytesPerValue)
+                packet.send(this, then, unname, data, error, noData, noFeedback)
+            })
         }
     }
     class StorageHandler extends sn.Handler {
@@ -124,12 +135,13 @@ Options:
 
 Options:
 - \`filename = 'sn'\`: which file to append to.
-- TODO: \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32.
+- \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32. Only relevant when first creating the file.
 - TODO: What else do we want? ...Nothing?
 ` }
         static options() {
             // TODO: Make `options`, when it encounters `x instanceof Node`, just put it into the result. (So that we can have buttons.)
             return {
+                // TODO: filename. Provide like, 5 options.
                 // TODO: bytesPerValue.
                 // TODO: A button that does navigator.storage.persist()
                 // TODO: Also a button that deletes the file. (And maybe also show its current size, based on the chunk-count, updating every second?)
@@ -230,7 +242,7 @@ Options:
                 else { // Reshape if needed. (Make some effort, at least.)
                     const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
                     const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
-                    for (let i = chStart*bpv, j = datastart*bpv; i < chNameEnd*bpv && j < dataNameEnd*bpv; ++i, ++j)
+                    for (let i = chStart*bpv, j = dataStart*bpv; i < chNameEnd*bpv && j < dataNameEnd*bpv; ++i, ++j)
                         chunk[i] = data[j] // Copy the name. Don't resize parts.
                     for (let i = chNameEnd*bpv, j = dataNameEnd*bpv; i < chEnd*bpv && j < dataEnd*bpv; ++i, ++j)
                         chunk[i] = data[j] // Copy data.
