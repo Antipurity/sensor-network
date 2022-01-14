@@ -24,25 +24,78 @@ export default function init(sn) {
         static docs() { return `TODO:
 
 Options:
+- TODO: \`filename = 'sn'\`
 - TODO: What do we want? \`filename\`?
 ` }
         static options() {
             return {
             }
         }
+        // TODO: On pause, close the file.
         resume(opts) {
+            const filename = (opts ? opts.filename : this.filename) || 'sn'
             if (opts) {
+                sn._assert(typeof filename == 'string')
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
-                // TODO: What else we want?
-                if (!this._data) { // Only once.
-                    this._data = [] // TODO: Do we want a data queue?
+                opts.onValues = this.onValues
+                if (!this._chunks) // Only once.
+                    this._chunks = [], this._chunksToGet = 0
+            }
+            try {
+                return super.resume(opts)
+            } finally {
+                // Connect to the indexedDB 'file'.
+                if (filename !== this.filename) {
+                    this._warned = false
+                    this.file && Promise.resolve(this.file).then(f => f.close())
+                    this.filename = filename
+                    const p = this.file = openFile(filename).then(async f => {
+                        if (p !== this.file) return f
+                        // Read metadata, and/or create it if needed.
+                        let ch = await loadChunk(f, 0)
+                        if (p !== this.file) return f
+                        if (!ch) return this.pause(), f
+                        const dv = new DataView(ch.buffer, ch.byteOffset, ch.byteLength)
+                        let offset = 0
+                        const bpv = dv.getUint16(offset);  offset += 2
+                        const partSize = dv.getUint32(offset);  offset += 4
+                        const cellShape = new Array(dv.getUint16(offset));  offset += 2
+                        for (let i = 0; i < cellShape.length; ++i)
+                            cellShape[i] = dv.getUint32(offset), offset += 4
+                        sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
+                        this._bytesPerValue = bpv
+                        this._partSize = partSize
+                        this._cellShape = cellShape
+                        const cellSize = cellShape.reduce((a,b)=>a+b)
+                        this._chunkCells = Math.floor(8*chunkSize / (8 * (bpv||4) * cellSize + 2))
+                        this.nextChunk = 1
+                        this.maxChunks = await countChunks(f)
+                        if (p !== this.file) return f
+                        return this.file = f
+                    })
                 }
             }
-            return super.resume(opts)
         }
-        // TODO: How would we decide whether to go from the start, or from a random position, and when to switch to a random position?
+        // TODO: How would we decide whether to go from the start, or from a random position, and when to switch to a random position? Maybe just start at 1, and allow users to reset position to random?
+        //   TODO: Maybe, have an option for periodic auto-reset?
+        // TODO: Maybe, a method to pick `this.nextChunk` randomly (or set it to an index, or even get it)?
+        onValues(data) {
+            sn._deallocF32(data)
+            if (this.file instanceof Promise || !this.filename) return
+            // Fill up the buffer.
+            while (this._chunks.length + this._chunksToGet < 8) {
+                loadChunks.then(chunk => { this._chunks.push(chunk), --this._chunksToGet })
+                ++this._chunksToGet
+            }
+            // Send off a chunk from the buffer. (A whole chunk each time, no regards for step boundaries.)
+            if (!this._chunks.length) return
+            const chunk = this._chunks.shift()
+            // TODO: How to process this chunk?
+            // TODO: this.sendRawCallback(null, this._name)
+        }
         _name({cellShape, partSize, summary}, namer, packet, then, unname) {
             // TODO: What do we do here? Maybe we should do nothing? …Or, rather, just pass through... But what do we pass through?
+            //   TODO: …Somewhere here, send(sensor, then, unname, point, error, noData, noFeedback)…
             // Copy all data points into the actual data stream.
             //   `this.onFeedback` will be called for each sending.
             for (let i = 0; i < this._data.length; ++i) {
@@ -65,7 +118,6 @@ Options:
             }
             this._data.length = 0
         }
-        _unname(namer, allFeedback, fbOffset, dataLen) {}
     }
     class StorageHandler extends sn.Handler {
         static docs() { return `TODO:
@@ -112,6 +164,7 @@ Options:
                     this._initResolve && this._initResolve()
                     this._initPromise = new Promise(resolve => this._initResolve = resolve)
                     this.file && Promise.resolve(this.file).then(f => f.close())
+                    this.filename = filename
                     const p = this.file = openFile(filename).then(async f => {
                         if (p !== this.file) return f
                         // Read metadata, and/or create it if needed.
@@ -149,7 +202,6 @@ Options:
                         return this.file = f
                     })
                 }
-                this.filename = filename
             }
         }
         async onValues(then, {data, noData, noFeedback, cellShape, partSize}) {

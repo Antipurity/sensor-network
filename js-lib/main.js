@@ -382,13 +382,13 @@ export default (function(exports) {
             }
             sendRawCallback(then, name, unname) { // Low-level. Dangerous. But fast.
                 // `name.call(this, {cellShape, partSize, summary}, namer, packet, then, unname)→bool`: does `packet.send(this, then, unname, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
-                // `unname(namer, allFeedback, fbOffset, dataLen) → flatV`
+                // `unname(namer, allFeedback, fbOffset, dataLen) → flatV`, called before feedback (`then`).
                 //   `allFeedback` is a non-owned f32a, which is copied into the owned `flatV`.
                 // Name+send to all handler shapes.
                 // Also forget about shapes that are more than 60 seconds old, to not slowly choke over time.
                 assert(then === null || typeof then == 'function', "Bad callback")
                 assert(typeof name == 'function')
-                assert(typeof unname == 'function')
+                assert(unname == null || typeof unname == 'function')
                 const ch = state(this.channel)
                 const removed = Sensor._removed || (Sensor._removed = new Set) // All sync, so, fine to reuse the same object for this.
                 for (let i = 0; i < ch.cellShapes.length; ++i) {
@@ -512,8 +512,9 @@ export default (function(exports) {
     - \`name\`: a human-readable string, or an array of that or a -1…1 number or a function from \`dataStart, dataEnd, dataLen\` to a -1…1 number.
     - \`values\`: how many -1…1 numbers this sensor exposes.
         - Usually a good idea to keep this to powers-of-2, and squares. Such as 64.
-    - \`onValues.call(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once. Not \`await\`ed.
-        - To run faster, use \`sensor.sendCallback(fn.call(sensor, feedback, cellShape, partSize), data, …)\` with a static function.
+    - \`onValues.call(sensor, data)\`: the regularly-executed function that reports data, by calling \`sensor.send(data, …)\` inside once.
+        - To not allocate garbage, use \`sensor.sendCallback(then, data, …)\` with a static function.
+        - \`data\` is owned; \`sensor.send\` it only once, or \`sn._deallocF32(data)\` if unused.
     - Extra flexibility:
         - \`channel\`: the human-readable name of the channel. Communication only happens within the same channel.
         - \`noFeedback\`: set to \`true\` if applicable to avoid some processing. Otherwise, feedback is the data that should have been.
@@ -535,7 +536,7 @@ export default (function(exports) {
         - Can be a number or a per-cell array or a function from \`valueStart, valueEnd, valuesTotal\` to that.
     - (Result: \`feedback\` is owned by you. Can use \`feedback && sn._deallocF32(feedback)\` once you are done with it, or simply ignore it and let GC collect it.)
 
-- \`sendCallback(then.call(sensor, null|feedback), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise, which is more efficient.
+- \`sendCallback(then.call(sensor, null|feedback, cellShape, partSize), values, error = null, reward = 0)\`: exactly like \`send\` but does not have to allocate a promise, which is more efficient.
 
 - \`resize(newValues, newEmptyValues = emptyValues)\`: fast changing of flat-data length.
     - (If used in \`onValues\`, do \`sn._deallocF32(data), data = sn._allocF32(newValues)\` for efficiency.)
@@ -1165,7 +1166,7 @@ Makes only the sign matter for low-frequency numbers.` }),
             const unnamer = T.feedbackUnnamer.shift()
             if (allFeedback && !noFeedback) {
                 const namer = packetNamer(T, namers, cellShape, partSize, summary)
-                const flatV = unnamer(namer, allFeedback, fbOffset, data.length)
+                const flatV = unnamer && unnamer(namer, allFeedback, fbOffset, data.length)
                 then && then.call(T, flatV, cellShape, partSize)
             } else
                 then && then.call(T, null, cellShape, partSize)
