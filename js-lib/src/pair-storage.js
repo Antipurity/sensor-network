@@ -29,6 +29,7 @@ Uses [\`indexedDB\`.](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB
 
 Options:
 - \`filename = 'sn'\`: which file was saved.
+- TODO: Also \`pauseOnEnd = false\`, for process-this-once operations.
 - TODO: Also an option for how many cells to go through before we reset to randomness, null by default.
 ` }
         static options() {
@@ -160,8 +161,10 @@ Options:
 - \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32. Only relevant when first creating the file.
 
 Functions:
+- \`sn.Handler.Storage.download(filename)\`: downloads the file to the OS, importing the [StreamSaver](https://github.com/jimmywarting/StreamSaver.js?) library.
+- \`sn.Handler.Storage.upload(filename, file)\`: gets the [file](https://developer.mozilla.org/en-US/docs/Web/API/File) from the OS, overwriting what is already in \`filename\`; to append, upload to a temporary location, then sense from there and handle to elsewhere.
 - [\`navigator.storage.persist()\`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist)
-- \`sn.Handler.Storage.download(filename)\`: downloads the file, importing the [StreamSaver](https://github.com/jimmywarting/StreamSaver.js?) library.
+- [\`indexedDB.deleteDatabase(filename)\`](https://developer.mozilla.org/en-US/docs/Web/API/IDBFactory/deleteDatabase)
 ` }
         static options(opts) {
             const el = document.createElement.bind(document)
@@ -176,10 +179,12 @@ Functions:
                 file.close()
                 if (!fileSize.isConnected) clearInterval(int1)
             }, 200)
-            const download = A(el('button'), { onclick() { sn.Handler.Storage.download(opts.filename) } })
-            download.append('▼ To file')
             const persist = A(el('button'), { onclick() { navigator.storage.persist() } })
             persist.append('⚙ Request persistence')
+            const download = A(el('button'), { onclick() { sn.Handler.Storage.download(opts.filename) } })
+            download.append('▼ To file')
+            const upload = A(el('input'), { type:'file', onchange() { this.files && this.files.length && sn.Handler.Storage.upload(opts.filename, this.files[0]) } })
+            upload.append('▲ Replace from file')
             const deletion = A(el('button'), { onclick() { confirm('Delete '+opts.filename+'?') && deleteFile(opts.filename) } })
             deletion.append('🔥 No more data')
             return {
@@ -196,10 +201,10 @@ Functions:
                     ['uint8 (1× size)']: () => 1,
                 },
                 fileSize,
-                download,
                 persist,
+                download,
+                upload,
                 delete: deletion,
-                // TODO: An input for uploading a file, ▲.
             }
         }
         static async download(filename, extension = '.num') {
@@ -222,8 +227,17 @@ Functions:
                 writer.close()
             } finally { file.close() }
         }
-        // TODO: A function for writing the contents of a user-selected file to this file.
-        //   ...But this would mean writing the code for cell reshaping AGAIN... Maybe, at least replace contents?
+        static async upload(filename, file) {
+            // `file`: https://developer.mozilla.org/en-US/docs/Web/API/File
+            sn._assert(typeof filename == 'string')
+            const chunks = Math.ceil(file.size / chunkSize)
+            await deleteFile(filename)
+            const ourFile = await openFile(filename)
+            try {
+                for (let c = 0; c < chunks; ++c)
+                    saveChunk(ourFile, c, new Uint8Array(await file.slice(c*chunkSize, (c+1)*chunkSize).arrayBuffer()))
+            } finally { ourFile.close() }
+        }
         pause(inResume = false) {
             if (!inResume) {
                 if (Array.isArray(this._chunks))
@@ -448,19 +462,19 @@ Functions:
         const req = indexedDB.open(filename)
         return new Promise((resolve, reject) => {
             req.onerror = evt => reject(evt.target.error)
-            req.onupgradeneeded = evt => {
-                const db = evt.target.result
-                db.createObjectStore('sn-storage')
-            }
-            req.onsuccess = evt => {
-                const db = evt.target.result
-                resolve(db)
-            }
+            req.onupgradeneeded = evt => evt.target.result.createObjectStore('sn-storage')
+            req.onsuccess = evt => resolve(evt.target.result)
         })
     }
     function deleteFile(filename) { // → Promise<file>
         sn._assert(typeof filename == 'string')
-        return indexedDB.deleteDatabase(filename)
+        const req = indexedDB.deleteDatabase(filename)
+        return new Promise((resolve, reject) => {
+            req.onerror = evt => reject(evt.target.error)
+            req.onsuccess = evt => {
+                resolve(evt.target.result)
+            }
+        })
     }
     function countChunks(file) {
         const transaction = file.transaction('sn-storage', 'readonly')
@@ -482,6 +496,11 @@ Functions:
     }
     function saveChunk(file, index, chunk) {
         // `chunk` is owned here.
+        if (chunk.length !== chunkSize) {
+            const old = chunk;  chunk = allocChunk().fill(255)
+            for (let i = 0; i < chunkSize; ++i)
+                chunk[i] = old[i] || 0
+        }
         const transaction = file.transaction('sn-storage', 'readwrite', {durability:'relaxed'})
         const store = transaction.objectStore('sn-storage')
         transaction.oncomplete = () => deallocChunk(chunk)
