@@ -36,7 +36,6 @@ export default (function(exports) {
     let currentBenchmark = null
     const f32aCache = Object.create(null)
     const arrayCache = []
-    const dealloced = new WeakSet // TODO:
     class _Packet {
         constructor(channel, cellShape, partSize) {
             const noData = [], noFeedback = []

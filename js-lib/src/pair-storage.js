@@ -30,7 +30,14 @@ Uses [\`indexedDB\`.](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB
 Options:
 - \`filename = 'sn'\`: which file was saved.
 - \`pauseOnEnd = false\`: to only process the file once, use this.
-- TODO: Also an option for how many cells to go through before we reset to randomness, null by default.
+- \`randomEveryNCells = null\`: if an integer, \`.random()\` will be called periodically and at the start.
+
+Methods:
+- \`.random()\`: sets the read-position to a random point.
+
+Properties, to get/set at will:
+- \`.nextChunk >= 1\`
+- \`.maxChunks\`
 ` }
         static options() {
             return {
@@ -40,6 +47,16 @@ Options:
                     ['2 ']: () => '2',
                     ['3 ']: () => '3',
                     ['4 ']: () => '4',
+                },
+                pauseOnEnd: {
+                    No: false,
+                    Yes: true,
+                },
+                randomEveryNCells: {
+                    ['No']: () => null,
+                    ['10000 ']: () => 10000,
+                    ['1000000 ']: () => 1000000,
+                    ['100000000 ']: () => 100000000,
                 },
             }
         }
@@ -58,6 +75,7 @@ Options:
                 opts.onValues = this.onValues
                 opts.noFeedback = true
                 this.pauseOnEnd = !!opts.pauseOnEnd
+                this.randomEveryNCells = opts.randomEveryNCells
                 if (!this._chunks) // Only once.
                     this._chunks = [], this._chunksToGet = 0
             }
@@ -91,14 +109,14 @@ Options:
                         this.nextChunk = 1
                         this.maxChunks = await countChunks(f)
                         if (p !== this.file) return f
+                        this.cellsUntilReset = this.randomEveryNCells || 0
+                        if (this.cellsUntilReset) this.random()
                         return this.file = f
                     })
                 }
             }
         }
-        // TODO: How would we decide whether to go from the start, or from a random position, and when to switch to a random position? Maybe just start at 1, and allow users to reset position to random?
-        //   TODO: Maybe, have an option for periodic auto-reset?
-        // TODO: Maybe, a method to pick `this.nextChunk` randomly (or set it to an index, or even get it)?
+        random() { this.nextChunk = 1 + (Math.random() * (this.maxChunks-1) | 0) }
         onValues(data) {
             sn._deallocF32(data)
             if (!this.file || this.file instanceof Promise || !this.filename) return
@@ -146,6 +164,9 @@ Options:
                         data[j] = bpv === 1 ? dv.getUint8(i) : bpv === 2 ? dv.getUint16(i*2) : dv.getFloat32(i*4) // Copy the name. Don't resize parts.
                     for (let i = chNameEnd, j = dataNameEnd; i < chEnd && j < dataEnd; ++i, ++j)
                         data[j] = bpv === 1 ? dv.getUint8(i) : bpv === 2 ? dv.getUint16(i*2) : dv.getFloat32(i*4) // Copy data.
+                    if (this.cellsUntilReset)
+                        if (!--this.cellsUntilReset)
+                            this.random()
                 }
 
                 const error = unquantizeError(cells * cellSize, this._bytesPerValue)
