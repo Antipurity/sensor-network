@@ -49,10 +49,10 @@ CSS not included. Markdown parsing not included.
             // The result has `.selected` (JSON-serializable) and `.opts` (passable as `parentOpts` here) and `.pause()` and `.resume()`.
             if (typeof x.options != 'function' || x === UI) return
             const isClass = UI.groupOf(x) !== 'object'
-            const variants = x.options() // {opt:{valueName:jsValue}}
+            const opts = Object.create(parentOpts)
+            const variants = x.options(opts) // {opt:{valueName:jsValue}}
             sn._assert(variants && typeof variants == 'object', "Invalid options format")
             selected = getDefaults(variants, selected)
-            const opts = Object.create(parentOpts)
             optsFor(variants, selected)
             const instance = isClass ? new x() : null
             const arr = []

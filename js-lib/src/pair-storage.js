@@ -153,11 +153,17 @@ Options:
 - \`filename = 'sn'\`: which file to append to.
 - \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32. Only relevant when first creating the file.
 ` }
-        static options() {
+        static options(selected) {
+            setInterval(() => console.log(selected), 3000) // TODO:
             // TODO: Make `options`, when it encounters `x instanceof Node`, just put it into the result. (So that we can have buttons.)
-            //   TODO: Make `options` pass in the mutable options object, which we can read here.
-            //     (I mean, an instance of this class would not receive the newest options if paused, degrading UX.)
             return {
+                filename: {
+                    ['sn']: () => 'sn',
+                    ['1 ']: () => '1',
+                    ['2 ']: () => '2',
+                    ['3 ']: () => '3',
+                    ['4 ']: () => '4',
+                },
                 // TODO: filename. Provide like, 5 options: 'sn', '1', '2', '3', '4'.
                 // TODO: bytesPerValue.
                 // TODO: Also an element that shows the current file size, based on the chunk-count, updating every second until !el.isConnected. (Because it's really easy to .)
