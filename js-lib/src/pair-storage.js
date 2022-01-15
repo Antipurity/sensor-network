@@ -29,7 +29,7 @@ Uses [\`indexedDB\`.](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB
 
 Options:
 - \`filename = 'sn'\`: which file was saved.
-- TODO: Also \`pauseOnEnd = false\`, for process-this-once operations.
+- \`pauseOnEnd = false\`: to only process the file once, use this.
 - TODO: Also an option for how many cells to go through before we reset to randomness, null by default.
 ` }
         static options() {
@@ -57,6 +57,7 @@ Options:
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
                 opts.onValues = this.onValues
                 opts.noFeedback = true
+                this.pauseOnEnd = !!opts.pauseOnEnd
                 if (!this._chunks) // Only once.
                     this._chunks = [], this._chunksToGet = 0
             }
@@ -104,12 +105,15 @@ Options:
             // Fill up the buffer.
             while (this._chunks.length + this._chunksToGet < 8) {
                 loadChunk(this.file, this.nextChunk++).then(chunk => { chunk && this._chunks.push(chunk), --this._chunksToGet })
-                if (this.nextChunk >= this.maxChunks) this.nextChunk = 1
+                ++this._chunksToGet
+                if (this.nextChunk >= this.maxChunks) {
+                    this.nextChunk = 1
+                    if (this.pauseOnEnd) return this.pause()
+                }
                 if (Math.random()<.01) {
                     const f = this.file
                     countChunks(f).then(ch => this.file === f && (this.maxChunks = ch))
                 }
-                ++this._chunksToGet
             }
             // Send off a chunk from the buffer. (A whole chunk each time, no regards for step boundaries.)
             if (!this._chunks.length) return
