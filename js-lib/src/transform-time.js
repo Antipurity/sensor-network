@@ -13,7 +13,11 @@ Options:
 - \`timing = () => +new Date()/1000\`: provides the seconds used to annotate data.
 ` }
         static options() { return {
-            // TODO: An option for providing another timing function, such as `performance.now()` or relative-performance-now or step-counting. (Because synthetic data would really like to have control, this isn't just for humans.)
+            timing: {
+                ['Date']: () => () => +new Date()/1000,
+                ['Since page load']: () => () => performance.now()/1000,
+                ['Count steps']: () => function f() { return f.n = f.n + 1 || 1 },
+            },
         } }
         resume(opts) {
             if (opts)
