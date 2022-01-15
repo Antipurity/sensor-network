@@ -23,6 +23,8 @@ It has to be efficient, and easily accessible.
 
 ### Rust API
 
+TODO: Move this below all JS stuff. After all, with the file format as simple as it is, we might forego Rust and go straight to Python for learning.
+
 The OS ecosystem, where communication happens through IPC. Each extra module should have its own crate, prefixed with `sensor-network-`.
 
 The functioning of the Sensor Network proceeds as such:
@@ -84,18 +86,15 @@ This allows pretty much any interaction to happen, from simple observation of da
                 - ⋯ Stereo (expose each channel, with 1 & i in the name).
             - ⋯ Write-mode: create a window and draw in it for video, and/or play the audio that we get. Debugging, essentially.
     - ⋯ System resources: CPU (% free mem and per-core % used) and GPU if available (roughly, % free mem and % used; align if possible).
-    - ⋯ Time, as sines-of-time-multiples, with 100FPS as the most-frequent-wave-period.
-    - ⋯ Read from Internet, through WebRTC. Many machines can thus gather into one sensor network.
-        - ⋯ Each data packet (1+ cells) references its meta-data (cell shape) by ID; when/if meta-data changes, it's re-sent, and the other side can request it if it doesn't know it (such as when the packet got lost). Though, cell shape shouldn't ever change, or there's a big problem in ML models.
-        - ⋯ Discourage disengagements: on user disconnect, hold its last block (`0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
-        - ⋯ Benchmark throughput, over localhost, with the default data (a file, preferably always the same one).
-    - ⋯ Read from file/s.
+    - ⋯ Read from Internet, through WebRTC. Many machines can thus gather into one sensor network. Same as JS.
+    - ⋯ Read from file/s. Same as JS.
     - ⋯ Launched-by-another-process STDIO. Model's outputs are sent, and model inputs are received as feedback (`0` or random noise in the first frame); inputs and outputs have separate cells, separated by type if possible. (With prediction & compute, one brain/model can download any knowledge and intuition for free, in the background. All models can gather in one.)
         - ⋯ Connect CPU-side GPT-2, which acts word-per-word, or even letter-per-letter and integrates like the keyboard sensor, by sharing parts of the name.
-        - ⋯ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding.
+        - ⋯ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding. (Listening to data directly has proven to be extremely low-bandwidth in practice, so, probably not.)
     - ⋯ A [Puppeteer](https://pptr.dev/)ed browser, where the JS extension is installed, and we make it inject interfaces and collect data by calling a Puppeteer-injected function (from base64 data, to a promise of base64 feedback) for us.
 
 - ⋯ Transforms:
+    - ⋯ TODO: Same as JS. (No need to write this down again.)
     - ⋯ Shuffle cells, to make models/brains that are not fully order-independent become such.
     - ⋯ Reward sender, which replaces `0`s in all cells' first number with the reward. To specify per-user reward in one place. (The idealized job: you give it your situation, it makes your number go up.)
         - ⋯ Configurable reward, via a closure that's called each frame. By default, Ctrl+Down is `-1` reward, Ctrl+Up is `+1` reward, otherwise `0`.
@@ -105,6 +104,7 @@ This allows pretty much any interaction to happen, from simple observation of da
     - ⋯ Sound output (speakers), no feedback: like machine-to-brain Neuralink, but everyone already has it. (Can even listen to what an AI model predicts and decides, for zero-effort human-AI merging.)
         - ⋯ Test, which sounds best and most recognizable, and what bandwidth we can achieve without making users tear out their ears: raw PCM output, +x -x PCM output, frequency-domain output.
     - ⋯ Sound input (microphone). May be trash though.
+        - TODO: Will DEFINITELY be trash, because humans can never be made to satisfy constraints that AI models that have sound-input as input can easily be made to satisfy.
     - ⋯ Send to Internet.
         - ⋯ Username: our local MAC address or IP or a stored randomly-generated number, added to each cell's label before anything. (In a model, to batch per-user rather than integrate integrate cross-user data, group by username.)
         - ⋯ Research libraries that can carry messages: [Rabbi](https://github.com/CleverCloud/lapin)[tMQ](https://crates.io/crates/amiquip); [raw WebRTC](https://webrtc.rs/).
@@ -130,7 +130,7 @@ This allows pretty much any interaction to happen, from simple observation of da
     - ⋯ A benchmark that measures compression ratio of a file, preferably always the same one, stored in the repo. Fail if uncompressed data does not match actual data, within the returned tolerance. And compression speed, per cell.
     - ⋯ Try compression options, and find the best one.
 
-- ⋯ PyTorch (or NumPy) integration, via easily-comprehensible blocking "gimme more data" and "give more data" functions.
+- ⋯ PyTorch (or NumPy) integration, via easily-comprehensible blocking "`receive`: gimme more data" and "`send`: give more data" functions.
     - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those. (Take a bath in data. Rub it into your eyes.)
 
 - ⋯ A server for nearest-neighbor search. Accept requests: "register/update this ID, with a removal token" (the -1…1 vector label is decided randomly), "remove this ID, given a removal token" (the label still persists), "get up-to-N nearest neighbors, current URL/IP & ID & current label", "update this ID with this suggested vector label" (with an update method that effectively averages inter-user most-recent votes, and slowly nudges the label toward that, notifying the register-ee along the way, removing the ID if not connected). (Connect AI models & humans: train a worldwide AI model collaboratively, and vote with far more detail than democracy can ever hope for.)
@@ -277,9 +277,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ Replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings in the `user` part of the name, so that learning doesn't *have* to do BPTT per-step (non-scalable beyond about a minute) but across time resolutions.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
-            - ⋯ Read from file.
-                - ⋯ Allow `noFeedback=false`. Research dataset distillation: loop: do several iterations of learning on adjustable data points (preserving all gradient graphs), then evaluate on the bigger dataset (not learning model weights), accumulating gradient and finally adjusting the data points. (Might be a bit strange for autoregressive tasks.) (ML-based compression: the more you live, the more you know and the faster you learn.) (For mesa-optimizer-learning, could simply give learned experience first, then target experience. No need to wait for gradient updates to learn at inference time. And if learned actions improve prediction, then they are predicted too, and it's all a feedback loop. Tho for accuracy, might want to only compress beginnings of single episodes, not all data.)
-                - ⋯ Research continuous model distillation (basically [Iterated Amplification](https://www.lesswrong.com/posts/vhfATmAoJcN8RqGg6/a-guide-to-iterated-amplification-and-debate)), because restarting sucks: making models not just out of dense layers `f(f(x))` but something like `(f(f(x)) + zeroGrad(g(x))) * .5`, where `g(x)` predicts `f(f(x))`. `g` is also self-distilled, and the result is too, until there's only 1 layer for the whole network, or maybe ½ or less layers via matrix factorization: `x@A → x@a@b`. (Seems too simple to not have been tried. [This](https://2021.ecmlpkdd.org/wp-content/uploads/2021/07/sub_676.pdf) also does not let teachers diverge too far from students, though without `+` and on weights rather than on outputs. No match was found.) (…Or just do [BYOL](https://arxiv.org/abs/2006.07733) with different online/target histories, possibly randomly dropping observations, or dropping them based on their hashes: `x@W < 0`.)
+            - ✓ Read from file.
+                - ⋯ Research [dataset distillation](https://arxiv.org/abs/2109.12534): optimize the training of models on 'summary' data points and subsequent evaluation on data points after that. (ML-based compression: the more you live, the more you know and the faster you learn.) (For mesa-optimizer-learning, could simply give learned experience first, then target experience. No need to wait for gradient updates to learn at inference time. And if learned actions improve prediction, then they are predicted too, and it's all a feedback loop. Tho for accuracy, might want to only compress beginnings of single episodes, not all data.)
+                    - TODO: ...Do we really want this that much...
+                    - TODO: With Transformer RNNs, can we make the 'summary' a neural network from the previous summary and many data points to the next summary, and make the main model train from summaries where possible?
+                - ⋯ Research continuous model distillation (basically [Iterated Amplification](https://www.lesswrong.com/posts/vhfATmAoJcN8RqGg6/a-guide-to-iterated-amplification-and-debate)), because restarting sucks: [shallow-ing](https://arxiv.org/abs/2106.03186) to achieve infinite depth: making models not just out of dense layers `f(f(x))` but something like `f(g(x, non_trainable=true))`, where `g(x)` predicts the result (so it always tries to approximate "but what if we had 1 more layer"). `g` can be smaller than `f` and thus also distilled into a smaller net, which is distilled too, until there's only 1 layer for the whole network, or maybe ½ or less layers via matrix factorization: `x@A → x@a@b`. (Seems too simple to not have been tried. [This](https://2021.ecmlpkdd.org/wp-content/uploads/2021/07/sub_676.pdf) also does not let teachers diverge too far from students, though without `+` and on weights rather than on outputs. No match was found.) (…Or just do [BYOL](https://arxiv.org/abs/2006.07733) with different online/target histories, possibly randomly dropping observations, or dropping them based on their hashes: `x@W < 0`.)
             - ⋯ In extension, read from tabs.
             - ✓ Read from Internet, with WebRTC, ❌ RabbitMQ preferable.
                 - ❌ Each data packet references its meta-data (names and such) by ID; when meta-data changes, it's re-sent until the other side acknowledges it. (Just send everything and rely on compression.)
@@ -324,9 +326,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
             - ❌ Sound input (microphone). Probably terrible, especially without an ML model to summarize it.
             - ✓ `Random` feedback. For debugging.
-            - ⋯ Write chunks to `indexedDB`, with visualization (extend `options()` to allow HTML elements?) allowing saving it all to a file.
-                - TODO: Write a database! Doing a Rust backend for this would take too long, and the data format seems very simple since we probably don't care about splitting data into experiences anymore: just write everything all the time (and let compression sort things out), into chunks of 64KB, with an integer count of cells in each chunk.
-                    - …In fact, each chunk just concatenates/splits cells, with not even time-steps being separate since we now can do that… This really is just "we got data, WRITE IT DOWN WRITE IT DOWN".
+            - ✓ Write chunks to `indexedDB`, with UI that allows saving to a file.
             - ⋯ If extension is present, write to background page. (`chrome.runtime.sendMessage` seems to be exposed to pages for some reason, but only in Chrome. Elsewhere, have to communicate via DOM events with a content script that does the actual message-sending.)
             - ✓ Write to Internet.
                 - ✓ `bytesPerValue=0`: transmit in f32 or u8 or u16.

@@ -32,12 +32,13 @@ Options:
 - \`pauseOnEnd = false\`: to only process the file once, use this.
 - \`randomEveryNCells = null\`: if an integer, \`.random()\` will be called periodically and at the start.
 
-Methods:
-- \`.random()\`: sets the read-position to a random point.
-
 Properties, to get/set at will:
-- \`.nextChunk >= 1\`
+- \`1 <= .nextChunk < .maxChunks\`. Note that changing this will not clear the chunk queue, so the change may take a while to become visible unless you \`.flush()\`.
 - \`.maxChunks\`
+
+Methods:
+- \`.random()\`: sets \`.nextChunk\` to a random point.
+- \`.flush()\`: makes the transition to another chunk instant, at the cost of a fetching delay.
 ` }
         static options() {
             return {
@@ -60,6 +61,8 @@ Properties, to get/set at will:
                 },
             }
         }
+        random() { this.nextChunk = 1 + (Math.random() * (this.maxChunks-1) | 0) }
+        flush() { this._chunks = [] }
         pause(inResume = false) {
             if (!inResume) {
                 this.file && Promise.resolve(this.file).then(f => f.close())
@@ -116,13 +119,13 @@ Properties, to get/set at will:
                 }
             }
         }
-        random() { this.nextChunk = 1 + (Math.random() * (this.maxChunks-1) | 0) }
         onValues(data) {
             sn._deallocF32(data)
             if (!this.file || this.file instanceof Promise || !this.filename) return
             // Fill up the buffer.
             while (this._chunks.length + this._chunksToGet < 8) {
-                loadChunk(this.file, this.nextChunk++).then(chunk => { chunk && this._chunks.push(chunk), --this._chunksToGet })
+                const ch = this._chunks
+                loadChunk(this.file, this.nextChunk++).then(chunk => { chunk && ch.push(chunk), --this._chunksToGet })
                 ++this._chunksToGet
                 if (this.nextChunk >= this.maxChunks) {
                     this.nextChunk = 1

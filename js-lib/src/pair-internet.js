@@ -20,7 +20,7 @@ export default function init(sn) {
 
 
     class InternetSensor extends sn.Sensor {
-        static docs() { return `Extends this network over the Internet, to control others.
+        static docs() { return `Extends this sensor network over the Internet, to control others.
 
 Methods:
 - \`signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)\`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [of a \`WebSocket\` which can be passed directly](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
