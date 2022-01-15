@@ -168,12 +168,14 @@ Options:
                 const file = await openFile(opts.filename)
                 const bytes = (await countChunks(file)) * chunkSize
                 const kb = bytes / 1024, mb = kb / 1024, gb = mb / 1024, tb = gb / 1024
-                fileSize.textContent = tb>=1 ? tb.toFixed(2)+' TiB' : gb>=1 ? gb.toFixed(2)+' GiB' : mb>=1 ? mb.toFixed(2)+' MiB' : kb>=1 ? kb.toFixed(2)+' KiB' : bytes.toFixed(2)+' bytes'
+                fileSize.textContent = '🍗 '+(tb>=1 ? tb.toFixed(2)+' TiB' : gb>=1 ? gb.toFixed(2)+' GiB' : mb>=1 ? mb.toFixed(2)+' MiB' : kb>=1 ? kb.toFixed(2)+' KiB' : bytes.toFixed(2)+' bytes')
                 file.close()
                 if (!fileSize.isConnected) clearInterval(int1)
             }, 200)
             const persist = A(el('button'), { onclick() { navigator.storage.persist() } })
-            persist.append('Request persistence')
+            persist.append('⚙ Request persistence')
+            const deletion = A(el('button'), { onclick() { confirm('Delete '+opts.filename+'?') && deleteFile(opts.filename) } })
+            deletion.append('🔥 No more data')
             return {
                 filename: {
                     ['sn']: () => 'sn',
@@ -189,7 +191,7 @@ Options:
                 },
                 fileSize,
                 persist,
-                // TODO: Also a button that deletes the file.
+                delete: deletion,
                 // TODO: Buttons/inputs for downloading and uploading files.
             }
         }
@@ -428,6 +430,10 @@ Options:
                 resolve(db)
             }
         })
+    }
+    function deleteFile(filename) { // → Promise<file>
+        sn._assert(typeof filename == 'string')
+        return indexedDB.deleteDatabase(filename)
     }
     function countChunks(file) {
         const transaction = file.transaction('sn-storage', 'readonly')
