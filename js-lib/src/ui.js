@@ -72,7 +72,7 @@ CSS not included. Markdown parsing not included.
 
             function getDefaults(vars, selected = {}) {
                 for (let k of Object.keys(vars))
-                    if (k !== active && selected[k] === undefined) {
+                    if (k !== active && selected[k] === undefined && !(vars[k] instanceof Node)) {
                         sn._assert(Object.keys(vars[k]).length, "Can't just be an empty object")
                         selected[k] = Object.keys(vars[k])[0]
                         if (isCheckboxy(vars[k])) selected[k] = vars[k][selected[k]]
@@ -84,7 +84,9 @@ CSS not included. Markdown parsing not included.
                 for (let k of Object.keys(vars)) {
                     if (k === active) continue
                     let opt
-                    if (!isCheckboxy(vars[k])) {
+                    if (vars[k] instanceof Node)
+                        opt = vars[k]
+                    else if (!isCheckboxy(vars[k])) {
                         const optId = ''+Math.random()
                         opt = [
                             {tag:'select', id:optId, onchange},
@@ -118,7 +120,7 @@ CSS not included. Markdown parsing not included.
                 const js = {}
                 for (let k of Object.keys(opts)) delete opts[k]
                 for (let k of Object.keys(vars)) {
-                    if (k === active) continue
+                    if (k === active || vars[k] instanceof Node) continue
                     const f = typeof selected[k] == 'boolean' ? selected[k] : vars[k][selected[k]]
                     opts[k] = typeof f == 'function' ? f() : f
                     const Default = isCheckboxy(vars[k]) ? Object.values(vars[k])[0] : Object.keys(vars[k])[0]

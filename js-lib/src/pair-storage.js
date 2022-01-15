@@ -29,11 +29,17 @@ Uses [\`indexedDB\`.](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB
 
 Options:
 - \`filename = 'sn'\`: which file was saved.
-- TODO: Also an option for how many cells to go through before we reset to randomness, null by default, right?
+- TODO: Also an option for how many cells to go through before we reset to randomness, null by default.
 ` }
         static options() {
             return {
-                // TODO: filename. Like 5 options: 'sn', '1', '2', '3', '4'.
+                filename: {
+                    ['sn']: () => 'sn',
+                    ['1 ']: () => '1',
+                    ['2 ']: () => '2',
+                    ['3 ']: () => '3',
+                    ['4 ']: () => '4',
+                },
             }
         }
         pause(inResume = false) {
@@ -153,9 +159,21 @@ Options:
 - \`filename = 'sn'\`: which file to append to.
 - \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32. Only relevant when first creating the file.
 ` }
-        static options(selected) {
-            setInterval(() => console.log(selected), 3000) // TODO:
-            // TODO: Make `options`, when it encounters `x instanceof Node`, just put it into the result. (So that we can have buttons.)
+        static options(opts) {
+            const el = document.createElement.bind(document)
+            const fileSize = el('div')
+            const int1 = setInterval(async () => {
+                if (document.visibilityState !== 'visible') return
+                if (getComputedStyle(fileSize).visibility === 'hidden') return
+                const file = await openFile(opts.filename)
+                const bytes = (await countChunks(file)) * chunkSize
+                const kb = bytes / 1024, mb = kb / 1024, gb = mb / 1024, tb = gb / 1024
+                fileSize.textContent = tb>=1 ? tb.toFixed(2)+' TiB' : gb>=1 ? gb.toFixed(2)+' GiB' : mb>=1 ? mb.toFixed(2)+' MiB' : kb>=1 ? kb.toFixed(2)+' KiB' : bytes.toFixed(2)+' bytes'
+                file.close()
+                if (!fileSize.isConnected) clearInterval(int1)
+            }, 200)
+            const persist = A(el('button'), { onclick() { navigator.storage.persist() } })
+            persist.append('Request persistence')
             return {
                 filename: {
                     ['sn']: () => 'sn',
@@ -164,10 +182,13 @@ Options:
                     ['3 ']: () => '3',
                     ['4 ']: () => '4',
                 },
-                // TODO: filename. Provide like, 5 options: 'sn', '1', '2', '3', '4'.
-                // TODO: bytesPerValue.
-                // TODO: Also an element that shows the current file size, based on the chunk-count, updating every second until !el.isConnected. (Because it's really easy to .)
-                // TODO: A button that does navigator.storage.persist()
+                bytesPerValue: {
+                    ['float32 (4× size)']: () => 0,
+                    ['uint16 (2× size)']: () => 2,
+                    ['uint8 (1× size)']: () => 1,
+                },
+                fileSize,
+                persist,
                 // TODO: Also a button that deletes the file.
                 // TODO: Buttons/inputs for downloading and uploading files.
             }
@@ -176,8 +197,9 @@ Options:
         // TODO: A function for writing the contents of a user-selected file to this file.
         pause(inResume = false) {
             if (!inResume) {
-                while (this._chunks.length > 0)
-                    this.saveChunk(this._chunks.shift())
+                if (Array.isArray(this._chunks))
+                    while (this._chunks.length > 0)
+                        this.saveChunk(this._chunks.shift())
                 this.file && Promise.resolve(this.file).then(f => f.close())
                 this.file = this.filename = null
             }
