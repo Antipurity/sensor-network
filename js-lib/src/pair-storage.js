@@ -23,13 +23,17 @@ export default function init(sn) {
     class StorageSensor extends sn.Sensor {
         static docs() { return `Loads data from storage.
 
+Note that this does not separate steps but just outputs data in ~1MiB chunks, so it is likely to sound different when visualized with \`sn.Sensor.Sound\`.
+
+Uses [\`indexedDB\`.](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API)
+
 Options:
-- TODO: \`filename = 'sn'\`
-- TODO: What else do we want?
+- \`filename = 'sn'\`: which file was saved.
+- TODO: Also an option for how many cells to go through before we reset to randomness, null by default, right?
 ` }
         static options() {
             return {
-                // TODO: filename. Like 5 options.
+                // TODO: filename. Like 5 options: 'sn', '1', '2', '3', '4'.
             }
         }
         pause(inResume = false) {
@@ -92,7 +96,6 @@ Options:
             if (!this.file || this.file instanceof Promise || !this.filename) return
             // Fill up the buffer.
             while (this._chunks.length + this._chunksToGet < 8) {
-                console.log('will load', this.nextChunk, '/', this.maxChunks) // TODO: Why is it loading the same chunk?! ...Why is maxChunks 2?! ...Oh, we were just saving very little data, and thought we would be saving more chunks because chunkSize was 64KB and is now 1MB, that's all.
                 loadChunk(this.file, this.nextChunk++).then(chunk => { chunk && this._chunks.push(chunk), --this._chunksToGet })
                 if (this.nextChunk >= this.maxChunks) this.nextChunk = 1
                 if (Math.random()<.01) {
@@ -104,8 +107,6 @@ Options:
             // Send off a chunk from the buffer. (A whole chunk each time, no regards for step boundaries.)
             if (!this._chunks.length) return
             const chunk = this._chunks.shift()
-            let SUM = chunk.reduce((a,b)=>a+b) // TODO:
-            console.log('chunk', chunk, 'sum', SUM) // TODO: Why does it all have the same sum?! No, not all. It's conceivable that pointers are the same, so, *maybe*?
             this.sendRawCallback(null, function name({cellShape, partSize, summary}, namer, packet, then, unname) {
                 const cellSize = cellShape.reduce((a,b)=>a+b)
                 const bpv = this._bytesPerValue || 4
@@ -121,52 +122,52 @@ Options:
                 noData.length = cells, noFeedback.length = cells
                 while (cells && noData[cells-1] && noFeedback[cells-1])
                     --cells, noData.pop(), noFeedback.pop()
-                // console.log('noData', noData.slice(), 'noFeedback', noFeedback.slice(), 'ndOffset', ndOffset, 'nfOffset', nfOffset) // TODO: Why is most of it true, with occasional specks of false? It shouldn't be all-true at the beginning...
-                //   (Is it the saving's fault, or the loading's?)
-                //   TODO: …And why is every chunk looking the same in noData and noFeedback?... Okay, I think noData is now fixed.
                 if (!cells) return
 
                 const data = sn._allocF32(cells * cellSize)
-                const dv = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength) // TODO: But what if we have bpv===1 or bpv===2?
+                const dv = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength)
                 for (let c = 0; c < cells; ++c) {
                     const dataStart = c * cellSize, dataEnd = dataStart + cellSize
                     const chStart = c * fileCellSize, chEnd = chStart + fileCellSize
                     const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
                     const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
                     for (let i = chStart, j = dataStart; i < chNameEnd && j < dataNameEnd; ++i, ++j)
-                        data[j] = dv.getFloat32(i*4) // Copy the name. Don't resize parts.
+                        data[j] = bpv === 1 ? dv.getUint8(i) : bpv === 2 ? dv.getUint16(i*2) : dv.getFloat32(i*4) // Copy the name. Don't resize parts.
                     for (let i = chNameEnd, j = dataNameEnd; i < chEnd && j < dataEnd; ++i, ++j)
-                        data[j] = dv.getFloat32(i*4) // Copy data.
+                        data[j] = bpv === 1 ? dv.getUint8(i) : bpv === 2 ? dv.getUint16(i*2) : dv.getFloat32(i*4) // Copy data.
                 }
-                // console.log('data sum:', data.reduce((a,b)=>a+b)) // TODO: Why is this still NaN?
-                // console.log('data:', data) // TODO: Okay, someone is definitely screwing up, since it's either 0 or 1e-38 or NaN: is it loading or saving?
-                //   …This data ain't right… Not even the conversion…
 
                 const error = unquantizeError(cells * cellSize, this._bytesPerValue)
                 packet.send(this, then, unname, data, error, noData, noFeedback)
-                // TODO: Also, dealloc chunk.
             })
         }
     }
     class StorageHandler extends sn.Handler {
         static docs() { return `Saves data to storage.
 
-Data of no-data cells is replaced with feedback, if the main handler is present to give 
+Data of no-data cells is already replaced with feedback, if the main handler is present to give it.
+
+Uses [\`indexedDB\`.](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API)
 
 Options:
-- \`filename = 'sn'\`: which file to append to. TODO: Mention indexedDB.
+- \`filename = 'sn'\`: which file to append to.
 - \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32. Only relevant when first creating the file.
-- TODO: What else do we want? ...Nothing?
 ` }
         static options() {
             // TODO: Make `options`, when it encounters `x instanceof Node`, just put it into the result. (So that we can have buttons.)
+            //   TODO: Make `options` pass in the mutable options object, which we can read here.
+            //     (I mean, an instance of this class would not receive the newest options if paused, degrading UX.)
             return {
-                // TODO: filename. Provide like, 5 options.
+                // TODO: filename. Provide like, 5 options: 'sn', '1', '2', '3', '4'.
                 // TODO: bytesPerValue.
+                // TODO: Also an element that shows the current file size, based on the chunk-count, updating every second until !el.isConnected. (Because it's really easy to .)
                 // TODO: A button that does navigator.storage.persist()
-                // TODO: Also a button that deletes the file. (And maybe also show its current size, based on the chunk-count, updating every second?)
+                // TODO: Also a button that deletes the file.
+                // TODO: Buttons/inputs for downloading and uploading files.
             }
         }
+        // TODO: A function for converting the current file to a stream (using the StreamSaver library) and downloading it as a file.
+        // TODO: A function for writing the contents of a user-selected file to this file.
         pause(inResume = false) {
             if (!inResume) {
                 while (this._chunks.length > 0)
@@ -250,6 +251,7 @@ Options:
             const fileCellSize = this._cellShape.reduce((a,b)=>a+b)
             const ndOffset = this._chunkCells * fileCellSize*bpv
             const nfOffset = ndOffset + Math.ceil(this._chunkCells / 8)
+            const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
             for (let c = 0; c < cells; ++c) {
                 if (this.nextCell >= this._chunkCells || !this._chunks.length)
                     this._chunks.push(allocChunk().fill(0)), this.nextCell = 0
@@ -259,14 +261,14 @@ Options:
                 const chStart = this.nextCell * fileCellSize, chEnd = ++this.nextCell * fileCellSize
                 if (!mustReshape)
                     for (let i = chStart*bpv, j = dataStart*bpv; i < chEnd*bpv && j < dataEnd*bpv; ++i, ++j)
-                        chunk[i] = data[j]
+                        chunk[i] = bytes[j]
                 else { // Reshape if needed. (Make some effort, at least.)
                     const dataNameEnd = dataStart + (cellSize - cellShape[cellShape.length-1])
                     const chNameEnd = chStart + (fileCellSize - this._cellShape[this._cellShape.length-1])
                     for (let i = chStart*bpv, j = dataStart*bpv; i < chNameEnd*bpv && j < dataNameEnd*bpv; ++i, ++j)
-                        chunk[i] = data[j] // Copy the name. Don't resize parts.
+                        chunk[i] = bytes[j] // Copy the name. Don't resize parts.
                     for (let i = chNameEnd*bpv, j = dataNameEnd*bpv; i < chEnd*bpv && j < dataEnd*bpv; ++i, ++j)
-                        chunk[i] = data[j] // Copy data.
+                        chunk[i] = bytes[j] // Copy data.
                 }
                 // Save noData and noFeedback.
                 if (this.nextCell === 1) chunk.fill(255, ndOffset)
@@ -284,7 +286,7 @@ Options:
             if (!this.file) return
             sn._assert(!(this.file instanceof Promise))
             const bpv = this._bytesPerValue, cellSize = this._cellShape.reduce((a,b)=>a+b), cells = this._chunkCells
-            bigEndian(chunk.subarray(0, cells * cellSize), bpv, true)
+            bigEndian(chunk.subarray(0, cells * cellSize * (bpv||4)), bpv, true)
             saveChunk(this.file, this.nextChunk++, chunk)
         }
     }
