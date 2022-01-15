@@ -158,6 +158,10 @@ Uses [\`indexedDB\`.](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB
 Options:
 - \`filename = 'sn'\`: which file to append to.
 - \`bytesPerValue = 0\`: 1 to store as uint8, 2 to store as uint16, 0 to store as float32. Only relevant when first creating the file.
+
+Functions:
+- [\`navigator.storage.persist()\`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist)
+- \`sn.Handler.Storage.download(filename)\`: downloads the file, importing the [StreamSaver](https://github.com/jimmywarting/StreamSaver.js?) library.
 ` }
         static options(opts) {
             const el = document.createElement.bind(document)
@@ -168,10 +172,12 @@ Options:
                 const file = await openFile(opts.filename)
                 const bytes = (await countChunks(file)) * chunkSize
                 const kb = bytes / 1024, mb = kb / 1024, gb = mb / 1024, tb = gb / 1024
-                fileSize.textContent = '🍗 '+(tb>=1 ? tb.toFixed(2)+' TiB' : gb>=1 ? gb.toFixed(2)+' GiB' : mb>=1 ? mb.toFixed(2)+' MiB' : kb>=1 ? kb.toFixed(2)+' KiB' : bytes.toFixed(2)+' bytes')
+                fileSize.textContent = tb>=1 ? '🌏 '+tb.toFixed(2)+' TiB' : gb>=1 ? '🍖 '+gb.toFixed(2)+' GiB' : mb>=1 ? '🍗 '+mb.toFixed(2)+' MiB' : kb>=1 ? '🍬 '+kb.toFixed(2)+' KiB' : '🍴 '+bytes.toFixed(2)+' bytes'
                 file.close()
                 if (!fileSize.isConnected) clearInterval(int1)
             }, 200)
+            const download = A(el('button'), { onclick() { sn.Handler.Storage.download(opts.filename) } })
+            download.append('▼ To file')
             const persist = A(el('button'), { onclick() { navigator.storage.persist() } })
             persist.append('⚙ Request persistence')
             const deletion = A(el('button'), { onclick() { confirm('Delete '+opts.filename+'?') && deleteFile(opts.filename) } })
@@ -190,13 +196,34 @@ Options:
                     ['uint8 (1× size)']: () => 1,
                 },
                 fileSize,
+                download,
                 persist,
                 delete: deletion,
-                // TODO: Buttons/inputs for downloading and uploading files.
+                // TODO: An input for uploading a file, ▲.
             }
         }
-        // TODO: A function for converting the current file to a stream (using the StreamSaver library) and downloading it as a file.
+        static async download(filename, extension = '.num') {
+            const file = await openFile(filename)
+            try {
+                const chunks = await countChunks(file)
+                const streamSaver = await importStreamSaver()
+                streamSaver.WritableStream = streamSaver.WritableStream
+                streamSaver.TransformStream = streamSaver.TransformStream
+                // `.createWriteStream` should be called on user interaction to get around popup blockers. But, eh.
+                const stream = streamSaver.createWriteStream(filename+extension, {
+                    size: chunks * chunkSize,
+                })
+                const writer = stream.getWriter()
+                for (let c = 0; c < chunks; ++c)
+                    await writer.write(await loadChunk(file, c))
+                // Should also handle leaving:
+                //   `onunload = ()=>{ writer.abort(), stream.abort() }`
+                //   `onbeforeunload = evt=>{ evt.returnValue = 'Stop the download?' }`
+                writer.close()
+            } finally { file.close() }
+        }
         // TODO: A function for writing the contents of a user-selected file to this file.
+        //   ...But this would mean writing the code for cell reshaping AGAIN... Maybe, at least replace contents?
         pause(inResume = false) {
             if (!inResume) {
                 if (Array.isArray(this._chunks))
@@ -460,5 +487,19 @@ Options:
         transaction.oncomplete = () => deallocChunk(chunk)
         store.put(chunk, index)
         transaction.commit()
+    }
+    function importStreamSaver() { // For saving >2GiB files.
+        if (importStreamSaver.did) return importStreamSaver.did
+        return importStreamSaver.did = new Promise(resolve => {
+            const el1 = document.createElement('script')
+            const el2 = document.createElement('script')
+            el1.src = 'https://cdn.jsdelivr.net/npm/web-streams-polyfill@2.0.2/dist/ponyfill.min.js'
+            el2.src = 'https://cdn.jsdelivr.net/npm/streamsaver@2.0.3/StreamSaver.min.js'
+            document.head.append(el1, el2)
+            const id = setInterval(() => {
+                if (self.streamSaver && self.WebStreamsPolyfill)
+                    clearInterval(id), resolve(self.streamSaver)
+            }, 50)
+        })
     }
 }
