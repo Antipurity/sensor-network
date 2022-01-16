@@ -132,10 +132,10 @@ In Chrome, users might have to first click on the page for sound to play.
                         return new sn.Sensor({
                             name: ['some', 'kinda', 'name'],
                             values: 1*dataSize,
-                            onValues(sensor, data) {
+                            onValues(data) {
                                 for (let i = 0; i < data.length; ++i)
                                     data[i] = (Math.random()*2-1) * loud
-                                sensor.send(data)
+                                this.send(data)
                             },
                         })
                     })
