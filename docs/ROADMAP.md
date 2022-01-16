@@ -21,123 +21,13 @@ It has to be efficient, and easily accessible.
         - ⋯ In-page library in `/js-lib`, for programmatic use of the API. The web page is the environment.
         - ⋯ Extension in `/js-ext`, for ad-hoc cross-tab setup and use of sensors, and for Chrome's [`tabCapture` API](https://developer.chrome.com/docs/extensions/reference/tabCapture/). Makes the browser the environment instead, and the human the end-user.
 
-### Rust API
-
-TODO: Move this below all JS stuff. After all, with the file format as simple as it is, we might forego Rust and go straight to Python for learning.
-
-The OS ecosystem, where communication happens through IPC. Each extra module should have its own crate, prefixed with `sensor-network-`.
-
 The functioning of the Sensor Network proceeds as such:
 - Each step: first, `-1`…`1` numbers are collected into named cells of a fixed size by *senders*, then all *handlers* of the environment receive those cells and create feedback (of the same size), then feedback is fed back to the *senders*. This composable architecture is made possible by *order invariance* of cells.
 - Each cell has structure: first 1 number for the reward (because prediction of what others did is *not* enough to distinguish preferable solutions) (always 0 in no-action senders), then the name (split into equally-sized parts), then data. By default, `64` numbers in data, and `63` numbers in the name, `16` numbers per name part.
     - The name (positional embedding) can be specified as an array, where strings are hashed and turned into basically-unpredictable number sequences and put into parts in-order, and numbers are put wherever. At least 1 part is always for numbers. The first part is always for the user ID, the same per machine, `"self"` by default; allows to compose many machines into a network.
     - ✓ Nail down some simple string-hashing strategy. Such as putting MD5 byte-by-byte, rescaling to `-1`..`1`, fractally folding each part if needed.
-    - ⋯ Allow specifying user ID (a string), or telling that it should be re-generated each time, or a place where it is stored.
 
 This allows pretty much any interaction to happen, from simple observation of data, through actions in the environment, to corrections of observations [if they can change some](https://arxiv.org/abs/2006.12057)[how](https://powerlisting.fandom.com/wiki/Mind_Link).
-
-- ⋯ Per-machine named [IPC](https://docs.rs/interprocess/latest/interprocess/) broadcasting, in this repo.
-    - ⋯ The trait `Sensor`, which specifies a sensor:
-        - ⋯ `new(name:&[&StringOrNumberOrClosure], data_size: u64, channel: Option<String>)`.
-            - ⋯ Each closure in `name` is called with start & end indices, and returns a `-1`…`1` number to put. This allows individual blocks to have different metadata, so that models can adapt easily.
-        - ⋯ `data_size(&self)->u32`. `0` by default.
-        - ⋯ `on_data(&self, feedback: Vec<f32>, reward_feedback: f32)->Future<(data:Vec<f32>, reward:f32)>`: if implemented, this will be called automatically whenever handlers are ready.
-        - ⋯ Pre-implemented `send(&self, data: Vec<f32>, reward: f32)->Future<(feedback: Vec<f32>, reward_feedback: f32)>`: send data, receive feedback, [eventually](https://crates.io/crates/futures).
-        - ⋯ Implement `std::io::Write` (sending data) and `std::io::Read` (getting feedback) on top of `send`, which make the reward `0`. (Unless Rust complains about conflicting implementations.)
-        - ⋯ `no_feedback(&self)->bool`, `true` by default, for no-action things. Handlers shouldn't bother giving feedback on these.
-    - ⋯ The trait `Transform`, which changes a frame's data (post-sending pre-handling):
-        - ⋯ For efficiency, transforms are not IPC (which would have needed at least one IPC copy per transform per message), but have to be created in the same process as the main `Handler`.
-        - ⋯ `new(channel: Option<String>)`.
-        - ⋯ `on_data(&self, data: Vec<f32>, cell_shape:&[u32])->Future<(Vec<f32>, Extra)>` returns a value [eventually](https://crates.io/crates/futures).
-        - ⋯ `on_feedback(&self, feedback: Vec<f32>, cell_shape:&[u32], extra: Extra)->Future<Vec<f32>>`.
-        - ⋯ `priority(&self) -> f64`: all transforms are called in a chain, highest-priority-first. `0` by default.
-    - ⋯ The trait `Handler`, which gives feedback to sensors:
-        - ⋯ `new(channel: Option<String>)`.
-        - ⋯ `on_data(&self, data: Vec<f32>, error: Vec<f32>, cellShape: &[f32], feedback: Option<Vec<f32>>) -> Future<Option<Vec<f32>>>`: give feedback to data, or observe another handler's data+feedback.
-            - ⋯ On each step, turn observations into corrections:
-                - ⋯ A periodic loop of fulfilling corrections to smooth network latency, released in the order that they were requested, sending back data if not handled when needed. Try to match the latency of observation-correction things.
-                    - ⋯ Benchmark the latency deviation, mean & stdev. Both when messages are sent evenly, and in bursts of 2/4/8/16/32/64/128.
-                    - ⋯ Give per-number max error along with data.
-            - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders transformed, avg per step.)
-            - ⋯ Only send feedback to those senders that have `.no_feedback()->false`.
-        - ⋯ `no_feedback(&self) -> bool`, `true` by default.
-        - ⋯ `priority(&self) -> f64`, `0` by default: only the one max-priority handler with `no_feedback=false` will give feedback, the rest will simply observe.
-        - ⋯ `data_size(&self) -> u32`, `64` by default.
-        - ⋯ `name_size(&self) -> u32`, `64` by default.
-        - ⋯ `name_part_size(&self) -> u32`, `16` by default.
-    - ⋯ Sensors first request cell shapes from handlers, then for each unique shape, allocate the actual positions. On step, limit f32 numbers to `-1`…`1`, put them in places, fill in reward (`0`) & name, compress if specified, then send to handlers.
-    - ⋯ Test that all data is indeed transformed correctly, via bogus senders/transforms.
-    - ⋯ Benchmark throughput and latency with bogus data, in time-per-cell.
-
-- ⋯ Sensors, each with read and write modes:
-    - ⋯ Actual sensors, as in actual hardware interfaces, each exposed with both read (handlers observe the human acting) and write (handlers specify actions) modes:
-        - ⋯ Keyboard.
-        - ⋯ Mouse.
-        - ⋯ Video+audio of a window or desktop, or camera/microphone.
-            - ⋯ Research libraries: [X11Cap](https://github.com/bryal/X11Cap) is Linux-only; [FFmpeg](http://www.ffmpeg.org/) may be good, though is an external dependency.
-            - ⋯ Video, in spatially-coalesced chunks, with x/y coords of each chunk's center in the name.
-                - ⋯ Full stream.
-                - ⋯ Around-mouse rect.
-                - ⋯ Around-mouse fovea.
-                - ⋯ Around-mouse progressively coarser grids, each zoomed out 2×, so if starting at 16×16 cells, only need 6 more levels to go to 1024×1024. (May act the same as a zooming data augmentation.)
-                    - ⋯ Make the "mouse" point configurable.
-            - ⋯ Audio:
-                - ⋯ Mono (average all channels, with -1 & 0 in the name).
-                - ⋯ Stereo (expose each channel, with 1 & i in the name).
-            - ⋯ Write-mode: create a window and draw in it for video, and/or play the audio that we get. Debugging, essentially.
-    - ⋯ System resources: CPU (% free mem and per-core % used) and GPU if available (roughly, % free mem and % used; align if possible).
-    - ⋯ Read from Internet, through WebRTC. Many machines can thus gather into one sensor network. Same as JS.
-    - ⋯ Read from file/s. Same as JS.
-    - ⋯ Launched-by-another-process STDIO. Model's outputs are sent, and model inputs are received as feedback (`0` or random noise in the first frame); inputs and outputs have separate cells, separated by type if possible. (With prediction & compute, one brain/model can download any knowledge and intuition for free, in the background. All models can gather in one.)
-        - ⋯ Connect CPU-side GPT-2, which acts word-per-word, or even letter-per-letter and integrates like the keyboard sensor, by sharing parts of the name.
-        - ⋯ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding. (Listening to data directly has proven to be extremely low-bandwidth in practice, so, probably not.)
-    - ⋯ A [Puppeteer](https://pptr.dev/)ed browser, where the JS extension is installed, and we make it inject interfaces and collect data by calling a Puppeteer-injected function (from base64 data, to a promise of base64 feedback) for us.
-
-- ⋯ Transforms:
-    - ⋯ TODO: Same as JS. (No need to write this down again.)
-    - ⋯ Shuffle cells, to make models/brains that are not fully order-independent become such.
-    - ⋯ Reward sender, which replaces `0`s in all cells' first number with the reward. To specify per-user reward in one place. (The idealized job: you give it your situation, it makes your number go up.)
-        - ⋯ Configurable reward, via a closure that's called each frame. By default, Ctrl+Down is `-1` reward, Ctrl+Up is `+1` reward, otherwise `0`.
-    - ⋯ An alternative string-hashing strategy, namely, "ask the user" (display the string somewhere for at least a few seconds, send `0`s as the name, and record suggestions; the most distant one from all names in the database wins, and the mapping from string-hash to actual-data is preserved, so that even file recordings can be replayed comfortably).
-
-- ⋯ Handlers (launch the main handler first, the rest will not give feedback):
-    - ⋯ Sound output (speakers), no feedback: like machine-to-brain Neuralink, but everyone already has it. (Can even listen to what an AI model predicts and decides, for zero-effort human-AI merging.)
-        - ⋯ Test, which sounds best and most recognizable, and what bandwidth we can achieve without making users tear out their ears: raw PCM output, +x -x PCM output, frequency-domain output.
-    - ⋯ Sound input (microphone). May be trash though.
-        - TODO: Will DEFINITELY be trash, because humans can never be made to satisfy constraints that AI models that have sound-input as input can easily be made to satisfy.
-    - ⋯ Send to Internet.
-        - ⋯ Username: our local MAC address or IP or a stored randomly-generated number, added to each cell's label before anything. (In a model, to batch per-user rather than integrate integrate cross-user data, group by username.)
-        - ⋯ Research libraries that can carry messages: [Rabbi](https://github.com/CleverCloud/lapin)[tMQ](https://crates.io/crates/amiquip); [raw WebRTC](https://webrtc.rs/).
-        - ⋯ Test stability: a remote sender that fails periodically, and a remote handler that fails periodically: the system has to re-establish connection automatically.
-    - ⋯ Store to file/s.
-        - ⋯ Each file consists of 16KB blocks, at the start of each is an i32: either a pointer to the next block or negated length of this one; it can then store streams of bytes; the list starting at block 0 specifies metadata (compression version) and all pointers to stream beginnings. So we need API for write-stream and enum-streams and sample-random-stream and read-stream.
-        - ⋯ Max cell count in one stream, 0 for unlimited; auto-split when needed, without saving model state.
-        - ⋯ Max byte-count of a file; when specified, store to a directory of named files. Also allow limiting the file count, to act as a circular buffer.
-        - ⋯ Possibly, each stream should have a vector label, and we should allow nearest-neighbor lookups. Possibly separately from the actual data. (Indirectly allows things like priority queues and filter-by-creation-date.)
-    - ⋯ Launched-by-another-process STDIO.
-        - ⋯ Communicate in packets: cell-count and 1+value-size (so that names can be resized if needed) and cell-size and all-cell-data (`-1`…`1`). Uncompressed for simplicity of integration.
-            - ⋯ Benchmark actual throughput.
-        - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model to do next-frame prediction and first-cell-number maximization.
-            - ⋯ To take advantage of exponential improvement of learning, ML must be a journey, not a series of separate steps like it is today. Sensor network being able to represent all datasets in one format is a prerequisite. So, experiment: implement weight decay weighted by gradient to [learn precise behaviors](https://mathai-iclr.github.io/papers/papers/MATHAI_29_paper.pdf) without much inter-task interference, or weight-magnitude-based evolution of weight groups for cache-aware sparsification, then make the same model fully learn very small datasets. Are there then benefits to learning bigger text-based datasets? Might be a dead-end though.
-            - ⋯ Prediction is technically a number to optimize. So make a transform that rewards a cell's next-frame prediction, and try to fully-learn that, so that models can then choose to predict without being forced to.
-    - ⋯ A Neuralink device. Once it, you know, exists. (Maybe it would be a [HID](https://web.dev/hid/).)
-
-- ⋯ Compression, for Internet and files:
-    - ⋯ API for compressing and decompressing a stream of messages: a trait, with the constructor (taking cell-shape) and the compression version and message-compression (from message and context, to data and context) and message-decompression (taking data and context, returning message and max error and context).
-        - ⋯ Handle historical context, via sync points: knowing past states can help compression, but if messages can be dropped (such as in RTC), decompression can't proceed if it needs history, so we need history-less points. Files won't need this, but WebRTC will.
-        - ⋯ No std lib, for wasm.
-    - ⋯ No-op compression, as the default.
-    - ⋯ A benchmark that measures compression ratio of a file, preferably always the same one, stored in the repo. Fail if uncompressed data does not match actual data, within the returned tolerance. And compression speed, per cell.
-    - ⋯ Try compression options, and find the best one.
-
-- ⋯ PyTorch (or NumPy) integration, via easily-comprehensible blocking "`receive`: gimme more data" and "`send`: give more data" functions.
-    - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those. (Take a bath in data. Rub it into your eyes.)
-
-- ⋯ A server for nearest-neighbor search. Accept requests: "register/update this ID, with a removal token" (the -1…1 vector label is decided randomly), "remove this ID, given a removal token" (the label still persists), "get up-to-N nearest neighbors, current URL/IP & ID & current label", "update this ID with this suggested vector label" (with an update method that effectively averages inter-user most-recent votes, and slowly nudges the label toward that, notifying the register-ee along the way, removing the ID if not connected). (Connect AI models & humans: train a worldwide AI model collaboratively, and vote with far more detail than democracy can ever hope for.)
-
-- ⋯ If we can somehow find TBs of storage for hosting, create a server that stores all incoming connections to file, and samples from that file when requested, or reads by stream ID.
-
-Isn't implementing all this such a joyful learning opportunity?
 
 ### JS API
 
@@ -274,21 +164,21 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
             - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
             - ❌ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
-                - ✓ Replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings in the `user` part of the name, so that learning doesn't *have* to do BPTT per-step (non-scalable beyond about a minute) but across time resolutions.
+                - ✓ Replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings in the `user` part of the name, so that learning doesn't *have* to do BPTT per-step (which is non-scalable beyond about a minute) but across time resolutions.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
             - ✓ Read from file.
-                - ⋯ Research [dataset distillation](https://arxiv.org/abs/2109.12534): optimize the training of models on 'summary' data points and subsequent evaluation on data points after that. (ML-based compression: the more you live, the more you know and the faster you learn.) (For mesa-optimizer-learning, could simply give learned experience first, then target experience. No need to wait for gradient updates to learn at inference time. And if learned actions improve prediction, then they are predicted too, and it's all a feedback loop. Tho for accuracy, might want to only compress beginnings of single episodes, not all data.)
-                    - TODO: ...Do we really want this that much...
-                    - TODO: With Transformer RNNs, can we make the 'summary' a neural network from the previous summary and many data points to the next summary, and make the main model train from summaries where possible?
+                - ⋯ Research [dataset distillation](https://arxiv.org/abs/2109.12534) for compression of the very-abundant experience: optimize the training of models on 'summary' data points and subsequent evaluation on data points after that. (Though, for mesa-optimizer-learning, could simply give learned experience first via the `summary(prev_summary, data) → summary` net for downsampling, then give target experience to the `do(summary) → next_data` net — or even do nothing and just have infinite-window-size attention with forgetting ([as suggested here](https://arxiv.org/abs/2102.11174)). Don't wait for gradient updates, learn at inference time.)
                 - ⋯ Research continuous model distillation (basically [Iterated Amplification](https://www.lesswrong.com/posts/vhfATmAoJcN8RqGg6/a-guide-to-iterated-amplification-and-debate)), because restarting sucks: [shallow-ing](https://arxiv.org/abs/2106.03186) to achieve infinite depth: making models not just out of dense layers `f(f(x))` but something like `f(g(x, non_trainable=true))`, where `g(x)` predicts the result (so it always tries to approximate "but what if we had 1 more layer"). `g` can be smaller than `f` and thus also distilled into a smaller net, which is distilled too, until there's only 1 layer for the whole network, or maybe ½ or less layers via matrix factorization: `x@A → x@a@b`. (Seems too simple to not have been tried. [This](https://2021.ecmlpkdd.org/wp-content/uploads/2021/07/sub_676.pdf) also does not let teachers diverge too far from students, though without `+` and on weights rather than on outputs. No match was found.) (…Or just do [BYOL](https://arxiv.org/abs/2006.07733) with different online/target histories, possibly randomly dropping observations, or dropping them based on their hashes: `x@W < 0`.)
             - ⋯ In extension, read from tabs.
             - ✓ Read from Internet, with WebRTC, ❌ RabbitMQ preferable.
                 - ❌ Each data packet references its meta-data (names and such) by ID; when meta-data changes, it's re-sent until the other side acknowledges it. (Just send everything and rely on compression.)
                 - ⋯ Support de/compression, able to hold the previous-packet's data if needed.
+                - ⋯ Username: the MD5 hash of the offer, added to each cell's label before anything.
                 - ⋯ Discourage disengagements: on user disconnect, hold its last cell (now `0` everywhere except the user in the name) with `-1` reward, for as many frames as specified (`8` by default). Dying is bad.
                 - ✓ Benchmark throughput, over localhost.
                 - ✓ [`BroadcastChannel`](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel/postMessage) for convenience.
+                - ⋯ Test stability: a remote sender that fails periodically, and a remote handler that fails periodically: the system has to re-establish connection automatically.
             - ⋯ Search: in a distributed database (sync with search-server URL/s if given, updating a few fitting entries on demand), lookup the nearest-neighbor of values' feedback (the label) (must not be linked elsewhere), and connect via read-from-Internet.
             - ⋯ In-extension [tabs](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/Tab): `.active, .audible, .mutedInfo.muted, .pinned, .status==='complete'`, `.index` (out of 32); `+new Date() - .lastAccessed` as time; [visible area](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureTab) as an image; and with an option checked and the `"tabs"` permission: maybe favicon from `.favIconUrl`, maybe reading out `.title` characters, maybe reading out `.url`. (Though, if we have bandwidth for that, then we might as well expose some proper programming language and/or rewriting system for direct use.)
         - ⋯ `.Transform`:
@@ -309,19 +199,29 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - TODO: Text in `README.md` (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
                 - TODO: Tools for connecting humans and AI models to arbitrary sensors: differentiable [subscribe/publish](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern).
                 - TODO: Design constraints:
-                    - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are dominant anyway.](https://arxiv.org/abs/1706.03762)
-                    - -1…1 values, including the reward. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. ML models [typically perform worse with unnormalized data.](https://en.wikipedia.org/wiki/Feature_scaling) (TODO: But if we don't quantize, I don't think we actually limit the raw values anywhere. So is this a real limitation?)
+                    - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are currently dominant anyway.](https://arxiv.org/abs/1706.03762)
+                    - -1…1 values, for visualization. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. Though in truth, this is less of a constraint and more of a recommendation that our code upholds but yours does not have to.
                     - That's all. A human can use it. AGI can use it.
-                - TODO: # You can: ???
+                - TODO: # You can:
                     - TODO: Not worry about efficiency (& a link to benchmarks)
-                    - TODO: Control your computer interaction data: collect it (& a link to sensors), store it (& a link to the database), share it (& a link to the Internet handler)
-                - TODO: # You should eventually be able to: ???
-            - ✓ No-feedback sound output (speakers).
+                    - TODO: Fully control (& a link to privacy considerations: TODO: What did we want here?) your computer interaction data: collect it (& a link to sensors), store it (& a link to the database), extend it over the Internet (& a link to the Internet handler)
+                    - TODO: Maybe, "design your own data collection pipeline, and/or integrate arbitrary pipelines in one AI model at the same time"? What would we link to? The test page?
+                - TODO: # You should eventually be able to:
+                    - TODO: Integrate all your data, and extract knowledge and skill from it (& a link to, what, soft mind uploading, and why it's the only realistic approximation to the sci-fi concept, and exponential improvement in compute will take us ever closer to it?).
+                    - TODO: Use an AI model to translate limited human actions (& a link to a small file detailing how humans have eyes and muscles and ears and throats, which drives the design of RGB displays and RGB cameras and speakers and microphones but simultaneously constrains all UI software in a way that humans cannot really understand without experience with freely creating extra senses, whereas Transformers can handle arbitrary data) into arbitrary computer interactions.
+                    - TODO: What other AI capabilities did we want, exactly?
+            - TODO: Publish to NPM and GitHub, with GitHub pages for `test.html`, so that we can have links.
+            - ✓ No-feedback sound output (speakers): like a machine-to-brain Neuralink device, but everyone already has it. (Can even listen to what an AI model predicts and decides, for zero-effort human-AI merging.)
+                - ✓ Test which sounds most recognizable, and what bandwidth we can achieve without making users tear out their ears: raw PCM output, +x -x PCM output, frequency-domain output. (Frequency-domain. And effective bandwidth is quite low, though no extensive training for recognizing individual numbers was performed.)
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
                 - ✓ Make it no-skips and no-huge-backlog. Make it reasonably-good UX, essentially.
-                    - ⋯ Inspect the first and last numbers of packets: these most likely cause that clicking. Try to pick the wave phase (dependent on previous-packets-size) that minimizes that difference.
-                    - ⋯ What we made is clearly not quite frequency-based, since adding/removing sensors really changes the sound, so fix it.
-                    - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience.)
+                    - ⋯ Replace the `debug` option by making `options()` create canvases for time-based and frequency-based analysis, only updating if `document.visibilityState==='visible' && getComputedStyle(el).visibility!=='hidden'`.
+                    - ⋯ Fix clicking. Inspect the first and last numbers of packets: these most likely cause that clicking.
+                        - ✓ Try to calc the wave phase that minimizes that difference (doesn't help).
+                        - ⋯ To fix skips a bit, provide a "min latency" option, so that we can have a few steps in flight at any point. (Since skips seem to happen when there is something else happening.)
+                    - ⋯ Find out why long listening can sometimes lock JS to oversupply sound data, causing a latency of a few minutes.
+                    - ⋯ Fix the noticeable slowdown-then-gradual-speedup phenomenon, likely occuring because we mispredict ms-per-step and don't have a backlog. (It really takes the listener out of the experience. Though, it has not occured recently.)
+                    - ⋯ AI integration: summarize into a fixed-size window. Possibly, make this a sensor, which uses feedback as sound frequencies (assuming that this feedback captures the variance of other data over time).
                     - ⋯ [Normalize perceived loudness.](https://en.wikipedia.org/wiki/Equal-loudness_contour)
                 - ⋯ Be able to specify how many sound samples each value should occupy, for more detail and less bandwidth.
             - ❌ Sound input (microphone). Probably terrible, especially without an ML model to summarize it.
@@ -387,6 +287,103 @@ The extension should be a control center that can manage a human's direct connec
             - Ability to attach to the extension's page.
             - Ability to watch not just one tab, but many tabs (`requestAnimationFrame` suffers in background tabs too).
 
+### Python API
+
+- ⋯ …Maybe, for simplicity, Python, since most ML stuff happens in Python? `send(data)→Future<feedback>`, `receive(prev_feedback)→next_data`, using NumPy. Be able to read from a file and write to it. And possibly a WebRTC sensor, for using the model online. (No need for any data collection nor transformation, nor multiple handlers.)
+    - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those. (Take a bath in data. Rub it into your eyes.)
+    - ⋯ Connect CPU-side GPT-2, which acts word-per-word, or even letter-per-letter and integrates like the keyboard sensor, by sharing parts of the name.
+    - ❌ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding. (Listening to data directly has proven to be extremely low-bandwidth in practice, and kinda tedious, so, probably won't be any good.)
+    - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model for future prediction and first-cell-number maximization.
+        - ⋯ To take advantage of exponential improvement of learning, ML has to be a journey, not a series of separate steps like it is today. Sensor network being able to represent all data in one format is a prerequisite. So research lifelong learning.
+        - ❌ Prediction is technically a number to optimize, so, make it the reward. (Unless all humanity instantly starts entrusting all tasks to a sensor network, we probably would have too little & too contradictory data for reward-learning to succeed.)
+
+### Rust API
+
+The OS ecosystem, where communication happens through IPC. Each extra module should have its own crate, prefixed with `sensor-network-`.
+
+- ⋯ Per-machine named [IPC](https://docs.rs/interprocess/latest/interprocess/) broadcasting, in this repo.
+    - ⋯ The trait `Sensor`, which specifies a sensor:
+        - ⋯ `new(name:&[&StringOrNumberOrClosure], data_size: u64, channel: Option<String>)`.
+            - ⋯ Each closure in `name` is called with start & end indices, and returns a `-1`…`1` number to put. This allows individual blocks to have different metadata, so that models can adapt easily.
+        - ⋯ `data_size(&self)->u32`. `0` by default.
+        - ⋯ `on_data(&self, feedback: Vec<f32>, reward_feedback: f32)->Future<(data:Vec<f32>, reward:f32)>`: if implemented, this will be called automatically whenever handlers are ready.
+        - ⋯ Pre-implemented `send(&self, data: Vec<f32>, reward: f32)->Future<(feedback: Vec<f32>, reward_feedback: f32)>`: send data, receive feedback, [eventually](https://crates.io/crates/futures).
+        - ⋯ Implement `std::io::Write` (sending data) and `std::io::Read` (getting feedback) on top of `send`, which make the reward `0`. (Unless Rust complains about conflicting implementations.)
+        - ⋯ `no_feedback(&self)->bool`, `true` by default, for no-action things. Handlers shouldn't bother giving feedback on these.
+    - ⋯ The trait `Transform`, which changes a frame's data (post-sending pre-handling):
+        - ⋯ For efficiency, transforms are not IPC (which would have needed at least one IPC copy per transform per message), but have to be created in the same process as the main `Handler`.
+        - ⋯ `new(channel: Option<String>)`.
+        - ⋯ `on_data(&self, data: Vec<f32>, cell_shape:&[u32])->Future<(Vec<f32>, Extra)>` returns a value [eventually](https://crates.io/crates/futures).
+        - ⋯ `on_feedback(&self, feedback: Vec<f32>, cell_shape:&[u32], extra: Extra)->Future<Vec<f32>>`.
+        - ⋯ `priority(&self) -> f64`: all transforms are called in a chain, highest-priority-first. `0` by default.
+    - ⋯ The trait `Handler`, which gives feedback to sensors:
+        - ⋯ `new(channel: Option<String>)`.
+        - ⋯ `on_data(&self, data: Vec<f32>, error: Vec<f32>, cellShape: &[f32], feedback: Option<Vec<f32>>) -> Future<Option<Vec<f32>>>`: give feedback to data, or observe another handler's data+feedback.
+            - ⋯ On each step, turn observations into corrections:
+                - ⋯ A periodic loop of fulfilling corrections to smooth network latency, released in the order that they were requested, sending back data if not handled when needed. Try to match the latency of observation-correction things.
+                    - ⋯ Benchmark the latency deviation, mean & stdev. Both when messages are sent evenly, and in bursts of 2/4/8/16/32/64/128.
+                    - ⋯ Give per-number max error along with data.
+            - ⋯ On each sent message, wait a bit before handling messages, to make inputs more coherent. (And, benchmark the coherence, as the % of senders transformed, avg per step.)
+            - ⋯ Only send feedback to those senders that have `.no_feedback()->false`.
+        - ⋯ `no_feedback(&self) -> bool`, `true` by default.
+        - ⋯ `priority(&self) -> f64`, `0` by default: only the one max-priority handler with `no_feedback=false` will give feedback, the rest will simply observe.
+        - ⋯ `data_size(&self) -> u32`, `64` by default.
+        - ⋯ `name_size(&self) -> u32`, `64` by default.
+        - ⋯ `name_part_size(&self) -> u32`, `16` by default.
+    - ⋯ Sensors first request cell shapes from handlers, then for each unique shape, allocate the actual positions. On step, limit f32 numbers to `-1`…`1`, put them in places, fill in reward (`0`) & name, compress if specified, then send to handlers.
+    - ⋯ Test that all data is indeed transformed correctly, via bogus senders/transforms.
+    - ⋯ Benchmark throughput and latency with bogus data, in time-per-cell.
+
+- ⋯ Sensors:
+    - ⋯ Actual sensors, as in actual hardware interfaces, each exposed with both read (handlers observe the human acting) and write (handlers specify actions) modes:
+        - ⋯ Keyboard.
+        - ⋯ Mouse.
+        - ⋯ Video+audio of a window or desktop, or camera/microphone.
+            - ⋯ Research libraries: [X11Cap](https://github.com/bryal/X11Cap) is Linux-only; [FFmpeg](http://www.ffmpeg.org/) may be good, though is an external dependency.
+            - ⋯ Video, in spatially-coalesced chunks, with x/y coords of each chunk's center in the name.
+                - ⋯ Full stream.
+                - ⋯ Split into rects.
+                - ⋯ Zoom.
+            - ⋯ Audio:
+                - ⋯ Mono (average all channels, with -1 & 0 in the name).
+                - ⋯ Stereo (expose each channel, with 1 & i in the name).
+            - ⋯ Write-mode: create a window and draw in it for video, and/or play the audio that we get. Debugging, essentially.
+    - ⋯ System resources: CPU (% free mem and per-core % used) and GPU if available (roughly, % free mem and % used; align if possible).
+    - ⋯ Read from Internet, through WebRTC. Many machines can thus gather into one sensor network. Same as JS.
+    - ⋯ Read from file/s. Same as JS.
+    - ⋯ Launched-by-another-process STDIO, for integration.
+    - ⋯ A [Puppeteer](https://pptr.dev/)ed browser, where the JS extension is installed, and we make it inject interfaces and collect data by calling a Puppeteer-injected function (from base64 data, to a promise of base64 feedback) for us.
+
+- ⋯ Transforms:
+    - ⋯ Same as JS.
+
+- ⋯ Handlers (launch the main handler first, the rest will not give feedback):
+    - ⋯ Sound output (speakers), no feedback.
+    - ❌ Sound input via microphone. (Humans can't perfectly uphold the "one feedback per one data" constraint, so we can at most expose audio to an AI model that will do the actual translation to feedback.)
+    - ⋯ Send to Internet. Same as JS.
+        - ⋯ Research libraries that can carry messages: [Rabbi](https://github.com/CleverCloud/lapin)[tMQ](https://crates.io/crates/amiquip); [raw WebRTC](https://webrtc.rs/).
+    - ⋯ Store to file/s. Same as JS.
+    - ⋯ Launched-by-another-process STDIO.
+        - ⋯ Communicate in packets: cell-count and 1+value-size (so that names can be resized if needed) and cell-size and all-cell-data (`-1`…`1`). Uncompressed for simplicity of integration.
+            - ⋯ Benchmark actual throughput.
+    - ⋯ A Neuralink device. Once it, you know, exists. (Maybe it would be a [HID](https://web.dev/hid/).)
+
+- ⋯ A library, usable [in ](https://github.com/bevyengine/bevy)[g](https://crates.io/crates/amethyst)[am](https://crates.io/crates/ggez)[es](https://crates.io/crates/piston), for acting as a sensor (AI-interface-enabled programs).
+
+- ⋯ Compression, for Internet and files:
+    - ⋯ API for compressing and decompressing a stream of messages: a trait, with the constructor (taking cell-shape) and the compression version and message-compression (from message and context, to data and context) and message-decompression (taking data and context, returning message and max error and context).
+        - ⋯ Handle historical context, via sync points: knowing past states can help compression, but if messages can be dropped (such as in RTC), decompression can't proceed if it needs history, so we need history-less points. Files won't need this, but WebRTC will.
+        - ⋯ No std lib, for wasm.
+    - ⋯ No-op compression, as the default.
+    - ⋯ A benchmark that measures compression ratio of a file, preferably always the same one, stored in the repo. Fail if uncompressed data does not match actual data, within the returned tolerance. And compression speed, per cell.
+    - ⋯ Try compression options, and find the best one.
+
+- ⋯ A server for nearest-neighbor search. Accept requests: "register/update this ID, with a removal token" (the -1…1 vector label is decided randomly), "remove this ID, given a removal token" (the label still persists), "get up-to-N nearest neighbors, current URL/IP & ID & current label", "update this ID with this suggested vector label" (with an update method that effectively averages inter-user most-recent votes, and slowly nudges the label toward that, notifying the register-ee along the way, removing the ID if not connected). (Connect AI models & humans: train a worldwide AI model collaboratively, and vote with far more detail than democracy can ever hope for.)
+
+- ⋯ If we can somehow find TBs of storage for hosting, create a server that stores all incoming connections to file, and samples from that file when requested, or reads by stream ID.
+
+Isn't implementing all this such a joyful learning opportunity?
+
 ## Journey
 
 The Sensor Network is a human-friendly environment for integrating general intelligence with computers.
@@ -403,4 +400,6 @@ Via a series of Web-based tutorials (let's be real, no one's gonna install some 
     - ⋯ Keyboard: type the displayed sentences, with each completed letter highlighted, and 3 mistakes in a row un-completing a letter. WPM is measured.
     - ⋯ Mouse+scroll: have a target somewhere on the vast vast page, its position shown on scrollbars; hovering over it gives reward and a reset; hovering at the viewport's outermost pixels gives negative reward. With 1+ scrolling-element levels.
         - ⋯ A bunch of buttons, able to be clicked with left/right clicks and drag-and-dropped around, and a textbox telling you what to do.
-    - ⋯ Video: a `<canvas>`, slowly paintable with video feedback. (3D rendering with multiple angles, or audio composition, is probably too hard to learn.)
+    - ⋯ Video: a `<canvas>`, slowly paintable with video feedback. (3D rendering with multiple angles, or audio composition, is probably too hard for humans to learn.)
+
+Though maybe all of this is inferior to games.
