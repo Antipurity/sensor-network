@@ -304,6 +304,7 @@ export default (function(exports) {
                     if (mainSensor && Array.isArray(ch.sensors))
                         for (let i = 0; i < ch.sensors.length; ++i) {
                             const s = ch.sensors[i]
+                            if (typeof s.onValues != 'function') continue
                             const data = allocF32(s.values)
                             try { s.onValues.call(s, data) }
                             catch (err) { console.error(err) }
@@ -381,6 +382,7 @@ export default (function(exports) {
             }
             sendRawCallback(then, name, unname) { // Low-level. Dangerous. But fast.
                 // `name.call(this, {cellShape, partSize, summary}, namer, packet, then, unname)→bool`: does `packet.send(this, then, unname, namedV, namedE, noData, noFeedback)`, where `namedV` and `namedE` are taken ownership of. Returns `true` if it wrote any non-`noData` stuff.
+                //   Called once per cell-shape (possibly 0 times).
                 // `unname(namer, allFeedback, fbOffset, dataLen) → flatV`, called before feedback (`then`).
                 //   `allFeedback` is a non-owned f32a, which is copied into the owned `flatV`.
                 // Name+send to all handler shapes.
@@ -452,11 +454,9 @@ export default (function(exports) {
             }
             pause(inResume = false) {
                 if (this.paused !== false) return this
-                if (typeof this.onValues == 'function') {
-                    const ch = state(this.channel)
-                    ch.sensors = ch.sensors.filter(v => v !== this)
-                }
                 this.paused = true
+                const ch = state(this.channel)
+                ch.sensors = ch.sensors.filter(v => v !== this)
                 return this
             }
             resume(opts) {
@@ -495,13 +495,12 @@ export default (function(exports) {
                     }
                 }
                 if (!this.paused) return this
-                if (typeof this.onValues == 'function') {
-                    const ch = state(this.channel)
-                    ch.sensors.push(this)
-                    for (let {cellShape, partSize, summary} of ch.cellShapes)
-                        _Packet.handleLoop(this.channel, cellShape, partSize, summary)
-                }
                 this.paused = false
+                // Add ourselves to `ch` even if `!.onValues`.
+                const ch = state(this.channel)
+                ch.sensors.push(this)
+                for (let {cellShape, partSize, summary} of ch.cellShapes)
+                    _Packet.handleLoop(this.channel, cellShape, partSize, summary)
                 return this
             }
         }, {
@@ -639,8 +638,8 @@ export default (function(exports) {
                 dst.handlers.push(this)
                 dst.handlers.sort((a,b) => b.priority - a.priority)
                 if (!this.noFeedback && (ch.mainHandler == null || ch.mainHandler.priority < this.priority)) ch.mainHandler = this
-                if (this.onValues) _Packet.handleLoop(this.channel, this.cellShape, this.partSize, this.summary)
                 this.paused = false
+                if (this.onValues) _Packet.handleLoop(this.channel, this.cellShape, this.partSize, this.summary)
                 return this
             }
         }, {

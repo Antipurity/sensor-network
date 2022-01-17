@@ -119,6 +119,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         resume(opts) {
             if (opts) {
                 this.iceServers = opts.iceServers || []
+                opts.onValues = this.onValues
                 opts.values = 0, opts.emptyValues = 0, opts.name = []
                 if (!this._data) { // Only once.
                     this._data = [], this._feedback = [] // The main adjustable data queue.
@@ -201,12 +202,10 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                         const a = allocArray(9)
                         ;[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]] = [partSize, cells, cellShape, bpv, rawData, rawError, noData, noFeedback, feedback]
                         this._data.push(a)
-                        this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     } else { // Drop.
                         const a = allocArray(9)
                         a.fill(undefined), a[8] = feedback
                         this._data.push(a)
-                        this.sendRawCallback(this.onFeedback, this._name, this._unname)
                     }
                 }))
                 if (inMetaData.length) {
@@ -216,9 +215,16 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 }
             })
         }
+        onValues(data) {
+            sn._deallocF32(data)
+            this.sendRawCallback(this.onFeedback, this._name, this._unname)
+            this._data.length = 0
+        }
+        // TODO: (Also, fix `Storage`, because it likely has the same problem.)
         _name({cellShape, partSize, summary}, namer, packet, then, unname) {
             // Copy all data points into the actual data stream.
             //   `this.onFeedback` will be called for each sending.
+            //   Besides, what if there are currently no handlers and no cell-shapes?...
             for (let i = 0; i < this._data.length; ++i) {
                 let [realPartSize, cells, realCellShape, bpv, rawData, rawError, noData, noFeedback, feedback] = this._data[i]
                 if (rawData === undefined) { // Dropped packet. Synthetic data.
@@ -237,7 +243,6 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 packet.send(this, then, unname, namedV, namedE || null, noData || true, noFeedback || true)
                 this._feedback.push(this._data[i])
             }
-            this._data.length = 0
         }
         _unname(namer, allFeedback, fbOffset, dataLen) {
             const vals = sn._allocF32(allFeedback.length) // Technically unnecessary (if `main.js` doesn't deallocate `feedbackData` but `onFeedback` can decide), but unless this becomes a bottleneck, better safe than sorry.
@@ -348,7 +353,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 this._signal = new Promise((resolve, reject) => {
                     mc.onopen = evt => { this._signal = null, resolve() }
                     mc.onmessage = evt => {
-                        if (this.peer == null) return
+                        if (this.peer == null) return console.warn('dropping signal', evt.data)
                         if (typeof evt.data != 'string') return console.warn('dropping signal', evt.data)
                         const d = JSON.parse(evt.data)
                         this.peer instanceof Promise ? this.peer.then(p => p.signal(d)) : this.peer.signal(d)
@@ -370,18 +375,18 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                                 maxRetransmits: 0, // Unreliable
                             },
                         })
-                        console.log('handler created peer', peer) // TODO:
-                        peer.on('close', (...args) => console.log('close', args)) // TODO: Why does it close?! Unless we do it on page load… This doesn't make any sense...
+                        peer.on('close', () => console.log('close')) // TODO: Why does it close?! Unless we do it on page load… This doesn't make any sense...
+                        //   TODO: On close, pause ourselves or something, and at least finish our steps, so that we don't stall everything.
                         peer.on('error', console.error)
                         peer.on('signal', data => {
-                            console.log('handler is signaling', data) // TODO:
                             signal.call(this, JSON.stringify(data))
                         })
                         peer.on('connect', () => {
-                            console.log('handler connected') // TODO:
+                            console.log('handler connected') // TODO: ...Wait, but if it's connected, then why isn't the data flowing?
                             const packer = messagePacker(peer)
                             this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
                                 // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
+                                console.log('handler _dataSend') // TODO:
                                 const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
                                 const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
                                 const bytes = new Uint8Array(totalSize), dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -516,7 +521,6 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         consoleLog: A(function signalViaConsole(sensor=null) {
             // TODO: Make this work.
             //   TODO: ...Where's the handler's message?? Why does it only appear if we do it on reload??
-            //   TODO: Okay, why does pasting the answer do nothing too?
             if (!signalViaConsole.did) {
                 console.log("Carry around WebRTC signals manually, through the JS console.")
                 console.log("    Please triple-click and copy each message, then paste at the other end.")

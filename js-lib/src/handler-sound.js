@@ -150,6 +150,8 @@ In Chrome, users might have to first click on the page for sound to play.
             }
         }
         static onValues(then, {data, cellShape}) {
+            console.log('sound onValues', data) // TODO: ...If this is called, then why is there never any sound and never any feedback sent back...
+            //   TODO: WHY IS `data` EMPTY, WHAT IN THE ABSOLUTE FUCK, WHERE ARE OUR VALUES?!?!?!?!?!?!?!?!?!??!?!?!?!?!?!??!?!?!?!?!?!??!
             if (!data || !data.length) return then()
             if (!Sound.ctx) {
                 Sound.ctx = new AudioContext()
