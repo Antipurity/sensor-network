@@ -149,6 +149,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             }
             importSimplePeer().then(SimplePeer => {
                 peer = new SimplePeer({
+                    trickle: !metaChannel.noTrickle,
                     config: {iceServers:this.iceServers},
                 })
                 peer.on('error', console.error)
@@ -293,7 +294,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 signaler: {
                     // TODO: Test both of these.
                     ['Tabs']: () => sn.Handler.Internet.broadcastChannel,
-                    ['Console']: () => sn.Handler.Internet.consoleLog,
+                    ['JS console (F12)']: () => sn.Handler.Internet.consoleLog,
                 },
                 bytesPerValue: {
                     ['float32 (4× size)']: () => 0,
@@ -361,6 +362,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 this.peer = p.then(() => {throw null}).catch(() => {
                     return importSimplePeer().then(SimplePeer => {
                         const peer = this.peer = new SimplePeer({
+                            trickle: !this.metaChannel.noTrickle,
                             initiator: true,
                             config: {iceServers:this.iceServers},
                             channelConfig: {
@@ -509,10 +511,14 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         }),
         consoleLog: A(function signalViaConsole(sensor=null) {
             // TODO: Make this work.
-            const k = !sensor ? 'internetHandler' : 'internetSensor'
+            //   TODO: ...Where's the handler's message?? Why does it only appear if we do it on reload??
+            //   TODO: Why is there no response from the sensor when we paste the message?
+            const k1 = !sensor ? 'internetHandler' : 'internetSensor'
+            const k2 =  sensor ? 'internetHandler' : 'internetSensor'
             const obj = {
-                send(msg) { console.log(`${k}(${msg})`) },
+                send(msg) { console.log(`${k2}(${msg})`) },
                 close() {},
+                noTrickle: true,
             }
             setTimeout(() => {
                 obj.onopen && obj.onopen()
@@ -521,7 +527,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                     console.log("    Please triple-click and copy each message, then paste at the other end.")
                     signalViaConsole.did = true
                 }
-                self[k] = msg => obj.onmessage && obj.onmessage({data:msg})
+                self[k1] = msg => obj.onmessage && obj.onmessage({data:msg})
             }, 0)
             return obj
         }, {
