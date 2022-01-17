@@ -22,12 +22,12 @@ export default function init(sn) {
     class InternetSensor extends sn.Sensor {
         static docs() { return `Extends this sensor network over the Internet, to control others.
 
-Methods:
-- \`signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)\`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [of a \`WebSocket\` which can be passed directly](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
-
 Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - \`signaler\`: a convenience: on construction, does \`sensor.signal(signaler(sensor))\` for you. Props of \`sn.Handler.Internet\` go well here.
+
+Methods:
+- \`signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)\` for manually establishing a connection: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [of a \`WebSocket\` which can be passed directly](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 
 Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)
 
@@ -141,7 +141,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 outMetaData && outMetaData.forEach(data => metaChannel.send(data))
                 outMetaData = null
                 metaChannel.onmessage = evt => {
-                    if (typeof evt.data != 'string') return
+                    if (typeof evt.data != 'string') return console.warn('dropping', evt)
                     const d = JSON.parse(evt.data)
                     peer ? peer.signal(d) : inMetaData.push(d)
                 }
@@ -348,8 +348,8 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 this._signal = new Promise((resolve, reject) => {
                     mc.onopen = evt => { this._signal = null, resolve() }
                     mc.onmessage = evt => {
-                        if (this.peer == null) return console.warn('dropping signal', evt.data)
-                        if (typeof evt.data != 'string') return
+                        if (this.peer == null) return
+                        if (typeof evt.data != 'string') return console.warn('dropping signal', evt.data)
                         const d = JSON.parse(evt.data)
                         this.peer instanceof Promise ? this.peer.then(p => p.signal(d)) : this.peer.signal(d)
                     }
@@ -370,11 +370,15 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                                 maxRetransmits: 0, // Unreliable
                             },
                         })
+                        console.log('handler created peer', peer) // TODO:
+                        peer.on('close', (...args) => console.log('close', args)) // TODO: Why does it close?! Unless we do it on page load… This doesn't make any sense...
                         peer.on('error', console.error)
                         peer.on('signal', data => {
+                            console.log('handler is signaling', data) // TODO:
                             signal.call(this, JSON.stringify(data))
                         })
                         peer.on('connect', () => {
+                            console.log('handler connected') // TODO:
                             const packer = messagePacker(peer)
                             this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
                                 // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
@@ -442,7 +446,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                         }))
                         function signal(data) {
                             // Send `data`, waiting for the signaling channel to open.
-                            if (!this.metaChannel) return
+                            if (!this.metaChannel) return console.warn('dropping signal', data)
                             if (this._signal) this._signal.then(() => this.metaChannel.send(data))
                             else this.metaChannel.send(data)
                         }
@@ -512,24 +516,35 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         consoleLog: A(function signalViaConsole(sensor=null) {
             // TODO: Make this work.
             //   TODO: ...Where's the handler's message?? Why does it only appear if we do it on reload??
-            //   TODO: Why is there no response from the sensor when we paste the message?
-            const k1 = !sensor ? 'internetHandler' : 'internetSensor'
-            const k2 =  sensor ? 'internetHandler' : 'internetSensor'
-            const obj = {
-                send(msg) { console.log(`${k2}(${msg})`) },
-                close() {},
-                noTrickle: true,
+            //   TODO: Okay, why does pasting the answer do nothing too?
+            if (!signalViaConsole.did) {
+                console.log("Carry around WebRTC signals manually, through the JS console.")
+                console.log("    Please triple-click and copy each message, then paste at the other end.")
+                signalViaConsole.did = true
             }
-            setTimeout(() => {
-                obj.onopen && obj.onopen()
-                if (!signalViaConsole.did) {
-                    console.log("Carry around WebRTC signals manually, through the JS console.")
-                    console.log("    Please triple-click and copy each message, then paste at the other end.")
-                    signalViaConsole.did = true
+            if (sensor) {
+                self.internetSensor = msg => {
+                    const obj = {
+                        send(msg) { console.log(`internetHandler(${msg})`) },
+                        close() {},
+                        noTrickle: true,
+                    }
+                    setTimeout(() => {
+                        obj.onopen && obj.onopen()
+                        obj.onmessage && obj.onmessage({data: JSON.stringify(msg)})
+                    }, 0)
+                    sensor.signal(obj)
                 }
-                self[k1] = msg => obj.onmessage && obj.onmessage({data:msg})
-            }, 0)
-            return obj
+            } else {
+                const obj = {
+                    send(msg) { console.log(`internetSensor(${msg})`) },
+                    close() {},
+                    noTrickle: true,
+                }
+                setTimeout(() => obj.onopen && obj.onopen(), 0)
+                self.internetHandler = msg => obj.onmessage && obj.onmessage({data: JSON.stringify(msg)})
+                return obj
+            }
         }, {
             docs:`[\`console.log\`](https://developer.mozilla.org/en-US/docs/Web/API/Console/log) and \`self.internetSensor(messageString)\` and \`self.internetHandler(messageString)\` is used to make the user carry signals around.`,
         }),
