@@ -220,7 +220,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             this.sendRawCallback(this.onFeedback, this._name, this._unname)
             this._data.length = 0
         }
-        // TODO: (Also, fix `Storage`, because it likely has the same problem.)
+        // TODO: (Also, fix `Storage`, because it likely has the same problem: `_name` consuming data.)
         _name({cellShape, partSize, summary}, namer, packet, then, unname) {
             // Copy all data points into the actual data stream.
             //   `this.onFeedback` will be called for each sending.
@@ -286,6 +286,7 @@ Options:
 - \`iceServers = []\`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - \`signaler = sn.Handler.Internet.broadcastChannel\`: creates the channel over which negotiation of connections takes place. When called, constructs \`{ send(Uint8Array), close(), onopen, onmessage, onclose }\`, for example, [\`new WebSocket(url)\`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - \`bytesPerValue=0\`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
+- \`autoresume = true\`: whether the connection closing will trigger an attempt to re-establish it.
 - \`untrustedWorkaround = false\`: if set, will request a microphone stream and do nothing with it, so that a WebRTC connection can connect. The need for this was determined via alchemy, so its exact need-to-use is unknown.
 
 Imports [100 KiB](https://github.com/feross/simple-peer) on use.
@@ -297,7 +298,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                     ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
                 },
                 signaler: {
-                    // TODO: Test both of these.
+                    // TODO: Test the tabs.
                     ['Tabs']: () => sn.Handler.Internet.broadcastChannel,
                     ['JS console (F12)']: () => sn.Handler.Internet.consoleLog,
                 },
@@ -306,14 +307,18 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                     ['uint16 (2× size)']: () => 2,
                     ['uint8 (1× size)']: () => 1,
                 },
+                autoresume: {
+                    Yes: true,
+                    No: false,
+                },
                 untrustedWorkaround: {
                     No: false,
                     Yes: true,
                 },
             }
         }
-        pause() {
-            if (!this._isInResume) {
+        pause(inResume) {
+            if (!inResume) {
                 if (this.peer) Promise.resolve(this.peer).then(p => (p.destroy(), this.peer = null))
                 if (this._feedback && this._feedback.length) {
                     for (let [feedback, then, start] of this._feedback)
@@ -329,6 +334,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 const bpv = opts.bytesPerValue || 0
                 sn._assert(bpv === 0 || bpv === 1 || bpv === 2)
                 opts.onValues = this.onValues
+                this.autoresume = opts.autoresume !== undefined ? opts.autoresume : true
                 this.iceServers = opts.iceServers || []
                 this.signaler = opts.signaler || sn.Handler.Internet.broadcastChannel
                 this.untrustedWorkaround = !!opts.untrustedWorkaround
@@ -336,15 +342,12 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 if (!this._feedback) { // Only init once.
                     this._feedback = [] // What receiving a feedback-packet will have to do.
                     this.bytesPerValue = bpv
-                    this._isInResume = false
                     this._dataSend = null, this._dataToSend = []
                 }
-                this.getPeer()
-                // Haven't seen a way to update the ICE-servers list in SimplePeer, so no `.setConfiguration`.
             }
-            try { this._isInResume = true
-                return super.resume(opts)
-            } finally { this._isInResume = false }
+            this.getPeer()
+            // Haven't seen a way to update the ICE-servers list in SimplePeer, so no `.setConfiguration`.
+            return super.resume(opts)
         }
         getPeer() {
             // Connects to another sensor network through WebRTC.
@@ -375,18 +378,19 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                                 maxRetransmits: 0, // Unreliable
                             },
                         })
-                        peer.on('close', () => console.log('close')) // TODO: Why does it close?! Unless we do it on page load… This doesn't make any sense...
-                        //   TODO: On close, pause ourselves or something, and at least finish our steps, so that we don't stall everything.
+                        peer.on('close', () => {
+                            this.pause()
+                            if (this.autoresume) setTimeout(() => this.resume(this._opts), 1000)
+                            else console.log('sn.Handler.Internet: close')
+                        })
                         peer.on('error', console.error)
                         peer.on('signal', data => {
                             signal.call(this, JSON.stringify(data))
                         })
                         peer.on('connect', () => {
-                            console.log('handler connected') // TODO: ...Wait, but if it's connected, then why isn't the data flowing?
                             const packer = messagePacker(peer)
                             this._dataSend = ({data, noData, noFeedback, cellShape, partSize}, bpv) => {
                                 // cells 4b, partSize 4b, cellShapeLen 2b, i × cellShapeItem 4b, bpv 2b, quantized data, noData bits, noFeedback bits.
-                                console.log('handler _dataSend') // TODO:
                                 const cells = data.length / cellShape.reduce((a,b)=>a+b) | 0
                                 const totalSize = 4 + 4 + 2+4*cellShape.length + 2 + (bpv||4) * data.length + 2*Math.ceil(cells / 8)
                                 const bytes = new Uint8Array(totalSize), dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -519,8 +523,6 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             docs:`Connects to all browser tabs, one connection per handler. Signals via a [\`BroadcastChannel\`](https://developer.mozilla.org/en-US/docs/Web/API/Broadcast_Channel_API). (Not in Safari.)`,
         }),
         consoleLog: A(function signalViaConsole(sensor=null) {
-            // TODO: Make this work.
-            //   TODO: ...Where's the handler's message?? Why does it only appear if we do it on reload??
             if (!signalViaConsole.did) {
                 console.log("Carry around WebRTC signals manually, through the JS console.")
                 console.log("    Please triple-click and copy each message, then paste at the other end.")
