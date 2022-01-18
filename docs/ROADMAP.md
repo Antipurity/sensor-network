@@ -18,7 +18,7 @@ It has to be efficient, and easily accessible.
 - ⋯ To that end, have 2 interoperable (via WebRTC) platforms:
     - ⋯ The IPC-based [Rust](https://www.rust-lang.org/) implementation in `/rs`. The OS is the environment.
     - ⋯ [JS](https://developer.mozilla.org/en-US/docs/Web/JavaScript):
-        - ⋯ In-page library in `/js-lib`, for programmatic use of the API. The web page is the environment.
+        - ✓ In-page library in `/js-lib`, for programmatic use of the API. The web page is the environment.
         - ⋯ Extension in `/js-ext`, for ad-hoc cross-tab setup and use of sensors, and for Chrome's [`tabCapture` API](https://developer.chrome.com/docs/extensions/reference/tabCapture/). Makes the browser the environment instead, and the human the end-user.
 
 The functioning of the Sensor Network proceeds as such:
@@ -33,7 +33,7 @@ This allows pretty much any interaction to happen, from simple observation of da
 
 Intelligence can do anything. But how to support the utter formlessness of generality of intelligence? By supporting every form at once. With reasonable defaults.
 
-- ⋯ One library that puts everything into the global `sn`, populated as variables:
+- ✓ One library that puts everything into the global `sn`, populated as variables:
     - ✓ The basics:
         - ✓ Have a name-hasher, from name and available-parts and part-size to Float32Array, possibly written-to in-place.
             - ✓ To not waste space, numbers fill up their cells (and all no-string cells) with fractally-folded versions of themselves; each fold turns the line `{ 0: -1, 1: 1 }` into `{ 0: -1, .5: 1, 1: -1 }`, so, `x → 1-2*abs(x)`. (The listener can then make out details more easily.)
@@ -169,7 +169,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ⋯ Read from another channel: insert a hidden handler to that channel, and read-through.
             - ✓ Read from file.
                 - ⋯ Research [dataset distillation](https://arxiv.org/abs/2109.12534) for compression of the very-abundant experience: optimize the training of models on 'summary' data points and subsequent evaluation on data points after that. (Though, for mesa-optimizer-learning, could simply give learned experience first via the `summary(prev_summary, data) → summary` net for downsampling, then give target experience to the `do(summary) → next_data` net — or even do nothing and just have infinite-window-size attention with forgetting ([as suggested here](https://arxiv.org/abs/2102.11174)). Don't wait for gradient updates, learn at inference time.)
-                - ⋯ Research continuous model distillation (basically [Iterated Amplification](https://www.lesswrong.com/posts/vhfATmAoJcN8RqGg6/a-guide-to-iterated-amplification-and-debate)), because restarting sucks: [shallow-ing](https://arxiv.org/abs/2106.03186) to achieve infinite depth: making models not just out of dense layers `f(f(x))` but something like `f(g(x, non_trainable=true))`, where `g(x)` predicts the result (so it always tries to approximate "but what if we had 1 more layer"). `g` can be smaller than `f` and thus also distilled into a smaller net, which is distilled too, until there's only 1 layer for the whole network, or maybe ½ or less layers via matrix factorization: `x@A → x@a@b`. (Seems too simple to not have been tried. [This](https://2021.ecmlpkdd.org/wp-content/uploads/2021/07/sub_676.pdf) also does not let teachers diverge too far from students, though without `+` and on weights rather than on outputs. No match was found.) (…Or just do [BYOL](https://arxiv.org/abs/2006.07733) with different online/target histories, possibly randomly dropping observations, or dropping them based on their hashes: `x@W < 0`.)
+                - ⋯ Research continuous model distillation (basically [Iterated Amplification](https://www.lesswrong.com/posts/vhfATmAoJcN8RqGg6/a-guide-to-iterated-amplification-and-debate)), because restarting sucks: [shallow-ing](https://arxiv.org/abs/2106.03186) to achieve infinite depth: making models not just out of dense layers `f(f(x))` but something like `f(g(x, non_trainable=true))`, where `g(x)` predicts the result (so it always tries to approximate "but what if we had 1 more layer"). `g` can be smaller than `f` and thus also distilled into a smaller net, which is distilled too, until there's only 1 layer for the whole network, or maybe ½ or less layers via matrix factorization: `x@A → x@a@b`; [this](https://2021.ecmlpkdd.org/wp-content/uploads/2021/07/sub_676.pdf) also does not let teachers diverge too far from students, though without `+` and on weights rather than on outputs. …And maybe self-distill layer width to be "infinite", maybe via just `cumsum(output)` for simplicity (can it even be called self-distillation at this point, or even ensembling?), vaguely similar to [this](https://openreview.net/forum?id=B1l6qiR5F7). (…Or just do [BYOL](https://arxiv.org/abs/2006.07733) with different online/target histories, possibly randomly dropping observations, or dropping them based on their hashes: `x@W < 0`.)
             - ⋯ In extension, read from tabs.
             - ✓ Read from Internet, with WebRTC, ❌ RabbitMQ preferable.
                 - ❌ Each data packet references its meta-data (names and such) by ID; when meta-data changes, it's re-sent until the other side acknowledges it. (Just send everything and rely on compression.)
@@ -196,34 +196,6 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ❌ Also find a music GAN, and train an RNN-from-observations that maximizes the discriminator's score. (Why, bored?)
             - ❌ Ask the user to rename cells using feedback. (Feedback is value-only, and besides, it's probably inferior to AI translation from meager user data to full feedback, which is already trivially achievable by observing the user, demanding actions, and a handler that defers to an AI model. BMI? Pfft, AI translation is superior.)
         - ⋯ `.Handler`:
-            - TODO: Text in `README.md` (and is text really any good if each word doesn't have infinite depth, and links are everywhere):
-                - TODO: Tools for connecting humans and AI models to arbitrary sensors: differentiable [subscribe/publish](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern).
-                - TODO: Design constraints:
-                    - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are currently dominant anyway.](https://arxiv.org/abs/1706.03762)
-                    - -1…1 values, for visualization. Humans do not tolerate [overly-strong](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/) signals anyway. Though in truth, this is less of a constraint and more of a recommendation that our code upholds but yours does not have to.
-                    - That's all. A human can use it. AGI can use it.
-                - TODO: # You can:
-                    - TODO: Collect the [re](https://arxiv.org/abs/2102.06701)[q](https://arxiv.org/abs/1712.00409)[ui](https://arxiv.org/abs/2001.08361)[re](https://arxiv.org/abs/2006.10621)[d](https://arxiv.org/abs/2010.14701) data for machine learning.
-                    - TODO: [Mix-and-match tasks](https://arxiv.org/pdf/2106.09017.pdf) at will.
-                    - TODO: Not worry about efficiency (& a link to benchmarks)
-                    - TODO: Fully (& a link to privacy considerations: real-time interaction data is the most precious data that can reasonably be collected about you, so to protect it from interests that are contrary to yours (& links to ads, greed, politics?? Or https://www.singularityweblog.com/technology-reveals/), we better make damn sure that we get this right. For humans, having sovereignty over your own body is [a right](https://en.wikipedia.org/wiki/Bodily_integrity) so fundamental that it's not worth mentioning; we should treat sensor networks with the same standards, and have at least one open-source implementation that is as good as proprietary alternatives.   This sensor-network implementation allows local processing of all data, and encrypted (& what, a link to WebRTC spec?) Internet communication if needed; it does not [depend on exploitation of user data for it to exist](https://en.wikipedia.org/wiki/Big_Tech).) control (& a link to the test page) your computer interaction data (& a link to a file like "Humans control bodies, and live for decades. In contrast, computer programs typically have constrained interfaces, and are destroyed when they outlive their use. With a sensor network for a computer program, equality can be achieved. Though for the privileged 'human' class, gains in equality can be [seen as a personal attack](https://www.techrepublic.com/article/big-data-privacy-is-a-bigger-issue-than-you-think/); please don't go overboard with privacy, and don't confuse "scarily accurate" with "out to get you" without non-emotional reasons, [which there often are](https://www.prnewswire.com/news-releases/privacy-concerns-rise-as-businesses-report-increased-personal-data-collection-301356043.html). TODO: And do we go toward personal sensor networks and how compute growth could make them viable within our lifetimes?"): collect it (& a link to sensors), store it (& a link to the database), extend it over the Internet (& a link to the Internet handler)
-                    - TODO: Maybe, "easily design your own data collection pipeline, and/or integrate arbitrary pipelines in one AI model at the same time"? What would we link to? The test page?
-                    - TODO: What about funky sounds?
-                - TODO: # You should eventually be able to:
-                    - TODO: Trust in its robustness. Should come with using it.
-                    - TODO: Collect OS-level data, not just browser-level.
-                    - TODO: Integrate with any machine learning framework and dataset?
-                    - TODO: Integrate all your data, and extract knowledge and skill from it (& a link to, what, soft mind uploading, and why it's the only realistic approximation to the sci-fi concept, and exponential improvement in compute will take us ever closer to it?).
-                    - TODO: Use an AI model to translate limited human actions (& a link to a small file detailing how humans have eyes and muscles and ears and throats, which drives the design of RGB displays and RGB cameras and speakers and microphones but simultaneously constrains all UI software in a way that humans cannot really understand without experience with freely creating extra senses, whereas Transformers can handle arbitrary data) into arbitrary computer interactions.
-                    - TODO: What about uniting AI models, letting them learn from data and each other (AI as the infinite conceptual rainbow)? Can we relate this to a useful thing? Link to nearest-neighbor search, maybe?
-                        - TODO: ...Would this perform any better than incorporating a differentiable model directly into your own, through newly-learned interfaces, though?
-                    - TODO: What about retraining your AI model trained on another data input/output, simply by encoding input and decoding output via randomly-initialized NNs? Maybe even training on several ways at the same time? (& a link to a file explaining how with ML, the "we had 13 standards, we need a unifying standard, now we have 14 standards" XKCD hardly matters, because there's no human-development cost, there's only a model that can understand several data formats simultaneously?)
-                    - TODO: Above, WHERE ARE THE LINKS THAT JUSTIFY THE NEED FOR EACH AND EVERY ONE OF THEM
-                    - TODO: What other AI capabilities did we want, exactly?
-                - TODO: ...What about, "Intelligence consists of learning from what you do. Among all optimization methods, model-construction has proven fundamental, even for RL (easier to optimize a reward model than the reward directly) (& some link/s to the rise of DL or even ML?). A differentiable sensor network is a model of intelligent existence, and when closely integrated with humans, may prove to be just as fundamental because it provides new capabilities, eventually (& some link/s to exponentially-improving compute?)."...
-            - TODO: Run all benchmarks, without CPU throttling.
-            - TODO: Have an NPM command that compiles test.html to the top-level docs.
-            - TODO: Publish to NPM and GitHub, with GitHub pages for `test.html`, so that we can have links.
             - ✓ No-feedback sound output (speakers): like a machine-to-brain Neuralink device, but everyone already has it. (Can even listen to what an AI model predicts and decides, for zero-effort human-AI merging.)
                 - ✓ Test which sounds most recognizable, and what bandwidth we can achieve without making users tear out their ears: raw PCM output, +x -x PCM output, frequency-domain output. (Frequency-domain. And effective bandwidth is quite low, though no extensive training for recognizing individual numbers was performed.)
                 - ✓ IFFT, implemented manually because it's not in `AudioContext`, with upsampling of inputs.
@@ -247,13 +219,21 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                 - ✓ Preserve no-data-from-this-cell and no-feedback-to-this-cell arrays.
             - ⋯ Advertise this computer for search (sync with search-server URL/s if given), and when someone connects, write-to-Internet.
             - ⋯ Research AI translation, from human observations to rewardable actions. [Just-reward is most general task description](https://deepmind.com/research/publications/2021/Reward-is-Enough), and an endless complexity of ways to hopefully align with future rewards, broadly falling into prediction or uncertainty-maximization (getting more data to predict). The age-old question: can specifics be learned from the general description? [Probably](http://www.incompleteideas.net/IncIdeas/BitterLesson.html), but how to best do it? In the sensor network, each cell has its own reward so that the model can learn many tasks at once, and distill many AI models (and humans, and anything else) into one. Basically, for [a good prior](https://deepmind.com/research/publications/2021/Creating-Interactive-Agents-with-Imitation-Learning): should perform max-reward filling of non-`noFeedback` cells, while also predicting non-`noData` cells with a slightly-different cell-name, so that actions are as-data-does first (top-reward among human actions: [a quantilizer](https://intelligence.org/files/QuantilizersSaferAlternative.pdf)) and well-adapted second. (Easy to implement, hard to implement well. But nothing is created perfect, and all we can do is improve: the better the model, the more humans use it and trust it and the more well-pointed their observations and rewards are, which means "the better the model, the faster it improves", which means "exponential progress", which means that any level of performance is practically reachable, even AGI. We can start any time you want.)
-                - (A personal AI model is basically soft mind uploading, realistically-gradual rather than instantly-perfect. The only real obstacle is that a typical PC doesn't have the compute to run some massive AI model full-time. But AI-training increases in efficiency rapidly, [2…10 ](https://openai.com/blog/ai-and-efficiency/)[times in ](https://venturebeat.com/2020/06/04/ark-invest-ai-training-costs-dropped-100-fold-between-2017-and-2019/)[a year](https://ark-invest.com/articles/analyst-research/ai-training/): what is today a [multi-million-dollar project](https://syncedreview.com/2020/04/30/ai21-labs-asks-how-much-does-it-cost-to-train-nlp-models/) may be doable on a personal computer in a decade. Phones and other devices that need a battery could connect; [Internet bandwidth is growing too, at 1.5× a year](https://www.nngroup.com/articles/law-of-bandwidth/).)
+                - (A personal AI model is basically soft mind uploading, realistically-gradual rather than instantly-perfect. The only real obstacle is that a typical PC doesn't have the compute to run some massive AI model full-time. But AI-training increases in efficiency rapidly, [2…10 ](https://openai.com/blog/ai-and-efficiency/)[times in ](https://venturebeat.com/2020/06/04/ark-invest-ai-training-costs-dropped-100-fold-between-2017-and-2019/)[a year](https://ark-invest.com/articles/analyst-research/ai-training/): what is today a [multi-million-dollar project](https://syncedreview.com/2020/04/30/ai21-labs-asks-how-much-does-it-cost-to-train-nlp-models/) may be doable on a personal computer in a decade. Phones and other devices that need a battery could connect; [Internet bandwidth is growing too, at 1.5× a year](https://www.nngroup.com/articles/law-of-bandwidth/).) TODO: This should be in a file in `docs`, linked-to in `README.md` somewhere.
                 - ⋯ Need concrete and relatively-compute-light tasks to strive for. Such as "in a game, learn to augment human play with non-human actions" or "predict near-term reward from facial expression".
         - ✓ `.UI()`.
             - ⋯ Allow multi-channel configuration, after we have a channel-sensor.
+            - ⋯ Dynamically color each sensor's name with data's L2 norm (blue), and feedback's L2 norm (red).
+            - ⋯ Drag-and-drop to change the order.
+            - ❌ Full collapsed code with syntax highlighting. (We didn't write `sn` as a quine.)
+                - ❌ Editable source code, for dynamically pasting new code pieces. (Just execute code instead. Not like basic human-computer interaction has infinite non-learnable complexity, so one base should be enough.)
+            - ❌ A class that documents this UI in its docs. (The UI turned out to be too simple.)
         - ❌ `.default()`, collecting non-`false` `.default`s. (UI makes it too easy to include everything you need.)
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
+
+- TODO: Have an NPM command that compiles test.html to the top-level docs.
+- TODO: Publish to NPM and GitHub, with GitHub pages for `test.html`, so that we can have links.
 
 An attempt to make the playing field even for humans and AI, based on the best of the best considerations. An attempt to bring about fairness, even though nothing would let it happen. Straying from beaten paths only to make a better one that no one wants to travel, most likely. Only when humanity is swimming in compute can it be desirable. Toys in the meantime.
 
@@ -263,47 +243,25 @@ The extension should be a control center that can manage a human's direct connec
 
 - ⋯ Infrastructure:
     - ⋯ Isolate the `chrome` and `browser` namespaces, of course. Snippets shouldn't have such power.
-    - ⋯ When a tab sends a message that it needs a video stream, [give it](https://developer.chrome.com/docs/extensions/reference/tabCapture/#method-getMediaStreamId).
-        - ⋯ Prompt the user if the page was not authorized. (It's only authorized if the extension injected the video-collecting script, with a nonce.)
-    - ⋯ Inject a content script that listens to DOM events and sends those messages to the extension, and sends replies as DOM events.
-    - ⋯ Inject a handler that defers to the extension with priority `Infinity`.
-        - ⋯ If active, suppress other handlers with `onlyIfNoExtension()` → `true`.
-    - ⋯ Allow extensions to enforce user-selected interfaces on the currently-active tab, disconnecting when the tab switches.
-        - ⋯ Benchmark tab-switching.
-    - ⋯ …Come up with something for in-extension DOM visualization of what it tells pages to do: `visualize({data, cellShape}, DOMelem)`.
-    - ⋯ Benchmark throughput of `.defaults()`.
-    - ⋯ Test that an infinite loop in extension's active snippets can be recovered from, in some way.
+    - ⋯ A function (given the tab id) to inject a content script that listens to DOM events and sends those messages to the extension, and sends replies as DOM events. And does periodic no-data events for detection.
+        - ⋯ Make `main.js` detect those events, and flip a flag for the extension-handler, and suppress handlers with `onlyIfNoExtension()` → `true`.
+        - ⋯ When a tab sends a message that it needs a video stream, [give it](https://developer.chrome.com/docs/extensions/reference/tabCapture/#method-getMediaStreamId).
+            - ⋯ Prompt the user if the page was not authorized. (It's only authorized if the extension injected the video-collecting script, with a nonce.)
+    - ⋯ Routed-through-a-handler visualization, displayed in UI: `visualize({data, cellShape}, DOMelem)`.
+    - ❌ Test that an infinite loop can be recovered from. (Sensors/transforms should run in-page anyway, not in-extension.)
+    - ❌ Benchmark throughput of `.default()`. (No defaults.)
 
 - ⋯ UI:
     - ⋯ Sliced-off corners for a sharper look, via `clip-path: polygon(0 5%, 5% 0, 95% 0, 100% 5%, 100% 95%, 95% 100%, 5% 100%, 0 95%);  clip-path: polygon(0 .4em, .4em 0, calc(100% - .4em) 0, 100% .4em, 100% calc(100% - .4em), calc(100% - .4em) 100%, .4em 100%, 0 calc(100% - .4em))`. (No box shadows like this, though. Unless SVG magic will help.)
-    - ⋯ A collapsible hierarchy of what's possible, with left-borders with gradients (indicating depth with brightness, and vertical progress with a rainbow). With triangles to indicate collapsed-ness.
-        - ⋯ A store of all snippets, put into that tree.
-        - ⋯ The summary of each snippet: a checkbox of whether it's currently active, unchecked by default, preserved in storage too; followed by name parts.
-            - ⋯ When a parent's activity changes, all child activity becomes parent's.
-            - ⋯ When a child's activity changes, all parents' activity becomes undetermined (and turned off, if the parent is more than just a namespace).
-            - ⋯ Color the name with data's L2 norm (blue), and feedback's L2 norm (red).
-        - ⋯ Each snippet can define its settings and their types, and the UI elements will show up.
-        - ⋯ Each snippet can have a collapsed visualization; when expanded, the element exists, and gets updated by the snippet's visualization code.
-        - ⋯ Each snippet has Markdown documentation.
-            - ⋯ Only 1 line is displayed by default, and more can be seen be uncollapsing it.
-        - ⋯ Each snippet has a list of children. Drag-and-drop changes it.
-        - ⋯ Each snippet has the full collapsed code. With syntax-highlighting of each code field, in case someone is actually interested.
-            - ⋯ (If we copy Conceptual's editor and modify the parser, use a filter for drop-shadows, so that irregularly-shaped boxes don't look super ugly.)
-            - ⋯ Ctrl+A and copying copies the JSON serialization. (Or a button copies the serialization.)
-        - ⋯ Each snippet can be deleted, by drag-and-dropping to a trash icon.
-            - ⋯ Have a queue of recently-deleted items, viewable by clicking on the trash icon, and make Ctrl+Z able to bring back the very-recently-deleted item.
-        - ⋯ New snippets can be created, by clicking a + icon near the trash icon.
-            - ⋯ A textarea, or a real editor that shares code with the collapsed-code viewer, for the full pastable serialization.
-        - ⋯ The one default snippet documents this UI.
-            - ⋯ And directs to a tutorial where more snippets can be picked up.
-        - Not that useful with modern technology (not enough bandwidth to control these):
-            - Ability to attach to the extension's page.
-            - Ability to watch not just one tab, but many tabs (`requestAnimationFrame` suffers in background tabs too).
+    - ⋯ A popup with a button that injects the connection and its handler and our sensors/transforms into the current tab.
+        - ⋯ Another button that does the same only with the active tab, removing and adding our code on tab switch.
+            - ⋯ Benchmark tab-switching. Or at least look at it.
+    - ⋯ UI via `UI`.
 
 ### Python API
 
-- ⋯ …Maybe, for simplicity, Python, since most ML stuff happens in Python? `send(data)→Future<feedback>`, `receive(prev_feedback)→next_data`, using NumPy. Be able to read from a file and write to it. And possibly a WebRTC sensor, for using the model online. (No need for any data collection nor transformation, nor multiple handlers.)
-    - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those. (Take a bath in data. Rub it into your eyes.)
+- ⋯ …Maybe, for simplicity, Python, since most ML stuff happens in Python? `send(name, data, then=None)`, `receive(prev_feedback)→next_data`, using NumPy. Be able to read from a file and write to it. And possibly a WebRTC sensor, for using the model online. (No need for any data collection nor transformation, nor multiple handlers.)
+    - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those: such as [Hugging Face](https://huggingface.co/tasks). (Take a bath in data. Rub it into your eyes.)
     - ⋯ Connect CPU-side GPT-2, which acts word-per-word, or even letter-per-letter and integrates like the keyboard sensor, by sharing parts of the name.
     - ❌ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding. (Listening to data directly has proven to be extremely low-bandwidth in practice, and kinda tedious, so, probably won't be any good.)
     - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model for future prediction and first-cell-number maximization.
