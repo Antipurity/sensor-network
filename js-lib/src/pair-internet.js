@@ -141,18 +141,19 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             metaChannel.onopen = evt => {
                 outMetaData && outMetaData.forEach(data => metaChannel.send(data))
                 outMetaData = null
-                metaChannel.onmessage = evt => {
-                    if (typeof evt.data != 'string') return console.warn('dropping', evt)
-                    const d = JSON.parse(evt.data)
-                    peer ? peer.signal(d) : inMetaData.push(d)
-                }
-                // Ignore `metaChannel.onclose`.
             }
+            metaChannel.onmessage = evt => {
+                if (typeof evt.data != 'string') return console.warn('dropping', evt)
+                const d = JSON.parse(evt.data)
+                peer ? peer.signal(d) : inMetaData.push(d)
+            }
+            // Ignore `metaChannel.onclose`.
             importSimplePeer().then(SimplePeer => {
                 peer = new SimplePeer({
                     trickle: !metaChannel.noTrickle,
                     config: {iceServers:this.iceServers},
                 })
+                peer.on('close', () => { peer = null, metaChannel.close() })
                 peer.on('error', console.error)
                 peer.on('signal', data => {
                     signal(JSON.stringify(data))
@@ -220,7 +221,6 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
             this.sendRawCallback(this.onFeedback, this._name, this._unname)
             this._data.length = 0
         }
-        // TODO: (Also, fix `Storage`, because it likely has the same problem: `_name` consuming data.)
         _name({cellShape, partSize, summary}, namer, packet, then, unname) {
             // Copy all data points into the actual data stream.
             //   `this.onFeedback` will be called for each sending.
@@ -298,8 +298,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                     ['Some']: () => [{urls:'stun: stun.l.google.com:19302'}, {urls:'stun: stunserver.org:3478'}],
                 },
                 signaler: {
-                    // TODO: Test the tabs.
-                    ['Tabs']: () => sn.Handler.Internet.broadcastChannel,
+                    ['Browser tabs']: () => sn.Handler.Internet.broadcastChannel,
                     ['JS console (F12)']: () => sn.Handler.Internet.consoleLog,
                 },
                 bytesPerValue: {
@@ -474,8 +473,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
         }
     }
     A(InternetHandler, {
-        broadcastChannel: A(function signalViaBC(sensor=null) { // TODO: Test it.
-            // TODO: Why isn't it working?
+        broadcastChannel: A(function signalViaBC(sensor=null) {
             const tabId = signalViaBC.id || (signalViaBC.id = String(Math.random()).slice(2) + String(Math.random()).slice(2))
             const bc = new BroadcastChannel('sn-internet-broadcast-channel')
             let interval, objs
@@ -489,12 +487,12 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                 onopen:null, onmessage:null, onclose:null,
             }
             bc.onmessage = evt => {
-                const d = JSON.parse(evt.data)
+                const d = evt.data
                 if (d.dst == null || d.dst === tabId)
                     if (d.tabId !== tabId)
                         obj.onmessage && obj.onmessage({data:d.msg}, d.tabId)
             }
-            setTimeout(() => bc.onopen && bc.onopen(), 0)
+            setTimeout(() => obj.onopen && obj.onopen(), 0)
             if (sensor) {
                 // One connection per connected tab.
                 objs = Object.create(null) // tabId → {send(msg), …}
@@ -507,7 +505,7 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                     }
                 }, 60000)
                 obj.onmessage = (evt, tabId) => {
-                    if (!objs[tabId])
+                    if (!objs[tabId]) {
                         sensor.signal(objs[tabId] = {
                             tabId,
                             lastTouched: 0,
@@ -515,6 +513,8 @@ Imports [100 KiB](https://github.com/feross/simple-peer) on use.
                             close() { delete objs[this.tabId] },
                             onopen:null, onmessage:null, onclose:null,
                         })
+                        setTimeout(() => objs[tabId].onopen && objs[tabId].onopen(), 0)
+                    }
                     objs[tabId].lastTouched = performance.now()
                     objs[tabId].onmessage && objs[tabId].onmessage(evt)
                 }
