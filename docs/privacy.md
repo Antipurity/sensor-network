@@ -1,0 +1,5 @@
+Real-time interaction data is the most precious data that can reasonably be collected about you, so to protect it from [interests that are contrary to yours](https://www.singularityweblog.com/technology-reveals/), we better make damn sure that we get this right.
+
+For humans, having sovereignty over your own body is [a right](https://en.wikipedia.org/wiki/Bodily_integrity) so fundamental that it's not worth mentioning. We should treat sensor networks with the same standards because they play essentially the same role for AI, and have at least one open-source implementation that is as good as proprietary alternatives.
+
+This sensor-network implementation allows local processing of all data, and [secure](https://webrtc-security.github.io/) Internet communication if needed; it does not [depend on exploitation ](https://en.wikipedia.org/wiki/Big_Tech)[of user data ](https://www.techrepublic.com/article/big-data-privacy-is-a-bigger-issue-than-you-think/)[for it to exist.](https://www.prnewswire.com/news-releases/privacy-concerns-rise-as-businesses-report-increased-personal-data-collection-301356043.html)
