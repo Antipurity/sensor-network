@@ -261,7 +261,7 @@ The extension should be a control center that can manage a human's direct connec
 ### Python API
 
 - ⋯ …Maybe, for simplicity, Python, since most ML stuff happens in Python? `send(name, data, then=None)`, `receive(prev_feedback)→next_data`, using NumPy. Be able to read from a file and write to it. And possibly a WebRTC sensor, for using the model online. (No need for any data collection nor transformation, nor multiple handlers.)
-    - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those: such as [Hugging Face](https://huggingface.co/tasks). (Take a bath in data. Rub it into your eyes.)
+    - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those: such as [Hugging Face](https://huggingface.co/tasks), [OpenAI Gym](https://gym.openai.com/). (Take a bath in data. Rub it into your eyes.)
     - ⋯ Connect CPU-side GPT-2, which acts word-per-word, or even letter-per-letter and integrates like the keyboard sensor, by sharing parts of the name.
     - ❌ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding. (Listening to data directly has proven to be extremely low-bandwidth in practice, and kinda tedious, so, probably won't be any good.)
     - ⋯ A [Perceiver IO](https://arxiv.org/abs/2107.14795) model for future prediction and first-cell-number maximization.
