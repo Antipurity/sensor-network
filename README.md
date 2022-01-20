@@ -14,7 +14,7 @@ It can represent streams of [any](https://github.com/Antipurity/sensor-network/t
 
 - Collect the [re](https://arxiv.org/abs/2102.06701)[q](https://arxiv.org/abs/1712.00409)[ui](https://arxiv.org/abs/2001.08361)[re](https://arxiv.org/abs/2006.10621)[d](https://arxiv.org/abs/2010.14701) data for machine learning. [From a web page.](https://github.com/Antipurity/sensor-network/tree/master/js-lib)
 - [Mix-and-match multimodal tasks of variable size](https://arxiv.org/abs/2106.09017)[,](https://arxiv.org/pdf/2106.02584.pdf)[ with 0 or more objectives](https://arxiv.org/abs/2112.15422).
-- [Not worry about efficiency.](https://Antipurity.github.io/sensor-network)
+- [Not worry about efficiency.](https://github.com/Antipurity/sensor-network/tree/master/js-lib/test)
 - [Fully ](https://github.com/Antipurity/sensor-network/tree/master/docs/privacy.md)[control](https://Antipurity.github.io/sensor-network) your computer interaction data: [collect it](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-sensor), [store it](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-handler-storage), [extend it over the Internet](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-handler-internet).
 - [Listen to data as unpleasant raw sounds.](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-handler-sound)
 
