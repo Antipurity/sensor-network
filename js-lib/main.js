@@ -241,7 +241,7 @@ export default (function(exports) {
                         const hadCells = !!T.cells
                         const tooFew = dst.giveNextPacketNow, tooMuch = dst.waitingSinceTooManySteps
                         T.deinit()
-                        if (hadCells && dst.stepsNow <= 1) dst.tooFew = true, tooFew && tooFew()
+                        if (hadCells && dst.stepsNow <= 1) dst.tooFew = true, tooFew && (clearTimeout(dst.clearNextPacketNow), tooFew())
                         return tooMuch && tooMuch()
                     } case 9: { // Assign the next data/error if given by a transform.
                         const extra = A, nextData = B, nextError = C
@@ -282,8 +282,9 @@ export default (function(exports) {
             const ch = S[channel], dst = ch.shaped[summary]
             if (!dst || dst.looping) return;  else dst.looping = true
             dst.prevEnd = performance.now()
-            let prevWait = dst.prevEnd
+            let prevWait1 = dst.prevEnd, prevWait2 = dst.prevEnd
             let tooFew = false
+            let overshoot = 0
             while (true) {
                 if (!ch.shaped[summary]) return // `Sensor`s might have cleaned us up.
                 const lessPackets = dst.overscheduled > .5
@@ -323,7 +324,7 @@ export default (function(exports) {
                     _Packet._measureThroughput()
                 }
                 // Don't do too much at once.
-                while (dst.stepsNow > E.maxSimultaneousPackets)
+                while (dst.stepsNow >= E.maxSimultaneousPackets)
                     await new Promise(then => dst.waitingSinceTooManySteps = then)
                 // Don't do it too often.
                 if (noData)
@@ -336,18 +337,20 @@ export default (function(exports) {
                     dst.prevEnd = now - 500 // Don't get too eager after being stalled.
                 if (dst.prevEnd > now + 500) // Don't get underexcited either.
                     dst.prevEnd = now + 500
-                const reallyNeedToWait = now - prevWait > 100
+                const reallyNeedToWait = now - prevWait1 > 50 || now - prevWait2 > 1000
                 if (reallyNeedToWait || !tooFew && needToWait > 5) {
-                    const expectedEnd = performance.now() + needToWait
-                    const delay = Math.max(needToWait - 5, 0)
-                    //   5ms is a stand-in for overshooting. Seems to be consistent enough.
+                    const delay = Math.max(needToWait - overshoot, 0)
+                    const start = performance.now(), expectedEnd = start + delay
+                    let fired = 0
                     await new Promise(then => {
-                        if (!reallyNeedToWait) dst.giveNextPacketNow = then
-                        setTimeout(() => {
-                            prevWait = performance.now(), then()
+                        const id = setTimeout(() => {
+                            if (!fired) prevWait2 = performance.now(), then()
+                            overshoot = .75*overshoot + .25 * (performance.now() - expectedEnd)
                         }, delay)
+                        if (!reallyNeedToWait) dst.giveNextPacketNow = then, dst.clearNextPacketNow = id
                     })
-                    dst.giveNextPacketNow = null
+                    prevWait1 = fired = performance.now()
+                    dst.giveNextPacketNow = null, dst.clearNextPacketNow = null
                 }
             }
         }
@@ -403,7 +406,7 @@ export default (function(exports) {
                     // Wake up.
                     //   (Regularly-scheduled things also wake up, often causing the time-per-step delay to be ignored.)
                     if (!dst.looping) _Packet.handleLoop(this.channel, cellShape, partSize, summary)
-                    wrote && dst.stepsNow <= 1 && dst.giveNextPacketNow && dst.giveNextPacketNow()
+                    wrote && dst.stepsNow <= 1 && dst.giveNextPacketNow && (clearTimeout(dst.clearNextPacketNow), dst.giveNextPacketNow())
                 }
                 if (removed.size) {
                     ch.cellShapes = ch.cellShapes.filter(o => !removed.has(o))
@@ -726,7 +729,7 @@ export default (function(exports) {
         _deallocF32: deallocF32,
         _assert: assert,
         _assertCounts: assertCounts,
-        maxSimultaneousPackets: 4,
+        maxSimultaneousPackets: 16,
         meta:{
             docs: A(function docs() {
                 const markdown = []
@@ -1203,6 +1206,7 @@ Makes only the sign matter for low-frequency numbers.` }),
                 overscheduled: 0, // 0…1; if too high, should have less .stepsNow.
                 lastUsed: performance.now(),
                 giveNextPacketNow: null, // Called when .stepsNow is 0|1, or on `sensor.send`.
+                clearNextPacketNow: null, // clearTimeout(that).
                 waitingSinceTooManySteps: null, // Called when a step is finished.
                 msPerStep: [0,0], // [n, mean]
                 cellShape, // [user, name, data]

@@ -209,11 +209,11 @@ In Chrome, users might have to first click on the page for sound to play.
             Sound.next = start + soundLen / sampleRate
 
             const needToWait = (Sound.next-.03 - Sound.ctx.currentTime - (start === Sound.next ? 0 : delay)) * 1000 - 5 - Sound.overshoot
+            const overscheduled = start - Sound.ctx.currentTime > .07
             if (needToWait > Sound.overshoot) {
-                const overscheduled = start - Sound.ctx.currentTime > .03
                 const willLikelyEndAt = performance.now() + needToWait
                 setTimeout(() => {
-                    Sound.overshoot = .5*Sound.overshoot + .5*Math.max(performance.now() - willLikelyEndAt, 0)
+                    Sound.overshoot = .75*Sound.overshoot + .25*Math.max(performance.now() - willLikelyEndAt, 0)
                     then(overscheduled)
                 }, needToWait)
             } else then()
@@ -249,6 +249,7 @@ In Chrome, users might have to first click on the page for sound to play.
                     dst[i] -= this.mean
 
                 const real = ifft(dst, phase)
+                real[0] = 0
                 dst.set(real)
                 for (let i = 0; i < dst.length; ++i) dst[i] *= volume
                 sn._deallocF32(real)
