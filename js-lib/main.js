@@ -207,7 +207,8 @@ export default (function(exports) {
                         } else { T.stage = 6;  continue }
                     } T.stage = 5;  case 5: { // Wait for all non-main handlers.
                         // Undocumented: overscheduling-prevention, for `Sound` latency.
-                        if (A) dst.overscheduled = 1
+                        if (typeof A == 'number')
+                            dst.prevEnd -= A||0,  dst.overscheduled = 1
                         else dst.overscheduled *= .9
                         if (--T.handlersLeft) return
                     } T.stage = 6;  case 6: { // Go over transform-feedback in reverse-order.
@@ -283,7 +284,7 @@ export default (function(exports) {
             if (!dst || dst.looping) return;  else dst.looping = true
             dst.prevEnd = performance.now()
             let prevWait1 = dst.prevEnd, prevWait2 = dst.prevEnd
-            let tooFew = false
+            let tooFew = false // Whether packet-scheduling requested the next packet before its time.
             let overshoot = 0
             while (true) {
                 if (!ch.shaped[summary]) return // `Sensor`s might have cleaned us up.
@@ -331,15 +332,17 @@ export default (function(exports) {
                     dst.noDataDelay = dst.noDataDelay ? Math.min(dst.noDataDelay * 1.4, 500) : 1
                 else
                     dst.noDataDelay = 0
-                const now = performance.now(), needToWait = Math.max(dst.prevEnd - now, dst.noDataDelay)
-                dst.prevEnd += dst.msPerStep[1] + (!dst.stepsNow || !lessPackets ? 0 : 20)
+                const now = performance.now()
+                dst.prevEnd += dst.msPerStep[1]
                 if (dst.prevEnd < now - 500)
                     dst.prevEnd = now - 500 // Don't get too eager after being stalled.
                 if (dst.prevEnd > now + 500) // Don't get underexcited either.
                     dst.prevEnd = now + 500
-                const reallyNeedToWait = now - prevWait1 > 50 || now - prevWait2 > 1000
-                if (reallyNeedToWait || !tooFew && needToWait > 5) {
-                    const delay = Math.max(needToWait - overshoot, 0)
+                const needToWait = Math.max(dst.prevEnd - now, dst.noDataDelay)
+                const reallyNeedToWait = now - prevWait1 > 50 || now - prevWait2 > 300
+                if (reallyNeedToWait || !tooFew && needToWait > overshoot) {
+                    let delay = Math.max(needToWait - overshoot, 0)
+                    if (!delay && Math.random()<.01) delay = 4
                     const start = performance.now(), expectedEnd = start + delay
                     let fired = 0
                     await new Promise(then => {
@@ -650,6 +653,7 @@ export default (function(exports) {
 - \`constructor({ onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })\`
     - \`onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback)\`: process.
         - ALWAYS do \`then()\` when done, even on errors.
+            - If you stall artificially to maintain tempo (as \`sn.Handler.Sound\` does), pass in how many milliseconds you've stalled for.
         - \`feedback\` is available in the one main handler, which should write to it in-place.
             - In other handlers, data of \`noData\` cells will be replaced by feedback.
         - \`noData\` and \`noFeedback\` are JS arrays, from cell index to boolean.
