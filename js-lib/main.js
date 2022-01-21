@@ -284,6 +284,7 @@ export default (function(exports) {
             if (!dst || dst.looping) return;  else dst.looping = true
             dst.prevEnd = performance.now()
             let prevWait1 = dst.prevEnd, prevWait2 = dst.prevEnd
+            let epochsWithoutWait = 0, avgEpochsWithoutWait = 10000
             let tooFew = false // Whether packet-scheduling requested the next packet before its time.
             let overshoot = 0
             while (true) {
@@ -338,11 +339,10 @@ export default (function(exports) {
                     dst.prevEnd = now - 500 // Don't get too eager after being stalled.
                 if (dst.prevEnd > now + 500) // Don't get underexcited either.
                     dst.prevEnd = now + 500
-                const needToWait = Math.max(dst.prevEnd - now, dst.noDataDelay)
-                const reallyNeedToWait = now - prevWait1 > 50 || now - prevWait2 > 300
+                let needToWait = Math.max(dst.prevEnd - now, dst.noDataDelay)
+                let reallyNeedToWait = epochsWithoutWait > 2*avgEpochsWithoutWait+2 || now - prevWait1 > 100 || now - prevWait2 > 500
                 if (reallyNeedToWait || !tooFew && needToWait > overshoot) {
-                    let delay = Math.max(needToWait - overshoot, 0)
-                    if (!delay && Math.random()<.01) delay = 4
+                    const delay = Math.max(needToWait - overshoot, 0)
                     const start = performance.now(), expectedEnd = start + delay
                     let fired = 0
                     await new Promise(then => {
@@ -352,9 +352,11 @@ export default (function(exports) {
                         }, delay)
                         if (!reallyNeedToWait) dst.giveNextPacketNow = then, dst.clearNextPacketNow = id
                     })
+                    avgEpochsWithoutWait = .95*avgEpochsWithoutWait + .05*epochsWithoutWait
+                    epochsWithoutWait = 0
                     prevWait1 = fired = performance.now()
                     dst.giveNextPacketNow = null, dst.clearNextPacketNow = null
-                }
+                } else ++epochsWithoutWait
             }
         }
         static _measureThroughput(reset = false) {
@@ -834,17 +836,16 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                 const benchOwner = []
                 walk(E) // Get benchmarks.
                 for (let i = 0; i < bench.length; ++i) { // Benchmark.
-                    if (typeof benchFilter != 'function' || benchFilter(benchOwner[i]))
-                        try {
-                            const cb = currentBenchmark = Object.create(null)
-                            const stop = bench[i].call()
-                            assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
-                            _Packet._measureThroughput(true)
-                            await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
-                            _Packet._measureThroughput(true)
-                            currentBenchmark = null
-                            onBenchFinished(benchOwner[i], benchIndex[i], cb, (i+1) / bench.length)
-                        } catch (err) { console.error(err) }
+                    try {
+                        const cb = currentBenchmark = Object.create(null)
+                        const stop = bench[i].call()
+                        assert(typeof stop == 'function', "BUT HOW DO WE STOP THIS")
+                        _Packet._measureThroughput(true)
+                        await new Promise((ok, bad) => setTimeout(() => { try { ok(stop()) } catch (err) { bad(err) } }, secPerBenchmark * 1000))
+                        _Packet._measureThroughput(true)
+                        currentBenchmark = null
+                        onBenchFinished(benchOwner[i], benchIndex[i], cb, (i+1) / bench.length)
+                    } catch (err) { console.error(err) }
                 }
                 onBenchFinished(null, null, null, 1)
                 currentBenchmark = null
@@ -853,11 +854,12 @@ Internally, it calls \`.tests()\` which return \`[…, [testName, value1, value2
                     if (!x || typeof x != 'object' && typeof x != 'function') return
                     if (Object.prototype.hasOwnProperty.call(x, 'bench') && typeof x.bench == 'function' && x.bench !== E.meta.bench) {
                         const bs = x.bench()
-                        for (let id of Object.keys(bs)) {
-                            bench.push(bs[id])
-                            benchIndex.push(id)
-                            benchOwner.push(x)
-                        }
+                        for (let id of Object.keys(bs))
+                            if (typeof benchFilter != 'function' || benchFilter(x)) {
+                                bench.push(bs[id])
+                                benchIndex.push(id)
+                                benchOwner.push(x)
+                            }
                     }
                     return Object.values(x).map(walk)
                 }
