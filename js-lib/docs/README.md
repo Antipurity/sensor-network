@@ -328,12 +328,12 @@ Methods:
 
 Extends this sensor network over the Internet, to control others.
 
-Methods:
-- `signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)`: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [of a `WebSocket` which can be passed directly](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
-
 Options:
 - `iceServers = []`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - `signaler`: a convenience: on construction, does `sensor.signal(signaler(sensor))` for you. Props of `sn.Handler.Internet` go well here.
+
+Methods:
+- `signal(metaChannel: { send(string), close(), onopen, onmessage, onclose }, maxCells=65536)` for manually establishing a connection: on an incoming connection, someone must notify us of it so that negotiation of a connection can take place, for example, [of a `WebSocket` which can be passed directly](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 
 Browser compatibility: [Edge 79.](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createDataChannel)
 
@@ -418,6 +418,7 @@ Given data, gives feedback: is a human or AI model.
 - `constructor({ onValues, partSize=8, userParts=1, nameParts=3, dataSize=64, noFeedback=false, priority=0, channel='' })`
     - `onValues(then, {data, error, noData, noFeedback, cellShape, partSize}, feedback)`: process.
         - ALWAYS do `then()` when done, even on errors.
+            - If you stall artificially to maintain tempo (as `sn.Handler.Sound` does), pass in how many milliseconds you've stalled for.
         - `feedback` is available in the one main handler, which should write to it in-place.
             - In other handlers, data of `noData` cells will be replaced by feedback.
         - `noData` and `noFeedback` are JS arrays, from cell index to boolean.
@@ -480,6 +481,7 @@ Options:
 - `iceServers = []`: the [list](https://gist.github.com/mondain/b0ec1cf5f60ae726202e) of [ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCIceServer/urls) (Interactive Connectivity Establishment).
 - `signaler = sn.Handler.Internet.broadcastChannel`: creates the channel over which negotiation of connections takes place. When called, constructs `{ send(Uint8Array), close(), onopen, onmessage, onclose }`, for example, [`new WebSocket(url)`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket).
 - `bytesPerValue=0`: 0 to transmit each value as float32, 1 to quantize as uint8, 2 to quantize as uint16. 1 is max-compression min-precision; 0 is the opposite.
+- `autoresume = true`: whether the connection closing will trigger an attempt to re-establish it.
 - `untrustedWorkaround = false`: if set, will request a microphone stream and do nothing with it, so that a WebRTC connection can connect. The need for this was determined via alchemy, so its exact need-to-use is unknown.
 
 Imports [100 KiB](https://github.com/feross/simple-peer) on use.

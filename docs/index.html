@@ -1,0 +1,243 @@
+
+<!DOCTYPE html>
+<html lang=en>
+<head>
+  <meta charset=utf-8>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sensor Network Testing</title>
+  <style>
+    .hiding, .hidable, .hidingMarker, .hidingSurface { transition: .3s }
+    .hidable { overflow: hidden }
+    .hidingMarker { display: inline-block; position: relative; z-index: 0; padding: 1px }
+    .hiding:not(.isHiding)>.hidingMarker { transform: rotate(90deg) }
+    .isHiding>.hidable { visibility: hidden }
+
+    .hiding { position: relative }
+    .hidingSurface { position:absolute; left:0; right:0; top:0; bottom:0; z-index: 1 }
+    .hidingSurface:hover { box-shadow: 0 0 .1em black, 0 0 .1em inset black }
+    .hidable { margin-left: 2em; position: relative; z-index: 2; background-color: white }
+    .hidable { box-shadow: -3px 0 1px black }
+    .hidable .hidable { box-shadow: -3px 0 1px #333 }
+    .hidable .hidable .hidable { box-shadow: -3px 0 1px #666 }
+    .hidable .hidable .hidable .hidable { box-shadow: -3px 0 1px #999 }
+    .hidable .hidable .hidable .hidable .hidable { box-shadow: -3px 0 1px #ccc }
+
+    code { font-family: monospace, monospace;  background-color: #ebebeb;  border-radius: .3em;  white-space: pre-wrap }
+    body { font-family: sans-serif }
+
+    textarea, div.resizable { transition: none !important }
+    div.resizable { resize:both; overflow:hidden; display:block }
+    button, select { padding: .6em;  min-width: 2.64em }
+    input { padding: .6em 0 }
+
+    #docs { padding-left: .6em }
+    td>* { width: 100% }
+
+    .anyRunningInside>.hiding { background: linear-gradient(135deg, white 40%, #007cff 85%, #0040ff 100%);  background-size: 100% 20em;  transition: .3s }
+    .anyRunningInside>.hiding:hover { background-position: 0 -10em }
+  </style>
+</head>
+<body>
+  <div>
+    <div class="hiding isHiding">
+      <div class=hidingSurface></div>
+      <span class=hidingMarker>▶</span>
+      Documentation
+      <div class="hidable" style="height:0px" id=docs>···</div>
+    </div>
+  </div>
+  <div class="hiding">
+    <div class=hidingSurface></div>
+    <span class=hidingMarker>▶</span>
+    Tests
+    <div class="hidable" id=tests>···</div>
+  </div>
+  <div class="hiding isHiding">
+    <div class=hidingSurface></div>
+    <span class=hidingMarker>▶</span>
+    Benchmarks
+    <div class="hidable" style="height:0px">
+      <div class="hiding isHiding">
+        <div class=hidingSurface></div>
+        <span class=hidingMarker>▶</span>
+        Paste JSON to view plots
+        <div class="hidable" style="height:0px" id=json>
+          <textarea rows=1 id=json-textarea></textarea>
+        </div>
+      </div>
+      <br>
+      <button style="width:100%" id=bench-button>Run benchmarks</button>
+      <br>
+      <div class="hiding isHiding">
+        <div class=hidingSurface></div>
+        <span class=hidingMarker>▶</span>
+        Which benchmarks
+        <div class="hidable" style="height:0px">
+          <div id=bench-enabling></div>
+        </div>
+      </div>
+      Before running, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/now">disable reduced time precision</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory">don't use Firefox to measure memory</a>, <a href="https://developer.mozilla.org/en-US/docs/Web/API/setTimeout">and keep the tab open (in Chromium, must not be obscured by a full-screen window)</a>.<br>
+      When running for
+      <select id=sec-per-benchmark>
+        <option value="30" selected>30 seconds</option>
+        <option value="10">10 seconds</option>
+        <option value="3">3 seconds</option>
+        <option value="1">1 second</option>
+      </select>, this reports the
+      <select id=bench-reporting>
+        <option value="mean" selected>Mean</option>
+        <option value="meanMedian">Mean of 25%…75%</option>
+        <option value="median">Median</option>
+        <option value="all">Distribution</option>
+      </select>
+      <div id=bench></div>
+      <div id=bench-progress></div>
+    </div>
+  </div>
+  <div>
+    <div class="hiding isHiding">
+      <div class=hidingSurface></div>
+      <span class=hidingMarker>▶</span>
+      Components for tinkering
+      <div class="hidable" style="height:0px" id=ui>(<code>Escape</code> to disable all.)</div>
+    </div>
+  </div>
+  <script type=module>
+    import sn from './main.min.js'
+    import './smooth-collapse.js'
+    import display from './plots.js'
+    import 'https://cdn.jsdelivr.net/npm/marked/marked.min.js'
+    sn.meta.UI.docsTransformer = docs => {
+      const html = document.createElement('div')
+      html.innerHTML = marked.parse(docs)
+      return html
+    }
+
+
+
+    // Docs. (Filled in a bit later, for better perceived load times.)
+    setTimeout(() => {
+      document.getElementById('docs').innerHTML = marked.parse(sn.meta.docs())
+    }, 100)
+
+    self.sn = sn // For console.
+
+
+
+    // Tests.
+    sn.meta.tests().then(r => {
+      const el = document.getElementById('tests')
+      if (!r) el.textContent = 'OK'
+      else {
+        let html = `Failing:<br>`
+        for (let [name, a, b] of r)
+          html += `<div class="hiding isHiding"><div class=hidingSurface></div><span class=hidingMarker>▶</span>${name}<div class=hidable style="height:0px"><div></div><code>${a}</code><div> must equal</div><code>${b}</code></div></div>`
+        el.innerHTML = html
+      }
+    })
+
+
+
+    // JSON.
+    function updateJSON() {
+      let obj
+      try { obj = JSON.parse(this.value) }
+      catch (err) { return }
+      if (!obj) return
+      const json = document.getElementById('json')
+      for (let lbl of Object.keys(obj))
+        try { display(json, lbl, 'empty'), display(json, lbl, obj[lbl]) }
+        catch (err) { console.error(err) }
+      for (let lbl of display(json))
+        if (!(lbl in obj))
+          display(json, lbl, undefined)
+    }
+    ;(document.getElementById('json-textarea').oninput = updateJSON).call(document.getElementById('json-textarea'))
+
+
+
+    // Benchmarks.
+    const reporting = { // Summarize a sorted array.
+      mean(a) { return a.reduce((a,b) => a+b) / a.length },
+      median(a) { return a[a.length / 2 | 0] },
+      meanMedian(a) {
+        a = a.length < 16 ? a : a.slice(a.length * .25 | 0, a.length * .75 | 0)
+        return a.reduce((a,b) => a+b) / a.length
+      },
+      all(a) { return a },
+    }
+    const benchDisabled = new Map
+    let benchProgressStream = { start:performance.now(), events:[] }
+    document.getElementById('bench-button').onclick = runBenchmarks
+    document.getElementById('bench-reporting').oninput = function() { // Clear & re-plot.
+      const plots = document.getElementById('bench')
+      const prev = { start:benchProgressStream.start, events:benchProgressStream.events };  benchProgressStream.events = []
+      for (let lbl of display(plots)) display(plots, lbl, undefined)
+      for (let a of prev.events) onBenchProgress(...a)
+    }
+    collectBenchmarks()
+
+    // UI.
+    setTimeout(() => {
+      const ui = document.getElementById('ui')
+      const uiContent = sn.meta.UI(sn, false)
+      ui.append(uiContent)
+      // ESC to disable all.
+      document.addEventListener('keydown', evt => {
+        if (evt.key === 'Escape')
+          Array.from(uiContent.querySelectorAll('.checkboxRunning:checked')).forEach(e => e.click())
+      }, {passive:true})
+    }, 100)
+
+    function onBenchProgress(obj, id, got, progress) { // Remember & plot.
+      const plots = document.getElementById('bench')
+      const progressElem = document.getElementById('bench-progress')
+      const elapsed = performance.now() - benchProgressStream.start
+      const remainingMs = elapsed / progress - elapsed
+      progressElem.textContent = round(progress * 100) + '% done; ETA: ' + round(remainingMs / 1000) + 's'
+      if (!got) return
+      benchProgressStream.events.push([obj, id, got, progress])
+      const report = reporting[document.getElementById('bench-reporting').value]
+      for (let key of Object.keys(got))
+        if (Array.isArray(got[key])) {
+          // Compute a kind of mean-of-medians, for a bit more stability than a mean.
+          const lbl = (obj.name || '—') + ': ' + key, v = got[key]
+          v.sort((a,b) => a-b)
+          const result = report(v)
+          display(plots, lbl, typeof result == 'number' ? round(result) : result)
+        }
+    }
+    async function collectBenchmarks() { // Create checkboxes, which allow disabling some benchmarks.
+      const objs = new Set
+      await sn.meta.bench(+document.getElementById('sec-per-benchmark').value, obj => void objs.add(obj))
+      const el = document.getElementById('bench-enabling')
+      objs.forEach(obj => {
+        const name = ''+obj.name, id = 'genesgnnienigrngtr' + name
+        const div = document.createElement('div')
+        const check = document.createElement('input')
+        check.id = id
+        check.type = 'checkbox'
+        check.checked = true
+        check.onchange = () => benchDisabled.set(obj, !check.checked)
+        const label = document.createElement('label')
+        label.htmlFor = id
+        label.append(name)
+        div.append(check), div.append(label)
+        el.append(div)
+      })
+    }
+    async function runBenchmarks() {
+      const plots = document.getElementById('bench')
+      const progressElem = document.getElementById('bench-progress')
+      for (let lbl of display(plots)) display(plots, lbl, undefined)
+      progressElem.textContent = '0% done'
+      benchProgressStream = { start:performance.now(), events:[] }
+      this.disabled = true
+      const filter = obj => !benchDisabled.get(obj)
+      await sn.meta.bench(+document.getElementById('sec-per-benchmark').value, filter, onBenchProgress)
+      this.disabled = false
+    }
+    function round(x) { return Math.round(x*100) / 100 }
+  </script>
+</body>
+</html>

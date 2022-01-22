@@ -5,9 +5,14 @@
   "main": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "doc": "nodejs tools/doc.js || node tools/doc.js"
+    "doc": "nodejs tools/doc.js || node tools/doc.js",
+    "compile": "nodejs tools/compile.js || node tools/compile.js"
   },
   "type": "module",
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "rollup": "^2.66.0",
+    "terser": "^5.10.0"
+  }
 }

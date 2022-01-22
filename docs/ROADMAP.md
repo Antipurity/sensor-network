@@ -229,10 +229,11 @@ Intelligence can do anything. But how to support the utter formlessness of gener
             - ❌ A class that documents this UI in its docs. (The UI turned out to be too simple.)
         - ❌ `.default()`, collecting non-`false` `.default`s. (UI makes it too easy to include everything you need.)
 
-- ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
+- ✓ `npm run compile`
 
-- TODO: Have an NPM command that compiles test.html to the top-level docs.
-- TODO: Publish to NPM and GitHub, with GitHub pages for `test.html`, so that we can have links.
+- TODO: Publish to NPM and GitHub, with GitHub pages for linking-to.
+
+- ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
 
 An attempt to make the playing field even for humans and AI, based on the best of the best considerations. An attempt to bring about fairness, even though nothing would let it happen. Straying from beaten paths only to make a better one that no one wants to travel, most likely. Only when humanity is swimming in compute can it be desirable. Toys in the meantime.
 
