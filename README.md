@@ -18,7 +18,7 @@ It can represent streams of [any](https://github.com/Antipurity/sensor-network/t
 - [Fully ](https://github.com/Antipurity/sensor-network/tree/master/docs/privacy.md)[control](https://Antipurity.github.io/sensor-network) your computer interaction data: [collect it](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-sensor), [store it](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-handler-storage), [extend it over the Internet](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-handler-internet).
 - [Listen to data as unpleasant raw sounds.](https://github.com/Antipurity/sensor-network/tree/master/js-lib/docs/README.md#sn-handler-sound)
 
-![The basic tree structure for editing JS components at runtime.](docs/images/ui-components.png)
+![The basic tree structure for editing JS components at runtime.](js-lib/docs/images/ui-components.png)
 
 ## You should [eventually](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) be able to:
 

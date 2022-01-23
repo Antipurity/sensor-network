@@ -230,8 +230,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ❌ `.default()`, collecting non-`false` `.default`s. (UI makes it too easy to include everything you need.)
 
 - ✓ `npm run compile`
-    - ⋯ Keywords: `["machine learning", "ml", "sensor", "network"]`
-    - TODO: Publish to NPM and GitHub, with GitHub pages for linking-to.
+    - ⋯ Keywords in `package.json`: `["machine learning", "ml", "sensor", "network", "data streams"]` (after we deserve them).
+    - ⋯ Enable GitHub Pages for linking-to.
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
 

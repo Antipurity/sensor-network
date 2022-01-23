@@ -19,5 +19,6 @@
     "type": "git",
     "url": "https://github.com/Antipurity/sensor-network.git",
     "directory": "js-lib"
-  }
+  },
+  "keywords": ["data streams"]
 }
