@@ -6,9 +6,9 @@ It can represent streams of [any](https://github.com/Antipurity/sensor-network/t
 
 ## Design constraints
 
+- Numeric values, optionally -1…1 [mostly ](https://arxiv.org/abs/1607.06450)[for humans.](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/)
 - Position-invariance, of cells into which data is divided. This enables hotswappable and user-defined observations/actions, which is how humans [expect ](https://en.wikipedia.org/wiki/Process_(computing))[computers ](https://en.wikipedia.org/wiki/USB)[to operate ](https://en.wikipedia.org/wiki/Internet_of_things)[anyway.](https://en.wikipedia.org/wiki/Internet) In ML, [Transformers are currently dominant anyway.](https://arxiv.org/abs/1706.03762)
-- -1…1 values, optionally, [mostly for humans.](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/)
-- That's all. A human can use it. AGI can use it.
+- That's all. A human can use it. AGI can use it. It's boring so as to not get in the way.
 
 ## You can:
 

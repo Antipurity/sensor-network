@@ -2,7 +2,7 @@
   "name": "sensor-network",
   "version": "0.0.1",
   "description": "Links sensors to handlers, for example, an AI model's output to sound.",
-  "main": "main.js",
+  "browser": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "doc": "nodejs tools/doc.js || node tools/doc.js",
@@ -14,5 +14,10 @@
   "devDependencies": {
     "rollup": "^2.66.0",
     "terser": "^5.10.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Antipurity/sensor-network.git",
+    "directory": "js-lib"
   }
 }

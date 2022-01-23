@@ -162,7 +162,7 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ⋯ [`TextTrack`s](https://developer.mozilla.org/en-US/docs/Web/API/TextTrack) of `<audio>`/`<video>`.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
-            - ⋯ Mobile device [sensor readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
+            - ⋯ Mobile device [sensor ](https://sensor-js.xyz/)[readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
             - ❌ Time, as sines of exponentially decreasing frequency, with 100FPS as the most-frequent-wave-period.
                 - ✓ Replace this separate time sensor with a `Transform` that annotates each cell with start & end (prev end == next start) timings in the `user` part of the name, so that learning doesn't *have* to do BPTT per-step (which is non-scalable beyond about a minute) but across time resolutions.
             - ❌ System resources, if exposed: `m=performance.memory, m.usedJSHeapSize / m.totalJSHeapSize`. (Doesn't report a good number. Nor would have been useful even with a good estimate of RAM usage, because if JS over-allocates, it's usually already too late to do anything from JS.)
@@ -230,8 +230,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
         - ❌ `.default()`, collecting non-`false` `.default`s. (UI makes it too easy to include everything you need.)
 
 - ✓ `npm run compile`
-
-- TODO: Publish to NPM and GitHub, with GitHub pages for linking-to.
+    - ⋯ Keywords: `["machine learning", "ml", "sensor", "network"]`
+    - TODO: Publish to NPM and GitHub, with GitHub pages for linking-to.
 
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
 
