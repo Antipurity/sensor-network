@@ -307,10 +307,11 @@ Extra options:
                 _tab.lastStitch = performance.now()
             }
             const canvas = _tab.canvas, ctx = _tab.ctx
+            let w, h
             return function tab() {
                 if (performance.now() - _tab.lastStitch < 15) return canvas
                 _tab.lastStitch = performance.now()
-                const w = innerWidth, h = innerHeight
+                w = innerWidth, h = innerHeight
                 canvas.width = w, canvas.height = h
                 ctx.clearRect(0, 0, w, h)
                 Array.from(document.getElementsByTagName('canvas')).forEach(draw)
@@ -320,6 +321,7 @@ Extra options:
             }
             function draw(elem) {
                 const r = elem.getBoundingClientRect()
+                if (r.x + r.width < 0 || r.y + r.height < 0 || r.x > w || r.y > h) return
                 ctx.drawImage(elem, r.x | 0, r.y | 0, r.width, r.height)
             }
         }, {
