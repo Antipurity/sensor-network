@@ -28,6 +28,12 @@ Tools for connecting humans and AI models to arbitrary sensors: differentiable [
 
 It can represent streams of [any](https://github.com/Antipurity/sensor-network/tree/master/docs/universal-environments.md) named observations and actions.
 
+## Usage
+
+```js
+import sn from 'https://unpkg.com/sensor-network/main.min.js'
+```
+
 ## Design constraints
 
 - Numeric values, optionally -1…1 [mostly ](https://arxiv.org/abs/1607.06450)[for humans.](https://www.reddit.com/r/NoStupidQuestions/comments/65o0gi/how_loud_is_a_nuclear_explosion_all_noise_is/)
