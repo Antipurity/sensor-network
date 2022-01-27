@@ -101,6 +101,10 @@ In Chrome, users might have to first click on the page for sound to play.
                     ['100%']: () => 1,
                     ['0%']: () => 0,
                 },
+                foregroundOnly: {
+                    No: false,
+                    Yes: true,
+                },
                 debug: {
                     No: false,
                     Yes: true,
@@ -153,7 +157,8 @@ In Chrome, users might have to first click on the page for sound to play.
             }
         }
         static onValues(then, {data, cellShape}) {
-            if (this.foregroundOnly && document.visibilityState === 'hidden') return then()
+            if (this.foregroundOnly && document.visibilityState === 'hidden')
+                return setTimeout(then, 4000)
             if (!data || !data.length) return then()
             if (!Sound.ctx) {
                 Sound.ctx = new AudioContext()
