@@ -89,7 +89,7 @@ Extra options:
                 sn._assert(typeof src == 'function' || src instanceof Promise || src instanceof MediaStream || src instanceof Element && (src.tagName === 'CANVAS' || src.tagName === 'VIDEO' || src.tagName === 'IMG'), "Bad source")
                 sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
                 sn._assertCounts("Non-integer zoom step count", zoomSteps, zoomStepStart)
-                sn._assert(zoomStepStart < zoomSteps, "Too zoomed-out at the start")
+                sn._assert(zoomStepStart <= zoomSteps, "Too zoomed-out at the start")
                 sn._assertCounts("Non-integer zoom step", zoomStep), sn._assert(zoomStep >= 2, "Pointless zoom step")
                 sn._assertCounts("Non-integer tiling", tiling), sn._assert(tiling > 0)
                 this.tileDimension = td
@@ -252,8 +252,10 @@ Extra options:
             const N = 2 // Delay read-back if slow.
             if (!this._canvas) {
                 this._canvas = many(() => document.createElement('canvas'))
-                this._canvas.forEach(c => {c.style.width='64px', c.style.imageRendering = 'pixelated'}) // TODO:
-                this._canvas.forEach(c => document.body.append(c)) // TODO:
+                // Uncomment (and combine with Handler.Sound's .debug option) to have the most delightful experience of iterated self-reflection.
+                //   The possible behavior is so complex.
+                // this._canvas.forEach(c => {c.style.width='64px', c.style.imageRendering = 'pixelated'})
+                // this._canvas.forEach(c => document.body.append(c))
                 this._ctx2d = many((_,i) => this._canvas[i].getContext('2d', {alpha:false}))
                 this._i = 0, this._slow = 0
                 function many(f) { return new Array(N).fill().map(f) }
@@ -263,7 +265,7 @@ Extra options:
             const td = this.tileDimension, tiles = this._tiles
             const zss = this.zoomSteps, zs = this.zoomStep
             const tiling = this.tiling
-            canvas.width = tiling * td, canvas.height = tiling * (zss+1) * td
+            canvas.width = tiling * td, canvas.height = tiling * (zss - this.zoomStepStart + 1) * td
             // Draw each tiling, one draw call per zoom level.
             for (let i = this.zoomStepStart, j = 0; i <= zss; ++i, ++j) {
                 const zoom = zs ** i
@@ -275,8 +277,8 @@ Extra options:
                         0, tiling * j * td, tiling * td, tiling * td,
                     )
                 } else { // Around a target.
-                    const x = (target.x * width + zoom*td*.5*(1-tiling)) | 0
-                    const y = (target.y * height + zoom*td*.5*(1-tiling)) | 0
+                    const x = (target.x * width - zoom*td*.5*tiling) | 0
+                    const y = (target.y * height - zoom*td*.5*tiling) | 0
                     ctxWrite.drawImage(frame,
                         x, y, zoom*td, zoom*td,
                         0, tiling * j * td, tiling * td, tiling * td,
@@ -286,7 +288,7 @@ Extra options:
             // Actually draw the data.
             const monochrome = this.monochrome
             const readStart = performance.now()
-            const imageData = ctxRead.getImageData(0, 0, tiling * td, tiling * (zss+1) * td).data
+            const imageData = ctxRead.getImageData(0, 0, tiling * td, tiling * (zss - this.zoomStepStart + 1) * td).data
             const toRead = performance.now() - readStart
             this._slow = .9*this._slow + .1 * (toRead > 10)
             for (let i = 0; i < tiles; ++i) {
@@ -336,6 +338,7 @@ Extra options:
                 if (st.visibility !== 'visible') return
                 const r = elem.getBoundingClientRect()
                 if (r.x + r.width < 0 || r.y + r.height < 0 || r.x > w || r.y > h) return
+                ctx.imageSmoothingEnabled = false
                 ctx.drawImage(elem, r.x | 0, r.y | 0, r.width, r.height)
             }
         }, {
