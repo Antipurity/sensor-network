@@ -18,6 +18,7 @@ Extra options:
     - If empty, the whole \`source\` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
 - \`tiling = 2\`: how many vertical/horizontal repetitions there are per target or screen.
 - \`zoomSteps = 3\`: how many extra zoomed views to generate per target or screen.
+- \`zoomStepStart = 0\`: the least-zoomed zoom level.
 - \`zoomStep = 2\`: the multiplier/divider of in-source tile dimension, per zoom step.
 ` }
         static options() {
@@ -56,6 +57,12 @@ Extra options:
                     ['1 ']: () => 1,
                     ['0 ']: () => 0,
                 },
+                zoomStepStart: {
+                    ['0 ']: () => 0,
+                    ['1 ']: () => 1,
+                    ['2 ']: () => 2,
+                    ['3 ']: () => 3,
+                },
                 zoomStep: {
                     ['2×']: () => 2,
                     ['3×']: () => 3,
@@ -75,13 +82,15 @@ Extra options:
                 const src = opts.source || Video.stitchTab()
                 const targ = opts.targets || sn.Sensor.Pointer.tab()
                 const zoomSteps = opts.zoomSteps !== undefined ? opts.zoomSteps : 3
+                const zoomStepStart = opts.zoomStepStart || 0
                 const zoomStep = opts.zoomStep !== undefined ? opts.zoomStep : 2
                 const tiling = opts.tiling !== undefined ? opts.tiling : 2
                 sn._assertCounts("Non-integer tile side", td), sn._assert(td > 0)
                 sn._assert(typeof src == 'function' || src instanceof Promise || src instanceof MediaStream || src instanceof Element && (src.tagName === 'CANVAS' || src.tagName === 'VIDEO' || src.tagName === 'IMG'), "Bad source")
                 sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
                 sn._assertCounts("Non-integer zoom step count", zoomSteps)
-                sn._assertCounts("Non-integer zoom step", zoomStep), sn._assert(zoomStep >= 2, "Pointless zoom step")
+                sn._assertCounts("Non-integer zoom step", zoomStep, zoomStepStart), sn._assert(zoomStep >= 2, "Pointless zoom step")
+                sn._assert(zoomStepStart < zoomSteps, "Too zoomed-out at the start")
                 sn._assertCounts("Non-integer tiling", tiling), sn._assert(tiling > 0)
                 this.tileDimension = td
                 // (Don't catch errors in `src`, so they'll be logged to console.)
@@ -95,6 +104,7 @@ Extra options:
                 if (!this._nextTarget)
                     this._nextTarget = null // Another `Video`, for multi-target support by forking.
                 this.zoomSteps = zoomSteps
+                this.zoomStepStart = zoomStepStart
                 this.zoomStep = zoomStep
                 this.tiling = tiling
                 this._width = 1, this._height = 1
@@ -250,10 +260,10 @@ Extra options:
             const canvas = this._canvas[iW], ctxWrite = this._ctx2d[iW], ctxRead = this._ctx2d[iR]
             const td = this.tileDimension, tiles = this._tiles
             const zss = this.zoomSteps, zs = this.zoomStep
-            const tiling = this.tiling, t2 = tiling*tiling
+            const tiling = this.tiling
             canvas.width = tiling * td, canvas.height = tiling * (zss+1) * td
             // Draw each tiling, one draw call per zoom level.
-            for (let i = 0; i <= zss; ++i) {
+            for (let i = this.zoomStepStart; i <= zss; ++i) {
                 const zoom = zs ** i
                 if (!target) { // Fullscreen.
                     const x = (width * .5 * (1-1/zoom)) | 0
