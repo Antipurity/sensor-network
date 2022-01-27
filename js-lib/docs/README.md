@@ -450,6 +450,7 @@ In Chrome, users might have to first click on the page for sound to play.
     - `volume = .3`: amplitude of sound output.
     - `minFrequency = 1000`, `maxFrequency = 13000`: how well you can hear. [From 20 or 50, to 16000 or 20000 is reasonable.](https://en.wikipedia.org/wiki/Hearing_range) The wider the range, the higher the bandwidth.
     - `nameImportance = .5`: multiplier of cell names. Non-1 to make it easier on your ears, and emphasize data.
+    - `foregroundOnly = false`: if set, switching away from the tab will stop the sound.
     - `debug = false`: if set, visualizes frequency data in a `<canvas>`. (Usable for quickly testing `.Sensor.Video`.)
 
 
