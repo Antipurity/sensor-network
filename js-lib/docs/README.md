@@ -194,6 +194,7 @@ Extra options:
     - If empty, the whole `source` will be resized to fit, and zooming will zoom in on the center instead of zooming out; if not, the viewed rect will be centered on the target.
 - `tiling = 2`: how many vertical/horizontal repetitions there are per target or screen.
 - `zoomSteps = 3`: how many extra zoomed views to generate per target or screen.
+- `zoomStepStart = 0`: the least-zoomed zoom level.
 - `zoomStep = 2`: the multiplier/divider of in-source tile dimension, per zoom step.
 
 
