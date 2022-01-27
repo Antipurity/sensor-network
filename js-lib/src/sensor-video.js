@@ -88,14 +88,14 @@ Extra options:
                 sn._assertCounts("Non-integer tile side", td), sn._assert(td > 0)
                 sn._assert(typeof src == 'function' || src instanceof Promise || src instanceof MediaStream || src instanceof Element && (src.tagName === 'CANVAS' || src.tagName === 'VIDEO' || src.tagName === 'IMG'), "Bad source")
                 sn._assert(typeof targ == 'function' || Array.isArray(targ), "Bad targets")
-                sn._assertCounts("Non-integer zoom step count", zoomSteps)
-                sn._assertCounts("Non-integer zoom step", zoomStep, zoomStepStart), sn._assert(zoomStep >= 2, "Pointless zoom step")
+                sn._assertCounts("Non-integer zoom step count", zoomSteps, zoomStepStart)
                 sn._assert(zoomStepStart < zoomSteps, "Too zoomed-out at the start")
+                sn._assertCounts("Non-integer zoom step", zoomStep), sn._assert(zoomStep >= 2, "Pointless zoom step")
                 sn._assertCounts("Non-integer tiling", tiling), sn._assert(tiling > 0)
                 this.tileDimension = td
                 // (Don't catch errors in `src`, so they'll be logged to console.)
                 this.source = src
-                this._tiles = (zoomSteps+1) * (tiling*tiling)
+                this._tiles = (zoomSteps - zoomStepStart + 1) * (tiling*tiling)
                 this.monochrome = opts.monochrome === undefined ? true : !!opts.monochrome
                 this.targets = targ
                 this._targetIndex = opts._targetIndex || 0
@@ -122,7 +122,7 @@ Extra options:
                     const x = targ ? targ.x : 0, y = targ ? targ.y : 0
                     const zss = this.zoomSteps, zs = this.zoomStep
                     const tiling = this.tiling, t2 = tiling*tiling
-                    const zoom = zs ** ((tile / t2 | 0) % (zss+1))
+                    const zoom = zs ** ((tile / t2 | 0) % (zss - this.zoomStepStart + 1) + this.zoomStepStart)
                     const dx = Video._tileMove(false, tile % t2, tiling)
                     const dy = Video._tileMove(true, tile % t2, tiling)
                     const color = this.monochrome ? -1 : ((dataStart / valuesPerCell | 0) % 3 - 1)
@@ -252,6 +252,8 @@ Extra options:
             const N = 2 // Delay read-back if slow.
             if (!this._canvas) {
                 this._canvas = many(() => document.createElement('canvas'))
+                this._canvas.forEach(c => {c.style.width='64px', c.style.imageRendering = 'pixelated'}) // TODO:
+                this._canvas.forEach(c => document.body.append(c)) // TODO:
                 this._ctx2d = many((_,i) => this._canvas[i].getContext('2d', {alpha:false}))
                 this._i = 0, this._slow = 0
                 function many(f) { return new Array(N).fill().map(f) }
@@ -263,21 +265,21 @@ Extra options:
             const tiling = this.tiling
             canvas.width = tiling * td, canvas.height = tiling * (zss+1) * td
             // Draw each tiling, one draw call per zoom level.
-            for (let i = this.zoomStepStart; i <= zss; ++i) {
+            for (let i = this.zoomStepStart, j = 0; i <= zss; ++i, ++j) {
                 const zoom = zs ** i
                 if (!target) { // Fullscreen.
                     const x = (width * .5 * (1-1/zoom)) | 0
                     const y = (height * .5 * (1-1/zoom)) | 0
                     ctxWrite.drawImage(frame,
                         x, y, width/zoom, height/zoom,
-                        0, tiling * i * td, tiling * td, tiling * td,
+                        0, tiling * j * td, tiling * td, tiling * td,
                     )
                 } else { // Around a target.
                     const x = (target.x * width + zoom*td*.5*(1-tiling)) | 0
                     const y = (target.y * height + zoom*td*.5*(1-tiling)) | 0
                     ctxWrite.drawImage(frame,
                         x, y, zoom*td, zoom*td,
-                        0, tiling * i * td, tiling * td, tiling * td,
+                        0, tiling * j * td, tiling * td, tiling * td,
                     )
                 }
             }
@@ -330,6 +332,8 @@ Extra options:
                 return canvas
             }
             function draw(elem) {
+                const st = getComputedStyle(elem)
+                if (st.visibility !== 'visible') return
                 const r = elem.getBoundingClientRect()
                 if (r.x + r.width < 0 || r.y + r.height < 0 || r.x > w || r.y > h) return
                 ctx.drawImage(elem, r.x | 0, r.y | 0, r.width, r.height)
