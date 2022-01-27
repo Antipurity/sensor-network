@@ -115,6 +115,7 @@ In Chrome, users might have to first click on the page for sound to play.
                 this.maxFrequency = opts.maxFrequency || 13000
                 this.nameImportance = opts.nameImportance !== undefined ? opts.nameImportance : .5
                 this.debug = opts.debug
+                this.avgGap = 0
             }
             return super.resume(opts)
         }
@@ -203,12 +204,15 @@ In Chrome, users might have to first click on the page for sound to play.
             writeData.call(this, data, buf.getChannelData(0), this.volume, offset, this.nameImportance, 0)
             const src = Sound.ctx.createBufferSource()
             src.buffer = buf
+            const gap = Sound.ctx.currentTime - Sound.next
+            this.avgGap = .9*this.avgGap + .1*gap
             sn.meta.metric('gap in sound, bool', start !== Sound.next ? 1 : 0)
-            sn.meta.metric('latency, s', Sound.next - Sound.ctx.currentTime)
+            sn.meta.metric('latency, s', -gap)
             src.connect(Sound.dst), src.start(start)
             Sound.next = start + soundLen / sampleRate
 
-            const needToWait = Math.max((Sound.next-.03 - Sound.ctx.currentTime - (start === Sound.next ? 0 : delay)) * 1000 - 5 - Sound.overshoot, 0)
+            let needToWait = Math.max((Sound.next-.03 - Sound.ctx.currentTime - (start === Sound.next ? 0 : delay)) * 1000 - 5 - Sound.overshoot, 0)
+            if (this.avgGap > 0) needToWait -= this.avgGap * 1000
             if (needToWait > Sound.overshoot) {
                 const willLikelyEndAt = performance.now() + needToWait
                 setTimeout(() => {

@@ -254,7 +254,7 @@ Extra options:
                 this._canvas = many(() => document.createElement('canvas'))
                 // Uncomment (and combine with Handler.Sound's .debug option) to have the most delightful experience of iterated self-reflection.
                 //   The possible behavior is so complex.
-                // this._canvas.forEach(c => {c.style.width='64px', c.style.imageRendering = 'pixelated'})
+                // this._canvas.forEach((c,i) => {c.style.width='64px', c.style.imageRendering = 'pixelated'})
                 // this._canvas.forEach(c => document.body.append(c))
                 this._ctx2d = many((_,i) => this._canvas[i].getContext('2d', {alpha:false}))
                 this._i = 0, this._slow = 0
@@ -277,8 +277,9 @@ Extra options:
                         0, tiling * j * td, tiling * td, tiling * td,
                     )
                 } else { // Around a target.
-                    const x = (target.x * width - zoom*td*.5*tiling) | 0
-                    const y = (target.y * height - zoom*td*.5*tiling) | 0
+                    const diff = zoom*td*.5*-1
+                    const x = (target.x * width + diff) | 0
+                    const y = (target.y * height + diff) | 0
                     ctxWrite.drawImage(frame,
                         x, y, zoom*td, zoom*td,
                         0, tiling * j * td, tiling * td, tiling * td,
