@@ -160,6 +160,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
                     - ✓ `textToTokens(str, max)→tokens = s => s.split('').slice(-max)`, with `.feedback(tokens)→str = a => a.join('')`.
                     - ✓ `tokenToDataMD5(token, data, start, end)=…`, with `.feedback(feedback, start, end)→token`. Use MD5 hashes because it's easy to, though feedback may suffer.
                     - ⋯ [`TextTrack`s](https://developer.mozilla.org/en-US/docs/Web/API/TextTrack) of `<audio>`/`<video>`.
+                    - ⋯ Accessibility tree, including the visible clickable buttons and inputs.
+                    - ⋯ To ease MD5-reversing significantly, UTF8-encode and feed each byte as a token.
             - ⋯ Chrome/Edge/Opera (Firefox has no direct hardware access):
                 - ⋯ Raw bytes of [HID](https://web.dev/hid/), remapped to -1…1.
             - ⋯ Mobile device [sensor ](https://sensor-js.xyz/)[readings](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs) (a Chrome-only API). Or [through ](https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent)[events](https://developer.mozilla.org/en-US/docs/Web/API/DeviceOrientationEvent)? Why are there two APIs?
