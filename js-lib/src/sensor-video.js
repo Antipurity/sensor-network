@@ -3,7 +3,7 @@ export default function init(sn) {
     return A(class Video extends sn.Sensor {
         static docs() { return `A sequence of images.
 
-Images are divided into [small patches, which has mostly been shown to work well in ML.](https://en.wikipedia.org/wiki/Vision_transformer)
+Images are divided into [small patches, which has mostly been ](https://en.wikipedia.org/wiki/Vision_transformer)[shown to work well in ML.](https://arxiv.org/abs/2006.09882v5)
 
 This sensor's output is composed of 1 or more tiles, which are square images.    
 It can target 0 or 1+ points, each shown in 1 or more tiles, and can include multiple zoom levels.
