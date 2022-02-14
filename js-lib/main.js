@@ -13,6 +13,7 @@ import WebRTC from './src/pair-internet.js'
 import LimitFPS from './src/transform-limit-fps.js'
 import Time from './src/transform-time.js'
 import Storage from './src/pair-storage.js'
+import Shuffle from './src/transform-shuffle.js'
 
 export default (function(exports) {
     // Browser compatibility (import):
@@ -1114,6 +1115,7 @@ Makes only the sign matter for low-frequency numbers.` }),
     Object.assign(E.Transform, {
         Time: Time(E),
         Reward: Reward(E),
+        Shuffle: Shuffle(E),
         LimitFPS: LimitFPS(E),
     })
     Object.assign(E.Handler, {
