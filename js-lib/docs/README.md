@@ -43,6 +43,8 @@ Sensor network:
 
         - [sn.Transform.Reward.keybindings](#sn-transform-reward-keybindings)
 
+    - [sn.Transform.Shuffle](#sn-transform-shuffle)
+
     - [sn.Transform.LimitFPS](#sn-transform-limitfps)
 
 - [sn.Handler](#sn-handler)
@@ -179,7 +181,7 @@ The new text will still be selected, so it can function as autocomplete or autoc
 
 A sequence of images.
 
-Images are divided into [small patches, which has mostly been shown to work well in ML.](https://en.wikipedia.org/wiki/Vision_transformer)
+Images are divided into [small patches, which has mostly been ](https://en.wikipedia.org/wiki/Vision_transformer)[shown to work well in ML.](https://arxiv.org/abs/2006.09882v5)
 
 This sensor's output is composed of 1 or more tiles, which are square images.    
 It can target 0 or 1+ points, each shown in 1 or more tiles, and can include multiple zoom levels.
@@ -400,6 +402,13 @@ The human has access to 2 buttons: +1 reward and -1 reward.
 
 By default, 'Ctrl+ArrowUp' is +1, 'Ctrl+ArrowDown' is -1. [Can use other keybindings.](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values)
 
+
+<a id="sn-transform-shuffle"></a>
+### `sn.Transform.Shuffle`[ ↑](#toc)
+
+Shuffles cells randomly each step.
+
+`.Handler.Storage` erases borders between steps, so this can help with autoregressive modeling. Also useful for learning position-invariance for models that do not have that enforced.
 
 <a id="sn-transform-limitfps"></a>
 ### `sn.Transform.LimitFPS`[ ↑](#toc)

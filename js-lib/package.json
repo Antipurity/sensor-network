@@ -1,6 +1,6 @@
 {
   "name": "sensor-network",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Links sensors to handlers, for example, an AI model's output to sound.",
   "browser": "main.js",
   "scripts": {
