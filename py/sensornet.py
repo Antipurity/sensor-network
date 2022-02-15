@@ -79,6 +79,7 @@ class Handler:
         """
         TODO:
         TODO: returns (data, error, no_data, no_feedback); describe each of these.
+            TODO: Usage: `numpy.compress(~no_data, data)` would select only inputs; `numpy.compress(~no_feedback, data)` would select only queries; `numpy.put(data, numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         TODO: if `prev_feedback` is a function, it'll be called with no args on each subsequent handling until it returns a non-`None` NumPy tensor; else it should be a NumPy tensor or `None`
         """
         assert prev_feedback is None or callable(prev_feedback)
@@ -151,8 +152,19 @@ class Namer:
                 raise TypeError("Names must consist of strings, numbers, and number-returning functions")
         if len(nums): name_parts.append(nums)
         self.name_parts = name_parts
-    # TODO: name(data, fill=None)→data2
-    #   …Which just consists of putting the header in, right?… …Then again, the header is variable due to functions… And should probably be fractal-folded too…
+    def name(self, data, fill=None):
+        """
+        TODO:
+        """
+        assert len(data.shape) == 1
+        # TODO: ...Do we want to compute `cells` from data.shape[0] and self.cell_size (divide rounding up) here, and zero-pad `data`?...
+        #   Or rather, fractal-fold `data`: _fill(data, size, 0).
+        # TODO: If fill is not None, take np.full((cells, self.cell_size - self.cell_shape[-1]), fill) as the full name tensor, and concat with the reshaped data.
+        # TODO: name(data, fill=None)→data2
+        #   …Which just consists of putting the header in, right?… …Then again, the header is variable due to functions… And should probably be fractal-folded too…
+        #   …Do we iterate over all cells in Python, and copy data manually?…
+        #     …Or should we come up with some NumPy solution? Maybe even try to get away with operating on NumPy tensors in calls to funcs? …How to do that…
+        #     Kinda want each name part to have its own tensor, then after we have all that (each fractally-folded to be sized self.part_size) and the reshaped data, just concat all.
     # TODO: unname(feedback)→feedback2
 
 
@@ -166,8 +178,26 @@ def _shape_ok(cell_shape: tuple, part_size: int):
 def _str_to_floats(string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
     return np.frombuffer(hash, dtype=np.uint8).astype(np.float32)/255.*2. - 1.
-# TODO: Do we want fractal un/filling too?
-#   How would we do them?
+def _fill(x, size, axis=0): # → y
+    """
+    Ensures that an `axis` of a NumPy array `x` has the appropriate `size`, returning `y`.
+    
+    If it's too small, fractally folds `x` via repeated `x → 1 - 2*abs(x)` to increase AI-model sensitivity where we can.
+    
+    >>> _fill(np.zeros((2,)), 6)
+    np.array([ 0.,  0.,  1.,  1., -1., -1.])
+    """
+    if x.shape[axis] == size: return x
+    if x.shape[axis] > size: return np.take(x, range(0,size), axis)
+    folds = [x]
+    for _ in range(1, -(-size // x.shape[axis])):
+        folds.append(1 - 2 * np.abs(folds[-1]))
+    x = np.concatenate(folds, 0)
+    if x.shape[axis] == size: return x
+    return np.take(x, range(0,size), axis)
+def _unfill(y, size, axis=0):
+    """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`."""
+    # TODO: ...How do we reverse `_fill`?...
 
 
 
@@ -181,3 +211,6 @@ sensors = default.sensors
 # TODO: Also launch tests if this module is executed directly: correctness, then throughput.
 #   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right? Not quite asyncio levels of simplicity, but still... ...Could we integrate with asyncio too?...)
 #     (Its flexibility as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
+#     `'asyncio' in sys.modules` and `sys.modules['asyncio']` with py3.3+ could check whether it has been imported already. Which introduces import-order requirements, which is bad UX.
+#     `try: import asyncio; except ImportError: ...` with py3.6+ for robust checking.
+#     …What would an asyncio interface look like exactly, though? And, can't users just easily implement it anyway if they need to?
