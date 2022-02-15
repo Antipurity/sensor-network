@@ -41,6 +41,7 @@ class Handler:
         TODO: on_feedback(feedback, cell_shape, part_size); `feedback` might be `None`.
         TODO: data is None or a number (how many no-data cells to request, as an action) or a NumPy array (flat if `name`, else 2D)
         """
+        # TODO: …Wait a second: how did we manage to forget about `reward` (overriding the 0th number)?…
         if name is None and on_feedback is None: return
         if not self.cell_size: return on_feedback(None, self.cell_shape, self.part_size)
         assert name is None or isinstance(name, tuple)
@@ -157,16 +158,20 @@ class Namer:
         TODO:
         """
         assert len(data.shape) == 1
-        # TODO: ...Do we want to compute `cells` from data.shape[0] and self.cell_size (divide rounding up) here, and zero-pad `data`?...
-        #   Or rather, fractal-fold `data`: _fill(data, size, 0).
-        # TODO: Turn arrays into NumPy arrays, after calling functions with appropriate NumPy-array args.
-        # TODO: If fill is not None, take np.full((cells, self.cell_size - self.cell_shape[-1]), fill) as the full name tensor, and concat with the reshaped data.
-        # TODO: name(data, fill=None)→data2
-        #   …Which just consists of putting the header in, right?… …Then again, the header is variable due to functions… And should probably be fractal-folded too…
-        #   …Do we iterate over all cells in Python, and copy data manually?…
-        #     …Or should we come up with some NumPy solution? Maybe even try to get away with operating on NumPy tensors in calls to funcs? …How to do that…
-        #     Kinda want each name part to have its own tensor, then after we have all that (each fractally-folded to be sized self.part_size) and the reshaped data, just concat all.
+        # Pad & reshape `data`.
+        cells = -(-data.shape[0] // self.cell_size)
+        total = cells * self.cell_size
+        data = np.reshape(_fill(data, total, 0), (cells, self.cell_size))
+        # Finalize the name, then concat it before `data`.
+        if fill is not None:
+            name = np.full((cells, self.cell_size - self.cell_shape[-1]), fill)
+            return np.concatenate((), 1)
+        start = np.range(0, total, self.cell_size)
+        end = start + self.cell_size
+        name = [_fill(np.array([x(start, end, total) if callable(x) else x for x in p]) if isinstance(p, list) else p, self.part_size, 1) for p in self.name_parts]
+        return np.concatenate([*name, data], 1)
     # TODO: unname(feedback)→feedback2
+    #   TODO: How to undo `name`?...
 
 
 
