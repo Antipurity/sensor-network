@@ -7,9 +7,13 @@ class Handler:
     """
     TODO:
 
+    TODO: Mention that the top-level `sensornet` module acts like an instance of this class, but if more processing streams are needed, can construct them.
+
     To gather data automatically, do `handler.sensors.append(lambda handler: ...)`.
 
     If needed, read `.cell_shape` or `.part_size` or `.cell_size` wherever the object is available.
+
+    TODO: After we have a test, have a mini-tutorial on the proper use.
     """
     def __init__(self, cell_shape=None, part_size=None):
         self._cell = 0
@@ -38,6 +42,7 @@ class Handler:
         TODO: data is None or a number (how many no-data cells to request, as an action) or a NumPy array (flat if `name`, else 2D)
         """
         if name is None and on_feedback is None: return
+        if not self.cell_size: return on_feedback(None, self.cell_shape, self.part_size)
         assert name is None or isinstance(name, tuple)
         assert data is None or isinstance(data, int) and data>=0 or isinstance(data, np.ndarray)
         assert error is None or isinstance(error, np.ndarray)
@@ -162,13 +167,17 @@ def _str_to_floats(string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
     return np.frombuffer(hash, dtype=np.uint8).astype(np.float32)/255.*2. - 1.
 # TODO: Do we want fractal un/filling too?
+#   How would we do them?
 
 
 
 default = Handler()
+sensors = default.sensors
 # TODO: Also expose method-like funcs that defer to `default`'s stuff.
+#   (And cell_shape, part_size, cell_size, all updated after `.shape(…)` returns.)
 
 
 
 # TODO: Also launch tests if this module is executed directly: correctness, then throughput.
 #   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right? Not quite asyncio levels of simplicity, but still... ...Could we integrate with asyncio too?...)
+#     (Its flexibility as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
