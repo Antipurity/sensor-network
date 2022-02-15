@@ -10,6 +10,7 @@ class Handler:
     If needed, read `.cell_shape` or `.part_size` or `.cell_size` wherever the object is available.
     """
     def __init__(self, cell_shape=None, part_size=None):
+        self._cell = 0
         self._data = []
         self._error = []
         self._no_data = []
@@ -28,13 +29,46 @@ class Handler:
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
-    # TODO: send(self, name=None, data, error=None, on_feedback=None)  (`sn.handle` concatenates these) (NumPy data tensors get flattened) (if `data` is a plain number, that's how many no-data cells are being requested) (`on_feedback(feedback, sn)`, called in-order so that re-using a function doesn't break things)
+    def send(self, name=None, data=None, error=None, on_feedback=None):
+        """
+        TODO:
+        """
+        if name is None and on_feedback is None: return
+        assert name is None or isinstance(name, tuple)
+        assert data is None or isinstance(data, int) and data>=0 or isinstance(data, np.ndarray)
+        assert error is None or isinstance(error, np.ndarray)
+        assert on_feedback is None or callable(on_feedback)
+        no_feedback = not on_feedback
+        no_data = False if isinstance(data, np.ndarray) else True
+        if no_data: data = np.zeros((data or 0, self.cell_size), dtype=np.float32)
+        if name is not None:
+            if len(data.shape) != 1: data = data.flatten()
+            if error and len(error.shape) != 1: error = error.flatten()
+        # Name.
+        if isinstance(name, tuple) or isinstance(name, list):
+            name = Namer(name, self.cell_shape, self.part_size)
+        if isinstance(name, Namer):
+            data = name.name(data, False)
+            error = name.name(error, True)
+        else:
+            assert name is None
+        assert len(data.shape) == 2
+        assert data.shape[-1] == self.cell_size
+        assert error is None or data.shape == error.shape
+        # Send.
+        cells = data.shape[0]
+        self._data.append(data)
+        self._error.append(error)
+        self._no_data.append(no_data)
+        self._no_feedback.append(no_feedback)
+        self._prev_fb.append((on_feedback, self._cell, self._cell + cells))
+        self._cell += cells
     # TODO: `handle(self, cell_shape, prev_feedback) → (data, error, no_data, no_feedback)` (if `prev_feedback` is a function, it'll be called with no args on each subsequent handling until it returns a non-`None` NumPy tensor; else it should be a NumPy tensor or `None`)
     #   TODO: Call each of self.sensors with `sn`.
     #   TODO: Concat all the collected data (& error).
     #   TODO: Empty all our memory of data.
     #     TODO: Push self._next_fb to self._prev_fb.
-    #     TODO: While len(self._prev_fb) and its first item's first item is either a NumPy array or returns non-None, deconstruct the feedback and call all the `on_feedback` funcs.
+    #     TODO: While len(self._prev_fb) and its first item's first item is either a NumPy array or returns non-None, deconstruct the feedback and call all the `on_feedback(feedback, sn)` funcs.
     #       TODO: ...Don't we want to do the same at `handle`'s start, until it can no longer be done?...
     #   TODO: Return it.
     def discard(self):
@@ -46,6 +80,7 @@ class Handler:
                 raise
             except Exception as err:
                 print(err)
+        self._cell = 0
         self._data.clear()
         self._error.clear()
         self._no_data.clear()
@@ -78,15 +113,15 @@ class Namer:
                 raise TypeError("Names must consist of strings, numbers, and number-returning functions")
         if len(nums): name_parts.append(nums)
         self.name_parts = name_parts
-    # TODO: name(data)→data2
+    # TODO: name(data, zero_fill=False)→data2
     #   …Which just consists of putting the header in, right?… …Then again, the header is variable due to functions… And should probably be fractal-folded too…
     # TODO: unname(feedback)→feedback2
 
 
 
-def _shape_ok(cell_shape, part_size: int):
+def _shape_ok(cell_shape: tuple, part_size: int):
     assert isinstance(part_size, int) and part_size > 0
-    assert isinstance(cell_shape, list) or isinstance(cell_shape, tuple)
+    assert isinstance(cell_shape, tuple)
     assert all(isinstance(s, int) and s > 0 for s in cell_shape)
     assert len(cell_shape) == 4
     assert all(s % part_size == 0 for s in cell_shape[:-1])
