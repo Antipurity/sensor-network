@@ -200,11 +200,19 @@ def _unfill(y, size, axis=0): # → x
     
     `(x,y) → (copysign((1-y)/2, x), y)`"""
     if y.shape[axis] == size: return y
-    # TODO: ...What if y.shape[axis] < size?... Zero-pad? How?
-    # TODO: Pad `y` so that y.shape[axis]%size==0, then folds = np.split(y, range(0, y.shape[axis], size), axis)
-    # TODO: Pad the last array so that the rest is filled with 1-2*np.abs(prev_to_last), to not lose precision.
-    # TODO: Going in reverse over `folds`, where `x` is the prev elem and `y` is its next elem, do `x[...] = np.copysign(.5 * (1-y), x)`
-    # TODO: Return folds[0].
+    if y.shape[axis] < size: return _pad(y, size, axis)
+    folds = np.split(y, range(0, y.shape[axis], size), axis)
+    if folds[-1].shape[0] < size:
+        folds[-1] = np.concatenate((folds[-1], 1 - 2 * np.abs(np.take(folds[-2], range(folds[-1].shape[0], size), axis))), 0)
+    for i in reversed(range(1, -(y.shape[axis] // -size))):
+        x, y = folds[i-1], folds[i]
+        folds[i-1] = np.copysign(.5 * (1-y), x)
+    return folds[0]
+def _pad(x, size, axis=0):
+    if x.shape[axis] == size: return x
+    assert x.shape[axis] < size
+    assert axis == 0 # Good enough for us.
+    return np.pad(x, (0, size - x.shape[axis]))
 
 
 
