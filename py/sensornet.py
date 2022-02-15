@@ -195,9 +195,16 @@ def _fill(x, size, axis=0): # → y
     x = np.concatenate(folds, 0)
     if x.shape[axis] == size: return x
     return np.take(x, range(0,size), axis)
-def _unfill(y, size, axis=0):
-    """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`."""
-    # TODO: ...How do we reverse `_fill`?...
+def _unfill(y, size, axis=0): # → x
+    """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`.
+    
+    `(x,y) → (copysign((1-y)/2, x), y)`"""
+    if y.shape[axis] == size: return y
+    # TODO: ...What if y.shape[axis] < size?... Zero-pad? How?
+    # TODO: Pad `y` so that y.shape[axis]%size==0, then folds = np.split(y, range(0, y.shape[axis], size), axis)
+    # TODO: Pad the last array so that the rest is filled with 1-2*np.abs(prev_to_last), to not lose precision.
+    # TODO: Going in reverse over `folds`, where `x` is the prev elem and `y` is its next elem, do `x[...] = np.copysign(.5 * (1-y), x)`
+    # TODO: Return folds[0].
 
 
 

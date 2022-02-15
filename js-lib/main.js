@@ -1091,7 +1091,7 @@ Even if your AI model can only accept and return ±1 bits, it can still use the 
             unfill: A(function unfill(dst, offset, haveNumbers, needNumbers) {
                 if (haveNumbers >= needNumbers || !haveNumbers) return
                 for (let i = offset + needNumbers - haveNumbers - 1; i >= offset; --i)
-                    dst[i] = Math.sign(dst[i]) * Math.abs(dst[i + haveNumbers] - 1) * .5
+                    dst[i] = Math.sign(dst[i]) * (1 - dst[i + haveNumbers]) * .5
                 return dst
             }, { docs:`Reverses \`._dataNamer.fill\`, enhancing low-frequency numbers with best guesses from high-frequency numbers.
 
