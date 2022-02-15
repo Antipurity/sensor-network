@@ -159,6 +159,7 @@ class Namer:
         assert len(data.shape) == 1
         # TODO: ...Do we want to compute `cells` from data.shape[0] and self.cell_size (divide rounding up) here, and zero-pad `data`?...
         #   Or rather, fractal-fold `data`: _fill(data, size, 0).
+        # TODO: Turn arrays into NumPy arrays, after calling functions with appropriate NumPy-array args.
         # TODO: If fill is not None, take np.full((cells, self.cell_size - self.cell_shape[-1]), fill) as the full name tensor, and concat with the reshaped data.
         # TODO: name(data, fill=None)→data2
         #   …Which just consists of putting the header in, right?… …Then again, the header is variable due to functions… And should probably be fractal-folded too…
@@ -200,7 +201,9 @@ def _unfill(y, size, axis=0): # → x
     
     `(x,y) → (copysign((1-y)/2, x), y)`"""
     if y.shape[axis] == size: return y
-    if y.shape[axis] < size: return _pad(y, size, axis)
+    if y.shape[axis] < size:
+        assert axis == 0 # Good enough for us.
+        return np.pad(y, (0, size - y.shape[axis]))
     folds = np.split(y, range(0, y.shape[axis], size), axis)
     if folds[-1].shape[0] < size:
         folds[-1] = np.concatenate((folds[-1], 1 - 2 * np.abs(np.take(folds[-2], range(folds[-1].shape[0], size), axis))), 0)
@@ -211,8 +214,8 @@ def _unfill(y, size, axis=0): # → x
 def _pad(x, size, axis=0):
     if x.shape[axis] == size: return x
     assert x.shape[axis] < size
-    assert axis == 0 # Good enough for us.
-    return np.pad(x, (0, size - x.shape[axis]))
+    
+    
 
 
 
