@@ -164,7 +164,7 @@ class Handler:
             self._prev_fb.pop(0)
             for on_feedback, expected_shape, start_cell, end_cell, namer, length in callbacks:
                 fb = feedback[start_cell:end_cell, :]
-                assert fb.shape == expected_shape # TODO: Should really have a test of what happens if data had no namer. (Or at least think through it.)
+                assert fb.shape == expected_shape
                 if namer is not None: fb = namer.unname(fb, length)
                 on_feedback(fb, cell_shape, part_size, self)
         return (data, error, no_data, no_feedback)
@@ -172,7 +172,6 @@ class Handler:
         """Clears all scheduled-to-be-sent data."""
         for on_feedback, expected_shape, start_cell, end_cell, namer, length in self._next_fb:
             try:
-                print('discarding', length) # TODO: ...Why are we still discarding?
                 on_feedback(None, self.cell_shape, self.part_size, self)
             except KeyboardInterrupt:
                 raise
@@ -281,7 +280,6 @@ def _unfill(y, size, axis=0): # → x
     folds = np.split(y, range(size, y.shape[axis], size), axis)
     if folds[-1].shape[0] < size:
         folds[-1] = np.concatenate((folds[-1], 1 - 2 * np.abs(np.take(folds[-2], range(folds[-1].shape[0], size), axis))), 0)
-    print(y.shape, 'is split into', len(folds), 'folds as', *[f.shape for f in folds]) # TODO: Fixed, but now, why are values wrong?
     for i in reversed(range(1, -(y.shape[axis] // -size))):
         x, y = folds[i-1], folds[i]
         folds[i-1] = np.copysign(.5 * (1-y), x)

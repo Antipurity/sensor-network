@@ -13,17 +13,18 @@ import time
 
 
 # Benchmark.
-#   TODO: Extract into a function.
-start, duration = time.monotonic(), 10.
+#   TODO: Extract into a function, accepting `N`.
 sn.shape((8, 24, 64), 8)
 iterations, feedback = 0, None
+N = 64*1 # TODO: Test multi-cell setups. ...Bugged. Fix.
 def check_feedback(fb, *_):
-    if fb is not None: print('have feedback', fb.shape) # TODO: ...Okay, this is so not right. We literally never have any data. Why?
-    assert fb is None or fb.shape == (4,) and fb[0] == .2 # TODO: Is it ever non-None?
+    assert fb is None or fb.shape == (N,) and fb[0] == .2
+send_data = np.random.randn(N)
+start, duration = time.monotonic(), 10.
 while time.monotonic() - start < duration:
-    sn.send(('test 1',), data=np.array([-.2, .2, .5, -1]), on_feedback=check_feedback)
+    sn.send(('test 1',), data=send_data, on_feedback=check_feedback)
     data, error, no_data, no_feedback = sn.handle(feedback)
-    feedback = -data
+    feedback = np.full_like(data, .2)
     iterations += 1
 print('iters/sec', iterations / duration) # TODO: Bytes per second, not iters per sec. And, with data-size-per-step pre-determined.
 # TODO: Send random data, respond with negated-data feedback, and measure throughput.
