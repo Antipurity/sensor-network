@@ -1,7 +1,7 @@
 """
 Module for differentiable sensor networks: each gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
-Position-invariant and numeric: these constraints allow AI models to disregard all concerns about data formats, perform cross-dataset meta-learning and multimodal learning, combine tasks at runtime, and learn in completely arbitrary environments, with only a couple lines of code on the sensor-side and no changes on the handler-side.
+Position-invariant and numeric: these constraints allow AI models to disregard all concerns about data formats, and with only a couple lines of code on the sensor-side and no changes on the handler-side: perform cross-dataset meta-learning and multimodal learning and multi-objective reinforcement learning and model distillation, combine tasks at runtime, and learn in completely arbitrary environments.
 
 Python 3.4 or newer (for asyncio).
 
