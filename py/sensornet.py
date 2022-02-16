@@ -107,7 +107,8 @@ class Handler:
         self._error.append(error)
         self._no_data.append(np.tile(no_data, shape))
         self._no_feedback.append(np.tile(no_feedback, shape))
-        self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length))
+        if on_feedback is not None:
+            self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length))
         self._cell += cells
     def maybe_get(self, name, len, reward=0.):
         """
