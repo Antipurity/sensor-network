@@ -1,3 +1,9 @@
+"""
+TODO:
+"""
+
+
+
 import numpy as np
 import hashlib
 
@@ -38,13 +44,13 @@ class Handler:
     def send(self, name=None, data=None, error=None, on_feedback=None):
         """
         TODO:
-        TODO: on_feedback(feedback, cell_shape, part_size); `feedback` might be `None`.
+        TODO: on_feedback(feedback, cell_shape, part_size, handler); `feedback` might be `None`.
         TODO: data is None or a number (how many no-data cells to request, as an action) or a NumPy array (flat if `name`, else 2D)
         """
         # TODO: …Wait a second: how did we manage to forget about `reward` (overriding the 0th number)?…
         #   Should pass that in, defaulting to `0.`, right?
         if name is None and on_feedback is None: return
-        if not self.cell_size: return on_feedback(None, self.cell_shape, self.part_size)
+        if not self.cell_size: return on_feedback(None, self.cell_shape, self.part_size, self)
         assert name is None or isinstance(name, tuple)
         assert data is None or isinstance(data, int) and data>=0 or isinstance(data, np.ndarray)
         assert error is None or isinstance(error, np.ndarray)
@@ -98,7 +104,7 @@ class Handler:
             self._prev_fb.append((prev_feedback, self._next_fb, self.cell_shape, self.part_size))
         else:
             for on_feedback, expected_shape, start_cell, end_cell, namer, length in self._next_fb:
-                on_feedback(None, self.cell_shape, self.part_size)
+                on_feedback(None, self.cell_shape, self.part_size, self)
         self.discard()
         while len(self._prev_fb):
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
@@ -110,7 +116,7 @@ class Handler:
                 fb = feedback[start_cell:end_cell, :]
                 assert fb.shape == expected_shape
                 fb = namer.unname(fb, length)
-                on_feedback(fb, cell_shape, part_size)
+                on_feedback(fb, cell_shape, part_size, self)
         return (data, error, no_data, no_feedback)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
@@ -132,7 +138,9 @@ class Handler:
 
 class Namer:
     """
-    TODO:
+    A class for augmenting a 1D array with numeric names, into a 2D array, sized cells×cell_size.
+
+    Pre-constructing this instead of passing in names to `handler.send` might be faster.
     """
     def __init__(self, name, cell_shape, part_size):
         assert isinstance(name, list) or isinstance(name, tuple)
@@ -156,7 +164,7 @@ class Namer:
         self.name_parts = name_parts
     def name(self, data, fill=None):
         """
-        TODO:
+        1D to 2D.
         """
         assert len(data.shape) == 1
         # Pad & reshape `data`.
@@ -172,6 +180,9 @@ class Namer:
         name = [_fill(np.array([x(start, end, total) if callable(x) else x for x in p]) if isinstance(p, list) else p, self.part_size, 1) for p in self.name_parts]
         return np.concatenate([*name, data], 1)
     def unname(self, feedback, length):
+        """
+        Reverses `.name`.
+        """
         # Ignore the name, only heed data.
         assert len(feedback.shape) == 2 and feedback.shape[-1] == self.cell_size
         feedback = feedback[:, -self.cell_shape[-1]:]
@@ -227,8 +238,18 @@ def _unfill(y, size, axis=0): # → x
 
 default = Handler()
 sensors = default.sensors
-# TODO: Also expose method-like funcs that defer to `default`'s stuff.
-#   (And cell_shape, part_size, cell_size, all updated after `.shape(…)` returns.)
+cell_shape, part_size, cell_size = default.cell_shape, default.part_size, default.cell_size
+def shape(*k, **kw):
+    global cell_shape, part_size, cell_size
+    r = default.shape(*k, **kw)
+    cell_shape, part_size, cell_size = default.cell_shape, default.part_size, default.cell_size
+    return r
+def send(*k, **kw):
+    return default.send(*k, **kw)
+def handle(*k, **kw):
+    return default.handle(*k, **kw)
+def discard(*k, **kw):
+    return default.discard(*k, **kw)
 
 
 
