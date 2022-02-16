@@ -44,7 +44,7 @@ class Handler:
     def send(self, name=None, data=None, error=None, on_feedback=None):
         """
         TODO:
-        TODO: on_feedback(feedback, cell_shape, part_size, handler); `feedback` might be `None`.
+        TODO: on_feedback(feedback, cell_shape, part_size, handler); `feedback` might be `None`; always called in-send-order, so to reduce memory allocations, could reuse the same function and use queues.
         TODO: data is None or a number (how many no-data cells to request, as an action) or a NumPy array (flat if `name`, else 2D)
         """
         # TODO: …Wait a second: how did we manage to forget about `reward` (overriding the 0th number)?…
@@ -85,10 +85,19 @@ class Handler:
         self._cell += cells
     def handle(self, prev_feedback=None):
         """
-        TODO:
-        TODO: returns (data, error, no_data, no_feedback); describe each of these.
-            TODO: Usage: `numpy.compress(~no_data, data)` would select only inputs; `numpy.compress(~no_feedback, data)` would select only queries; `numpy.put(data, numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
-        TODO: if `prev_feedback` is a function, it'll be called with no args on each subsequent handling until it returns a non-`None` NumPy tensor; else it should be a NumPy tensor or `None`
+        Handles collected data.
+
+        Pass it the previous handling's feedback (as a NumPy array or `None`), or if not immediately available (i.e. needs GPU→CPU transfer), a function with no inputs that will return `None` or the feedback.
+
+        This returns `(data, error, no_data, no_feedback)`.
+        - `data`: a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
+        - `error`: transmission error: `None` or a float32 array of `abs(true_data - data) - 1`. -1…1.
+        - `no_data`: a bit-mask, sized `cells`.
+        - `no_feedback`: a bit-mask, sized `cells`.
+        - Usage:
+            - `numpy.compress(~no_data, data)` would select only inputs.
+            - `numpy.compress(~no_feedback, data)` would select only queries.
+            - `numpy.put(data, numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
         assert prev_feedback is None or callable(prev_feedback)
         # Collect sensor data.
