@@ -39,6 +39,7 @@ class Handler:
         if cell_shape is not None or part_size is not None:
             self.shape(cell_shape, part_size)
     def shape(self, cell_shape, part_size):
+        """Changes the current shape."""
         _shape_ok(cell_shape, part_size)
         self.discard()
         self.cell_shape = cell_shape
@@ -46,10 +47,20 @@ class Handler:
         self.cell_size = sum(cell_shape)
     def send(self, name=None, data=None, error=None, reward=0., on_feedback=None):
         """
-        TODO:
-        TODO: on_feedback(feedback, cell_shape, part_size, handler); `feedback` might be `None`; always called in-send-order, so to reduce memory allocations, could reuse the same function and use queues.
-        TODO: data is None or a number (how many no-data cells to request, as an action) or a NumPy array (flat if `name`, else 2D)
-        TODO: reward
+        Sends named data, possibly getting same-size feedback, possibly only getting feedback.
+
+        Arguments:
+        - `name = None`:
+            - If a tuple/list of strings and -1…1 numbers and functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, converted to a `Namer`.
+            - If a `Namer`, it is used.
+            - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`.
+        - `data = None`: `None`, or how many numbers of no-data feedback to return, or a 1D NumPy array of -1…1 numbers.
+        - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
+        - `reward = 0.`: rates prior performance of these cells, for reinforcement learning.
+        - `on_feedback = None`: a function from `feedback` (could be `None`), `cell_shape`, `part_size`, `handler`, to nothing.
+            - `.handle` steps are never re-ordered, so to reduce memory allocations, could reuse the same function and use queues.
+
+        Returns `None`. See `.maybe_get` and `.get` for more convenient `asyncio`-based interfaces.
         """
         if name is None and on_feedback is None: return
         if not self.cell_size:
@@ -78,6 +89,7 @@ class Handler:
         assert len(data.shape) == 2
         assert data.shape[-1] == self.cell_size
         assert error is None or data.shape == error.shape
+        # Reward.
         data[:, 0] = reward
         # Send.
         cells = data.shape[0]
@@ -88,6 +100,8 @@ class Handler:
         self._no_feedback.append(np.tile(no_feedback, shape))
         self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name))
         self._cell += cells
+    # TODO: async def maybe_get(name, len)→None|array, build on top of send.
+    # TODO: async def get(name, len)→array, built on top of maybe_get.
     def handle(self, prev_feedback=None):
         """
         Handles collected data.
@@ -96,13 +110,14 @@ class Handler:
 
         This returns `(data, error, no_data, no_feedback)`.
         - `data`: a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
-        - `error`: transmission error: `None` or a float32 array of `abs(true_data - data) - 1`. -1…1.
+        - `error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
         - `no_data`: a bit-mask, sized `cells`.
         - `no_feedback`: a bit-mask, sized `cells`.
         - Usage:
+            - `data[:, 0]` would return per-cell rewards.
             - `numpy.compress(~no_data, data)` would select only inputs.
             - `numpy.compress(~no_feedback, data)` would select only queries.
-            - `numpy.put(np.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
+            - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
         assert prev_feedback is None or callable(prev_feedback)
         # Collect sensor data.
