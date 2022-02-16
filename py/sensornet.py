@@ -93,6 +93,7 @@ class Handler:
             error = name.name(error, -1.)
         else:
             assert name is None
+        print('data', data.shape, 'cell_size', self.cell_size) # TODO: ...Why is it 104 in the last dimension, 8 more than the correct 96...
         assert len(data.shape) == 2
         assert data.shape[-1] == self.cell_size
         assert error is None or data.shape == error.shape
@@ -215,19 +216,23 @@ class Namer:
         """
         1D to 2D.
         """
+        if data is None: return
         assert len(data.shape) == 1
         # Pad & reshape `data`.
-        cells = -(-data.shape[0] // self.cell_size)
-        total = cells * self.cell_size
-        data = np.reshape(_fill(data, total, 0), (cells, self.cell_size))
+        data_size = self.cell_shape[-1]
+        name_size = self.cell_size - data_size
+        cells = -(-data.shape[0] // data_size)
+        total = cells * data_size
+        data = np.reshape(_fill(data, total, 0), (cells, data_size))
         # Finalize the name, then concat it before `data`.
         if fill is not None:
-            name = np.full((cells, self.cell_size - self.cell_shape[-1]), fill)
+            name = np.full((cells, name_size), fill)
             return np.concatenate((), 1)
-        start = np.arange(0, total, self.cell_size)
-        end = start + self.cell_size
-        name = [_fill(np.array([x(start, end, total) if callable(x) else x for x in p]) if isinstance(p, list) else p, self.part_size, 1) for p in self.name_parts]
-        return np.concatenate([*name, data], 1)
+        start = np.arange(0, total, data_size)
+        end = start + data_size
+        name = np.concatenate([_fill(np.array([x(start, end, total) if callable(x) else x for x in p]) if isinstance(p, list) else p, self.part_size, 1) for p in self.name_parts], 1)
+        name = _fill(name, name_size, 1)
+        return np.concatenate((name, data), 1)
     def unname(self, feedback, length):
         """
         Reverses `.name`.
@@ -256,13 +261,12 @@ def _fill(x, size, axis=0): # → y
     >>> _fill(np.zeros((2,)), 6)
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
-    print(x, size, axis) # TODO: ...Why are we being requested to fill along axis `1` on a flat array...
-    if x.shape[axis] == size: return x # TODO: Why is this index non-existent?
+    if x.shape[axis] == size: return x
     if x.shape[axis] > size: return np.take(x, range(0,size), axis)
     folds = [x]
     for _ in range(1, -(-size // x.shape[axis])):
         folds.append(1 - 2 * np.abs(folds[-1]))
-    x = np.concatenate(folds, 0)
+    x = np.concatenate(folds, axis)
     if x.shape[axis] == size: return x
     return np.take(x, range(0,size), axis)
 def _unfill(y, size, axis=0): # → x
