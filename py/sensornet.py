@@ -142,7 +142,7 @@ class Handler:
             - `numpy.compress(~no_feedback, data)` would select only queries.
             - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
-        assert prev_feedback is None or callable(prev_feedback)
+        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or callable(prev_feedback)
         # Collect sensor data.
         for s in self.sensors: s(self)
         if not len(self._data): return

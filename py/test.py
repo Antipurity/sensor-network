@@ -8,16 +8,26 @@ To measure test coverage, use https://coverage.readthedocs.io/en/6.3.1/
 
 import sensornet as sn
 import numpy as np
+import time
 
 
 
+# Benchmark.
+start, duration = time.monotonic(), 10.
 sn.shape((8, 24, 64), 8)
-sn.send(('test 1',), data=np.array([-.2, .2, .5, -1]))
-# TODO: ...Fix bugs.
-print(sn.handle())
-# TODO: Send random data, respond with random feedback, and measure throughput.
+iterations, feedback = 0, None
+def check_feedback(fb, *_):
+    assert fb is None or fb.shape == (4,) and fb[0] == .2 # TODO: Is it ever non-None?
+while time.monotonic() - start < duration:
+    sn.send(('test 1',), data=np.array([-.2, .2, .5, -1]), on_feedback=check_feedback)
+    data, error, no_data, no_feedback = sn.handle(feedback)
+    feedback = -data
+    iterations += 1
+print('iters/sec', iterations / duration) # TODO: Bytes per second, not iters per sec. And, with data-size-per-step pre-determined.
+# TODO: Send random data, respond with negated-data feedback, and measure throughput.
+#   TODO: How do we measure time?
 
-# TODO: Analyse reports of what's not covered by test, and cover it.
+# TODO: Analyse reports of what's not covered by tests, and cover it.
 
 
 
