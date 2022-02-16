@@ -241,7 +241,7 @@ class Namer:
         # Ignore the name, only heed data.
         assert len(feedback.shape) == 2 and feedback.shape[-1] == self.cell_size
         feedback = feedback[:, -self.cell_shape[-1]:]
-        return _unfill(np.flatten(feedback), length, 0)
+        return _unfill(feedback.flatten(), length, 0)
 
 
 
@@ -278,9 +278,10 @@ def _unfill(y, size, axis=0): # → x
     if y.shape[axis] < size:
         assert axis == 0 # Good enough for us.
         return np.pad(y, (0, size - y.shape[axis]))
-    folds = np.split(y, range(0, y.shape[axis], size), axis)
+    folds = np.split(y, range(size, y.shape[axis], size), axis)
     if folds[-1].shape[0] < size:
         folds[-1] = np.concatenate((folds[-1], 1 - 2 * np.abs(np.take(folds[-2], range(folds[-1].shape[0], size), axis))), 0)
+    print(y.shape, 'is split into', len(folds), 'folds as', *[f.shape for f in folds]) # TODO: Fixed, but now, why are values wrong?
     for i in reversed(range(1, -(y.shape[axis] // -size))):
         x, y = folds[i-1], folds[i]
         folds[i-1] = np.copysign(.5 * (1-y), x)

@@ -1,7 +1,7 @@
 """
 TODO:
 
-To measure test coverage, use https://coverage.readthedocs.io/en/6.3.1/
+To measure test coverage, use https://coverage.readthedocs.io/en/6.3.1/ or an equivalent.
 """
 
 
