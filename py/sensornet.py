@@ -22,7 +22,7 @@ class Handler:
         self._no_data = []
         self._no_feedback = []
         self._prev_fb = [] # [prev_feedback, …, _next_fb, …]
-        self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer), …]
+        self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self.sensors = [] # Called by `.handle(…)`.
         self.cell_shape = ()
         self.part_size = 0
@@ -42,6 +42,7 @@ class Handler:
         TODO: data is None or a number (how many no-data cells to request, as an action) or a NumPy array (flat if `name`, else 2D)
         """
         # TODO: …Wait a second: how did we manage to forget about `reward` (overriding the 0th number)?…
+        #   Should pass that in, defaulting to `0.`, right?
         if name is None and on_feedback is None: return
         if not self.cell_size: return on_feedback(None, self.cell_shape, self.part_size)
         assert name is None or isinstance(name, tuple)
@@ -96,7 +97,7 @@ class Handler:
         if prev_feedback is not None:
             self._prev_fb.append((prev_feedback, self._next_fb, self.cell_shape, self.part_size))
         else:
-            for on_feedback, expected_shape, start_cell, end_cell, namer in self._next_fb:
+            for on_feedback, expected_shape, start_cell, end_cell, namer, length in self._next_fb:
                 on_feedback(None, self.cell_shape, self.part_size)
         self.discard()
         while len(self._prev_fb):
@@ -105,15 +106,15 @@ class Handler:
             if feedback is None: break
             assert isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
-            for on_feedback, expected_shape, start_cell, end_cell, namer in callbacks:
+            for on_feedback, expected_shape, start_cell, end_cell, namer, length in callbacks:
                 fb = feedback[start_cell:end_cell, :]
                 assert fb.shape == expected_shape
-                fb = namer.unname(fb)
+                fb = namer.unname(fb, length)
                 on_feedback(fb, cell_shape, part_size)
         return (data, error, no_data, no_feedback)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
-        for on_feedback, start_cell, end_cell in self._next_fb:
+        for on_feedback, expected_shape, start_cell, end_cell, namer, length in self._next_fb:
             try:
                 on_feedback(None, self)
             except KeyboardInterrupt:
@@ -170,8 +171,11 @@ class Namer:
         end = start + self.cell_size
         name = [_fill(np.array([x(start, end, total) if callable(x) else x for x in p]) if isinstance(p, list) else p, self.part_size, 1) for p in self.name_parts]
         return np.concatenate([*name, data], 1)
-    # TODO: unname(feedback)→feedback2
-    #   TODO: How to undo `name`?...
+    def unname(self, feedback, length):
+        # Ignore the name, only heed data.
+        assert len(feedback.shape) == 2 and feedback.shape[-1] == self.cell_size
+        feedback = feedback[:, -self.cell_shape[-1]:]
+        return _unfill(np.flatten(feedback), length, 0)
 
 
 
@@ -216,9 +220,6 @@ def _unfill(y, size, axis=0): # → x
         x, y = folds[i-1], folds[i]
         folds[i-1] = np.copysign(.5 * (1-y), x)
     return folds[0]
-def _pad(x, size, axis=0):
-    if x.shape[axis] == size: return x
-    assert x.shape[axis] < size
     
     
 
@@ -236,4 +237,4 @@ sensors = default.sensors
 #     (Its flexibility as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
 #     `'asyncio' in sys.modules` and `sys.modules['asyncio']` with py3.3+ could check whether it has been imported already. Which introduces import-order requirements, which is bad UX.
 #     `try: import asyncio; except ImportError: ...` with py3.6+ for robust checking.
-#     …What would an asyncio interface look like exactly, though? And, can't users just easily implement it anyway if they need to?
+#     …What would an asyncio interface look like exactly, though? And, can't users just easily implement it anyway if they need to? (But it *is* convenient to have, both could-fail and retry-until-does-not-fail, so, maybe?...)
