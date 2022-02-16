@@ -31,3 +31,4 @@ while time.monotonic() - start < duration:
 print('bytes/sec', N*4 * iterations / duration) # TODO:
 
 # TODO: Analyse reports of what's not covered by tests, and cover it.
+#   …How does it already have 80% coverage…
