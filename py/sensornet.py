@@ -184,19 +184,21 @@ class Handler:
         return (data, error, no_data, no_feedback)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
+        got_err = None
         for on_feedback, expected_shape, start_cell, end_cell, namer, length in self._next_fb:
             try:
                 on_feedback(None, self.cell_shape, self.part_size, self)
-            except KeyboardInterrupt: # TODO: Some dumb feedback shit that raises a KeyboardInterrupt.
-                raise
+            except KeyboardInterrupt as err:
+                got_err = err
             except Exception as err:
-                print(err) # TODO: Instead of this, remember the last error, and if any, raise it after everything is cleared.
+                got_err = err
         self._cell = 0
         self._data.clear()
         self._error.clear()
         self._no_data.clear()
         self._no_feedback.clear()
         self._next_fb.clear()
+        if got_err: raise got_err
 
 
 
@@ -298,12 +300,12 @@ def _fill(x, size, axis=0): # → y
         folds.append(1 - 2 * np.abs(folds[-1]))
     x = np.concatenate(folds, axis)
     if x.shape[axis] == size: return x
-    return np.take(x, range(0,size), axis) # TODO: A test that triggers this.
+    return np.take(x, range(0,size), axis)
 def _unfill(y, size, axis=0): # → x
     """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`.
 
     `(x,y) → (copysign((1-y)/2, x), y)`"""
-    if y.shape[axis] == size: return y # TODO: A test that triggers the rest.
+    if y.shape[axis] == size: return y # TODO: A test that triggers the rest. ...How would we do that?
     if y.shape[axis] < size:
         assert axis == 0 # Good enough for us.
         return np.pad(y, (0, size - y.shape[axis]))

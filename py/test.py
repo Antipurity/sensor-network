@@ -58,12 +58,24 @@ def test5():
     h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.1, .2, .3])))
     h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.4, .5, .6])))
     assert h.handle()[0].shape == (2, 96)
+def test6():
+    """Errors thrown by `on_feedback`."""
+    h = sn.Handler((8, 24, 64), 8)
+    def err1(*_): raise KeyboardInterrupt()
+    def err2(*_): raise TypeError('damn')
+    h.send(data=None, on_feedback=err1)
+    try: h.handle()
+    except KeyboardInterrupt: pass
+    h.send(data=None, on_feedback=err2)
+    try: h.handle()
+    except TypeError: pass
 test0()
 test1()
 test2()
 test3()
 test4()
 test5()
+test6()
 # TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
 # TODO: And all the other tests, as many as we need to bring the coverage up to 100%.
 # TODO: Also try sending None as data, and still have on_feedback.
