@@ -91,7 +91,7 @@ class Handler:
         length = None
         if name is not None:
             if len(data.shape) != 1: data = data.flatten()
-            if error and len(error.shape) != 1: error = error.flatten()
+            if error is not None and len(error.shape) != 1: error = error.flatten()
             length = data.shape[0]
         # Name.
         if isinstance(name, tuple) or isinstance(name, list): # TODO: A test that does not trigger this.
@@ -156,7 +156,7 @@ class Handler:
             - `numpy.compress(~no_feedback, data)` would select only queries.
             - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
-        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or callable(prev_feedback)
+        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or callable(prev_feedback) # TODO: Also allow prev_feedback to be asyncio.Future? (feedback = feedback() if callable(feedback) else (feedback.result() if feedback.done() else None) if isinstance(feedback, asyncio.Future) else feedback)
         # Collect sensor data.
         for s in self.sensors: s(self)
         if not len(self._data): return (None, None, None, None)
@@ -173,7 +173,7 @@ class Handler:
         while len(self._prev_fb):
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if callable(feedback): feedback = feedback()
-            if feedback is None: break # TODO: A test that triggers this.
+            if feedback is None: break # TODO: A test that triggers this (delayed prev_feedback, returning None at least once, then the actual feedback).
             assert isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
             for on_feedback, expected_shape, start_cell, end_cell, namer, length in callbacks:
@@ -187,10 +187,10 @@ class Handler:
         for on_feedback, expected_shape, start_cell, end_cell, namer, length in self._next_fb:
             try:
                 on_feedback(None, self.cell_shape, self.part_size, self)
-            except KeyboardInterrupt:
+            except KeyboardInterrupt: # TODO: Some dumb feedback shit that raises a KeyboardInterrupt.
                 raise
             except Exception as err:
-                print(err)
+                print(err) # TODO: Instead of this, remember the last error, and if any, raise it after everything is cleared.
         self._cell = 0
         self._data.clear()
         self._error.clear()
@@ -223,7 +223,7 @@ class Namer:
                 name_parts.append(np.expand_dims(_str_to_floats(part), 0))
             elif isinstance(part, float) or isinstance(part, int) or callable(part): # TODO: A test that triggers this.
                 nums.append(np.atleast_2d(part) if not callable(part) else part)
-                if len(nums) >= part_size:
+                if len(nums) >= part_size: # TODO: A test that crams many, many numbers into one part.
                     name_parts.append(nums)
                     nums = []
             else: # TODO: A test that triggers this.
@@ -254,9 +254,9 @@ class Namer:
         total = cells * data_size
         data = np.reshape(_fill(data, total, 0), (cells, data_size))
         # Finalize the name, then concat it before `data`.
-        if fill is not None:
+        if fill is not None: # TODO: ...But we have a test with an error; why isn't this ever triggered?... ...OH: that error isn't named!
             name = np.full((cells, name_size), fill)
-            return np.concatenate((), 1)
+            return np.concatenate((name, data), 1)
         start = np.expand_dims(np.arange(0, total, data_size), -1)
         end = start + data_size
         name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1) if isinstance(p, list) else np.repeat(p, cells, 0), self.part_size, 1) for p in self.name_parts], 1)
@@ -330,7 +330,7 @@ def send(*k, **kw):
     return default.send(*k, **kw)
 def handle(*k, **kw):
     return default.handle(*k, **kw)
-def discard(*k, **kw): # TODO: A test that uses this.
+def discard(*k, **kw):
     return default.discard(*k, **kw)
 def maybe_get(*k, **kw):
     return default.maybe_get(*k, **kw)
