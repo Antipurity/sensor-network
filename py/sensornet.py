@@ -213,22 +213,20 @@ class Namer:
     def __init__(self, name, cell_shape, part_size):
         assert isinstance(name, list) or isinstance(name, tuple)
         _shape_ok(cell_shape, part_size)
-        self.cell_shape = cell_shape
-        self.part_size = part_size
-        self.cell_size = sum(cell_shape)
         name_parts = []
         nums = []
         for part in name:
             if isinstance(part, str):
                 name_parts.append(np.expand_dims(_str_to_floats(part), 0))
-            elif isinstance(part, float) or isinstance(part, int) or callable(part): # TODO: A test that triggers this.
+            elif callable(part) or not isinstance(part, bool) and (isinstance(part, float) or isinstance(part, int)):
                 nums.append(np.atleast_2d(part) if not callable(part) else part)
                 if len(nums) >= part_size: # TODO: A test that crams many, many numbers into one part.
                     name_parts.append(nums)
                     nums = []
-            else: # TODO: A test that triggers this.
+            else:
                 raise TypeError("Names must consist of strings, numbers, and number-returning functions")
         if len(nums): name_parts.append(nums)
+        # Concat consecutive numbers in the name for a bit more performance.
         for part in name_parts:
             if isinstance(part, list):
                 start, end = 0, 0
@@ -241,6 +239,9 @@ class Namer:
                     if start < len(part) and not isinstance(part[start], np.ndarray): start = end+1
                     end += 1
         self.name_parts = name_parts
+        self.cell_shape = cell_shape
+        self.part_size = part_size
+        self.cell_size = sum(cell_shape)
     def name(self, data, fill=None):
         """
         1D to 2D.

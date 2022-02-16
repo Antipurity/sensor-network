@@ -43,22 +43,25 @@ def test3():
     h = sn.Handler((8, 24, 64), 8)
     h.send(name=('test',), data=np.zeros((16,)), error=np.full((16,), -.5), on_feedback=lambda *_: ...)
     h.handle()
+def test4():
+    """Name's error."""
+    h = sn.Handler((8, 24, 64), 8)
+    try:
+        h.send(name=(True,), data=np.array([1.]))
+        assert False
+    except TypeError:
+        pass
 test0()
 test1()
 test2()
 test3()
+test4()
 # TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
 # TODO: And all the other tests, as many as we need to bring the coverage up to 100%.
 # TODO: Also h.sensors.append(lambda h: ...).
 # TODO: Also try sending None as data, and still have on_feedback.
 # TODO: Also send "no-data" as a number requesting a cell-count. Via h.get, and async handling.
 # TODO: Also make prev_feedback a function that returns None at least once.
-# TODO:
-#   try:
-#     h.send(name=(False,), data=np.array([1.]))
-#     raise RuntimeError('Should have raised an error')
-#   except AssertionError:
-#     pass
 print('Tests OK')
 
 
