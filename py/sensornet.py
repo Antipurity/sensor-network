@@ -204,13 +204,20 @@ class Namer:
             if isinstance(part, str):
                 name_parts.append(np.expand_dims(_str_to_floats(part), 0))
             elif isinstance(part, float) or isinstance(part, int) or callable(part):
-                nums.append(part)
+                nums.append(np.atleast_1d(part))
                 if len(nums) >= part_size:
                     name_parts.append(nums)
                     nums = []
             else:
                 raise TypeError("Names must consist of strings, numbers, and number-returning functions")
         if len(nums): name_parts.append(nums)
+        for part in name:
+            if isinstance(part, list):
+                start = 0
+                for end in range(0, len(part)+1):
+                    if end >= len(part) or not isinstance(part[end], np.ndarray):
+                        part[start:end] = [np.concatenate(part[start:end])]
+                        start = end
         self.name_parts = name_parts
     def name(self, data, fill=None):
         """
@@ -228,9 +235,9 @@ class Namer:
         if fill is not None:
             name = np.full((cells, name_size), fill)
             return np.concatenate((), 1)
-        start = np.arange(0, total, data_size)
+        start = np.expand_dims(np.arange(0, total, data_size), -1)
         end = start + data_size
-        name = np.concatenate([_fill(np.array([x(start, end, total) if callable(x) else x for x in p]) if isinstance(p, list) else p, self.part_size, 1) for p in self.name_parts], 1)
+        name = np.concatenate([_fill(np.array([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p]) if isinstance(p, list) else np.repeat(p, cells, 0), self.part_size, 1) for p in self.name_parts], 1)
         name = _fill(name, name_size, 1)
         return np.concatenate((name, data), 1)
     def unname(self, feedback, length):
@@ -255,9 +262,9 @@ def _str_to_floats(string: str):
 def _fill(x, size, axis=0): # → y
     """
     Ensures that an `axis` of a NumPy array `x` has the appropriate `size`, returning `y`.
-    
+
     If it's too small, fractally folds `x` via repeated `x → 1 - 2*abs(x)` to increase AI-model sensitivity where we can.
-    
+
     >>> _fill(np.zeros((2,)), 6)
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
@@ -271,7 +278,7 @@ def _fill(x, size, axis=0): # → y
     return np.take(x, range(0,size), axis)
 def _unfill(y, size, axis=0): # → x
     """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`.
-    
+
     `(x,y) → (copysign((1-y)/2, x), y)`"""
     if y.shape[axis] == size: return y
     if y.shape[axis] < size:
@@ -284,8 +291,8 @@ def _unfill(y, size, axis=0): # → x
         x, y = folds[i-1], folds[i]
         folds[i-1] = np.copysign(.5 * (1-y), x)
     return folds[0]
-    
-    
+
+
 
 
 
