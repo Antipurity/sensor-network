@@ -229,13 +229,17 @@ class Namer:
             else: # TODO: A test that triggers this.
                 raise TypeError("Names must consist of strings, numbers, and number-returning functions")
         if len(nums): name_parts.append(nums)
-        for part in name:
-            if isinstance(part, list): # TODO: A test that triggers this.
-                start = 0
-                for end in range(0, len(part)+1): # TODO: ...Wait, why weren't the numbers merged...
-                    if end >= len(part) or not isinstance(part[end], np.ndarray):
-                        part[start:end] = [np.concatenate(part[start:end])]
+        for part in name_parts:
+            if isinstance(part, list):
+                start, end = 0, 0
+                while end <= len(part):
+                    if start<end and (end >= len(part) or not isinstance(part[end], np.ndarray)):
+                        L = end-start
+                        part[start:end] = [np.concatenate(part[start:end], 1)]
+                        end -= L-1
                         start = end
+                    if start < len(part) and not isinstance(part[start], np.ndarray): start = end+1
+                    end += 1
         self.name_parts = name_parts
     def name(self, data, fill=None):
         """

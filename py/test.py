@@ -46,6 +46,12 @@ test2()
 # TODO: Also try sending None as data, and still have on_feedback.
 # TODO: Also send "no-data" as a number requesting a cell-count. Via h.get, and async handling.
 # TODO: Also h.sensors.append(lambda h: ...).
+# TODO:
+#   try:
+#     h.send(name=(False,), data=np.array([1.]))
+#     raise RuntimeError('Should have raised an error')
+#   except AssertionError:
+#     pass
 print('Tests OK')
 
 
