@@ -224,7 +224,7 @@ class Namer:
         if fill is not None:
             name = np.full((cells, self.cell_size - self.cell_shape[-1]), fill)
             return np.concatenate((), 1)
-        start = np.range(0, total, self.cell_size)
+        start = np.arange(0, total, self.cell_size)
         end = start + self.cell_size
         name = [_fill(np.array([x(start, end, total) if callable(x) else x for x in p]) if isinstance(p, list) else p, self.part_size, 1) for p in self.name_parts]
         return np.concatenate([*name, data], 1)
@@ -256,7 +256,7 @@ def _fill(x, size, axis=0): # → y
     >>> _fill(np.zeros((2,)), 6)
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
-    if x.shape[axis] == size: return x
+    if x.shape[axis] == size: return x # TODO: Why is this index non-existent?
     if x.shape[axis] > size: return np.take(x, range(0,size), axis)
     folds = [x]
     for _ in range(1, -(-size // x.shape[axis])):
@@ -302,9 +302,3 @@ def maybe_get(*k, **kw):
     return default.maybe_get(*k, **kw)
 def get(*k, **kw):
     return default.get(*k, **kw)
-
-
-
-# TODO: Also launch tests if this module is executed directly: correctness, then throughput.
-#   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right?)
-#     (Its flexibility & convenience as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
