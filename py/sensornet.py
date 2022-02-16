@@ -80,9 +80,11 @@ class Handler:
         no_feedback = not on_feedback
         no_data = False if isinstance(data, np.ndarray) else True
         if no_data: data = np.zeros((data or 0, self.cell_size), dtype=np.float32)
+        length = None
         if name is not None:
             if len(data.shape) != 1: data = data.flatten()
             if error and len(error.shape) != 1: error = error.flatten()
+            length = data.shape[0]
         # Name.
         if isinstance(name, tuple) or isinstance(name, list):
             name = Namer(name, self.cell_shape, self.part_size)
@@ -93,7 +95,6 @@ class Handler:
             error = name.name(error, -1.)
         else:
             assert name is None
-        print('data', data.shape, 'cell_size', self.cell_size) # TODO: ...Why is it 104 in the last dimension, 8 more than the correct 96...
         assert len(data.shape) == 2
         assert data.shape[-1] == self.cell_size
         assert error is None or data.shape == error.shape
@@ -106,7 +107,7 @@ class Handler:
         self._error.append(error)
         self._no_data.append(np.tile(no_data, shape))
         self._no_feedback.append(np.tile(no_feedback, shape))
-        self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name))
+        self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length))
         self._cell += cells
     def maybe_get(self, name, len, reward=0.):
         """
@@ -165,7 +166,7 @@ class Handler:
             for on_feedback, expected_shape, start_cell, end_cell, namer, length in callbacks:
                 fb = feedback[start_cell:end_cell, :]
                 assert fb.shape == expected_shape
-                fb = namer.unname(fb, length)
+                if namer is not None: fb = namer.unname(fb, length)
                 on_feedback(fb, cell_shape, part_size, self)
         return (data, error, no_data, no_feedback)
     def discard(self):
