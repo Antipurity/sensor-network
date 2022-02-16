@@ -220,7 +220,7 @@ class Namer:
                 name_parts.append(np.expand_dims(_str_to_floats(part), 0))
             elif callable(part) or not isinstance(part, bool) and (isinstance(part, float) or isinstance(part, int)):
                 nums.append(np.atleast_2d(part) if not callable(part) else part)
-                if len(nums) >= part_size: # TODO: A test that crams many, many numbers into one part.
+                if len(nums) >= part_size:
                     name_parts.append(nums)
                     nums = []
             else:

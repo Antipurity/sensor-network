@@ -36,8 +36,9 @@ def test2():
     h = sn.Handler((8, 24, 64), 8)
     h.send(name=('test',), data=np.array([-.4, -.2, .2, .4]))
     h.send(name=('test', -.2, .2, lambda start,end,total: start/total*2-1), data=np.array([-.4, -.2, .2, .4]))
+    h.send(name=(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), data=np.array([-.4, -.2, .2, .4]))
     data, error, no_data, no_feedback = h.handle()
-    assert data.shape == (2, 96)
+    assert data.shape == (3, 96)
 def test3():
     """Named error."""
     h = sn.Handler((8, 24, 64), 8)
