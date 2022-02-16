@@ -13,10 +13,12 @@ import time
 
 
 # Benchmark.
+#   TODO: Extract into a function.
 start, duration = time.monotonic(), 10.
 sn.shape((8, 24, 64), 8)
 iterations, feedback = 0, None
 def check_feedback(fb, *_):
+    if fb is not None: print('have feedback', fb.shape) # TODO: ...Okay, this is so not right. We literally never have any data. Why?
     assert fb is None or fb.shape == (4,) and fb[0] == .2 # TODO: Is it ever non-None?
 while time.monotonic() - start < duration:
     sn.send(('test 1',), data=np.array([-.2, .2, .5, -1]), on_feedback=check_feedback)
@@ -26,6 +28,7 @@ while time.monotonic() - start < duration:
 print('iters/sec', iterations / duration) # TODO: Bytes per second, not iters per sec. And, with data-size-per-step pre-determined.
 # TODO: Send random data, respond with negated-data feedback, and measure throughput.
 #   TODO: How do we measure time?
+#   ...Why is our throughput so pathetic (6.3k iters/sec)? Is it because of Python? Will it significantly increase if we have bigger arrays?
 
 # TODO: Analyse reports of what's not covered by tests, and cover it.
 
