@@ -58,7 +58,7 @@ class Handler:
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
         - `reward = 0.`: rates prior performance of these cells, for reinforcement learning.
         - `on_feedback = None`: a function from `feedback` (could be `None`), `cell_shape`, `part_size`, `handler`, to nothing.
-            - `.handle` steps are never re-ordered, so to reduce memory allocations, could reuse the same function and use queues.
+            - Neither `.send` nor `.handle` steps are never re-ordered, so to reduce memory allocations, could reuse the same function and use queues.
 
         Returns `None`. See `.maybe_get` and `.get` for more convenient `asyncio`-based interfaces.
         """
@@ -100,8 +100,20 @@ class Handler:
         self._no_feedback.append(np.tile(no_feedback, shape))
         self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name))
         self._cell += cells
-    # TODO: async def maybe_get(name, len)→None|array, build on top of send.
-    # TODO: async def get(name, len)→array, built on top of maybe_get.
+    def maybe_get(self, name, len, reward=0.):
+        """
+        Wraps `.send` to allow `await`ing a 1D tensor from the handler, or `None`.
+        """
+        fut = asyncio.Future()
+        self.send(name, len, None, reward, lambda feedback, cell_shape, part_size, handler: fut.set_result(feedback))
+        return fut
+    async def get(self, name, len, reward=0.):
+        """
+        Wraps `.send` to allow `await`ing a 1D tensor from the handler. Never returns `None`, instead re-requesting until a numeric result is available.
+        """
+        while True:
+            fb = self.maybe_get(name, len, reward)
+            if fb is not None: return fb
     def handle(self, prev_feedback=None):
         """
         Handles collected data.
@@ -279,13 +291,13 @@ def handle(*k, **kw):
     return default.handle(*k, **kw)
 def discard(*k, **kw):
     return default.discard(*k, **kw)
+def maybe_get(*k, **kw):
+    return default.maybe_get(*k, **kw)
+def get(*k, **kw):
+    return default.get(*k, **kw)
 
 
 
 # TODO: Also launch tests if this module is executed directly: correctness, then throughput.
 #   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right? Not quite asyncio levels of simplicity, but still... ...Could we integrate with asyncio too?...)
 #     (Its flexibility as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
-#     `'asyncio' in sys.modules` and `sys.modules['asyncio']` with py3.3+ could check whether it has been imported already. Which introduces import-order requirements, which is bad UX.
-#     `try: import asyncio; except ImportError: ...` with py3.6+ for robust checking.
-#     …What would an asyncio interface look like exactly, though? And, can't users just easily implement it anyway if they need to? (But it *is* convenient to have, both could-fail and retry-until-does-not-fail, so, maybe?...)
-#     …Apparently, asyncio is in Python stdlib since Py3.4. So, maybe we don't need to check.
