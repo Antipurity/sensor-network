@@ -1,11 +1,14 @@
 """
 TODO:
+
+Python 3.4 or newer.
 """
 
 
 
 import numpy as np
 import hashlib
+import asyncio
 
 
 
@@ -41,16 +44,17 @@ class Handler:
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
-    def send(self, name=None, data=None, error=None, on_feedback=None):
+    def send(self, name=None, data=None, error=None, reward=0., on_feedback=None):
         """
         TODO:
         TODO: on_feedback(feedback, cell_shape, part_size, handler); `feedback` might be `None`; always called in-send-order, so to reduce memory allocations, could reuse the same function and use queues.
         TODO: data is None or a number (how many no-data cells to request, as an action) or a NumPy array (flat if `name`, else 2D)
+        TODO: reward
         """
-        # TODO: …Wait a second: how did we manage to forget about `reward` (overriding the 0th number)?…
-        #   Should pass that in, defaulting to `0.`, right?
         if name is None and on_feedback is None: return
-        if not self.cell_size: return on_feedback(None, self.cell_shape, self.part_size, self)
+        if not self.cell_size:
+            on_feedback(None, self.cell_shape, self.part_size, self)
+            return
         assert name is None or isinstance(name, tuple)
         assert data is None or isinstance(data, int) and data>=0 or isinstance(data, np.ndarray)
         assert error is None or isinstance(error, np.ndarray)
@@ -74,6 +78,7 @@ class Handler:
         assert len(data.shape) == 2
         assert data.shape[-1] == self.cell_size
         assert error is None or data.shape == error.shape
+        data[:, 0] = reward
         # Send.
         cells = data.shape[0]
         shape = (cells,)
@@ -97,7 +102,7 @@ class Handler:
         - Usage:
             - `numpy.compress(~no_data, data)` would select only inputs.
             - `numpy.compress(~no_feedback, data)` would select only queries.
-            - `numpy.put(data, numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
+            - `numpy.put(np.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
         assert prev_feedback is None or callable(prev_feedback)
         # Collect sensor data.
@@ -268,3 +273,4 @@ def discard(*k, **kw):
 #     `'asyncio' in sys.modules` and `sys.modules['asyncio']` with py3.3+ could check whether it has been imported already. Which introduces import-order requirements, which is bad UX.
 #     `try: import asyncio; except ImportError: ...` with py3.6+ for robust checking.
 #     …What would an asyncio interface look like exactly, though? And, can't users just easily implement it anyway if they need to? (But it *is* convenient to have, both could-fail and retry-until-does-not-fail, so, maybe?...)
+#     …Apparently, asyncio is in Python stdlib since Py3.4. So, maybe we don't need to check.
