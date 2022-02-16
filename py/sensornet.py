@@ -201,7 +201,7 @@ class Namer:
         nums = []
         for part in name:
             if isinstance(part, str):
-                name_parts.append(_str_to_floats(part))
+                name_parts.append(np.expand_dims(_str_to_floats(part), 0))
             elif isinstance(part, float) or isinstance(part, int) or callable(part):
                 nums.append(part)
                 if len(nums) >= part_size:
@@ -256,6 +256,7 @@ def _fill(x, size, axis=0): # → y
     >>> _fill(np.zeros((2,)), 6)
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
+    print(x, size, axis) # TODO: ...Why are we being requested to fill along axis `1` on a flat array...
     if x.shape[axis] == size: return x # TODO: Why is this index non-existent?
     if x.shape[axis] > size: return np.take(x, range(0,size), axis)
     folds = [x]
