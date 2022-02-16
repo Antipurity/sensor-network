@@ -1,7 +1,14 @@
 """
-TODO:
+Module for differentiable sensor networks: each gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
-Python 3.4 or newer.
+Position-invariant and numeric: these constraints allow AI models to disregard all concerns about data formats, perform cross-dataset meta-learning and multimodal learning, combine tasks at runtime, and learn in completely arbitrary environments, with only a couple lines of code on the sensor-side and no changes on the handler-side.
+
+Python 3.4 or newer (for asyncio).
+
+---
+
+TODO: After we have the tests, have a mini-tutorial on the proper use.
+    TODO: Mention that users can use the top-level module, or equivalently, create a `Handler` and call methods on that, and/or use many `Handler`s.
 """
 
 
@@ -14,15 +21,15 @@ import asyncio
 
 class Handler:
     """
-    TODO:
+    A differentiable sensor network: gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
-    TODO: Mention that the top-level `sensornet` module acts like an instance of this class, but if more processing streams are needed, can construct them.
+    All data is split into fixed-size cells, each of which has a numeric name and a part of data. Handlers (AI models) should be position-invariant.
+
+    Either pass in `cell_shape` (such as `(8, 24, 64)`: the last one is how many data-numbers there are per cell, the rest are the name's sizes) and `part_size` (such as `8`; sent name is split into parts; for example, each string in a name would take up 1 part), or call `.shape(cell_shape, part_size)`.
 
     To gather data automatically, do `handler.sensors.append(lambda handler: ...)`.
 
-    If needed, read `.cell_shape` or `.part_size` or `.cell_size` wherever the object is available.
-
-    TODO: After we have a test, have a mini-tutorial on the proper use.
+    If needed, read `.cell_shape` or `.part_size` or `.cell_size` wherever the object is available. These values might change between sending and receiving feedback.
     """
     def __init__(self, cell_shape=None, part_size=None):
         self._cell = 0
@@ -104,6 +111,7 @@ class Handler:
         """
         Wraps `.send` to allow `await`ing a 1D tensor from the handler, or `None`.
         """
+        # `asyncio.get_running_loop().create_future()` is better for customization-by-the-loop reasons, but imposes Python 3.7.
         fut = asyncio.Future()
         self.send(name, len, None, reward, lambda feedback, cell_shape, part_size, handler: fut.set_result(feedback))
         return fut
@@ -235,7 +243,6 @@ def _shape_ok(cell_shape: tuple, part_size: int):
     assert isinstance(part_size, int) and part_size > 0
     assert isinstance(cell_shape, tuple)
     assert all(isinstance(s, int) and s > 0 for s in cell_shape)
-    assert len(cell_shape) == 4
     assert all(s % part_size == 0 for s in cell_shape[:-1])
 def _str_to_floats(string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
@@ -299,5 +306,5 @@ def get(*k, **kw):
 
 
 # TODO: Also launch tests if this module is executed directly: correctness, then throughput.
-#   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right? Not quite asyncio levels of simplicity, but still... ...Could we integrate with asyncio too?...)
-#     (Its flexibility as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
+#   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right?)
+#     (Its flexibility & convenience as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
