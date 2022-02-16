@@ -10,6 +10,7 @@ Python 3.4 or newer (for asyncio).
 TODO: After we have the tests, have a mini-tutorial on the proper use.
     TODO: Mention that users can use the top-level module, or equivalently, create a `Handler` and call methods on that, and/or use many `Handler`s.
 """
+# TODO: A license file.
 
 
 
@@ -21,6 +22,8 @@ import asyncio
 
 class Handler:
     """
+    `Namer(cell_shape=None, part_size=None)`
+
     A differentiable sensor network: gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
     All data is split into fixed-size cells, each of which has a numeric name and a part of data. Handlers (AI models) should be position-invariant.
@@ -44,9 +47,11 @@ class Handler:
         self.part_size = 0
         self.cell_size = 0
         if cell_shape is not None or part_size is not None:
-            self.shape(cell_shape, part_size) # TODO: A test that covers this.
+            self.shape(cell_shape, part_size)
     def shape(self, cell_shape, part_size):
-        """Changes the current shape."""
+        """`sn.shape(cell_shape, part_size)`
+
+        Changes the current shape."""
         _shape_ok(cell_shape, part_size)
         self.discard()
         self.cell_shape = cell_shape
@@ -54,6 +59,8 @@ class Handler:
         self.cell_size = sum(cell_shape)
     def send(self, name=None, data=None, error=None, reward=0., on_feedback=None):
         """
+        `sn.send(name=None, data=None, error=None, reward=0., on_feedback=None)`
+
         Sends named data, possibly getting same-size feedback, possibly only getting feedback.
 
         Arguments:
@@ -69,19 +76,20 @@ class Handler:
 
         Returns `None`. See `.maybe_get` and `.get` for more convenient `asyncio`-based interfaces.
         """
-        if name is None and on_feedback is None: return # TODO: A test that triggers this.
-        if not self.cell_size: # TODO: A test that triggers this.
-            on_feedback(None, self.cell_shape, self.part_size, self)
-            return
-        assert name is None or isinstance(name, tuple)
+        if data is None and on_feedback is None: return
+        assert name is None or isinstance(name, tuple) or isinstance(name, Namer)
         assert data is None or isinstance(data, int) and data>=0 or isinstance(data, np.ndarray)
         assert error is None or isinstance(error, np.ndarray)
         assert on_feedback is None or callable(on_feedback)
+        if not self.cell_size:
+            if on_feedback is not None:
+                on_feedback(None, self.cell_shape, self.part_size, self)
+            return
         no_feedback = not on_feedback
         no_data = False if isinstance(data, np.ndarray) else True
         if no_data: data = np.zeros((data or 0, self.cell_size), dtype=np.float32)
         length = None
-        if name is not None: # TODO: A test that does not trigger this.
+        if name is not None:
             if len(data.shape) != 1: data = data.flatten()
             if error and len(error.shape) != 1: error = error.flatten()
             length = data.shape[0]
@@ -112,6 +120,8 @@ class Handler:
         self._cell += cells
     def maybe_get(self, name, len, reward=0.):
         """
+        `sn.maybe_get(name, len, reward=0.)`
+
         Wraps `.send` to allow `await`ing a 1D tensor from the handler, or `None`.
         """
         # `asyncio.get_running_loop().create_future()` is better for customization-by-the-loop reasons, but imposes Python 3.7.
@@ -120,6 +130,8 @@ class Handler:
         return fut
     async def get(self, name, len, reward=0.): # TODO: A test that uses this.
         """
+        `sn.get(name, len, reward=0.)`
+
         Wraps `.send` to allow `await`ing a 1D tensor from the handler. Never returns `None`, instead re-requesting until a numeric result is available.
         """
         while True:
@@ -127,6 +139,8 @@ class Handler:
             if fb is not None: return fb
     def handle(self, prev_feedback=None):
         """
+        `sn.handle(prev_feedback=None)`
+
         Handles collected data.
 
         Pass it the previous handling's feedback (as a NumPy array or `None`), or if not immediately available (i.e. needs GPU→CPU transfer), a function with no inputs that will return `None` or the feedback.
@@ -145,10 +159,10 @@ class Handler:
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or callable(prev_feedback)
         # Collect sensor data.
         for s in self.sensors: s(self)
-        if not len(self._data): return (None, None, None, None) # TODO: A test that triggers this.
+        if not len(self._data): return (None, None, None, None)
         # Gather data.
         data = np.concatenate(self._data, 0)
-        error = np.concatenate([e or -np.ones((0, self.cell_size)) for e in self._error], 0) if any(self._error) else None # TODO: A test that specifies sending error.
+        error = np.concatenate([e if e is not None else -np.ones((0, self.cell_size)) for e in self._error], 0) if any(e is not None for e in self._error) else None
         no_data = np.concatenate(self._no_data, 0)
         no_feedback = np.concatenate(self._no_feedback, 0)
         # Forget this step's data, and report feedback.
@@ -188,10 +202,14 @@ class Handler:
 
 class Namer:
     """
+    `Namer(name, cell_shape, part_size)`
+
     A class for augmenting a 1D array with numeric names, into a 2D array, sized cells×cell_size.
 
-    Pre-constructing this instead of passing in names to `handler.send` might be faster.
+    This is an optimization opportunity: wrapping a name in this and storing this object is faster than passing the name directly (which re-constructs this object each time).
     """
+    # (Fixed cell_shape and part_size may be quite inconvenient to use.)
+    #   TODO: (So, may want this to cache `name_parts` for cell shape and part size, and make name/unname accept cell shape and part size, and update name parts if changed. After all, user convenience MUST be king here.)
     def __init__(self, name, cell_shape, part_size):
         assert isinstance(name, list) or isinstance(name, tuple)
         _shape_ok(cell_shape, part_size)
@@ -204,7 +222,7 @@ class Namer:
             if isinstance(part, str):
                 name_parts.append(np.expand_dims(_str_to_floats(part), 0))
             elif isinstance(part, float) or isinstance(part, int) or callable(part): # TODO: A test that triggers this.
-                nums.append(np.atleast_1d(part))
+                nums.append(np.atleast_2d(part) if not callable(part) else part)
                 if len(nums) >= part_size:
                     name_parts.append(nums)
                     nums = []
@@ -214,7 +232,7 @@ class Namer:
         for part in name:
             if isinstance(part, list): # TODO: A test that triggers this.
                 start = 0
-                for end in range(0, len(part)+1):
+                for end in range(0, len(part)+1): # TODO: ...Wait, why weren't the numbers merged...
                     if end >= len(part) or not isinstance(part[end], np.ndarray):
                         part[start:end] = [np.concatenate(part[start:end])]
                         start = end
@@ -232,12 +250,12 @@ class Namer:
         total = cells * data_size
         data = np.reshape(_fill(data, total, 0), (cells, data_size))
         # Finalize the name, then concat it before `data`.
-        if fill is not None: # TODO: A test that specifies the transmission error.
+        if fill is not None:
             name = np.full((cells, name_size), fill)
             return np.concatenate((), 1)
         start = np.expand_dims(np.arange(0, total, data_size), -1)
         end = start + data_size
-        name = np.concatenate([_fill(np.array([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p]) if isinstance(p, list) else np.repeat(p, cells, 0), self.part_size, 1) for p in self.name_parts], 1)
+        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1) if isinstance(p, list) else np.repeat(p, cells, 0), self.part_size, 1) for p in self.name_parts], 1)
         name = _fill(name, name_size, 1)
         return np.concatenate((name, data), 1)
     def unname(self, feedback, length):
