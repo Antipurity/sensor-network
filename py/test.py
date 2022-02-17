@@ -108,6 +108,7 @@ test6()
 test7()
 test8()
 # TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
+#   What do we need to modify? Just `Namer.name`?
 # TODO: Also send "no-data" as a number requesting that-many-numbers. Via h.get, and async handling. (Possibly near the benchmark, so that we can use `sn`.)
 print('Tests OK')
 

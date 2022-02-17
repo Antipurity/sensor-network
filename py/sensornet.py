@@ -208,7 +208,7 @@ class Namer:
 
     Naming data first flattens then transforms it into a 2D array, sized cells×cell_size.
 
-    Names are split into fixed-size *parts*. Each part can be:
+    Names are split into fixed-size *parts*. Each part can be: # TODO: Also mention that only cell_shape[-2] is filled with name parts, the rest are deliberately zero-filled.
     - A string: MD5-hashed, and the resulting 16 bytes are put into one part, shifted and rescaled to -1…1.
     - A number, -1…1: put into a part directly, potentially shared with non-string pieces.
     - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
@@ -243,7 +243,7 @@ class Namer:
             return np.concatenate((name, data), 1)
         start = np.expand_dims(np.arange(0, total, data_size), -1)
         end = np.minimum(start + data_size, length)
-        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1) if isinstance(p, list) else np.repeat(p, cells, 0), part_size, 1) for p in self.name_parts], 1)
+        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1), part_size, 1) if isinstance(p, list) else np.repeat(p, cells, 0) for p in self.name_parts], 1)
         name = _fill(name, name_size, 1)
         return np.concatenate((name, data), 1)
     def unname(self, feedback, length, cell_shape, _):
@@ -261,9 +261,11 @@ class Namer:
         _shape_ok(cell_shape, part_size)
         name_parts = []
         nums = []
+        # TODO: zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior. (We can just push zero-arrays to name_parts here, right?)
+        #   We don't need per-part arrays, right? ...We do, because filling only happens at runtime.
         for part in self.named:
             if isinstance(part, str):
-                name_parts.append(np.expand_dims(_str_to_floats(part), 0))
+                name_parts.append(_fill(np.expand_dims(_str_to_floats(part), 0), part_size, 1))
             elif callable(part) or not isinstance(part, bool) and (isinstance(part, float) or isinstance(part, int)):
                 nums.append(np.atleast_2d(part) if not callable(part) else part)
                 if len(nums) >= part_size:
