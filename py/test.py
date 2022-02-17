@@ -115,7 +115,7 @@ def benchmark(N=64*10):
         assert fb is not None and fb.shape == (N,) and fb[0] == .2
     send_data = np.random.randn(N)
     start, duration = time.monotonic(), 10.
-    name = sn.Namer(('benchmark',), sn.cell_shape, sn.part_size)
+    name = sn.Namer('benchmark')
     while time.monotonic() - start < duration:
         sn.send(name, data=send_data, on_feedback=check_feedback)
         data, error, no_data, no_feedback = sn.handle(feedback)

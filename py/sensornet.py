@@ -21,7 +21,7 @@ import asyncio
 
 class Handler:
     """
-    `Namer(cell_shape=None, part_size=None)`
+    `Handler(cell_shape=None, part_size=None)`
 
     A differentiable sensor network: gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
@@ -94,12 +94,10 @@ class Handler:
             length = data.shape[0]
         # Name.
         if isinstance(name, tuple) or isinstance(name, list):
-            name = Namer(name, self.cell_shape, self.part_size)
+            name = Namer(*name)
         if isinstance(name, Namer):
-            assert name.cell_shape == self.cell_shape
-            assert name.part_size == self.part_size
-            data = name.name(data, None)
-            error = name.name(error, -1.)
+            data = name.name(data, self.cell_shape, self.part_size, None)
+            error = name.name(error, self.cell_shape, self.part_size, -1.)
         else:
             assert name is None
         assert len(data.shape) == 2
@@ -199,22 +197,60 @@ class Handler:
 
 class Namer:
     """
-    `Namer(name, cell_shape, part_size)`
+    `Namer(*name)`
 
-    This is an optimization opportunity: wrapping a name in this and storing this object is faster than passing the name directly (which re-constructs this object each time).
+    An optimization opportunity: wrapping a name in this and reusing this object is faster than passing the name directly (which re-constructs this object each time).
 
     A class for augmenting a 1D array with numeric names, into a 2D array, sized cells×cell_size.
 
     TODO: Actually describe everything about names, because where else could users learn about those.
+        TODO: With examples of funcs, such as, `start/total` being [0,1), and `end/total` being (0,1].
     """
-    # (Fixed cell_shape and part_size may be quite inconvenient to use.)
-    #   TODO: (So, may want this to cache `name_parts` for cell shape and part size, and make name/unname accept cell shape and part size, and update name parts if changed. After all, user convenience MUST be king here.)
-    def __init__(self, name, cell_shape, part_size):
-        assert isinstance(name, list) or isinstance(name, tuple)
+    def __init__(self, *name):
+        self.named = name
+        self.name_parts = None
+        self.cell_shape = None
+        self.part_size = None
+        self.cell_size = None
+    def name(self, data, cell_shape, part_size, fill=None):
+        """
+        1D to 2D.
+        """
+        if data is None: return
+        assert len(data.shape) == 1
+        self._name_parts(cell_shape, part_size)
+        # Pad & reshape `data`.
+        data_size = cell_shape[-1]
+        name_size = self.cell_size - data_size
+        cells = -(-data.shape[0] // data_size)
+        total = cells * data_size
+        data = _fill(data, total, 0) # Can't make it smaller, so `_unfill` will never have to make feedback larger.
+        data = np.reshape(data, (cells, data_size))
+        # Finalize the name, then concat it before `data`.
+        if fill is not None:
+            name = np.full((cells, name_size), fill)
+            return np.concatenate((name, data), 1)
+        start = np.expand_dims(np.arange(0, total, data_size), -1)
+        end = start + data_size
+        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1) if isinstance(p, list) else np.repeat(p, cells, 0), part_size, 1) for p in self.name_parts], 1)
+        name = _fill(name, name_size, 1)
+        return np.concatenate((name, data), 1)
+    def unname(self, feedback, length, cell_shape, _):
+        """
+        Reverses `.name`.
+        """
+        # Ignore the name, only heed data.
+        assert len(feedback.shape) == 2 and feedback.shape[-1] == sum(cell_shape)
+        feedback = feedback[:, -cell_shape[-1]:]
+        return _unfill(feedback.flatten(), length, 0)
+    def _name_parts(self, cell_shape, part_size):
+        # Recomputes the name's parts for faster naming. MD5-hashes, and merges consecutive raw numbers.
+        if cell_shape == self.cell_shape and part_size == self.part_size:
+            return self.name_parts
         _shape_ok(cell_shape, part_size)
         name_parts = []
         nums = []
-        for part in name:
+        for part in self.named:
             if isinstance(part, str):
                 name_parts.append(np.expand_dims(_str_to_floats(part), 0))
             elif callable(part) or not isinstance(part, bool) and (isinstance(part, float) or isinstance(part, int)):
@@ -241,36 +277,7 @@ class Namer:
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
-    def name(self, data, fill=None):
-        """
-        1D to 2D.
-        """
-        if data is None: return
-        assert len(data.shape) == 1
-        # Pad & reshape `data`.
-        data_size = self.cell_shape[-1]
-        name_size = self.cell_size - data_size
-        cells = -(-data.shape[0] // data_size)
-        total = cells * data_size
-        data = _fill(data, total, 0) # Can't make it smaller, so `_unfill` will never have to make feedback larger.
-        data = np.reshape(data, (cells, data_size))
-        # Finalize the name, then concat it before `data`.
-        if fill is not None:
-            name = np.full((cells, name_size), fill)
-            return np.concatenate((name, data), 1)
-        start = np.expand_dims(np.arange(0, total, data_size), -1)
-        end = start + data_size
-        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1) if isinstance(p, list) else np.repeat(p, cells, 0), self.part_size, 1) for p in self.name_parts], 1)
-        name = _fill(name, name_size, 1)
-        return np.concatenate((name, data), 1)
-    def unname(self, feedback, length):
-        """
-        Reverses `.name`.
-        """
-        # Ignore the name, only heed data.
-        assert len(feedback.shape) == 2 and feedback.shape[-1] == self.cell_size
-        feedback = feedback[:, -self.cell_shape[-1]:]
-        return _unfill(feedback.flatten(), length, 0)
+        return self.name_parts
 
 
 
@@ -320,7 +327,7 @@ def _feedback(callbacks, feedback, cell_shape, part_size, handler):
         if feedback is not None:
             fb = feedback[start_cell:end_cell, :]
             assert fb.shape == expected_shape
-            if namer is not None: fb = namer.unname(fb, length)
+            if namer is not None: fb = namer.unname(fb, length, cell_shape, part_size)
         try:
             on_feedback(fb, cell_shape, part_size, handler)
         except KeyboardInterrupt as err:
