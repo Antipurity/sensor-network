@@ -42,8 +42,9 @@ def test2():
 def test3():
     """Named error."""
     h = sn.Handler((8, 24, 64), 8)
-    h.send(name=('test',), data=np.zeros((16,)), error=np.full((16,), -.5), on_feedback=lambda *_: ...)
+    h.send(name=('test',), data=np.zeros((16,)), error=np.full((16,), -.5), on_feedback=lambda fb, *_: print(fb)) # TODO: ...Why is its feedback None, though... Shouldn't it be, uh, not given, because we should've done h.handle() twice?... THIS IS A BUG, ISN'T IT
     h.handle()
+    # h.handle(np.zeros((1, 96))) # TODO: This should have been important.
 def test4():
     """Name's error."""
     h = sn.Handler((8, 24, 64), 8)
@@ -53,13 +54,13 @@ def test4():
     except TypeError:
         pass
 def test5():
-    """Sensors."""
+    """Sensors are auto-called at each step."""
     h = sn.Handler((8, 24, 64), 8)
     h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.1, .2, .3])))
     h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.4, .5, .6])))
     assert h.handle()[0].shape == (2, 96)
 def test6():
-    """Errors thrown by `on_feedback`."""
+    """Errors thrown by `on_feedback` are re-thrown."""
     h = sn.Handler((8, 24, 64), 8)
     def err1(*_): raise KeyboardInterrupt()
     def err2(*_): raise TypeError('damn')
@@ -78,9 +79,8 @@ test5()
 test6()
 # TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
 # TODO: And all the other tests, as many as we need to bring the coverage up to 100%.
-# TODO: Also try sending None as data, and still have on_feedback.
 # TODO: Also send "no-data" as a number requesting a cell-count. Via h.get, and async handling.
-# TODO: Also make prev_feedback a function that returns None at least once.
+# TODO: Also make prev_feedback a function that returns None at least once (to catch that one small branch).
 print('Tests OK')
 
 

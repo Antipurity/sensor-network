@@ -166,13 +166,15 @@ class Handler:
         no_data = np.concatenate(self._no_data, 0)
         no_feedback = np.concatenate(self._no_feedback, 0)
         # Forget this step's data, and report feedback.
-        if prev_feedback is not None:
-            self._prev_fb.append((prev_feedback, self._next_fb, self.cell_shape, self.part_size))
-            self._next_fb = []
+        self._prev_fb.append((prev_feedback if prev_feedback is not None else False, self._next_fb, self.cell_shape, self.part_size)) # TODO: WHY ARE WE APPENDING `prev_feedback` TO OUR NEXT FEEDBACK; SHOULDN'T WE SET IT ON THE PREVIOUS ITEM INSTEAD?
+        self._next_fb = []
+        # TODO: ...Is it correct to, if prev_feedback is None, just discard all data that we've accumulated?... (This is the cause of the first step concluding things prematurely, isn't it?)
+        #   How to fix this; should we always append feedback?...
         self.discard()
         while len(self._prev_fb):
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if callable(feedback): feedback = feedback()
+            if feedback == False: pass # TODO: ...What do we do in such a case?... How to return immediately? ...Besides, prev_feedback is not actually known...
             if feedback is None: break # TODO: A test that triggers this (delayed prev_feedback, returning None at least once, then the actual feedback).
             assert isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
@@ -305,7 +307,7 @@ def _unfill(y, size, axis=0): # → x
     """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`.
 
     `(x,y) → (copysign((1-y)/2, x), y)`"""
-    if y.shape[axis] == size: return y # TODO: A test that triggers the rest. ...How would we do that?
+    if y.shape[axis] == size: return y # TODO: A test that triggers the rest. ...How would we do that? (...And why wasn't it triggered already? What, do we not have feedback?)
     if y.shape[axis] < size:
         assert axis == 0 # Good enough for us.
         return np.pad(y, (0, size - y.shape[axis]))
