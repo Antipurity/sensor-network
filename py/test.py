@@ -1,7 +1,7 @@
 """
 Tests and benchmarks for this Python implementation of a sensor network.
 
-TODO: Should we include a chart of most-recent benchmark results, or something? Or at least mention them?
+Expect around 10000 steps per second, which should be more than enough for any AI model.
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
 """
@@ -107,9 +107,7 @@ test5()
 test6()
 test7()
 test8()
-# TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
-#   What do we need to modify? Just `Namer.name`?
-# TODO: Also send "no-data" as a number requesting that-many-numbers. Via h.get, and async handling. (Possibly near the benchmark, so that we can use `sn`.)
+# TODO: Also send "no-data" as a number requesting that-many-numbers. Via h.get, and async handling. (Possibly near the benchmark, so that we can use `sn`. ...Or just use `sn` here?)
 print('Tests OK')
 
 

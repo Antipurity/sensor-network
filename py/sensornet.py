@@ -206,9 +206,9 @@ class Namer:
 
     To achieve position-invariance of `handler.send`, data cells need names.
 
-    Naming data first flattens then transforms it into a 2D array, sized cells×cell_size.
+    Naming data first flattens then transforms it into a 2D array, sized `cells×sum(cell_shape)`. All in `cell_shape[:-1]` must be divisible by `part_size`.
 
-    Names are split into fixed-size *parts*. Each part can be: # TODO: Also mention that only cell_shape[-2] is filled with name parts, the rest are deliberately zero-filled.
+    Numeric names are split into fixed-size *parts*. `cell_shape[-2]` is where `Namer` puts its parts, so ensure that `cell_shape` has space for a few. Each part can be:
     - A string: MD5-hashed, and the resulting 16 bytes are put into one part, shifted and rescaled to -1…1.
     - A number, -1…1: put into a part directly, potentially shared with non-string pieces.
     - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
@@ -259,10 +259,9 @@ class Namer:
         if cell_shape == self.cell_shape and part_size == self.part_size:
             return self.name_parts
         _shape_ok(cell_shape, part_size)
-        name_parts = []
+        extra_parts = sum(cell_shape[:-2]) // part_size
+        name_parts = [np.zeros((1, part_size)) for _ in range(extra_parts)]
         nums = []
-        # TODO: zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior. (We can just push zero-arrays to name_parts here, right?)
-        #   We don't need per-part arrays, right? ...We do, because filling only happens at runtime.
         for part in self.named:
             if isinstance(part, str):
                 name_parts.append(_fill(np.expand_dims(_str_to_floats(part), 0), part_size, 1))
