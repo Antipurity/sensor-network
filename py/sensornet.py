@@ -77,7 +77,7 @@ class Handler:
         """
         if data is None and on_feedback is None: return
         assert name is None or isinstance(name, tuple) or isinstance(name, Namer)
-        assert data is None or isinstance(data, np.ndarray) or _inty(data) or (isinstance(data, tuple) or isinstance(data, list) and all(_inty(n) for n in data))
+        assert data is None or isinstance(data, np.ndarray) or _inty(data) or (isinstance(data, tuple) or isinstance(data, list)) and all(_inty(n) for n in data)
         assert error is None or isinstance(error, np.ndarray)
         assert on_feedback is None or callable(on_feedback)
         if not self.cell_size:
@@ -134,7 +134,7 @@ class Handler:
         """
         while True:
             fb = await self.maybe_get(name, len, reward)
-            if fb is not None: return fb
+            if fb is not None: return fb # TODO: ...This was never None... How to ensure that it is?
     def handle(self, prev_feedback=None):
         """
         `sn.handle(prev_feedback=None)`
@@ -197,7 +197,7 @@ class Handler:
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         if len(self._prev_fb) <= max_simultaneous_steps: return
         fb = self._prev_fb[0][0] # The oldest feedback, must be done.
-        if isinstance(fb, asyncio.Future):
+        if isinstance(fb, asyncio.Future) and not fb.done():
             await fb
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
@@ -389,7 +389,7 @@ def handle(*k, **kw):
     return default.handle(*k, **kw)
 def discard(*k, **kw):
     return default.discard(*k, **kw)
-def maybe_get(*k, **kw):
+def maybe_get(*k, **kw): # TODO: How to use this particular function in a test, for completeness?
     return default.maybe_get(*k, **kw)
 def get(*k, **kw):
     return default.get(*k, **kw)

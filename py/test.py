@@ -78,6 +78,15 @@ def test6():
     try: h.handle(); assert False
     except TypeError: pass
 def test7():
+    """Non-1D data and feedback."""
+    h = sn.Handler((8, 24, 64), 8)
+    got = False
+    def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
+    h.send(name=('test',), data=np.zeros((2,3,4)), on_feedback=yes_feedback)
+    assert h.handle()[0].shape == (1,96)
+    h.handle(np.zeros((1,96)))
+    assert got
+def test8():
     """Async operations."""
     sn.shape((0, 32, 64), 8)
     name = sn.Namer('test')
@@ -100,17 +109,10 @@ def test7():
         while finished < 5:
             await sn.wait(16)
             fb = give_feedback_later(*sn.handle(fb))
-        await fb
+        await asyncio.sleep(.1)
+        await fb # To silence a warning.
+        await sn.wait(1) # For test coverage.
     asyncio.run(main())
-def test8():
-    """Non-1D data and feedback."""
-    h = sn.Handler((8, 24, 64), 8)
-    got = False
-    def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
-    h.send(name=('test',), data=np.zeros((2,3,4)), on_feedback=yes_feedback)
-    assert h.handle()[0].shape == (1,96)
-    h.handle(np.zeros((1,96)))
-    assert got
 test0()
 test1()
 test2()
