@@ -89,7 +89,7 @@ class Handler:
         if no_data: data = np.zeros((data or 0, self.cell_size), dtype=np.float32)
         length = None
         if name is not None:
-            if len(data.shape) != 1: data = data.flatten()
+            if len(data.shape) != 1: data = data.flatten() # TODO: ...But what happens when the user receives flat feedback to their shaped data? Isn't it quite bad? Should at least add a test of what happens. And then, either demand 1D, or remember the shape and reshape feedback.
             if error is not None and len(error.shape) != 1: error = error.flatten()
             length = data.shape[0]
         # Name.
@@ -199,12 +199,21 @@ class Namer:
     """
     `Namer(*name)`
 
-    An optimization opportunity: wrapping a name in this and reusing this object is faster than passing the name directly (which re-constructs this object each time).
+    An optimization opportunity: wrapping a name in this and reusing this object is faster than passing the name tuple directly to `handler.send(name=...)` (which re-constructs this object each time).
 
-    A class for augmenting a 1D array with numeric names, into a 2D array, sized cells×cell_size.
+    ---
 
-    TODO: Actually describe everything about names, because where else could users learn about those.
-        TODO: With examples of funcs, such as, `start/total` being [0,1), and `end/total` being (0,1].
+    To achieve position-invariance of `handler.send`, data cells need names.
+
+    Naming 1D data transforms it into a 2D array, sized cells×cell_size. TODO: What happens what data is differently-dimensioned?
+
+    Names are split into fixed-size *parts*. Each part can be:
+    - A string: MD5-hashed, and the resulting 16 bytes are put into one part, shifted and rescaled to -1…1.
+    - A number, -1…1: put into a part directly, potentially shared with non-string pieces.
+    - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
+        - For example, `lambda start, end, total: start/total*2-1` puts a number, from -1 (inclusive) to 1 (exclusive).
+        - For example, `lambda start, end, total: end / total*2-1` puts a number, from -1 (exclusive) to 1 (inclusive).
+        - (Good idea to always include at least something dynamic, unless data only occupies one cell.)
     """
     def __init__(self, *name):
         self.named = name
@@ -222,7 +231,8 @@ class Namer:
         # Pad & reshape `data`.
         data_size = cell_shape[-1]
         name_size = self.cell_size - data_size
-        cells = -(-data.shape[0] // data_size)
+        length = data.shape[0]
+        cells = -(-length // data_size)
         total = cells * data_size
         data = _fill(data, total, 0) # Can't make it smaller, so `_unfill` will never have to make feedback larger.
         data = np.reshape(data, (cells, data_size))
@@ -231,7 +241,7 @@ class Namer:
             name = np.full((cells, name_size), fill)
             return np.concatenate((name, data), 1)
         start = np.expand_dims(np.arange(0, total, data_size), -1)
-        end = start + data_size
+        end = np.minimum(start + data_size, length)
         name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1) if isinstance(p, list) else np.repeat(p, cells, 0), part_size, 1) for p in self.name_parts], 1)
         name = _fill(name, name_size, 1)
         return np.concatenate((name, data), 1)
