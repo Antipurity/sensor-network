@@ -154,13 +154,9 @@ class Handler:
             - `numpy.compress(~no_feedback, data)` would select only queries.
             - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
-        # print('prev_feedback', prev_feedback, isinstance(prev_feedback, asyncio.Future), asyncio.iscoroutine(prev_feedback)) # TODO: ...So, why is a coroutine not an asyncio.Future?
-        # TODO: asyncio.iscoroutine(prev_feedback), possibly...
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.ensure_future(prev_feedback)
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future)
-        # TODO: Also allow prev_feedback to be asyncio.Future? (feedback = feedback() if callable(feedback) else (feedback.result() if feedback.done() else None) if isinstance(feedback, asyncio.Future) else feedback)
-        #   (A saner interface, which doesn't use `False` to signal no-data and `None` for data-later.)
         # Collect sensor data.
         for s in self.sensors: s(self)
         # Gather data.
@@ -182,7 +178,7 @@ class Handler:
         while True:
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if isinstance(feedback, asyncio.Future):
-                print('R', feedback, len(self._prev_fb)) # TODO: ...Okay, we definitely never yield to other async tasks.
+                print('R', feedback.result() if feedback.done() else feedback.shape if isinstance(feedback, np.ndarray) else feedback, len(self._prev_fb)) # TODO: ...Okay, we definitely never yield to other async tasks. ...Now we have sn.wait(…) though...
                 if not feedback.done(): break
                 feedback = feedback.result()
             else:
@@ -199,7 +195,10 @@ class Handler:
         """
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         if len(self._prev_fb) <= max_simultaneous_steps: return
-        # TODO: How do we wait?
+        fb = self._prev_fb[0][0] # The oldest feedback, must be done.
+        if isinstance(fb, asyncio.Future):
+            print('waiting for', fb) # TODO: ...Why never waiting for this...
+            await fb
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:

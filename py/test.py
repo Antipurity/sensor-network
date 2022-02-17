@@ -86,6 +86,7 @@ def test7():
     async def request_data(h):
         nonlocal finished
         fb = await h.get(name, 15)
+        print('request_data got', fb.shape) # TODO: ...Why is feedback shaped (15,96), not (15,) as requested?
         assert fb.shape == (15,)
         finished += 1
     async def give_feedback_later(data, error, no_data, no_feedback):
@@ -98,9 +99,8 @@ def test7():
             asyncio.ensure_future(request_data(sn))
         fb = None
         while finished < 5:
+            await sn.wait(16) # TODO: Why did this not help the situation?
             fb = give_feedback_later(*sn.handle(fb))
-            # TODO: ...Would this run into issues with never yielding to all the futures that we've set up...
-            #   ...Do we want something like `sn.wait(max_steps=16)`?... I think this is the only solution that makes sense.
         await fb
     asyncio.run(main())
 def test8():
