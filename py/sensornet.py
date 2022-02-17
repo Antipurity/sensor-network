@@ -1,16 +1,51 @@
 """
-Module for differentiable sensor networks: each gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
+Module for differentiable sensor networks: each gathers named numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
 Position-invariant and numeric: these constraints allow AI models to disregard all concerns about data formats, and with only a couple lines of code: perform cross-dataset meta-learning and multimodal learning and multi-objective reinforcement learning and lifelong learning and model distillation, combine tasks at runtime, and learn in completely arbitrary environments.
 
-You'll wish you had less data.
-
-Python 3.4 or newer (for asyncio).
+Python 3.4 or newer (for `asyncio`).
 
 ---
 
-TODO: After we have the tests, have a mini-tutorial on the proper use.
-    TODO: Mention that users can use the top-level module, or equivalently, create a `Handler` and call methods on that, and/or use many `Handler`s.
+Usage is simple.
+
+First, initialize the handler:
+
+```python
+import sensornet as sn
+import numpy as np
+
+h = sn.Handler((8, 24, 64), 8) # See `sn.Namer` for discussion of cell shapes.
+# OR, simply use the global `sn` as if it's a handler:
+sn.shape((8, 24, 64), 8)
+h = sn
+```
+
+Then send/receive data:
+
+```python
+def set():
+    h.send(name = ('name',), data = np.random.rand(32)*2-1)
+
+async def get():
+    nums = await h.get(('name',), 32)
+    assert nums.shape == (32,)
+```
+
+And handle it:
+
+```python
+async def main():
+    fb = None
+    while True:
+        await h.wait()
+        data, error, no_data, no_feedback = h.handle(fb)
+        fb = process(...) # See `sn.Handler.handle` for what these mean.
+```
+
+This module implements this basic protocol, and does not include anything else by default, such as string/image handling or file storage or Internet communication.
+
+(Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
 """
 
 
