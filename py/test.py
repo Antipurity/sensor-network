@@ -76,6 +76,19 @@ def test6():
     assert h.handle()[0].shape == (5, 96)
     try: h.handle(); assert False
     except TypeError: pass
+def test7():
+    """Deferring feedback via a function."""
+    h = sn.Handler((8, 24, 64), 8)
+    n, got = 0, False
+    def yes_feedback(fb, *_): nonlocal got;  assert fb is not None;  got = True
+    def fb(): nonlocal n; n+=1; return [None, None, np.zeros((2,96))][n-1]
+    h.send(data=np.zeros((2,96)), on_feedback=yes_feedback)
+    assert h.handle()[0].shape == (2,96)
+    h.handle(fb)
+    h.handle()
+    assert got is False
+    h.handle()
+    assert got is True
 test0()
 test1()
 test2()
@@ -83,9 +96,8 @@ test3()
 test4()
 test5()
 test6()
+test7()
 # TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
-# TODO: And all the other tests, as many as we need to bring the coverage up to 100%.
-# TODO: Also make prev_feedback a function that returns None at least once (to catch that one small branch).
 # TODO: Also send "no-data" as a number requesting that-many-numbers. Via h.get, and async handling.
 print('Tests OK')
 

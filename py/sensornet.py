@@ -10,7 +10,6 @@ Python 3.4 or newer (for asyncio).
 TODO: After we have the tests, have a mini-tutorial on the proper use.
     TODO: Mention that users can use the top-level module, or equivalently, create a `Handler` and call methods on that, and/or use many `Handler`s.
 """
-# TODO: A license file.
 
 
 
@@ -206,7 +205,7 @@ class Namer:
 
     A class for augmenting a 1D array with numeric names, into a 2D array, sized cells×cell_size.
 
-    TODO: Actually describe everything about names.
+    TODO: Actually describe everything about names, because where else could users learn about those.
     """
     # (Fixed cell_shape and part_size may be quite inconvenient to use.)
     #   TODO: (So, may want this to cache `name_parts` for cell shape and part size, and make name/unname accept cell shape and part size, and update name parts if changed. After all, user convenience MUST be king here.)
