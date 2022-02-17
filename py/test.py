@@ -67,10 +67,11 @@ def test6():
     def err2(*_): raise TypeError('damn')
     h.send(data=None, on_feedback=err1)
     assert h.handle()[0].shape == (0, 96)
-    try: h.handle()
+    try: h.handle(); assert False
     except KeyboardInterrupt: pass
-    h.send(data=None, on_feedback=err2)
-    try: h.handle()
+    h.send(data=np.zeros((5, 96)), on_feedback=err2)
+    assert h.handle()[0].shape == (5, 96)
+    try: h.handle(); assert False
     except TypeError: pass
 test0()
 test1()
