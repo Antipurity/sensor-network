@@ -78,28 +78,6 @@ def test6():
     try: h.handle(); assert False
     except TypeError: pass
 def test7():
-    """Deferring feedback via a function."""
-    h = sn.Handler((8, 24, 64), 8)
-    n, got = 0, False
-    def yes_feedback(fb, *_): nonlocal got;  assert fb is not None;  got = True
-    def fb(): nonlocal n; n+=1; return [None, None, np.zeros((2,96))][n-1]
-    h.send(data=np.zeros((2,96)), on_feedback=yes_feedback)
-    assert h.handle()[0].shape == (2,96)
-    h.handle(fb)
-    h.handle()
-    assert got is False
-    h.handle()
-    assert got is True
-def test8():
-    """Non-1D data and feedback."""
-    h = sn.Handler((8, 24, 64), 8)
-    got = False
-    def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
-    h.send(name=('test',), data=np.zeros((2,3,4)), on_feedback=yes_feedback)
-    assert h.handle()[0].shape == (1,96)
-    h.handle(np.zeros((1,96)))
-    assert got
-def test9():
     """Async operations."""
     sn.shape((0, 32, 64), 8)
     name = sn.Namer('test')
@@ -122,9 +100,18 @@ def test9():
         while finished < 5:
             fb = give_feedback_later(*sn.handle(fb))
             # TODO: ...Would this run into issues with never yielding to all the futures that we've set up...
-            #   ...Do we want something like `sn.wait(max_steps=16)`?...
+            #   ...Do we want something like `sn.wait(max_steps=16)`?... I think this is the only solution that makes sense.
         await fb
     asyncio.run(main())
+def test8():
+    """Non-1D data and feedback."""
+    h = sn.Handler((8, 24, 64), 8)
+    got = False
+    def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
+    h.send(name=('test',), data=np.zeros((2,3,4)), on_feedback=yes_feedback)
+    assert h.handle()[0].shape == (1,96)
+    h.handle(np.zeros((1,96)))
+    assert got
 test0()
 test1()
 test2()
@@ -134,8 +121,6 @@ test5()
 test6()
 test7()
 test8()
-test9()
-# TODO: Also send "no-data" as a number requesting that-many-numbers. Via h.get, and async handling. (Possibly near the benchmark, so that we can use `sn`. ...Or just use `sn` here?)
 print('Tests OK')
 
 

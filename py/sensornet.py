@@ -141,7 +141,7 @@ class Handler:
 
         Handles collected data.
 
-        Pass it the previous handling's feedback (as a NumPy array or `None` or an `asyncio.Future` of that), or a low-level function with no inputs that will return `None` to wait or the feedback or `False` if feedback will never arrive.
+        Pass it the previous handling's feedback: as a NumPy array or `None` or an `await`able future of that.
 
         This returns `(data, error, no_data, no_feedback)`.
         - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
@@ -158,7 +158,7 @@ class Handler:
         # TODO: asyncio.iscoroutine(prev_feedback), possibly...
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.ensure_future(prev_feedback)
-        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
+        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future)
         # TODO: Also allow prev_feedback to be asyncio.Future? (feedback = feedback() if callable(feedback) else (feedback.result() if feedback.done() else None) if isinstance(feedback, asyncio.Future) else feedback)
         #   (A saner interface, which doesn't use `False` to signal no-data and `None` for data-later.)
         # Collect sensor data.
@@ -173,10 +173,10 @@ class Handler:
             data, error, no_data, no_feedback = None, None, None, None
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
-            self._prev_fb[-1][0] = prev_feedback if prev_feedback is not None else False
+            self._prev_fb[-1][0] = prev_feedback
         else:
-            assert prev_feedback is None, 'The first step cannot give feedback'
-        self._prev_fb.append([None, self._next_fb, self.cell_shape, self.part_size])
+            assert prev_feedback is None, 'The first step cannot give feedback to its previous step'
+        self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size])
         self._next_fb = []
         self.discard()
         while True:
@@ -186,13 +186,20 @@ class Handler:
                 if not feedback.done(): break
                 feedback = feedback.result()
             else:
-                if callable(feedback): feedback = feedback()
-                if feedback is None: break # Respond in-order.
-                if feedback is False: feedback = None
+                if feedback is False: break # Respond in-order.
             assert feedback is None or isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
             _feedback(callbacks, feedback, cell_shape, part_size, self)
         return (data, error, no_data, no_feedback)
+    async def wait(self, max_simultaneous_steps = 16):
+        """
+        `sn.wait(max_simultaneous_steps = 16)`
+
+        TODO:
+        """
+        assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
+        if len(self._prev_fb) <= max_simultaneous_steps: return
+        # TODO: How do we wait?
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
@@ -385,9 +392,12 @@ def maybe_get(*k, **kw):
     return default.maybe_get(*k, **kw)
 def get(*k, **kw): # TODO: A test that uses this.
     return default.get(*k, **kw)
+def wait(*k, **kw): # TODO: A test that uses this.
+    return default.wait(*k, **kw)
 shape.__doc__ = Handler.shape.__doc__
 send.__doc__ = Handler.send.__doc__
 handle.__doc__ = Handler.handle.__doc__
 discard.__doc__ = Handler.discard.__doc__
 maybe_get.__doc__ = Handler.maybe_get.__doc__
 get.__doc__ = Handler.get.__doc__
+wait.__doc__ = Handler.wait.__doc__
