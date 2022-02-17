@@ -77,7 +77,7 @@ class Handler:
         """
         if data is None and on_feedback is None: return
         assert name is None or isinstance(name, tuple) or isinstance(name, Namer)
-        assert data is None or isinstance(data, int) and data>=0 or isinstance(data, np.ndarray)
+        assert data is None or isinstance(data, np.ndarray) or _inty(data) or (isinstance(data, tuple) or isinstance(data, list) and all(_inty(n) for n in data))
         assert error is None or isinstance(error, np.ndarray)
         assert on_feedback is None or callable(on_feedback)
         if not self.cell_size:
@@ -86,7 +86,7 @@ class Handler:
             return
         no_feedback = not on_feedback
         no_data = False if isinstance(data, np.ndarray) else True
-        if no_data: data = np.zeros((data or 0, self.cell_size), dtype=np.float32)
+        if no_data: data = np.zeros((data,) if _inty(data) else data if data is not None else (0, self.cell_size), dtype=np.float32)
         length = None
         original_shape = None
         if name is not None:
@@ -118,7 +118,7 @@ class Handler:
         self._cell += cells
     def maybe_get(self, name, len, reward=0.):
         """
-        `sn.maybe_get(name, len, reward=0.)`
+        `await sn.maybe_get(name, len, reward=0.)`
 
         Wraps `.send` to allow `await`ing a 1D array from the handler, or `None`.
         """
@@ -126,9 +126,9 @@ class Handler:
         fut = asyncio.Future()
         self.send(name, len, None, reward, lambda feedback, cell_shape, part_size, handler: fut.set_result(feedback))
         return fut
-    async def get(self, name, len, reward=0.): # TODO: A test that uses this.
+    async def get(self, name, len, reward=0.):
         """
-        `sn.get(name, len, reward=0.)`
+        `await sn.get(name, len, reward=0.)`
 
         Wraps `.send` to allow `await`ing a 1D array from the handler. Never returns `None`, instead re-requesting until a numeric result is available.
         """
@@ -141,7 +141,7 @@ class Handler:
 
         Handles collected data.
 
-        Pass it the previous handling's feedback: as a NumPy array or `None` or an `await`able future of that.
+        Pass it the previous handling's feedback: as a NumPy array or `None` or an `await`able future of that (see `sn.wait`).
 
         This returns `(data, error, no_data, no_feedback)`.
         - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
@@ -178,7 +178,6 @@ class Handler:
         while True:
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if isinstance(feedback, asyncio.Future):
-                print('R', feedback.result() if feedback.done() else feedback.shape if isinstance(feedback, np.ndarray) else feedback, len(self._prev_fb)) # TODO: ...Okay, we definitely never yield to other async tasks. ...Now we have sn.wait(…) though...
                 if not feedback.done(): break
                 feedback = feedback.result()
             else:
@@ -189,15 +188,16 @@ class Handler:
         return (data, error, no_data, no_feedback)
     async def wait(self, max_simultaneous_steps = 16):
         """
-        `sn.wait(max_simultaneous_steps = 16)`
+        `await sn.wait(max_simultaneous_steps = 16)`
 
-        TODO:
+        If called before each `sn.handle(…)`, will limit how many steps can be done at once, yielding if necessary.
+
+        Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
         """
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         if len(self._prev_fb) <= max_simultaneous_steps: return
         fb = self._prev_fb[0][0] # The oldest feedback, must be done.
         if isinstance(fb, asyncio.Future):
-            print('waiting for', fb) # TODO: ...Why never waiting for this...
             await fb
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
@@ -315,7 +315,7 @@ class Namer:
 def _shape_ok(cell_shape: tuple, part_size: int):
     assert isinstance(part_size, int) and part_size > 0
     assert isinstance(cell_shape, tuple)
-    assert all(isinstance(s, int) and s >= 0 for s in cell_shape)
+    assert all(_inty(s) for s in cell_shape)
     assert cell_shape[-1] > 0
     assert all(s % part_size == 0 for s in cell_shape[:-1])
 def _str_to_floats(string: str):
@@ -368,6 +368,8 @@ def _feedback(callbacks, feedback, cell_shape, part_size, handler):
         except Exception as err:
             got_err = err
     if got_err is not None: raise got_err
+def _inty(n):
+    return isinstance(n, int) and n>=0
 
 
 
@@ -389,9 +391,9 @@ def discard(*k, **kw):
     return default.discard(*k, **kw)
 def maybe_get(*k, **kw):
     return default.maybe_get(*k, **kw)
-def get(*k, **kw): # TODO: A test that uses this.
+def get(*k, **kw):
     return default.get(*k, **kw)
-def wait(*k, **kw): # TODO: A test that uses this.
+def wait(*k, **kw):
     return default.wait(*k, **kw)
 shape.__doc__ = Handler.shape.__doc__
 send.__doc__ = Handler.send.__doc__

@@ -85,10 +85,9 @@ def test7():
     finished = 0
     async def request_data(h):
         nonlocal finished
-        fb = await h.get(name, 15)
-        print('request_data got', fb.shape) # TODO: ...Why is feedback shaped (15,96), not (15,) as requested?
-        assert fb.shape == (15,)
+        fb = await h.get(name, (3,5))
         finished += 1
+        assert fb.shape == (3,5)
     async def give_feedback_later(data, error, no_data, no_feedback):
         nonlocal n
         await asyncio.sleep(.1)
@@ -99,7 +98,7 @@ def test7():
             asyncio.ensure_future(request_data(sn))
         fb = None
         while finished < 5:
-            await sn.wait(16) # TODO: Why did this not help the situation?
+            await sn.wait(16)
             fb = give_feedback_later(*sn.handle(fb))
         await fb
     asyncio.run(main())
