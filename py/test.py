@@ -42,9 +42,10 @@ def test2():
 def test3():
     """Named error."""
     h = sn.Handler((8, 24, 64), 8)
-    h.send(name=('test',), data=np.zeros((16,)), error=np.full((16,), -.5), on_feedback=lambda fb, *_: print(fb)) # TODO: ...Why is its feedback None, though... Shouldn't it be, uh, not given, because we should've done h.handle() twice?... THIS IS A BUG, ISN'T IT
+    def yes_feedback(fb, *_): assert fb is not None
+    h.send(name=('test',), data=np.zeros((16,)), error=np.full((16,), -.5), on_feedback=yes_feedback)
     h.handle()
-    # h.handle(np.zeros((1, 96))) # TODO: This should have been important.
+    h.handle(np.zeros((1, 96)))
 def test4():
     """Name's error."""
     h = sn.Handler((8, 24, 64), 8)
@@ -65,6 +66,7 @@ def test6():
     def err1(*_): raise KeyboardInterrupt()
     def err2(*_): raise TypeError('damn')
     h.send(data=None, on_feedback=err1)
+    assert h.handle()[0].shape == (0, 96)
     try: h.handle()
     except KeyboardInterrupt: pass
     h.send(data=None, on_feedback=err2)
@@ -79,8 +81,8 @@ test5()
 test6()
 # TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
 # TODO: And all the other tests, as many as we need to bring the coverage up to 100%.
-# TODO: Also send "no-data" as a number requesting a cell-count. Via h.get, and async handling.
 # TODO: Also make prev_feedback a function that returns None at least once (to catch that one small branch).
+# TODO: Also send "no-data" as a number requesting a cell-count. Via h.get, and async handling.
 print('Tests OK')
 
 
@@ -94,7 +96,7 @@ def benchmark(N=64*10):
     iterations, feedback = 0, None
     N = 64*10
     def check_feedback(fb, *_):
-        assert fb is None or fb.shape == (N,) and fb[0] == .2
+        assert fb is not None and fb.shape == (N,) and fb[0] == .2
     send_data = np.random.randn(N)
     start, duration = time.monotonic(), 10.
     name = sn.Namer(('benchmark',), sn.cell_shape, sn.part_size)

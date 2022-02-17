@@ -143,7 +143,7 @@ class Handler:
 
         Handles collected data.
 
-        Pass it the previous handling's feedback (as a NumPy array or `None`), or if not immediately available (i.e. needs GPU→CPU transfer), a function with no inputs that will return `None` or the feedback.
+        Pass it the previous handling's feedback (as a NumPy array or `None`), or if not immediately available (i.e. needs GPU→CPU transfer), a function with no inputs that will return `None` or the feedback, or `False` if feedback will never arrive.
 
         This returns `(data, error, no_data, no_feedback)`.
         - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
@@ -159,48 +159,42 @@ class Handler:
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or callable(prev_feedback) # TODO: Also allow prev_feedback to be asyncio.Future? (feedback = feedback() if callable(feedback) else (feedback.result() if feedback.done() else None) if isinstance(feedback, asyncio.Future) else feedback)
         # Collect sensor data.
         for s in self.sensors: s(self)
-        if not len(self._data): return (None, None, None, None)
         # Gather data.
-        data = np.concatenate(self._data, 0)
-        error = np.concatenate([e if e is not None else -np.ones((0, self.cell_size)) for e in self._error], 0) if any(e is not None for e in self._error) else None
-        no_data = np.concatenate(self._no_data, 0)
-        no_feedback = np.concatenate(self._no_feedback, 0)
-        # Forget this step's data, and report feedback.
-        self._prev_fb.append((prev_feedback if prev_feedback is not None else False, self._next_fb, self.cell_shape, self.part_size)) # TODO: WHY ARE WE APPENDING `prev_feedback` TO OUR NEXT FEEDBACK; SHOULDN'T WE SET IT ON THE PREVIOUS ITEM INSTEAD?
+        if len(self._data):
+            data = np.concatenate(self._data, 0)
+            error = np.concatenate([e if e is not None else -np.ones((0, self.cell_size)) for e in self._error], 0) if any(e is not None for e in self._error) else None
+            no_data = np.concatenate(self._no_data, 0)
+            no_feedback = np.concatenate(self._no_feedback, 0)
+        else:
+            data, error, no_data, no_feedback = None, None, None, None
+        # Remember to respond to the previous step with prev_feedback.
+        if len(self._prev_fb):
+            self._prev_fb[-1][0] = prev_feedback if prev_feedback is not None else False
+        else:
+            assert prev_feedback is None
+        self._prev_fb.append([None, self._next_fb, self.cell_shape, self.part_size])
         self._next_fb = []
-        # TODO: ...Is it correct to, if prev_feedback is None, just discard all data that we've accumulated?... (This is the cause of the first step concluding things prematurely, isn't it?)
-        #   How to fix this; should we always append feedback?...
         self.discard()
         while len(self._prev_fb):
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if callable(feedback): feedback = feedback()
-            if feedback == False: pass # TODO: ...What do we do in such a case?... How to return immediately? ...Besides, prev_feedback is not actually known...
-            if feedback is None: break # TODO: A test that triggers this (delayed prev_feedback, returning None at least once, then the actual feedback).
-            assert isinstance(feedback, np.ndarray)
+            if feedback is None: break # Respond in-order. # TODO: A test that triggers this (delayed prev_feedback, returning None at least once, then the actual feedback).
+            if feedback is False: feedback = None
+            assert feedback is None or isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
-            for on_feedback, expected_shape, start_cell, end_cell, namer, length in callbacks:
-                fb = feedback[start_cell:end_cell, :]
-                assert fb.shape == expected_shape
-                if namer is not None: fb = namer.unname(fb, length)
-                on_feedback(fb, cell_shape, part_size, self)
+            _feedback(callbacks, feedback, cell_shape, part_size, self)
         return (data, error, no_data, no_feedback)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
-        got_err = None
-        for on_feedback, expected_shape, start_cell, end_cell, namer, length in self._next_fb:
-            try:
-                on_feedback(None, self.cell_shape, self.part_size, self)
-            except KeyboardInterrupt as err:
-                got_err = err
-            except Exception as err:
-                got_err = err
-        self._cell = 0
-        self._data.clear()
-        self._error.clear()
-        self._no_data.clear()
-        self._no_feedback.clear()
-        self._next_fb.clear()
-        if got_err: raise got_err
+        try:
+            _feedback(self._next_fb, None, self.cell_shape, self.part_size, self)
+        finally:
+            self._cell = 0
+            self._data.clear()
+            self._error.clear()
+            self._no_data.clear()
+            self._no_feedback.clear()
+            self._next_fb.clear()
 
 
 
@@ -208,9 +202,11 @@ class Namer:
     """
     `Namer(name, cell_shape, part_size)`
 
+    This is an optimization opportunity: wrapping a name in this and storing this object is faster than passing the name directly (which re-constructs this object each time).
+
     A class for augmenting a 1D array with numeric names, into a 2D array, sized cells×cell_size.
 
-    This is an optimization opportunity: wrapping a name in this and storing this object is faster than passing the name directly (which re-constructs this object each time).
+    TODO: Actually describe everything about names.
     """
     # (Fixed cell_shape and part_size may be quite inconvenient to use.)
     #   TODO: (So, may want this to cache `name_parts` for cell shape and part size, and make name/unname accept cell shape and part size, and update name parts if changed. After all, user convenience MUST be king here.)
@@ -318,6 +314,21 @@ def _unfill(y, size, axis=0): # → x
         x, y = folds[i-1], folds[i]
         folds[i-1] = np.copysign(.5 * (1-y), x)
     return folds[0]
+def _feedback(callbacks, feedback, cell_shape, part_size, handler):
+    fb = None
+    got_err = None
+    for on_feedback, expected_shape, start_cell, end_cell, namer, length in callbacks:
+        if feedback is not None:
+            fb = feedback[start_cell:end_cell, :]
+            assert fb.shape == expected_shape
+            if namer is not None: fb = namer.unname(fb, length)
+        try:
+            on_feedback(fb, cell_shape, part_size, handler)
+        except KeyboardInterrupt as err:
+            got_err = err
+        except Exception as err:
+            got_err = err
+    if got_err is not None: raise got_err
 
 
 
