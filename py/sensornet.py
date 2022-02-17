@@ -175,7 +175,7 @@ class Handler:
         self._prev_fb.append([None, self._next_fb, self.cell_shape, self.part_size])
         self._next_fb = []
         self.discard()
-        while len(self._prev_fb):
+        while True:
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if callable(feedback): feedback = feedback()
             if feedback is None: break # Respond in-order. # TODO: A test that triggers this (delayed prev_feedback, returning None at least once, then the actual feedback).
@@ -303,12 +303,12 @@ def _unfill(y, size, axis=0): # → x
     """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`.
 
     `(x,y) → (copysign((1-y)/2, x), y)`"""
-    if y.shape[axis] == size: return y # TODO: A test that triggers the rest. ...How would we do that? (...And why wasn't it triggered already? What, do we not have feedback?)
-    if y.shape[axis] < size:
+    if y.shape[axis] == size: return y
+    if y.shape[axis] < size: # TODO: How to trigger this?
         assert axis == 0 # Good enough for us.
         return np.pad(y, (0, size - y.shape[axis]))
     folds = np.split(y, range(size, y.shape[axis], size), axis)
-    if folds[-1].shape[0] < size:
+    if folds[-1].shape[0] < size: # TODO: How to trigger this?
         folds[-1] = np.concatenate((folds[-1], 1 - 2 * np.abs(np.take(folds[-2], range(folds[-1].shape[0], size), axis))), 0)
     for i in reversed(range(1, -(y.shape[axis] // -size))):
         x, y = folds[i-1], folds[i]
