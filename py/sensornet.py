@@ -1,7 +1,9 @@
 """
 Module for differentiable sensor networks: each gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
-Position-invariant and numeric: these constraints allow AI models to disregard all concerns about data formats, and with only a couple lines of code on the sensor-side and no changes on the handler-side: perform cross-dataset meta-learning and multimodal learning and multi-objective reinforcement learning and model distillation, combine tasks at runtime, and learn in completely arbitrary environments.
+Position-invariant and numeric: these constraints allow AI models to disregard all concerns about data formats, and with only a couple lines of code: perform cross-dataset meta-learning and multimodal learning and multi-objective reinforcement learning and lifelong learning and model distillation, combine tasks at runtime, and learn in completely arbitrary environments.
+
+You'll wish you had less data.
 
 Python 3.4 or newer (for asyncio).
 
@@ -134,7 +136,7 @@ class Handler:
         """
         while True:
             fb = await self.maybe_get(name, len, reward)
-            if fb is not None: return fb # TODO: ...This was never None... How to ensure that it is?
+            if fb is not None: return fb
     def handle(self, prev_feedback=None):
         """
         `sn.handle(prev_feedback=None)`
@@ -389,7 +391,7 @@ def handle(*k, **kw):
     return default.handle(*k, **kw)
 def discard(*k, **kw):
     return default.discard(*k, **kw)
-def maybe_get(*k, **kw): # TODO: How to use this particular function in a test, for completeness?
+def maybe_get(*k, **kw):
     return default.maybe_get(*k, **kw)
 def get(*k, **kw):
     return default.get(*k, **kw)

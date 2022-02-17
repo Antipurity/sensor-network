@@ -4,9 +4,13 @@ Tests and benchmarks for this Python implementation of a sensor network.
 Expect around 10000 steps per second, which should be more than enough for any AI model.
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
+
+```bash
+coverage run --branch sensor-network/py/test.py
+coverage report
+coverage html
+```
 """
-#   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right?)
-#     (Its flexibility & convenience as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
 
 
 
@@ -92,21 +96,22 @@ def test8():
     name = sn.Namer('test')
     n = 0
     finished = 0
-    async def request_data(h):
+    async def request_data(h, maybe=False):
         nonlocal finished
-        fb = await h.get(name, (3,5))
+        fb = await (h.maybe_get(name, (3,5)) if maybe else h.get(name, (3,5)))
         finished += 1
-        assert fb.shape == (3,5)
+        if not maybe: assert fb.shape == (3,5)
     async def give_feedback_later(data, error, no_data, no_feedback):
         nonlocal n
         await asyncio.sleep(.1)
         n += 1
-        return data if n==10 or n>20 else None
+        return data if n==20 or n>40 else None
     async def main():
         for _ in range(5):
             asyncio.ensure_future(request_data(sn))
+        asyncio.ensure_future(request_data(sn, True))
         fb = None
-        while finished < 5:
+        while finished < 6:
             await sn.wait(16)
             fb = give_feedback_later(*sn.handle(fb))
         await asyncio.sleep(.1)
