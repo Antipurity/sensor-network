@@ -108,7 +108,7 @@ def test9():
     async def request_data(h):
         nonlocal finished
         fb = await h.get(name, 15)
-        assert fb.shape == (15,) # TODO: ...Why is `fb` a Future...
+        assert fb.shape == (15,)
         finished += 1
     async def give_feedback_later(data, error, no_data, no_feedback):
         nonlocal n
@@ -123,6 +123,7 @@ def test9():
             fb = give_feedback_later(*sn.handle(fb))
             # TODO: ...Would this run into issues with never yielding to all the futures that we've set up...
             #   ...Do we want something like `sn.wait(max_steps=16)`?...
+        await fb
     asyncio.run(main())
 test0()
 test1()

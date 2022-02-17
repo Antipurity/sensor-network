@@ -133,7 +133,7 @@ class Handler:
         Wraps `.send` to allow `await`ing a 1D array from the handler. Never returns `None`, instead re-requesting until a numeric result is available.
         """
         while True:
-            fb = self.maybe_get(name, len, reward)
+            fb = await self.maybe_get(name, len, reward)
             if fb is not None: return fb
     def handle(self, prev_feedback=None):
         """
@@ -154,6 +154,10 @@ class Handler:
             - `numpy.compress(~no_feedback, data)` would select only queries.
             - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
+        # print('prev_feedback', prev_feedback, isinstance(prev_feedback, asyncio.Future), asyncio.iscoroutine(prev_feedback)) # TODO: ...So, why is a coroutine not an asyncio.Future?
+        # TODO: asyncio.iscoroutine(prev_feedback), possibly...
+        if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
+            prev_feedback = asyncio.ensure_future(prev_feedback)
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
         # TODO: Also allow prev_feedback to be asyncio.Future? (feedback = feedback() if callable(feedback) else (feedback.result() if feedback.done() else None) if isinstance(feedback, asyncio.Future) else feedback)
         #   (A saner interface, which doesn't use `False` to signal no-data and `None` for data-later.)
@@ -169,7 +173,6 @@ class Handler:
             data, error, no_data, no_feedback = None, None, None, None
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
-            print(prev_feedback) # TODO: Why is there never a coroutine...
             self._prev_fb[-1][0] = prev_feedback if prev_feedback is not None else False
         else:
             assert prev_feedback is None, 'The first step cannot give feedback'
@@ -179,7 +182,8 @@ class Handler:
         while True:
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if isinstance(feedback, asyncio.Future):
-                if feedback.done(): break
+                print('R', feedback, len(self._prev_fb)) # TODO: ...Okay, we definitely never yield to other async tasks.
+                if not feedback.done(): break
                 feedback = feedback.result()
             else:
                 if callable(feedback): feedback = feedback()
