@@ -1,7 +1,27 @@
 """
 Tests and benchmarks for this Python implementation of a sensor network.
 
-Expect around 10000 steps per second, which should be more than enough for any AI model.
+Expect around 10000 steps per second or less, which should be more than enough for any AI model.
+
+```bash
+python3 sensor-network/py/test.py
+```
+
+Sample run:
+
+```
+Tests OK
+With 4800 values, throughput: 217445760.0 bytes/sec (207.37 MiB/s) (11325.3 it/s)
+With 9600 values, throughput: 417527040.0 bytes/sec (398.18 MiB/s) (10873.1 it/s)
+With 14400 values, throughput: 562112640.0 bytes/sec (536.07 MiB/s) (9758.9 it/s)
+With 19200 values, throughput: 673466880.0 bytes/sec (642.27 MiB/s) (8769.1 it/s)
+With 24000 values, throughput: 767932800.0 bytes/sec (732.36 MiB/s) (7999.3 it/s)
+With 28800 values, throughput: 859207680.0 bytes/sec (819.4 MiB/s) (7458.4 it/s)
+With 33600 values, throughput: 914874240.0 bytes/sec (872.49 MiB/s) (6807.1 it/s)
+With 38400 values, throughput: 934302720.0 bytes/sec (891.02 MiB/s) (6082.7 it/s)
+With 43200 values, throughput: 678672000.0 bytes/sec (647.23 MiB/s) (3927.5 it/s)
+With 48000 values, throughput: 610809600.0 bytes/sec (582.51 MiB/s) (3181.3 it/s)
+```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
 
@@ -93,6 +113,9 @@ def test7():
 def test8():
     """Async operations."""
     sn.shape((0, 32, 64), 8)
+    assert sn.cell_shape == (0, 32, 64)
+    assert sn.part_size == 8
+    assert sn.cell_size == 96
     name = sn.Namer('test')
     n = 0
     finished = 0
@@ -117,6 +140,8 @@ def test8():
         await asyncio.sleep(.1)
         await fb # To silence a warning.
         await sn.wait(1) # For test coverage.
+        sn.send()
+        sn.discard()
     asyncio.run(main())
 test0()
 test1()
@@ -133,23 +158,19 @@ print('Tests OK')
 
 def benchmark(N=64*10):
     """Raw number-shuffling performance."""
-    sn.shape((8, 24, 64), 8)
-    assert sn.cell_shape == (8, 24, 64)
-    assert sn.part_size == 8
-    assert sn.cell_size == 96
+    h = sn.Handler((8, 24, 64), 8)
     iterations, feedback = 0, None
-    N = 64*10
     def check_feedback(fb, *_):
         assert fb is not None and fb.shape == (N,) and fb[0] == .2
     send_data = np.random.randn(N)
     start, duration = time.monotonic(), 10.
     name = sn.Namer('benchmark')
     while time.monotonic() - start < duration:
-        sn.send(name, data=send_data, on_feedback=check_feedback)
-        data, error, no_data, no_feedback = sn.handle(feedback)
+        h.send(name, data=send_data, on_feedback=check_feedback)
+        data, error, no_data, no_feedback = h.handle(feedback)
         feedback = np.full_like(data, .2) if data is not None else None
         iterations += 1
-    sn.discard()
-    thr = N*4 * iterations / duration
-    print('With', N, 'values, throughput:', thr, 'bytes/sec', f'({round(thr/1024/1024*100)/100} MiB/s)', f'({round(thr/N/4*100)/100} it/s)')
-benchmark(64*10) # TODO: Mirror the JS basic benchmark.
+    thr = N*4 * (96/64) * iterations / duration
+    print('With', N*96//64, 'values, throughput:', thr, 'bytes/sec', f'({round(thr/1024/1024*100)/100} MiB/s)', f'({round(iterations/duration*100)/100} it/s)')
+for i in range(10):
+    benchmark(64*50 * (i+1))
