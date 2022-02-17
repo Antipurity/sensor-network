@@ -40,7 +40,7 @@ class Handler:
         self._no_data = []
         self._no_feedback = []
         self._prev_fb = [] # [prev_feedback, …, _next_fb, …]
-        self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
+        self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length, original_shape), …]
         self.sensors = [] # Called by `.handle(…)`.
         self.cell_shape = ()
         self.part_size = 0
@@ -67,10 +67,10 @@ class Handler:
             - If a tuple/list of strings and -1…1 numbers and functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, converted to a `Namer`.
             - If a `Namer`, it is used.
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`.
-        - `data = None`: `None`, or how many numbers of no-data feedback to return, or a 1D NumPy array of -1…1 numbers.
+        - `data = None`: `None`, or how many numbers of no-data feedback to return, or a NumPy array of -1…1 numbers.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
         - `reward = 0.`: rates prior performance of these cells, for reinforcement learning.
-        - `on_feedback = None`: a function from `feedback` (could be `None`), `cell_shape`, `part_size`, `handler`, to nothing.
+        - `on_feedback = None`: a function from `feedback` (could be `None`, otherwise a NumPy array shaped the same as `data`), `cell_shape`, `part_size`, `handler`, to nothing.
             - Neither `.send` nor `.handle` steps are never re-ordered, so to reduce memory allocations, could reuse the same function and use queues.
 
         Returns `None`. See `.maybe_get` and `.get` for more convenient `asyncio`-based interfaces.
@@ -88,8 +88,9 @@ class Handler:
         no_data = False if isinstance(data, np.ndarray) else True
         if no_data: data = np.zeros((data or 0, self.cell_size), dtype=np.float32)
         length = None
+        original_shape = None
         if name is not None:
-            if len(data.shape) != 1: data = data.flatten() # TODO: ...But what happens when the user receives flat feedback to their shaped data? Isn't it quite bad? Should at least add a test of what happens. And then, either demand 1D, or remember the shape and reshape feedback.
+            if len(data.shape) != 1: original_shape, data = data.shape, data.flatten()
             if error is not None and len(error.shape) != 1: error = error.flatten()
             length = data.shape[0]
         # Name.
@@ -113,13 +114,13 @@ class Handler:
         self._no_data.append(np.tile(no_data, shape))
         self._no_feedback.append(np.tile(no_feedback, shape))
         if on_feedback is not None:
-            self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length))
+            self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length, original_shape))
         self._cell += cells
     def maybe_get(self, name, len, reward=0.):
         """
         `sn.maybe_get(name, len, reward=0.)`
 
-        Wraps `.send` to allow `await`ing a 1D tensor from the handler, or `None`.
+        Wraps `.send` to allow `await`ing a 1D array from the handler, or `None`.
         """
         # `asyncio.get_running_loop().create_future()` is better for customization-by-the-loop reasons, but imposes Python 3.7.
         fut = asyncio.Future()
@@ -129,7 +130,7 @@ class Handler:
         """
         `sn.get(name, len, reward=0.)`
 
-        Wraps `.send` to allow `await`ing a 1D tensor from the handler. Never returns `None`, instead re-requesting until a numeric result is available.
+        Wraps `.send` to allow `await`ing a 1D array from the handler. Never returns `None`, instead re-requesting until a numeric result is available.
         """
         while True:
             fb = self.maybe_get(name, len, reward)
@@ -205,7 +206,7 @@ class Namer:
 
     To achieve position-invariance of `handler.send`, data cells need names.
 
-    Naming 1D data transforms it into a 2D array, sized cells×cell_size. TODO: What happens what data is differently-dimensioned?
+    Naming data first flattens then transforms it into a 2D array, sized cells×cell_size.
 
     Names are split into fixed-size *parts*. Each part can be:
     - A string: MD5-hashed, and the resulting 16 bytes are put into one part, shifted and rescaled to -1…1.
@@ -333,11 +334,12 @@ def _unfill(y, size, axis=0): # → x
 def _feedback(callbacks, feedback, cell_shape, part_size, handler):
     fb = None
     got_err = None
-    for on_feedback, expected_shape, start_cell, end_cell, namer, length in callbacks:
+    for on_feedback, expected_shape, start_cell, end_cell, namer, length, original_shape in callbacks:
         if feedback is not None:
             fb = feedback[start_cell:end_cell, :]
             assert fb.shape == expected_shape
             if namer is not None: fb = namer.unname(fb, length, cell_shape, part_size)
+            fb = fb.reshape(original_shape)
         try:
             on_feedback(fb, cell_shape, part_size, handler)
         except KeyboardInterrupt as err:
