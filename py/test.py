@@ -1,7 +1,9 @@
 """
-TODO:
+Tests and benchmarks for this Python implementation of a sensor network.
 
-To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent.
+TODO: Should we include a chart of most-recent benchmark results, or something?
+
+To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
 """
 #   (The interface is not hard to use for the "functions that wait for the handler's decision, where some can spawn new functions and such", right?)
 #     (Its flexibility & convenience as an RL interface is kinda amazing. There are just no limitations, at all, there's only writing down ideas.)
@@ -50,16 +52,17 @@ def test4():
     """Name's error."""
     h = sn.Handler((8, 24, 64), 8)
     try:
-        h.send(name=(True,), data=np.array([1.]))
-        assert False
+        h.send(name=(True,), data=np.array([1.])); assert False
     except TypeError:
         pass
 def test5():
     """Sensors are auto-called at each step."""
     h = sn.Handler((8, 24, 64), 8)
-    h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.1, .2, .3])))
-    h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.4, .5, .6])))
+    def eh_feedback(fb, *_): assert fb is not None
+    h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.1, .2, .3]), on_feedback=eh_feedback))
+    h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.4, .5, .6]), on_feedback=eh_feedback))
     assert h.handle()[0].shape == (2, 96)
+    h.handle(np.zeros((2, 96)))
 def test6():
     """Errors thrown by `on_feedback` are re-thrown."""
     h = sn.Handler((8, 24, 64), 8)
@@ -83,7 +86,7 @@ test6()
 # TODO: Allow `None` to be a part of the name (zero-filling). …Or, start zero-fill every part of the name except `cell_shape[-2]`, to match JS behavior.
 # TODO: And all the other tests, as many as we need to bring the coverage up to 100%.
 # TODO: Also make prev_feedback a function that returns None at least once (to catch that one small branch).
-# TODO: Also send "no-data" as a number requesting a cell-count. Via h.get, and async handling.
+# TODO: Also send "no-data" as a number requesting that-many-numbers. Via h.get, and async handling.
 print('Tests OK')
 
 

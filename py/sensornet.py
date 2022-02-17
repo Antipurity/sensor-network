@@ -94,7 +94,7 @@ class Handler:
             if error is not None and len(error.shape) != 1: error = error.flatten()
             length = data.shape[0]
         # Name.
-        if isinstance(name, tuple) or isinstance(name, list): # TODO: A test that does not trigger this.
+        if isinstance(name, tuple) or isinstance(name, list):
             name = Namer(name, self.cell_shape, self.part_size)
         if isinstance(name, Namer):
             assert name.cell_shape == self.cell_shape
@@ -115,7 +115,7 @@ class Handler:
         self._error.append(error)
         self._no_data.append(np.tile(no_data, shape))
         self._no_feedback.append(np.tile(no_feedback, shape))
-        if on_feedback is not None: # TODO: A test that does not trigger this.
+        if on_feedback is not None:
             self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length))
         self._cell += cells
     def maybe_get(self, name, len, reward=0.):
@@ -171,14 +171,14 @@ class Handler:
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback if prev_feedback is not None else False
         else:
-            assert prev_feedback is None
+            assert prev_feedback is None, 'The first step cannot give feedback'
         self._prev_fb.append([None, self._next_fb, self.cell_shape, self.part_size])
         self._next_fb = []
         self.discard()
         while True:
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if callable(feedback): feedback = feedback()
-            if feedback is None: break # Respond in-order. # TODO: A test that triggers this (delayed prev_feedback, returning None at least once, then the actual feedback).
+            if feedback is None: break # Respond in-order.
             if feedback is False: feedback = None
             assert feedback is None or isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
@@ -253,9 +253,10 @@ class Namer:
         name_size = self.cell_size - data_size
         cells = -(-data.shape[0] // data_size)
         total = cells * data_size
-        data = np.reshape(_fill(data, total, 0), (cells, data_size))
+        data = _fill(data, total, 0) # Can't make it smaller, so `_unfill` will never have to make feedback larger.
+        data = np.reshape(data, (cells, data_size))
         # Finalize the name, then concat it before `data`.
-        if fill is not None: # TODO: ...But we have a test with an error; why isn't this ever triggered?... ...OH: that error isn't named!
+        if fill is not None:
             name = np.full((cells, name_size), fill)
             return np.concatenate((name, data), 1)
         start = np.expand_dims(np.arange(0, total, data_size), -1)
@@ -292,7 +293,8 @@ def _fill(x, size, axis=0): # → y
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
     if x.shape[axis] == size: return x
-    if x.shape[axis] > size: return np.take(x, range(0,size), axis)
+    if x.shape[axis] > size:
+        return np.take(x, range(0,size), axis)
     folds = [x]
     for _ in range(1, -(-size // x.shape[axis])):
         folds.append(1 - 2 * np.abs(folds[-1]))
@@ -304,11 +306,9 @@ def _unfill(y, size, axis=0): # → x
 
     `(x,y) → (copysign((1-y)/2, x), y)`"""
     if y.shape[axis] == size: return y
-    if y.shape[axis] < size: # TODO: How to trigger this?
-        assert axis == 0 # Good enough for us.
-        return np.pad(y, (0, size - y.shape[axis]))
+    assert y.shape[axis] > size # Users of `_unfill` never actually request the padding of data.
     folds = np.split(y, range(size, y.shape[axis], size), axis)
-    if folds[-1].shape[0] < size: # TODO: How to trigger this?
+    if folds[-1].shape[0] < size:
         folds[-1] = np.concatenate((folds[-1], 1 - 2 * np.abs(np.take(folds[-2], range(folds[-1].shape[0], size), axis))), 0)
     for i in reversed(range(1, -(y.shape[axis] // -size))):
         x, y = folds[i-1], folds[i]
