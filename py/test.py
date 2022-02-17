@@ -12,6 +12,7 @@ To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage
 
 import sensornet as sn
 import numpy as np
+import asyncio
 import time
 
 
@@ -98,6 +99,31 @@ def test8():
     assert h.handle()[0].shape == (1,96)
     h.handle(np.zeros((1,96)))
     assert got
+def test9():
+    """Async operations."""
+    sn.shape((0, 32, 64), 8)
+    name = sn.Namer('test')
+    n = 0
+    finished = 0
+    async def request_data(h):
+        nonlocal finished
+        fb = await h.get(name, 15)
+        assert fb.shape == (15,) # TODO: ...Why is `fb` a Future...
+        finished += 1
+    async def give_feedback_later(data, error, no_data, no_feedback):
+        nonlocal n
+        await asyncio.sleep(.1)
+        n += 1
+        return data if n==10 or n>20 else None
+    async def main():
+        for _ in range(5):
+            asyncio.ensure_future(request_data(sn))
+        fb = None
+        while finished < 5:
+            fb = give_feedback_later(*sn.handle(fb))
+            # TODO: ...Would this run into issues with never yielding to all the futures that we've set up...
+            #   ...Do we want something like `sn.wait(max_steps=16)`?...
+    asyncio.run(main())
 test0()
 test1()
 test2()
@@ -107,6 +133,7 @@ test5()
 test6()
 test7()
 test8()
+test9()
 # TODO: Also send "no-data" as a number requesting that-many-numbers. Via h.get, and async handling. (Possibly near the benchmark, so that we can use `sn`. ...Or just use `sn` here?)
 print('Tests OK')
 

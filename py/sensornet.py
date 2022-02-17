@@ -50,7 +50,7 @@ class Handler:
     def shape(self, cell_shape, part_size):
         """`sn.shape(cell_shape, part_size)`
 
-        Changes the current shape."""
+        Changes the current shape. `cell_shape` is `(padding, name_size, data_size)`, where `padding % part_size == 0` and `name_size % part_size == 0`."""
         _shape_ok(cell_shape, part_size)
         self.discard()
         self.cell_shape = cell_shape
@@ -141,7 +141,7 @@ class Handler:
 
         Handles collected data.
 
-        Pass it the previous handling's feedback (as a NumPy array or `None`), or if not immediately available (i.e. needs GPU→CPU transfer), a function with no inputs that will return `None` or the feedback, or `False` if feedback will never arrive.
+        Pass it the previous handling's feedback (as a NumPy array or `None` or an `asyncio.Future` of that), or a low-level function with no inputs that will return `None` to wait or the feedback or `False` if feedback will never arrive.
 
         This returns `(data, error, no_data, no_feedback)`.
         - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
@@ -154,7 +154,9 @@ class Handler:
             - `numpy.compress(~no_feedback, data)` would select only queries.
             - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
         """
-        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or callable(prev_feedback) # TODO: Also allow prev_feedback to be asyncio.Future? (feedback = feedback() if callable(feedback) else (feedback.result() if feedback.done() else None) if isinstance(feedback, asyncio.Future) else feedback)
+        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
+        # TODO: Also allow prev_feedback to be asyncio.Future? (feedback = feedback() if callable(feedback) else (feedback.result() if feedback.done() else None) if isinstance(feedback, asyncio.Future) else feedback)
+        #   (A saner interface, which doesn't use `False` to signal no-data and `None` for data-later.)
         # Collect sensor data.
         for s in self.sensors: s(self)
         # Gather data.
@@ -167,6 +169,7 @@ class Handler:
             data, error, no_data, no_feedback = None, None, None, None
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
+            print(prev_feedback) # TODO: Why is there never a coroutine...
             self._prev_fb[-1][0] = prev_feedback if prev_feedback is not None else False
         else:
             assert prev_feedback is None, 'The first step cannot give feedback'
@@ -175,9 +178,13 @@ class Handler:
         self.discard()
         while True:
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
-            if callable(feedback): feedback = feedback()
-            if feedback is None: break # Respond in-order.
-            if feedback is False: feedback = None
+            if isinstance(feedback, asyncio.Future):
+                if feedback.done(): break
+                feedback = feedback.result()
+            else:
+                if callable(feedback): feedback = feedback()
+                if feedback is None: break # Respond in-order.
+                if feedback is False: feedback = None
             assert feedback is None or isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
             _feedback(callbacks, feedback, cell_shape, part_size, self)
@@ -215,6 +222,8 @@ class Namer:
         - For example, `lambda start, end, total: start/total*2-1` puts a number, from -1 (inclusive) to 1 (exclusive).
         - For example, `lambda start, end, total: end / total*2-1` puts a number, from -1 (exclusive) to 1 (inclusive).
         - (Good idea to always include at least something dynamic, unless data only occupies one cell.)
+
+    Neural networks are good at classification but are poor at regression. So numbers are repeatedly folded via `x → 1 - 2*abs(x)` until a part has no free space, to increase AI-model sensitivity. Handlers can also un/fold or apply I/FFT if needed.
     """
     def __init__(self, *name):
         self.named = name
@@ -296,7 +305,8 @@ class Namer:
 def _shape_ok(cell_shape: tuple, part_size: int):
     assert isinstance(part_size, int) and part_size > 0
     assert isinstance(cell_shape, tuple)
-    assert all(isinstance(s, int) and s > 0 for s in cell_shape)
+    assert all(isinstance(s, int) and s >= 0 for s in cell_shape)
+    assert cell_shape[-1] > 0
     assert all(s % part_size == 0 for s in cell_shape[:-1])
 def _str_to_floats(string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
@@ -371,3 +381,9 @@ def maybe_get(*k, **kw):
     return default.maybe_get(*k, **kw)
 def get(*k, **kw): # TODO: A test that uses this.
     return default.get(*k, **kw)
+shape.__doc__ = Handler.shape.__doc__
+send.__doc__ = Handler.send.__doc__
+handle.__doc__ = Handler.handle.__doc__
+discard.__doc__ = Handler.discard.__doc__
+maybe_get.__doc__ = Handler.maybe_get.__doc__
+get.__doc__ = Handler.get.__doc__
