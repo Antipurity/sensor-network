@@ -194,6 +194,7 @@ class Handler:
         This returns `(data, error, no_data, no_feedback)`.
         - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
         - `error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
+            - A usage example: `if error is not None: data = numpy.clip(data + (error+1) * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
         - `no_data`: a bit-mask, sized `cells`.
         - `no_feedback`: a bit-mask, sized `cells`.
         - Usage:
