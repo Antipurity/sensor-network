@@ -195,10 +195,12 @@ class Handler:
         - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
         - `error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
             - A usage example: `if error is not None: data = numpy.clip(data + (error+1) * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
-        - `no_data`: a bit-mask, sized `cells`.
-        - `no_feedback`: a bit-mask, sized `cells`.
+        - `no_data`: bools, sized `cells`.
+        - `no_feedback`: bools, sized `cells`.
         - Usage:
             - `data[:, 0]` would return per-cell rewards.
+            - `data[:, :-sn.cell_shape[-1]]` would select only names.
+            - `data[:, -sn.cell_shape[-1]:]` would select only data.
             - `numpy.compress(~no_data, data)` would select only inputs.
             - `numpy.compress(~no_feedback, data)` would select only queries.
             - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
