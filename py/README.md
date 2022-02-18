@@ -46,6 +46,6 @@ async def main():
         fb = process(...) # See `sn.Handler.handle` for what these mean.
 ```
 
-This module implements this basic protocol, and does not include anything else by default, such as string/image handling or file storage or Internet communication.
+This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or Internet communication.
 
 (Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
