@@ -121,7 +121,7 @@ def test8():
     finished = 0
     async def request_data(h, maybe=False):
         nonlocal finished
-        fb = await (h.maybe_get(name, (3,5)) if maybe else h.get(name, (3,5)))
+        fb = await (h.maybe_get(name, (3,5), reward=None) if maybe else h.get(name, (3,5)))
         finished += 1
         if not maybe: assert fb.shape == (3,5)
     async def give_feedback_later(data, error, no_data, no_feedback):

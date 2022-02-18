@@ -106,7 +106,7 @@ class Handler:
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`.
         - `data = None`: `None`, or how many numbers of no-data feedback to return, or a NumPy array of -1…1 numbers.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
-        - `reward = 0.`: rates prior performance of these cells, for reinforcement learning.
+        - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. Replaces the first number of every cell. Pass in `None` to disable this.
         - `on_feedback = None`: a function from `feedback` (could be `None`, otherwise a NumPy array shaped the same as `data`), `cell_shape`, `part_size`, `handler`, to nothing.
             - Neither `.send` nor `.handle` steps are never re-ordered, so to reduce memory allocations, could reuse the same function and use queues.
 
@@ -142,7 +142,8 @@ class Handler:
         assert data.shape[-1] == self.cell_size
         assert error is None or data.shape == error.shape
         # Reward.
-        data[:, 0] = reward
+        if reward is not None:
+            data[:, 0] = reward
         # Send.
         cells = data.shape[0]
         shape = (cells,)
