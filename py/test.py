@@ -34,7 +34,7 @@ coverage html
 
 
 
-import sensornet as sn
+import __init__ as sn
 import numpy as np
 import asyncio
 import time
