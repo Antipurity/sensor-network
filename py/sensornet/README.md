@@ -1,6 +1,6 @@
 Module for differentiable [sensor networks](https://github.com/Antipurity/sensor-network): each gathers named numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
-This is the core protocol: as flexible as you can imagine, [as fast as you need](https://github.com/Antipurity/sensor-network/tree/master/py/test.py), [as small as is reasonable](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet.py), and [as well-tested as you can measure](https://github.com/Antipurity/sensor-network/tree/master/py/test.py).
+This is the core protocol: as flexible as you can imagine, [as fast as you need](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py), [as small as is reasonable](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/__init__.py), and [as well-tested as you can measure](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py).
 
 Position-invariant and numeric, nothing is fixed: these constraints free AI models from all concerns about data formats. With only a couple lines of code, you can: learn in completely arbitrary environments, combine tasks at runtime, and perform cross-dataset meta-learning and multimodal learning and multi-objective reinforcement learning and lifelong learning and model distillation.
 
@@ -8,7 +8,13 @@ Python 3.4 or newer (for `asyncio`).
 
 ## Installation
 
-Like, copy `sensornet.py` or something.
+```bash
+pip install sensornet
+```
+
+Or, like, copy this directory.
+
+Or `pip install -ve .` here, see where your `easy-install.pth` lives, and edit that file to remove the last directory in the path to here.
 
 ## Usage
 

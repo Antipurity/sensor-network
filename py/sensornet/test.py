@@ -4,7 +4,7 @@ Tests and benchmarks for this Python implementation of a sensor network.
 Expect around 10000 steps per second or less, which should be more than enough for any AI model.
 
 ```bash
-python3 sensor-network/py/test.py
+python3 sensor-network/py/sensornet/test.py
 ```
 
 Sample run:
@@ -26,7 +26,7 @@ With 48000 values, throughput: 610809600.0 bytes/sec (582.51 MiB/s) (3181.3 it/s
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
 
 ```bash
-coverage run --branch sensor-network/py/test.py
+coverage run --branch sensor-network/py/sensornet/test.py
 coverage report
 coverage html
 ```
