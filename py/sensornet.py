@@ -93,11 +93,13 @@ class Handler:
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
-    def send(self, name=None, data=None, error=None, reward=0., on_feedback=None):
+    def send(self, name=None, data=None, error=None, reward=0., on_feedback=None, no_data=None, no_feedback=None):
         """
-        `sn.send(name=None, data=None, error=None, reward=0., on_feedback=None)`
+        `sn.send(name=None, data=None, error=None, reward=0., on_feedback=None, no_data=None, no_feedback=None)`
 
         Sends named data, possibly getting same-size feedback, possibly only getting feedback.
+
+        Returns `None`. See `.maybe_get` and `.get` for more convenient `asyncio`-based interfaces.
 
         Arguments:
         - `name = None`:
@@ -108,22 +110,24 @@ class Handler:
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
         - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. Replaces the first number of every cell. Pass in `None` to disable this.
         - `on_feedback = None`: a function from `feedback` (could be `None`, otherwise a NumPy array shaped the same as `data`), `cell_shape`, `part_size`, `handler`, to nothing.
-            - Neither `.send` nor `.handle` steps are never re-ordered, so to reduce memory allocations, could reuse the same function and use queues.
-
-        Returns `None`. See `.maybe_get` and `.get` for more convenient `asyncio`-based interfaces.
+            - `.send`/`.maybe_get`/`.get` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
+        - `no_data = None` and `no_feedback = None`: for passing through `sn.handle(…)`'s result to another handler, like `h.send(name=None, reward=None, data=data, error=error, no_data=no_data, no_feedback=no_feedback, on_feedback = lambda fb,*_: ...)`.
         """
         if data is None and on_feedback is None: return
         assert name is None or isinstance(name, tuple) or isinstance(name, Namer)
         assert data is None or isinstance(data, np.ndarray) or _inty(data) or (isinstance(data, tuple) or isinstance(data, list)) and all(_inty(n) for n in data)
         assert error is None or isinstance(error, np.ndarray)
         assert on_feedback is None or callable(on_feedback)
+        assert no_data is None and no_feedback is None or isinstance(no_data, np.ndarray) and isinstance(no_feedback, np.ndarray) and no_data.dtype == no_feedback.dtype == np.dtype('bool')
         if not self.cell_size:
             if on_feedback is not None:
                 on_feedback(None, self.cell_shape, self.part_size, self)
             return
-        no_feedback = not on_feedback
-        no_data = False if isinstance(data, np.ndarray) else True
-        if no_data: data = np.zeros((data,) if _inty(data) else data if data is not None else (0, self.cell_size), dtype=np.float32)
+        if no_feedback is None:
+            no_feedback = not on_feedback
+        if no_data is None:
+            no_data = False if isinstance(data, np.ndarray) else True
+            if no_data: data = np.zeros((data,) if _inty(data) else data if data is not None else (0, self.cell_size), dtype=np.float32)
         length = None
         original_shape = None
         if name is not None:
@@ -147,10 +151,16 @@ class Handler:
         # Send.
         cells = data.shape[0]
         shape = (cells,)
+        if not isinstance(no_data, np.ndarray):
+            no_data = np.tile(no_data, shape)
+        if not isinstance(no_feedback, np.ndarray):
+            no_feedback = np.tile(no_feedback, shape)
+        assert no_data.shape == shape
+        assert no_feedback.shape == shape
         self._data.append(data)
         self._error.append(error)
-        self._no_data.append(np.tile(no_data, shape))
-        self._no_feedback.append(np.tile(no_feedback, shape))
+        self._no_data.append(no_data)
+        self._no_feedback.append(no_feedback)
         if on_feedback is not None:
             self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length, original_shape))
         self._cell += cells

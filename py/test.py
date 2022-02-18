@@ -128,7 +128,7 @@ def test8():
         nonlocal n
         await asyncio.sleep(.1)
         n += 1
-        return data if n==20 or n>40 else None
+        return data if n==30 or n>60 else None
     async def main():
         for _ in range(5):
             asyncio.ensure_future(request_data(sn))
@@ -143,6 +143,14 @@ def test8():
         sn.send()
         sn.discard()
     asyncio.run(main())
+def test9():
+    """Pass-through of (synthetic) handler data to another one."""
+    h = sn.Handler((8, 24, 64), 8)
+    def yes_feedback(fb, *_): assert fb.shape == (13, 96)
+    cells, shape = (13,), (13, 96)
+    h.send(name=None, reward=None, data=np.zeros(shape), error=np.zeros(shape), no_data=np.full(cells, True), no_feedback=np.full(cells, False), on_feedback=yes_feedback)
+    assert h.handle()[0].shape == shape
+    h.handle(np.zeros(shape))
 test0()
 test1()
 test2()
@@ -152,6 +160,7 @@ test5()
 test6()
 test7()
 test8()
+test9()
 print('Tests OK')
 
 
