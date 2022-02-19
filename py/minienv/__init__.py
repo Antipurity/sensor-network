@@ -22,7 +22,8 @@ def reset(**opts):
         agents[name][0].cancel()
         del agents[name]
     if not opts['stop']:
-        _create_nodes('start')
+        nodes['start'] = _random_name()
+        _create_nodes(nodes['start'])
         options['please_make_an_agent'] = True
     metrics['nodes'] = len(nodes['all'])
 def explored(): return metrics['explored'] / metrics['nodes']
@@ -66,7 +67,8 @@ metrics = {
 }
 nodes = {
     'all': [], # Node IDs, for random sampling.
-    'start': [], # Node ID to `[neighbor_ids, name_vec, visited, resource]`.
+    'start': '',
+    # Node ID to `[neighbor_ids, name_vec, visited, resource]`.
 }
 agents = {
     # Agent ID (randomly-generated) to `[task, at, resource, hunger]`:
@@ -81,30 +83,33 @@ import numpy as np
 
 
 
-def agent(sn, at='start', resource=1., hunger=False):
+def agent(sn, at=nodes['start'], resource=1., hunger=False):
     """Creates an agent, two-way-bound to wander the graph."""
     name = _random_name()
     async def loop():
         reward = 0.
         while True:
             _, at, resource, hunger = agents[name]
-            neighbors, at_name, at_visited, at_resource = nodes[at]
+            neighbors, at_name_vec, at_visited, at_resource = nodes[at]
             # Keep track of exploration.
             if not at_visited:
                 nodes[at][2] = True
                 metrics['explored'] += 1
-            # Bleed.
-            resource -= options['step_takes_resources']
-            if resource < 0:
+            # Bleed onto a random node.
+            dresource = min(options['step_takes_resources'], resource)
+            resource -= dresource
+            nodes[random.choice(nodes['all'])][3] += dresource
+            if resource <= 0:
                 del agents[name]
                 return
             agents[name][2] = resource
-            # TODO: Send node's and agent's data.
-            #   node's remaining resource,
-            #   node's own randomly-initialized vector,
-            #   each neighbor's vector (the name includes the neighbor ID and the node ID),
-            #   our health (0…1 but exposed as -1…1, increasing with picked-up resource, slowly decreasing (going to a random node), terminating the thread when 0, and no threads means a reset),
-            #   all sent with the `reward`, which is then reset to `0.`.
+            # Send observations.
+            sn.send(name=(name, at, 'resource', 'agent'), data=np.array([resource*2-1, 1. if hunger else -1.]), reward=reward)
+            sn.send(name=(at, 'node resource'), data=np.array([at_resource*2-1]), reward=reward)
+            sn.send(name=(at, 'name_vec'), data=at_name_vec, reward=reward)
+            for ng in neighbors:
+                sn.send(name=(at, ng, 'neighbor'), data=nodes[ng][1], reward=reward)
+            reward = 0.
             # TODO: Determine which of the 4 actions we can do: take-reward if at_resource>0, fork if len(agents.keys())<options['max_agents'], suicide if options['allow_suicide'], goto-neighbor if len(neighbors).
             # TODO: If no actions are OK, continue. (Won't ever get non-forking actions, but at least we'll eat up resources and annoy the handler.)
             # TODO: Get action's data.
