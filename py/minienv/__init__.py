@@ -56,7 +56,7 @@ default_options = {
     'max_agents': 16, # 1 to disallow forking.
     'allow_suicide': True, # Look at all this proof-of-exploration opportunity.
     'allow_fork_with_resource_goal': True,
-    'step_takes_resource': .01, # The resource is moved to a random node, so total resources are conserved.
+    'step_takes_resources': .01, # The resource is moved to a random node, so total resources are conserved.
     'resource_consumption_speed': .1,
 }
 metrics = {
@@ -88,25 +88,34 @@ def agent(sn, at='start', resource=1., hunger=False):
         reward = 0.
         while True:
             _, at, resource, hunger = agents[name]
-            # nodes[at] = [neighbor_ids, name_vec, visited, resource]
-            # TODO: Mark the node as explored, and increment metrics['explored'] if it previously was not.
-            # TODO: Bleed our resource. If <0, suicide and return.
+            neighbors, at_name, at_visited, at_resource = nodes[at]
+            # Keep track of exploration.
+            if not at_visited:
+                nodes[at][2] = True
+                metrics['explored'] += 1
+            # Bleed.
+            resource -= options['step_takes_resources']
+            if resource < 0:
+                del agents[name]
+                return
+            agents[name][2] = resource
             # TODO: Send node's and agent's data.
             #   node's remaining resource,
             #   node's own randomly-initialized vector,
             #   each neighbor's vector (the name includes the neighbor ID and the node ID),
             #   our health (0…1 but exposed as -1…1, increasing with picked-up resource, slowly decreasing (going to a random node), terminating the thread when 0, and no threads means a reset),
             #   all sent with the `reward`, which is then reset to `0.`.
-            # TODO: Determine which of the 4 actions we can do: take-reward if nodes[at][3]>0, fork if len(agents.keys())<options['max_agents'], suicide if options['allow_suicide'], goto-neighbor if len(nodes[at][0]).
+            # TODO: Determine which of the 4 actions we can do: take-reward if at_resource>0, fork if len(agents.keys())<options['max_agents'], suicide if options['allow_suicide'], goto-neighbor if len(neighbors).
             # TODO: If no actions are OK, continue. (Won't ever get non-forking actions, but at least we'll eat up resources and annoy the handler.)
             # TODO: Get action's data.
             #   Of length options['node_name_size'] + actions, always.
             # TODO: Execute the action, with the max number in it.
             #   take-reward (can't take the node to below 0, can't take us to above 1) (if `hunger`, also sets `reward`),
-            #   fork (unless will have too many agents) (health is split evenly between the threads) (possibly setting the `hunger` flag, if the extra data calls for it),
+            #   fork (health is split evenly between the threads) (possibly setting the `hunger` flag, if the extra data calls for it),
             #   suicide (add our resource to the cell's),
             #   goto-neighbor (vector output, and the nearest-neighbor vector among neighbors is picked)
     agents[name] = [asyncio.ensure_future(loop()), at, resource, hunger]
+    return name
 
 
 

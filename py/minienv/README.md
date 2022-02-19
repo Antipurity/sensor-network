@@ -20,7 +20,7 @@ This can be seen as either the need to boldly go where we have not been before (
 
 Prioritizing the unknown is just asking for [catastrophic ](https://en.wikipedia.org/wiki/Catastrophic_interference)[forgetting](https://arxiv.org/abs/1612.00796), so compressing future possibilities to make them equally-likely (if its compressed future features are picked randomly) is where it's at.
 
-In machine learning, [self-](https://en.wikipedia.org/wiki/Unsupervised_learning)[supervised learning](https://en.wikipedia.org/wiki/Self-supervised_learning) is all about compressing data into an AI [model](https://www.tensorflow.org/text/tutorials/transformer). Try its best [met](https://arxiv.org/abs/2006.07733)[hods.](https://paperswithcode.com/method/swav)
+In machine learning, [self-](https://en.wikipedia.org/wiki/Unsupervised_learning)[supervised learning](https://en.wikipedia.org/wiki/Self-supervised_learning) is all about compressing data into an AI [model](https://www.tensorflow.org/text/tutorials/transformer). Try its best [met](https://arxiv.org/abs/2006.07733)[hods](https://paperswithcode.com/method/swav) to see whether this intuition is misleading or practically useful.
 
 ---
 
