@@ -1,6 +1,12 @@
 Not every action serves a [consistent ](https://deepmind.com/research/publications/2021/The-Difficulty-of-Passive-Learning-in-Deep-Reinforcement-Learning)[goal](https://deepsense.ai/what-is-reinforcement-learning-the-complete-guide/), so to gain future potential, have to *explore*. This minienv is intended as a sanity check of whether a handler is capable of exploration: it essentially exposes a bunch of progressively-less-likely states.
 
-To use it, simply `import minienv` in its parent directory and handle `import sensornet`'s globally-exposed data.
+To use it:
+
+```python
+import sensornet # Must come first.
+import minienv
+# And handle `sensornet`'s globally-exposed data.
+```
 
 When `minienv.explored() > .987` at times, your handler handles exploration well.
 

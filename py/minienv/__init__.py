@@ -4,14 +4,9 @@ TODO:
 
 
 
-# In case the `sensornet` is not installed as a package, allow importing a sibling directory.
-import os
+# In case `sensornet` is not installed as a package.
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-
-
-import sensornet as sn
+sn = sys.modules['sensornet']
 
 
 
