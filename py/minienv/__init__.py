@@ -1,4 +1,17 @@
-import sensornet as sn # TODO: ...How do we refer to a parent directory (to not rely on the package being installed)?... Can we, even, in Python?...
+"""
+TODO:
+"""
+
+
+
+# In case the `sensornet` is not installed as a package, allow importing a sibling directory.
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+
+
+import sensornet as sn
 
 
 
