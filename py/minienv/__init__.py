@@ -1,13 +1,31 @@
 """
 This simple sensor-network environment consists of a few parts:
 
-- TODO: The node-graph to explore.
+- The node-graph to explore.
+    - Each node has a 'name' vector for directing the traversal, and the node's resource amount (never less than 0).
+    - Each node has directed edges to a few neighbors.
+        - Nodes mostly form a tree, sometimes with random edges, to increase path length.
+        - Nodes usually link back to the starting node, to make sabotaging exploration likely.
 
-- TODO: Agents that explore.
+- Agents that explore nodes.
+    - One agent starts at the starting node.
+    - Each agent knows its current position (a node), the agent's resource amount, and whether consuming resources gives it reward.
+    - Each agent loses some of its resource each step, which is given to some random node. Total resources are always preserved.
+    - Observations:
+        - Agent resource & hunger-ness.
+        - Node resource.
+        - Node 'name'.
+        - All neighbor 'names'.
+        - (`sensornet`'s cell shape should reserve 3 name-parts.)
+    - Actions:
+        - Take resources from the node for ourselves.
+        - Fork. Possibly into an agent that hungers.
+        - Go to a neighbor. 'Which neighbor' is the nearest-neighbor of the received data in node-neighbor 'names'.
+        - Un-fork. Kick the bucket. Bite the dust. If all agents meet their maker, the world resets.
 
-- The world possibly ending at each step, just to make exploration more difficult.
+- The world can end at each step if chosen, just to make exploration more difficult.
 
-Reset with `.reset(**options)` (see `.options` for what is allowed), read the main metric with `.explored()` (0…1). Don't overfit to this metric, this is *exploration*, not *reward*.
+Reset with `.reset(**options)` (see `.options` for what can be changed, which is quite a lot), read the desired metric with `.explored()` (0…1). Don't overfit to this metric, this is *exploration*, not *reward*.
 
 TODO: Test.
 """
@@ -15,6 +33,7 @@ TODO: Test.
 
 
 def reset(**opts):
+    """Destroys and recreates the world."""
     options.update(default_options)
     options.update(opts)
     metrics['nodes'], metrics['explored'], metrics['collected'] = 0, 0, 0
@@ -46,12 +65,12 @@ default_options = {
     # Kill-switch.
     'stop': False,
     # The graph to explore.
-    'max_nodes': 256,
+    'max_nodes': 1024,
     'node_name_size': 16,
     'child_probabilities': {1:.7, 2:.1, 3:.1, 4:.1},
     'loopback_to_start_probability': .75,
     'loopback_to_parent_probability': .25,
-    'random_connection_probability': .1,
+    'random_connection_probability': .03,
     'avg_resource': .1, # The actual initial resource in a node is 0…avg_resource*2.
     # The top-level-action options.
     'can_reset_the_world': True, # If checked, each step has a 50% chance of resetting the world, which only adds to exploration.
@@ -97,6 +116,18 @@ def agent(sn, at=nodes['start'], resource=1., hunger=False):
             if not at_visited:
                 nodes[at][3] = True
                 metrics['explored'] += 1
+            # Send observations.
+            sn.send(name=(name, at, 'agent resource'), data=np.array([resource*2-1, 1. if hunger else -1.]), reward=reward)
+            sn.send(name=(at, 'node resource'), data=np.array([at_resource*2-1]), reward=reward)
+            sn.send(name=(at, 'name_vec'), data=at_name_vec, reward=reward)
+            for i, ng in enumerate(neighbors):
+                sn.send(name=(at, ng, 'neighbor '+str(i)), data=nodes[ng][1], reward=reward)
+            reward = 0.
+            # Receive actions.
+            actions = 4
+            act = await sn.send(name=(name, at, 'act'), data = options['node_name_size'] + actions, on_feedback=True)
+            if act is None: continue # Re-send observations on dropped packets.
+            data, acts = act[:-actions], act[-actions:]
             # Bleed onto a random node. Die if unfortunate.
             dresource = min(options['step_takes_resources'], resource)
             resource -= dresource
@@ -106,18 +137,6 @@ def agent(sn, at=nodes['start'], resource=1., hunger=False):
                 del agents[name]
                 return
             agents[name][2] = resource
-            # Send observations.
-            sn.send(name=(name, at, 'agent resource'), data=np.array([resource*2-1, 1. if hunger else -1.]), reward=reward)
-            sn.send(name=(at, 'node resource'), data=np.array([at_resource*2-1]), reward=reward)
-            sn.send(name=(at, 'name_vec'), data=at_name_vec, reward=reward)
-            for ng in neighbors:
-                sn.send(name=(at, ng, 'neighbor'), data=nodes[ng][1], reward=reward)
-            reward = 0.
-            # Receive actions.
-            actions = 4
-            act = await sn.send(name=(name, at, 'act'), data = options['node_name_size'] + actions, on_feedback=True)
-            if act is None: continue # Re-send observations on dropped packets.
-            data, acts = act[:-actions], act[-actions:]
             # Take resources from the cell.
             if acts[0]>0 and at_resource > 0.:
                 dresource = min(options['resource_consumption_speed'], at_resource, 1. - resource)
