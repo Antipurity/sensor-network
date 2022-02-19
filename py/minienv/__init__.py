@@ -16,9 +16,8 @@ def reset(**opts):
     metrics['explored'], metrics['collected'] = 0, 0
 
     nodes.clear()
-    nodes['all'] = []
-    _create_nodes('start')
-    pass
+    if not opts['stop']:
+        _create_nodes('start')
 def explored(): return metrics['explored']
 def collected(): return metrics['collected']
 
@@ -28,13 +27,15 @@ def collected(): return metrics['collected']
 import sys
 try:
     sn = sys.modules['sensornet']
-except KeyError as err:
-    raise ImportError('Please `import sensornet` first') from err
+except KeyError:
+    raise ImportError('Please `import sensornet` first') from None
 
 
 
 options = {}
 default_options = {
+    # Kill-switch.
+    'stop': False,
     # The graph to explore.
     'max_nodes': 1024,
     'node_name_size': 64,
@@ -43,6 +44,9 @@ default_options = {
     'loopback_to_parent_probability': .25,
     'random_connection_probability': .1,
     'avg_resource': .1, # The actual initial resource in a node is 0…avg_resource*2.
+    # The top-level-action options.
+    'can_reset_the_world': True, # If checked, each step has a 50% chance of resetting the world, which only adds to exploration.
+    # Agents that act on the graph.
     # TODO: What other options do we want `reset` to control?
 }
 metrics = {
@@ -54,6 +58,8 @@ nodes = {
     'start': [], # Node ID to `[neighbor_ids, name_vec, visited, resource]`.
 }
 # TODO: How are the agents handled?...
+#   Do we want them to be contained in functions, and have an array (or set) of per-agent Tasks which we can `.cancel()` when resetting?
+#   TODO: No reward (exploration yo) (or maybe, an option to allow forks that do want that reward?); observations: node's remaining resource, node's randomly-initialized vector, and each neighbor's vector, our health (0…1 but exposed as -1…1, increasing with picked-up resource, slowly decreasing (going to a random node), terminating the thread when 0, and no threads means a reset); actions: take-reward (.1), fork (health is split evenly between the threads), suicide (add our health to the cell's), goto-neighbor (vector output, and the nearest-neighbor vector is picked)…
 
 
 
@@ -67,6 +73,7 @@ def _random_node_name():
 def _create_nodes(start_id):
     """Creates the node tree-like graph with loopback connections (which decrease the probability of successful exploration) in `nodes`."""
     ids = [start_id]
+    nodes['all'] = []
     prob = random.random
     def new_node(parent_id, id = None):
         if id is None: id = _random_node_name()
@@ -106,7 +113,17 @@ def _create_nodes(start_id):
 
 
 
+def _maybe_reset_the_world(fb, *_):
+    if fb is not None and (fb[0] > 0).all():
+        reset()
+def _top_level_actions(sn):
+    if options['can_reset_the_world']:
+        sn.send(name=('world', 'reset'), data=1, on_feedback=_maybe_reset_the_world)
+    if not options['stop']:
+        pass # TODO: Also deploy an agent if there are none.
+
+
+
+# If you really need many environments, launch many processes, and enjoy the benefits of actual parallelism.
 reset()
-sn.sensors.append(lambda sn: ...) # TODO: What does this do? Is this the main world re/creation loop, deploying an agent if the level is empty?
-# TODO: On import, push the world-thread to `sn.sensors` (with just world-resets and world-continues actions, to really test exploration, optionally), exposing `.reset(**opts)` to re-init everything, and `.explored()` and `.collected()` to measure performance… No reward (exploration yo) (or maybe, an option to allow forks that do want that reward?); observations: node's remaining resource, node's randomly-initialized vector, and each neighbor's vector, our health (0…1 but exposed as -1…1, increasing with picked-up resource, slowly decreasing (going to a random node), terminating the thread when 0, and no threads means a reset); actions: take-reward (.1), fork (health is split evenly between the threads), suicide (add our health to the cell's), goto-neighbor (vector output, and the nearest-neighbor vector is picked)…
-#   ...Maybe don't have health? Or maybe, to have a bit more stuff to explore, do have health... Yeah, have health, and forking, and all that.
+sn.sensors.append(_top_level_actions)
