@@ -296,6 +296,7 @@ class Namer:
         self.cell_shape = None
         self.part_size = None
         self.cell_size = None
+        self.last_cells, self.last_name = None, None
     def name(self, data, cell_shape, part_size, fill=None):
         """
         1D to 2D.
@@ -317,7 +318,11 @@ class Namer:
             return np.concatenate((name, data), 1)
         start = np.expand_dims(np.arange(0, total, data_size), -1)
         end = np.minimum(start + data_size, length)
-        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1), part_size, 1) if isinstance(p, list) else np.repeat(p, cells, 0) for p in self.name_parts], 1) # TODO: Can we also cache this result, based on `cells`, for much better performance?
+        if self.last_cells != cells:
+            name = self.last_name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1), part_size, 1) if isinstance(p, list) else np.repeat(p, cells, 0) for p in self.name_parts], 1)
+            self.last_cells = cells
+        else:
+            name = self.last_name
         name = _fill(name, name_size, 1)
         return np.concatenate((name, data), 1)
     def unname(self, feedback, length, cell_shape, _):
@@ -371,6 +376,7 @@ class Namer:
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
+        self.last_cells, self.last_name = None, None
         return self.name_parts
 
 

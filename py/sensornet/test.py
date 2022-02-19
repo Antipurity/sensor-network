@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 266584320.0 bytes/sec (254.23 MiB/s) (13884.6 it/s)
-With 9600 values, throughput: 470522880.0 bytes/sec (448.73 MiB/s) (12253.2 it/s)
-With 14400 values, throughput: 619476480.0 bytes/sec (590.78 MiB/s) (10754.8 it/s)
-With 19200 values, throughput: 741565440.0 bytes/sec (707.21 MiB/s) (9655.8 it/s)
-With 24000 values, throughput: 848736000.0 bytes/sec (809.42 MiB/s) (8841.0 it/s)
-With 28800 values, throughput: 935136000.0 bytes/sec (891.82 MiB/s) (8117.5 it/s)
-With 33600 values, throughput: 1030014720.0 bytes/sec (982.3 MiB/s) (7663.8 it/s)
-With 38400 values, throughput: 1090974720.0 bytes/sec (1040.43 MiB/s) (7102.7 it/s)
-With 43200 values, throughput: 1141948800.0 bytes/sec (1089.05 MiB/s) (6608.5 it/s)
-With 48000 values, throughput: 602803200.0 bytes/sec (574.88 MiB/s) (3139.6 it/s)
+With 4800 values, throughput: 289027200.0 bytes/sec (275.64 MiB/s) (15053.5 it/s)
+With 9600 values, throughput: 509157120.0 bytes/sec (485.57 MiB/s) (13259.3 it/s)
+With 14400 values, throughput: 674772480.0 bytes/sec (643.51 MiB/s) (11714.8 it/s)
+With 19200 values, throughput: 835614720.0 bytes/sec (796.9 MiB/s) (10880.4 it/s)
+With 24000 values, throughput: 916416000.0 bytes/sec (873.96 MiB/s) (9546.0 it/s)
+With 28800 values, throughput: 1017285120.0 bytes/sec (970.16 MiB/s) (8830.6 it/s)
+With 33600 values, throughput: 1075200000.0 bytes/sec (1025.39 MiB/s) (8000.0 it/s)
+With 38400 values, throughput: 707143680.0 bytes/sec (674.38 MiB/s) (4603.8 it/s)
+With 43200 values, throughput: 711987840.0 bytes/sec (679.0 MiB/s) (4120.3 it/s)
+With 48000 values, throughput: 820915200.0 bytes/sec (782.89 MiB/s) (4275.6 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
