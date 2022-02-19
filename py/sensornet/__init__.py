@@ -158,9 +158,9 @@ class Handler:
         cells = data.shape[0]
         shape = (cells,)
         if not isinstance(no_data, np.ndarray):
-            no_data = np.tile(no_data, shape)
+            no_data = np.full(shape, no_data)
         if not isinstance(no_feedback, np.ndarray):
-            no_feedback = np.tile(no_feedback, shape)
+            no_feedback = np.full(shape, no_feedback)
         assert no_data.shape == shape
         assert no_feedback.shape == shape
         self._data.append(data)
@@ -346,7 +346,8 @@ class Namer:
                 raise TypeError("Names must consist of strings, numbers, and number-returning functions")
         if len(nums): name_parts.append(nums)
         # Concat consecutive numbers in the name for a bit more performance.
-        for part in name_parts:
+        for i in range(len(name_parts)): # TODO: How to react to the changing len(name_parts)?
+            part = name_parts[i]
             if isinstance(part, list):
                 start, end = 0, 0
                 while end <= len(part):
@@ -357,8 +358,10 @@ class Namer:
                         start = end
                     if start < len(part) and not isinstance(part[start], np.ndarray): start = end+1
                     end += 1
-                # TODO: If the whole list is now just one tensor, replace it with that (probably need `i` for `part=name_parts[i]` for that).
+                if len(part) == 1:
+                    part = name_parts[i] = part[0]
             # TODO: Also concatenate consecutive tensors, since concatenation has shown itself to be a performance problem (and concatenating name parts is not that fun).
+            #   ...How, exactly?
         self.name_parts = name_parts
         self.cell_shape = cell_shape
         self.part_size = part_size
