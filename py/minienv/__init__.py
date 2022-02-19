@@ -7,7 +7,9 @@ This simple sensor-network environment consists of a few parts:
 
 - The world possibly ending at each step, just to make exploration more difficult.
 
-Reset with `.reset(**options)` (see `.options` for what is allowed), read the main metric with `.explored()` (0…1). Don't overfit to this metric.
+Reset with `.reset(**options)` (see `.options` for what is allowed), read the main metric with `.explored()` (0…1). Don't overfit to this metric, this is *exploration*, not *reward*.
+
+TODO: Test.
 """
 
 
@@ -21,7 +23,7 @@ def reset(**opts):
     for name in agents.keys():
         agents[name][0].cancel()
         del agents[name]
-    if not opts['stop']:
+    if not options['stop']:
         nodes['start'] = _random_name()
         _create_nodes(nodes['start'])
         options['please_make_an_agent'] = True
@@ -44,8 +46,8 @@ default_options = {
     # Kill-switch.
     'stop': False,
     # The graph to explore.
-    'max_nodes': 1024,
-    'node_name_size': 32,
+    'max_nodes': 256,
+    'node_name_size': 16,
     'child_probabilities': {1:.7, 2:.1, 3:.1, 4:.1},
     'loopback_to_start_probability': .75,
     'loopback_to_parent_probability': .25,
@@ -56,7 +58,7 @@ default_options = {
     # Agents that act on the graph.
     'max_agents': 16, # 1 to disallow forking.
     'allow_suicide': True, # Look at all this proof-of-exploration opportunity.
-    'allow_fork_with_resource_goal': True,
+    'allow_fork_with_resource_goal': True, # Exploration that can choose to maximize.
     'step_takes_resources': .01, # The resource is moved to a random node, so total resources are conserved.
     'resource_consumption_speed': .1,
 }
@@ -68,7 +70,7 @@ metrics = {
 nodes = {
     'all': [], # Node IDs, for random sampling.
     'start': '',
-    # Node ID to `[neighbor_ids, name_vec, visited, resource]`.
+    # Node ID to `[neighbor_ids, name_vec, resource, visited]`.
 }
 agents = {
     # Agent ID (randomly-generated) to `[task, at, resource, hunger]`:
@@ -90,35 +92,52 @@ def agent(sn, at=nodes['start'], resource=1., hunger=False):
         reward = 0.
         while True:
             _, at, resource, hunger = agents[name]
-            neighbors, at_name_vec, at_visited, at_resource = nodes[at]
+            neighbors, at_name_vec, at_resource, at_visited = nodes[at]
             # Keep track of exploration.
             if not at_visited:
-                nodes[at][2] = True
+                nodes[at][3] = True
                 metrics['explored'] += 1
-            # Bleed onto a random node.
+            # Bleed onto a random node. Die if unfortunate.
             dresource = min(options['step_takes_resources'], resource)
             resource -= dresource
-            nodes[random.choice(nodes['all'])][3] += dresource
+            nodes[random.choice(nodes['all'])][2] += dresource
+            at_resource = nodes[at][2]
             if resource <= 0:
                 del agents[name]
                 return
             agents[name][2] = resource
             # Send observations.
-            sn.send(name=(name, at, 'resource', 'agent'), data=np.array([resource*2-1, 1. if hunger else -1.]), reward=reward)
+            sn.send(name=(name, at, 'agent resource'), data=np.array([resource*2-1, 1. if hunger else -1.]), reward=reward)
             sn.send(name=(at, 'node resource'), data=np.array([at_resource*2-1]), reward=reward)
             sn.send(name=(at, 'name_vec'), data=at_name_vec, reward=reward)
             for ng in neighbors:
                 sn.send(name=(at, ng, 'neighbor'), data=nodes[ng][1], reward=reward)
             reward = 0.
-            # TODO: Determine which of the 4 actions we can do: take-reward if at_resource>0, fork if len(agents.keys())<options['max_agents'], suicide if options['allow_suicide'], goto-neighbor if len(neighbors).
-            # TODO: If no actions are OK, continue. (Won't ever get non-forking actions, but at least we'll eat up resources and annoy the handler.)
-            # TODO: Get action's data.
-            #   Of length options['node_name_size'] + actions, always.
-            # TODO: Execute the action, with the max number in it.
-            #   take-reward (can't take the node to below 0, can't take us to above 1) (if `hunger`, also sets `reward`),
-            #   fork (health is split evenly between the threads) (possibly setting the `hunger` flag, if the extra data calls for it),
-            #   suicide (add our resource to the cell's),
-            #   goto-neighbor (vector output, and the nearest-neighbor vector among neighbors is picked)
+            # Receive actions.
+            actions = 4
+            act = await sn.send(name=(name, at, 'act'), data = options['node_name_size'] + actions, on_feedback=True)
+            if act is None: continue # Re-send observations on dropped packets.
+            data, acts = act[:-actions], act[-actions:]
+            # Take resources from the cell.
+            if acts[0]>0 and at_resource > 0.:
+                dresource = min(options['resource_consumption_speed'], at_resource, 1. - resource)
+                resource += dresource;  agents[name][2] = resource
+                at_resource -= dresource;  nodes[at][2] = at_resource
+                if hunger: reward = dresource
+            # Fork. (Casually, as if you see action-space-alteration in RL often.)
+            if acts[1]>0 and len(agents.keys()) < options['max_agents']:
+                ours = .5
+                agent(sn, at, resource*(1-ours), options['allow_fork_with_resource_goal'] and data[0]>0)
+                resource *= ours;  agents[name][2] = resource
+            # Goto neighbor.
+            if acts[2]>0 and len(neighbors):
+                nearest_neighbor_i = np.argmin(np.sum(np.abs(data - np.concatenate([nodes[ng][1] for ng in neighbors], 0)), 1))
+                name = neighbors[nearest_neighbor_i]
+            # Un-fork.
+            if acts[3]>0 and options['allow_suicide']:
+                nodes[at][2] += resource
+                del agents[name]
+                return
     agents[name] = [asyncio.ensure_future(loop()), at, resource, hunger]
     return name
 
@@ -144,8 +163,8 @@ def _create_nodes(start_id):
         nodes[id] = [
             neighbors,
             np.random.rand(options['node_name_size']),
-            False,
             random.uniform(0, options['avg_resource']),
+            False,
         ]
         nodes['all'].append(id)
         ids.append(id)
