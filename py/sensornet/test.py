@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 256310400.0 bytes/sec (244.44 MiB/s) (13349.5 it/s)
-With 9600 values, throughput: 447763200.0 bytes/sec (427.02 MiB/s) (11660.5 it/s)
-With 14400 values, throughput: 594282240.0 bytes/sec (566.75 MiB/s) (10317.4 it/s)
-With 19200 values, throughput: 703349760.0 bytes/sec (670.77 MiB/s) (9158.2 it/s)
-With 24000 values, throughput: 797529600.0 bytes/sec (760.58 MiB/s) (8307.6 it/s)
-With 28800 values, throughput: 881061120.0 bytes/sec (840.25 MiB/s) (7648.1 it/s)
-With 33600 values, throughput: 944563200.0 bytes/sec (900.81 MiB/s) (7028.0 it/s)
-With 38400 values, throughput: 1017615360.0 bytes/sec (970.47 MiB/s) (6625.1 it/s)
-With 43200 values, throughput: 1082280960.0 bytes/sec (1032.14 MiB/s) (6263.2 it/s)
-With 48000 values, throughput: 774182400.0 bytes/sec (738.32 MiB/s) (4032.2 it/s)
+With 4800 values, throughput: 266584320.0 bytes/sec (254.23 MiB/s) (13884.6 it/s)
+With 9600 values, throughput: 470522880.0 bytes/sec (448.73 MiB/s) (12253.2 it/s)
+With 14400 values, throughput: 619476480.0 bytes/sec (590.78 MiB/s) (10754.8 it/s)
+With 19200 values, throughput: 741565440.0 bytes/sec (707.21 MiB/s) (9655.8 it/s)
+With 24000 values, throughput: 848736000.0 bytes/sec (809.42 MiB/s) (8841.0 it/s)
+With 28800 values, throughput: 935136000.0 bytes/sec (891.82 MiB/s) (8117.5 it/s)
+With 33600 values, throughput: 1030014720.0 bytes/sec (982.3 MiB/s) (7663.8 it/s)
+With 38400 values, throughput: 1090974720.0 bytes/sec (1040.43 MiB/s) (7102.7 it/s)
+With 43200 values, throughput: 1141948800.0 bytes/sec (1089.05 MiB/s) (6608.5 it/s)
+With 48000 values, throughput: 602803200.0 bytes/sec (574.88 MiB/s) (3139.6 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
@@ -112,6 +112,7 @@ def test7():
     assert got
 def test8():
     """Async operations."""
+    sn.shape((0, 32, 64), 8)
     sn.shape((0, 32, 64), 8)
     assert sn.cell_shape == (0, 32, 64)
     assert sn.part_size == 8

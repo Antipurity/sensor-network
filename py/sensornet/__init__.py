@@ -89,6 +89,8 @@ class Handler:
 
         Changes the current shape. `cell_shape` is `(padding, name_size, data_size)`, where `padding % part_size == 0` and `name_size % part_size == 0`."""
         _shape_ok(cell_shape, part_size)
+        if self.cell_shape == cell_shape and self.part_size == part_size:
+            return
         self.discard()
         self.cell_shape = cell_shape
         self.part_size = part_size
@@ -315,7 +317,7 @@ class Namer:
             return np.concatenate((name, data), 1)
         start = np.expand_dims(np.arange(0, total, data_size), -1)
         end = np.minimum(start + data_size, length)
-        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1), part_size, 1) if isinstance(p, list) else np.repeat(p, cells, 0) for p in self.name_parts], 1)
+        name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1), part_size, 1) if isinstance(p, list) else np.repeat(p, cells, 0) for p in self.name_parts], 1) # TODO: Can we also cache this result, based on `cells`, for much better performance?
         name = _fill(name, name_size, 1)
         return np.concatenate((name, data), 1)
     def unname(self, feedback, length, cell_shape, _):
@@ -346,7 +348,8 @@ class Namer:
                 raise TypeError("Names must consist of strings, numbers, and number-returning functions")
         if len(nums): name_parts.append(nums)
         # Concat consecutive numbers in the name for a bit more performance.
-        for i in range(len(name_parts)): # TODO: How to react to the changing len(name_parts)?
+        i = 0
+        while i < len(name_parts):
             part = name_parts[i]
             if isinstance(part, list):
                 start, end = 0, 0
@@ -359,9 +362,11 @@ class Namer:
                     if start < len(part) and not isinstance(part[start], np.ndarray): start = end+1
                     end += 1
                 if len(part) == 1:
-                    part = name_parts[i] = part[0]
-            # TODO: Also concatenate consecutive tensors, since concatenation has shown itself to be a performance problem (and concatenating name parts is not that fun).
-            #   ...How, exactly?
+                    part = name_parts[i] = _fill(part[0], part_size, 1)
+            if i > 0 and isinstance(name_parts[i-1], np.ndarray) and isinstance(name_parts[i], np.ndarray):
+                name_parts[i-1:i+1] = [np.concatenate(name_parts[i-1:i+1], 1)]
+            else:
+                i += 1
         self.name_parts = name_parts
         self.cell_shape = cell_shape
         self.part_size = part_size
