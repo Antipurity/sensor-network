@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 217445760.0 bytes/sec (207.37 MiB/s) (11325.3 it/s)
-With 9600 values, throughput: 417527040.0 bytes/sec (398.18 MiB/s) (10873.1 it/s)
-With 14400 values, throughput: 562112640.0 bytes/sec (536.07 MiB/s) (9758.9 it/s)
-With 19200 values, throughput: 673466880.0 bytes/sec (642.27 MiB/s) (8769.1 it/s)
-With 24000 values, throughput: 767932800.0 bytes/sec (732.36 MiB/s) (7999.3 it/s)
-With 28800 values, throughput: 859207680.0 bytes/sec (819.4 MiB/s) (7458.4 it/s)
-With 33600 values, throughput: 914874240.0 bytes/sec (872.49 MiB/s) (6807.1 it/s)
-With 38400 values, throughput: 934302720.0 bytes/sec (891.02 MiB/s) (6082.7 it/s)
-With 43200 values, throughput: 678672000.0 bytes/sec (647.23 MiB/s) (3927.5 it/s)
-With 48000 values, throughput: 610809600.0 bytes/sec (582.51 MiB/s) (3181.3 it/s)
+With 4800 values, throughput: 232657920.0 bytes/sec (221.88 MiB/s) (12117.6 it/s)
+With 9600 values, throughput: 401341440.0 bytes/sec (382.75 MiB/s) (10451.6 it/s)
+With 14400 values, throughput: 530110080.0 bytes/sec (505.55 MiB/s) (9203.3 it/s)
+With 19200 values, throughput: 661585920.0 bytes/sec (630.94 MiB/s) (8614.4 it/s)
+With 24000 values, throughput: 766454400.0 bytes/sec (730.95 MiB/s) (7983.9 it/s)
+With 28800 values, throughput: 830649600.0 bytes/sec (792.17 MiB/s) (7210.5 it/s)
+With 33600 values, throughput: 900708480.0 bytes/sec (858.98 MiB/s) (6701.7 it/s)
+With 38400 values, throughput: 969891840.0 bytes/sec (924.96 MiB/s) (6314.4 it/s)
+With 43200 values, throughput: 676425600.0 bytes/sec (645.09 MiB/s) (3914.5 it/s)
+With 48000 values, throughput: 593260800.0 bytes/sec (565.78 MiB/s) (3089.9 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
@@ -186,4 +186,3 @@ async def benchmark(N=64*10):
     print('With', N*96//64, 'values, throughput:', thr, 'bytes/sec', f'({round(thr/1024/1024*100)/100} MiB/s)', f'({round(iterations/duration*100)/100} it/s)')
 for i in range(10):
     asyncio.run(benchmark(64*50 * (i+1)))
-# TODO: Re-run, to check coverage.

@@ -94,11 +94,11 @@ class Handler:
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without too much overhead.
-    def send(self, name=None, data=None, error=None, reward=0., on_feedback=None, no_data=None, no_feedback=None):
+    def send(self, name=None, data=None, error=None, no_data=None, no_feedback=None, reward=0., on_feedback=None):
         """
-        `sn.send(name=None, data=None, error=None, reward=0., on_feedback=None, no_data=None, no_feedback=None)`
         `sn.send(name=..., data=numpy.random.rand(16)*2-1)`
         `await sn.send(name=..., data=16, on_feedback=True)`
+        `sn.send(name=None, data=None, error=None, no_data=None, no_feedback=None, reward=0., on_feedback=None)`
 
         Sends named data, possibly getting same-size feedback, possibly only getting feedback.
 
@@ -116,7 +116,7 @@ class Handler:
         - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. Replaces the first number of every cell. Pass in `None` to disable this.
         - `on_feedback = None`: could be `True` or `asyncio.Future()` to return and fill, or for efficiency, a function from `feedback` (could be `None`, otherwise a NumPy array shaped the same as `data`), `cell_shape`, `part_size`, `handler`, to nothing.
             - `.send` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
-        - `no_data = None` and `no_feedback = None`: for passing through `sn.handle(…)`'s result to another handler, like `h.send(name=None, reward=None, data=data, error=error, no_data=no_data, no_feedback=no_feedback, on_feedback = lambda fb,*_: ...)`. TODO: With params reordered, have the much shorter `h.send(None, *sn.handle(…))`.
+        - `no_data = None` and `no_feedback = None`: for passing through `sn.handle(…)`'s result to another handler, like `h.send(None, *sn.handle(…), reward=None, on_feedback=...)`.
         """
         if data is None and on_feedback is None: return
         if on_feedback is True: on_feedback = asyncio.Future()
