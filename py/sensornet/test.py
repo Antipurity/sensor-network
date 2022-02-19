@@ -121,7 +121,7 @@ def test8():
     finished = 0
     async def request_data(h, maybe=False):
         nonlocal finished
-        fb = await (h.maybe_get(name, (3,5), reward=None) if maybe else h.get(name, (3,5)))
+        fb = await (h.send(name, (3,5), reward=None, on_feedback=True) if maybe else h.get(name, (3,5)))
         finished += 1
         if not maybe: assert fb.shape == (3,5)
     async def give_feedback_later(data, error, no_data, no_feedback):
@@ -165,7 +165,7 @@ print('Tests OK')
 
 
 
-def benchmark(N=64*10):
+async def benchmark(N=64*10):
     """Raw number-shuffling performance."""
     h = sn.Handler((8, 24, 64), 8)
     iterations, feedback = 0, None
@@ -175,11 +175,15 @@ def benchmark(N=64*10):
     start, duration = time.monotonic(), 10.
     name = sn.Namer('benchmark')
     while time.monotonic() - start < duration:
+        await h.wait()
+        # Using Futures is a 30% slowdown.
         h.send(name, data=send_data, on_feedback=check_feedback)
         data, error, no_data, no_feedback = h.handle(feedback)
         feedback = np.full_like(data, .2) if data is not None else None
         iterations += 1
+    h.discard()
     thr = N*4 * (96/64) * iterations / duration
     print('With', N*96//64, 'values, throughput:', thr, 'bytes/sec', f'({round(thr/1024/1024*100)/100} MiB/s)', f'({round(iterations/duration*100)/100} it/s)')
 for i in range(10):
-    benchmark(64*50 * (i+1))
+    asyncio.run(benchmark(64*50 * (i+1)))
+# TODO: Re-run, to check coverage.

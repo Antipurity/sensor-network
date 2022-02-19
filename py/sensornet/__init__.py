@@ -93,13 +93,18 @@ class Handler:
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
+        self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without too much overhead.
     def send(self, name=None, data=None, error=None, reward=0., on_feedback=None, no_data=None, no_feedback=None):
         """
         `sn.send(name=None, data=None, error=None, reward=0., on_feedback=None, no_data=None, no_feedback=None)`
+        `sn.send(name=..., data=numpy.random.rand(16)*2-1)`
+        `await sn.send(name=..., data=16, on_feedback=True)`
 
         Sends named data, possibly getting same-size feedback, possibly only getting feedback.
 
-        Returns `None`. See `.maybe_get` and `.get` for more convenient `asyncio`-based interfaces.
+        Returns `None` or `on_feedback` if that is an `asyncio.Future`. If async, do `sn.wait()` before `sn.handle(...)`.
+
+        Use `.get` to retry until feedback is non-`None`.
 
         Arguments:
         - `name = None`:
@@ -109,19 +114,20 @@ class Handler:
         - `data = None`: `None`, or how many numbers of no-data feedback to return, or a NumPy array of -1…1 numbers.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
         - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. Replaces the first number of every cell. Pass in `None` to disable this.
-        - `on_feedback = None`: a function from `feedback` (could be `None`, otherwise a NumPy array shaped the same as `data`), `cell_shape`, `part_size`, `handler`, to nothing.
-            - `.send`/`.maybe_get`/`.get` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
-        - `no_data = None` and `no_feedback = None`: for passing through `sn.handle(…)`'s result to another handler, like `h.send(name=None, reward=None, data=data, error=error, no_data=no_data, no_feedback=no_feedback, on_feedback = lambda fb,*_: ...)`.
+        - `on_feedback = None`: could be `True` or `asyncio.Future()` to return and fill, or for efficiency, a function from `feedback` (could be `None`, otherwise a NumPy array shaped the same as `data`), `cell_shape`, `part_size`, `handler`, to nothing.
+            - `.send` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
+        - `no_data = None` and `no_feedback = None`: for passing through `sn.handle(…)`'s result to another handler, like `h.send(name=None, reward=None, data=data, error=error, no_data=no_data, no_feedback=no_feedback, on_feedback = lambda fb,*_: ...)`. TODO: With params reordered, have the much shorter `h.send(None, *sn.handle(…))`.
         """
         if data is None and on_feedback is None: return
+        if on_feedback is True: on_feedback = asyncio.Future()
         assert name is None or isinstance(name, tuple) or isinstance(name, Namer)
         assert data is None or isinstance(data, np.ndarray) or _inty(data) or (isinstance(data, tuple) or isinstance(data, list)) and all(_inty(n) for n in data)
         assert error is None or isinstance(error, np.ndarray)
-        assert on_feedback is None or callable(on_feedback)
+        assert on_feedback is None or callable(on_feedback) or isinstance(on_feedback, asyncio.Future)
         assert no_data is None and no_feedback is None or isinstance(no_data, np.ndarray) and isinstance(no_feedback, np.ndarray) and no_data.dtype == no_feedback.dtype == np.dtype('bool')
         if not self.cell_size:
             if on_feedback is not None:
-                on_feedback(None, self.cell_shape, self.part_size, self)
+                on_feedback(None, self.cell_shape, self.part_size, self) if callable(on_feedback) else on_feedback.set_result(None)
             return
         if no_feedback is None:
             no_feedback = not on_feedback
@@ -164,24 +170,16 @@ class Handler:
         if on_feedback is not None:
             self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length, original_shape))
         self._cell += cells
-    def maybe_get(self, name, len, reward=0.):
-        """
-        `await sn.maybe_get(name, len, reward=0.)`
-
-        Wraps `.send` to allow `await`ing a 1D array from the handler, or `None`.
-        """
-        # `asyncio.get_running_loop().create_future()` is better for customization-by-the-loop reasons, but imposes Python 3.7.
-        fut = asyncio.Future()
-        self.send(name, len, None, reward, lambda feedback, cell_shape, part_size, handler: fut.set_result(feedback))
-        return fut
+        if isinstance(on_feedback, asyncio.Future):
+            return on_feedback
     async def get(self, name, len, reward=0.):
         """
         `await sn.get(name, len, reward=0.)`
 
-        Wraps `.send` to allow `await`ing a 1D array from the handler. Never returns `None`, instead re-requesting until a numeric result is available.
+        Gets feedback, guaranteed. Never returns `None`, instead re-requesting until a numeric result is available.
         """
         while True:
-            fb = await self.maybe_get(name, len, reward)
+            fb = await self.send(name, len, reward=reward, on_feedback=True)
             if fb is not None: return fb
     def handle(self, prev_feedback=None):
         """
@@ -246,6 +244,10 @@ class Handler:
         Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
         """
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
+        self.n += 1
+        if self.n >= max_simultaneous_steps: self.n = 0
+        if self.n == 0:
+            await asyncio.sleep(0)
         if len(self._prev_fb) <= max_simultaneous_steps: return
         fb = self._prev_fb[0][0] # The oldest feedback, must be done.
         if isinstance(fb, asyncio.Future) and not fb.done():
@@ -355,6 +357,8 @@ class Namer:
                         start = end
                     if start < len(part) and not isinstance(part[start], np.ndarray): start = end+1
                     end += 1
+                # TODO: If the whole list is now just one tensor, replace it with that (probably need `i` for `part=name_parts[i]` for that).
+            # TODO: Also concatenate consecutive tensors, since concatenation has shown itself to be a performance problem (and concatenating name parts is not that fun).
         self.name_parts = name_parts
         self.cell_shape = cell_shape
         self.part_size = part_size
@@ -413,7 +417,7 @@ def _feedback(callbacks, feedback, cell_shape, part_size, handler):
             if namer is not None: fb = namer.unname(fb, length, cell_shape, part_size)
             fb = fb.reshape(original_shape)
         try:
-            on_feedback(fb, cell_shape, part_size, handler)
+            on_feedback(fb, cell_shape, part_size, handler) if callable(on_feedback) else on_feedback.set_result(fb)
         except KeyboardInterrupt as err:
             got_err = err
         except Exception as err:
@@ -440,8 +444,6 @@ def handle(*k, **kw):
     return default.handle(*k, **kw)
 def discard(*k, **kw):
     return default.discard(*k, **kw)
-def maybe_get(*k, **kw):
-    return default.maybe_get(*k, **kw)
 def get(*k, **kw):
     return default.get(*k, **kw)
 def wait(*k, **kw):
@@ -450,6 +452,5 @@ shape.__doc__ = Handler.shape.__doc__
 send.__doc__ = Handler.send.__doc__
 handle.__doc__ = Handler.handle.__doc__
 discard.__doc__ = Handler.discard.__doc__
-maybe_get.__doc__ = Handler.maybe_get.__doc__
 get.__doc__ = Handler.get.__doc__
 wait.__doc__ = Handler.wait.__doc__
