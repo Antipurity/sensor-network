@@ -10,7 +10,7 @@ Roughly speaking.
 
 Exploration is about making rare events less rare.
 
-This can be seen as either the need to boldly go where we have not been before ([implicit ](http://www.cs.cornell.edu/~helou/IMRL.pdf)[rewards](https://lilianweng.github.io/lil-log/2020/06/07/exploration-strategies-in-deep-reinforcement-learning.html)), or the need to make all probabilities equal ([entropy ](https://arxiv.org/abs/2005.00820)[regularization](https://paperswithcode.com/method/entropy-regularization), [diversity search](https://icml.cc/media/Slides/icml/2019/halla(10-09-15)-10-09-15-4336-recent_advances.pdf), etc).
+This can be seen as either the need to boldly go where we have not been before ([implicit ](http://www.cs.cornell.edu/~helou/IMRL.pdf)[rewards](https://lilianweng.github.io/lil-log/2020/06/07/exploration-strategies-in-deep-reinforcement-learning.html)), or the need to make all probabilities equal ([entropy ](https://arxiv.org/abs/2005.00820)[regularization](https://paperswithcode.com/method/entropy-regularization), [trying ](https://arxiv.org/abs/1806.09605)[every](https://arxiv.org/abs/1504.04909)[thing](https://icml.cc/media/Slides/icml/2019/halla(10-09-15)-10-09-15-4336-recent_advances.pdf), etc).
 
 Prioritizing the unknown is just asking for [catastrophic ](https://en.wikipedia.org/wiki/Catastrophic_interference)[forgetting](https://arxiv.org/abs/1612.00796), so compressing future possibilities to make them equally-likely (if its compressed future features are picked randomly) is where it's at.
 
