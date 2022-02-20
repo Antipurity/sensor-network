@@ -2,6 +2,33 @@
 Contains `RNN`: a simple wrapper for training `fn(state, *args) → state` functions.
 
 Run this file to test it.
+
+Usage example:
+
+```python
+import torch
+import torch.nn as nn
+class OnlyFirstArg(nn.Module):
+    def __init__(self, fn):
+        super(OnlyFirstArg, self).__init__()
+        self.fn = fn
+    def forward(self, x, *_): return self.fn(x)
+
+model = RNN(
+    OnlyFirstArg(nn.Sequential(
+        nn.Linear(96, 128),
+        nn.ReLU(),
+        nn.LayerNorm(128),
+        nn.Linear(128, 96),
+    )),
+    lambda state, predicts: (state - predicts).square().sum(),
+    lambda p: torch.optim.SGD(p, lr=3e-4),
+    backprop_length=lambda: random.randint(1, 10),
+)
+state = torch.randn(96)
+for _ in range(50000):
+    state = model(state, (state*.9).detach())
+```
 """
 
 
