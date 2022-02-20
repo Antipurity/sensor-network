@@ -95,7 +95,9 @@ class Handler:
     def shape(self, cell_shape, part_size):
         """`sn.shape(cell_shape, part_size)`
 
-        Changes the current shape. `cell_shape` is `(padding, name_size, data_size)`, where `padding % part_size == 0` and `name_size % part_size == 0`."""
+        Changes the current shape. `cell_shape` is `(padding, name_size, data_size)`, where `padding % part_size == 0` and `name_size % part_size == 0`.
+
+        Recommendation: leave space for about 3 name parts, meaning, `name_size = part_size*3`."""
         _shape_ok(cell_shape, part_size)
         if self.cell_shape == cell_shape and self.part_size == part_size:
             return
@@ -119,6 +121,7 @@ class Handler:
         Arguments:
         - `name = None`:
             - If a tuple/list of strings and -1…1 numbers and functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, converted to a `Namer`.
+                - Recommendation: try to use at most about 3 parts, or however much the cell-shape allows for.
             - If a `Namer`, it is used.
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`.
         - `data = None`: `None`, or how many numbers of no-data feedback to return, or a NumPy array of -1…1 numbers.
@@ -197,7 +200,7 @@ class Handler:
 
         Handles collected data.
 
-        Pass it the previous handling's feedback: as a NumPy array or `None` or an `await`able future of that (see `sn.wait`).
+        Pass it the previous handling's feedback: as a NumPy array or `None` or an `await`able future of that (see `sn.wait`), or a low-level function (takes nothing, returns `False` to wait, `None` to drop, an array to respond).
 
         This returns `(data, error, no_data, no_feedback)`.
         - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
@@ -215,7 +218,7 @@ class Handler:
         """
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.ensure_future(prev_feedback)
-        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future)
+        assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
         # Collect sensor data.
         for s in self.sensors: s(self)
         # Gather data.
@@ -240,7 +243,9 @@ class Handler:
                 if not feedback.done(): break
                 feedback = feedback.result()
             else:
-                if feedback is False: break # Respond in-order.
+                if callable(feedback):
+                    feedback = feedback()
+                if feedback is False: break # Respond in-order, waiting if `False`.
             assert feedback is None or isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
             _feedback(callbacks, feedback, cell_shape, part_size, self)
@@ -262,6 +267,13 @@ class Handler:
         fb = self._prev_fb[0][0] # The oldest feedback, must be done.
         if isinstance(fb, asyncio.Future) and not fb.done():
             await fb
+        elif callable(fb): # pragma: no cover
+            while True:
+                r = fb()
+                if r is not False:
+                    self._prev_fb[0][0] = r
+                    return
+                await asyncio.sleep(.003)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
@@ -450,21 +462,18 @@ def _inty(n):
 
 
 
-async def torch(torch, tensor):
+def torch(torch, tensor):
     """PyTorch integration, providing GPU→CPU async transfer, usable in `sn.handle(sn.torch(torch, x))`."""
     if not tensor.is_cuda:
         return tensor.detach().numpy()
+    # Do not return an `await`able, since that needs `while not event.query(): await asyncio.sleep(...)` and thus queries all tensors constantly, whereas a func only queries what it needs.
     with torch.no_grad():
         # https://discuss.pytorch.org/t/non-blocking-device-to-host-transfer/42353/2
         result = torch.zeros_like(tensor, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
         result.copy_(tensor, non_blocking=True)
         event = torch.cuda.Event()
         event.record()
-        while not event.query(): # pragma: no cover
-            # Functions may have been better than `asyncio.Future`s for this, since we would have only queried once per step, not all per step.
-            #   TODO: Re-enable functions as `sn.handler`'s feedbacks, and here, return a lambda.
-            await asyncio.sleep(.001)
-        return result.numpy()
+        return lambda: event.query() and result.numpy()
 
 
 

@@ -156,12 +156,35 @@ def test10():
     """PyTorch tensor GPU→CPU async transfer."""
     try:
         import torch # This statement takes so long. So long. So long. So long.
+        async def get(x): # pragma: no cover
+            fn = sn.torch(torch, x)
+            if not callable(fn): return fn
+            while True:
+                r = fn()
+                if r is not False: return r
+                await asyncio.sleep(.003)
         async def main():
             a = torch.tensor([1., 2., 3.], device='cpu')
             b = torch.tensor([1., 2., 3.], device='cuda' if torch.cuda.is_available() else 'cpu')
-            assert ((await sn.torch(torch, a)) == (await sn.torch(torch, b))).all()
+            assert ((await get(a)) == (await get(b))).all()
         asyncio.run(main())
     except ImportError: pass # pragma: no cover
+def test11():
+    """Low-level functions as substitutes for `asyncio.Future`s."""
+    h = sn.Handler((8, 24, 64), 8)
+    h.handle()
+    n, got = 0, False
+    def feedback():
+        nonlocal n, got;  n += 1
+        if n == 4: got = True
+        return got and np.zeros((2, 96))
+    h.send(None, np.zeros((2, 96)))
+    h.handle(feedback)
+    h.handle()
+    h.handle()
+    assert not got
+    h.handle()
+    assert got
 test0()
 test1()
 test2()
@@ -173,6 +196,7 @@ test7()
 test8()
 test9()
 test10()
+test11()
 print('Tests OK')
 
 
