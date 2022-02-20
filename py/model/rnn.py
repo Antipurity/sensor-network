@@ -23,7 +23,7 @@ def RNN(transition, loss, optimizer, backprop_length=64, grad_checkpointing=32, 
     - `backprop_length = 64`: how many steps to backpropagate gradient through, capped off by `sum(loss).backward()`. Could be wrapped in a function such as `lambda: random.randint(1, 1024)`.
     - TODO: `grad_checkpointing = 32`: if `None`, no [checkpointing](https://pytorch.org/docs/stable/checkpoint.html): computation is as-quick-as-possible, but used memory grows quickly because all intermediate activations are stored. If an integer `n`, we only store `backprop_length/n` `state`s plus intermediate activations for `n` steps, but do the forward pass twice (so, about 30% slowdown).
         - TODO: `torch.get_rng_state()→state`, `torch.set_rng_state(state)`
-    - TODO: `trace = True`: if `transition` has no CPU-side control flow, `True` can be used here to (potentially) speed up execution at the cost of slow startup.
+    - `trace = True`: if `transition` has no CPU-side control flow, `True` can be used here to (potentially) [speed up execution](https://pytorch.org/docs/stable/generated/torch.jit.trace.html) at the cost of slow startup.
     - TODO: `async_updates=True`: ...Also: if we implement checkpointing manually, then we'd be able to train online by intelligently scheduling backward updates, and copying updates...
         - WHY CAN WE SUDDENLY THINK OF SO MANY GOOD FEATURES SO LATE
         - THEY ARE HARD TO IMPLEMENT
@@ -33,8 +33,7 @@ def RNN(transition, loss, optimizer, backprop_length=64, grad_checkpointing=32, 
     assert isinstance(optimizer, torch.optim.Optimizer)
     n, n_max = 0, 0
     total_loss = 0.
-    # TODO: Add tracing.
-    # TODO: Then add checkpointing.
+    # TODO: Add checkpointing.
     # TODO: Then add async updates (even though we decided to use replay buffers for learning…).
     def new_bptt(state):
         nonlocal total_loss, n, n_max
@@ -51,9 +50,13 @@ def RNN(transition, loss, optimizer, backprop_length=64, grad_checkpointing=32, 
         assert isinstance(n_max, int)
         return state
     def step(state, *args):
-        nonlocal n, total_loss
+        nonlocal n, total_loss, trace, transition
         if n_max == 0: state = new_bptt(state)
         n += 1
+        if trace:
+            with torch.no_grad():
+                transition = torch.jit.trace(transition, (state, *args))
+                trace = False
         state = transition(state, *args)
         total_loss += loss(state, *args)
         if n >= n_max: state = new_bptt(state)
