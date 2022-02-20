@@ -238,6 +238,8 @@ Intelligence can do anything. But how to support the utter formlessness of gener
     - ⋯ Keywords in `package.json`: `["machine learning", "ml", "sensor", "network", "data streams"]` (after we deserve them).
     - ⋯ Enable GitHub Pages for linking-to.
 
+- ⋯ Integration with numeric libraries, mainly TensorFlow.js, because as the Python impl has shown, extreme ease-of-use may be more important than a mostly-static 'body' obtainable through fixed-FPS sensors.
+
 - ⋯ Compression. Try to share code with Rust if possible, via Wasm. (Possibly split this into another library/package, and provide the no-compression default here and a way to negotiate compression, to not bloat code too much.)
 
 An attempt to make the playing field even for humans and AI, based on the best of the best considerations. An attempt to bring about fairness, even though nothing would let it happen. Straying from beaten paths only to make a better one that no one wants to travel, most likely. Only when humanity is swimming in compute can it be desirable. Toys in the meantime.
@@ -265,7 +267,9 @@ The extension should be a control center that can manage a human's direct connec
 
 ### Python API
 
-- ⋯ …Maybe, for simplicity, Python, since most ML stuff happens in Python? `send(name(reward, name, data), then=None)`, `receive(prev_feedback)→next_data`, using NumPy. Be able to read from a file and write to it. And possibly a WebRTC sensor, for using the model online. (No need for any data collection nor transformation, nor multiple handlers.)
+- ✓ Maybe, for simplicity, Python, since most ML stuff happens in Python? `send(name, data, reward=0, on_feedback=None)`, `handle(prev_feedback)→*next_data`, using only NumPy. (No need for built-in data collection nor transformation.) (The UX turned out extremely nicely. Absorbing datasets would be trivial.)
+    - ⋯ Be able to read from a file and write to it.
+    - ⋯ A WebRTC sensor, for using a handler online.
     - ⋯ Research dataset/environment libraries, and how one-line we can make sensors of those: such as [Hugging Face](https://huggingface.co/tasks), [OpenAI Gym](https://gym.openai.com/). (Take a bath in data. Rub it into your eyes.)
     - ⋯ Connect CPU-side GPT-2, which acts word-per-word, or even letter-per-letter and integrates like the keyboard sensor, by sharing parts of the name.
     - ❌ Connect a GAN's generator, from a random or drifting vector to some simple data, such as MNIST digits, or even a very simple tabular dataset. See whether listening to this can somehow give an understanding. (Listening to data directly has proven to be extremely low-bandwidth in practice, and kinda tedious, so, probably won't be any good.)
