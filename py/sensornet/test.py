@@ -152,6 +152,16 @@ def test9():
     h.send(name=None, reward=None, data=np.zeros(shape), error=np.zeros(shape), no_data=np.full(cells, True), no_feedback=np.full(cells, False), on_feedback=yes_feedback)
     assert h.handle()[0].shape == shape
     h.handle(np.zeros(shape))
+def test10():
+    """PyTorch tensor GPU→CPU async transfer."""
+    try:
+        import torch # This statement takes so long. So long. So long. So long.
+        async def main():
+            a = torch.tensor([1., 2., 3.], device='cpu')
+            b = torch.tensor([1., 2., 3.], device='cuda' if torch.cuda.is_available() else 'cpu')
+            assert ((await sn.torch(torch, a)) == (await sn.torch(torch, b))).all()
+        asyncio.run(main())
+    except ImportError: pass # pragma: no cover
 test0()
 test1()
 test2()
@@ -162,6 +172,7 @@ test6()
 test7()
 test8()
 test9()
+test10()
 print('Tests OK')
 
 

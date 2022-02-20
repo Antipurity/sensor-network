@@ -1,6 +1,8 @@
 """
 Module for differentiable sensor networks: each gathers named numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
 
+This is the core protocol: as flexible as you can imagine, [as fast as you need](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py), [as small as is reasonable](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/__init__.py), and [as well-tested as you can measure](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py).
+
 Position-invariant and numeric, nothing is fixed: these constraints free AI models from all concerns about data formats. With only a couple lines of code, you can: learn in completely arbitrary environments, combine tasks at runtime, and perform cross-dataset meta-learning and multimodal learning and multi-objective reinforcement learning and lifelong learning and model distillation.
 
 Python 3.5 or newer (for `asyncio` with `await`).
@@ -46,6 +48,12 @@ async def main():
 This module implements this basic protocol, and does not include anything else by default, such as string/image handling or file storage or Internet communication.
 
 (Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
+
+---
+
+## Integrations
+
+- PyTorch: given `import torch`, `sn.torch(torch, tensor)` should be used as the argument to `h.handle(...)`.
 """
 
 
@@ -441,6 +449,22 @@ def _inty(n):
     return isinstance(n, int) and n>=0
 
 
+
+async def torch(torch, tensor):
+    """PyTorch integration, providing GPU→CPU async transfer, usable in `sn.handle(sn.torch(torch, x))`."""
+    if not tensor.is_cuda:
+        return tensor.detach().numpy()
+    with torch.no_grad():
+        # https://discuss.pytorch.org/t/non-blocking-device-to-host-transfer/42353/2
+        result = torch.zeros_like(tensor, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
+        result.copy_(tensor, non_blocking=True)
+        event = torch.cuda.Event()
+        event.record()
+        while not event.query(): # pragma: no cover
+            # Functions may have been better than `asyncio.Future`s for this, since we would have only queried once per step, not all per step.
+            #   TODO: Re-enable functions as `sn.handler`'s feedbacks, and here, return a lambda.
+            await asyncio.sleep(.001)
+        return result.numpy()
 
 
 

@@ -18,6 +18,8 @@ Or `pip install -ve .` here, see where your `easy-install.pth` lives, and edit t
 
 ## Usage
 
+Simple.
+
 First, initialize the handler:
 
 ```python
@@ -55,3 +57,9 @@ async def main():
 This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or Internet communication.
 
 (Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
+
+---
+
+## Integrations
+
+- PyTorch: given `import torch`, `sn.torch(torch, tensor)` should be used as the argument to `h.handle(...)`.
