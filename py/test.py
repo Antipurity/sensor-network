@@ -1,9 +1,11 @@
 """
-This investigates the connection between compression and exploration: whether extracting potential futures in an AI model, preferably well enough to compress them maximally and thus make its representations uniformly-distributed, makes the pasts select those futures more uniformly.
+This file investigates the connection between compression and exploration: whether extracting potential futures in an AI model, preferably well enough to compress them maximally and thus make its representations uniformly-distributed, makes the pasts select those futures more uniformly.
 
-The displayed "picked" observation should become equally-divided, else no exploration is happening.
+There are 2 possible observations, one much likelier than another. The displayed "picked" observation should become equally-divided, else no exploration is happening.
 
-Not successful, at least so far.
+Although we haven't found a fully-stable gradient-only solution, a BYOL-like solution appears to show some promise: given a `transition: state1 → state2` RNN, have `future_fn: state → future` and `next_future: future → future` functions, and make `next_future(future_fn(state))` predict an updated-via-momentum `future_fn(transition(state))` (important to normalize both). Basically, materialize those futures in a differentiable form, and make their distribution uniform via gradient.
+
+At least, it doesn't fail all the time like next-observation-prediction does. But it is of course impossible to tell whether it's any good in this extremely-limited environment. It's either on the way to a real solution, or just very unstable.
 """
 
 
@@ -14,18 +16,10 @@ import torch.nn as nn
 
 
 if __name__ == '__main__':
-    # TODO: The picked ratio doesn't change at all... Why?...
-    #   Is next-frame prediction not enough?
-    #   Did see something like future-regularization with weight_decay=1e-3. Usually has sudden jumps. But it's extremely fragile: weight-decay has to be 1/10 of the learning-rate (which is best 1e-2), and unroll_length has to be 6. (But at least we might possibly have *some* lead.)
-    #     Is this a coincidence, or is next-frame prediction just that inefficient at extracting futures?
-    #     Either way, it's so non-smooth that it's pretty much unusable for actual exploration.
-    #     Having done more visualizations & runs, pretty sure it's just spurious correlation.
-    # TODO: Cumulative sum?
-    # TODO: BYOL?
     # TODO: Mixup?
-    batch_size, unroll_length = 64, 6
+    iterations, batch_size, unroll_length = 10000, 64, 6
     dev = 'cpu' # 'cuda' if torch.cuda.is_available() else 'cpu'
-    sz, fut_sz, obs_sz, hidden_sz = 2, 1, 1, 64
+    sz, fut_sz, obs_sz, hidden_sz = 2, 1, 1, 32
     obs = torch.randn(2, obs_sz, device=dev)
     obs -= obs.mean()
     obs /= obs.std()
@@ -51,12 +45,6 @@ if __name__ == '__main__':
         nn.LayerNorm(hidden_sz),
         nn.Linear(hidden_sz, sz),
     ).to(dev)
-    predict_next_obs = nn.Sequential( # state → obs
-        nn.Linear(sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, obs_sz),
-    ).to(dev)
 
     class MomentumCopy(nn.Module):
         def __init__(self, f, momentum = .99):
@@ -73,29 +61,33 @@ if __name__ == '__main__':
                     self.gp[i][:] = self.gp[i] * self.momentum + (1-self.momentum) * self.fp[i]
                 return self.g(x) # Cannot backprop through it because the in-place modification above does not play nice with backprop.
 
+    class CumSum(nn.Module):
+        def __init__(self): super().__init__()
+        def forward(self, x): return x.cumsum(-1)
+
     future = nn.Sequential( # state → future
         nn.Linear(sz, hidden_sz),
         nn.ReLU(),
         nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
+        # nn.Linear(hidden_sz, hidden_sz),
+        # nn.ReLU(),
+        # nn.LayerNorm(hidden_sz),
         nn.Linear(hidden_sz, fut_sz),
+        CumSum(), # Doesn't appear to help.
     ).to(dev)
-    future_slowed_down = MomentumCopy(future, .99)
+    future_slowed_down = MomentumCopy(future, .999)
     next_future = SkipConnection(nn.Sequential( # future → future
         nn.Linear(fut_sz, hidden_sz),
         nn.ReLU(),
         nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
+        # nn.Linear(hidden_sz, hidden_sz),
+        # nn.ReLU(),
+        # nn.LayerNorm(hidden_sz),
         nn.Linear(hidden_sz, fut_sz),
     )).to(dev)
-    # TODO: What about predicting a 'future' representation at each state, and making that 'future' predict its own future one/many steps in the future (after `next_future`) (normalized, to hopefully make futures equally-spaced)?
 
-    optim = torch.optim.SGD([*transition.parameters(), *predict_next_obs.parameters(), *future.parameters(), *next_future.parameters()], lr=1e-3, weight_decay=1e-4)
-    for iteration in range(5001): # TODO:
+    optim = torch.optim.SGD([*transition.parameters(), *future.parameters(), *next_future.parameters()], lr=1e-3, weight_decay=0)
+    for iteration in range(iterations+1):
         state = torch.randn(batch_size, sz, device=dev)
         loss = 0
         prev_fut = torch.randn(batch_size, obs_sz, device=dev)
@@ -104,16 +96,12 @@ if __name__ == '__main__':
             next_fut = obs_of(state)
             prev_state = state
             state = transition(torch.cat((state, prev_fut), -1))
-            # fut_prediction = predict_next_obs(state) # TODO: Maybe try on the previous state, not the next state? ...Definitely much worse. ...Or maybe it's just having only 1 number for state making it much worse...
-            # loss += (next_fut - fut_prediction).square().mean(0).sum()
-            # TODO: Below is basically-BYOL. Find out whether we can make it work in any way.
             A = next_future(future(prev_state))
-            A = A - A.mean() # TODO: Why does removing this (for both A and B) make loss explode?
-            #   TODO: ...Even with just `A` unnormalized, the predicted values are in hundreds-of-millions (at least the dividing lines are centered at 0,0)... How could this happen, even? Is the RNN transition to blame?...
+            A = A - A.mean()
             A = A / (A.std()+1e-5)
             with torch.no_grad():
                 B = future_slowed_down(state.detach())
-                B -= B.mean() # TODO: Maybe just leave this in for B, but not for A?
+                B -= B.mean()
                 B /= (B.std()+1e-5)
             loss += (A - B).square().mean(0).sum()
             prev_fut = next_fut
@@ -135,9 +123,7 @@ if __name__ == '__main__':
     plt.plot([x.cpu().detach().numpy() for x in picked])
     with torch.no_grad():
         # Show what happens with all the different (2) inputs.
-        #   (If we plot the predicted eventual-obs against RNN inputs, then it should ideally be equal-area for all potential obs.)
-        #   ...Currently, basically random. Meaning that we have a chance of improving it?
-        #     (...And, currently, variations in state basically never lead to changing the predicted obs.)
+        #   (If we plot the predicted eventual-future against RNN inputs, then it should ideally be equal-area for all potential obs, meaning that the RNN is maximally sensitive to its initial state and thus can explore well in future-space I guess.)
         plt.subplot(1,2,2)
         def fn(xy):
             return future((xy))[..., 0]
