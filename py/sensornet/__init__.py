@@ -27,7 +27,7 @@ Then send/receive data:
 
 ```python
 def set():
-    h.send(name = ('name',), data = np.random.rand(32)*2-1)
+    h.data(name = ('name',), data = np.random.rand(32)*2-1)
 
 async def get():
     nums = await h.get(('name',), 32)
@@ -41,8 +41,8 @@ async def main():
     fb = None
     while True:
         await h.wait()
-        data, error, no_data, no_feedback = h.handle(fb)
-        fb = process(...) # See `sn.Handler.handle` for what these mean.
+        data, query, data_error, query_error = h.handle(fb)
+        fb = np.random.rand(query.shape[0], data.shape[1])*2-1)
 ```
 
 This module implements this basic protocol, and does not include anything else by default, such as string/image handling or file storage or Internet communication.
@@ -79,13 +79,13 @@ class Handler:
     If needed, read `.cell_shape` or `.part_size` or `.cell_size` wherever the object is available. These values might change between sending and receiving feedback.
     """
     def __init__(self, cell_shape=None, part_size=None):
-        self._cell = 0
+        self._query_cell = 0
         self._data = []
-        self._error = []
-        self._no_data = []
-        self._no_feedback = []
+        self._query = []
+        self._data_error = []
+        self._query_error = []
         self._prev_fb = [] # [prev_feedback, …, _next_fb, …]
-        self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length, original_shape), …]
+        self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self.sensors = [] # Called by `.handle(…)`.
         self.cell_shape = ()
         self.part_size = 0
@@ -97,7 +97,7 @@ class Handler:
 
         Changes the current shape. `cell_shape` is `(padding, name_size, data_size)`, where `padding % part_size == 0` and `name_size % part_size == 0`.
 
-        Recommendation: leave space for about 3 name parts, meaning, `name_size = part_size*3`."""
+        Recommendation: leave space for about 3 name parts, meaning, `name_size = part_size*3`. Also leave some space in `padding`, in case some transforms want to leave their mark such as the source IP."""
         _shape_ok(cell_shape, part_size)
         if self.cell_shape == cell_shape and self.part_size == part_size:
             return
@@ -105,94 +105,113 @@ class Handler:
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
-        self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without too much overhead.
-    def send(self, name=None, data=None, error=None, no_data=None, no_feedback=None, reward=0., on_feedback=None):
+        self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
+    def data(self, name=None, data=None, error=None, reward=0.):
         """
-        `sn.send(name=..., data=numpy.random.rand(16)*2-1)`
-        `await sn.send(name=..., data=16, on_feedback=True)`
-        `sn.send(name=None, data=None, error=None, no_data=None, no_feedback=None, reward=0., on_feedback=None)`
+        `sn.data(name, data, error=None, reward=0.)`
 
-        Sends named data, possibly getting same-size feedback, possibly only getting feedback.
+        Sends named data to the handler. Receives nothing; see `.query`.
 
-        Returns `None` or `on_feedback` if that is an `asyncio.Future`. If async, do `sn.wait()` before `sn.handle(...)`.
-
-        Use `.get` to retry until feedback is non-`None`.
-
-        Arguments:
-        - `name = None`:
+        Args:
+        - `name`:
             - If a tuple/list of strings and -1…1 numbers and functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, converted to a `Namer`.
                 - Recommendation: try to use at most about 3 parts, or however much the cell-shape allows for.
             - If a `Namer`, it is used.
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`.
-        - `data = None`: `None`, or how many numbers of no-data feedback to return, or a NumPy array of -1…1 numbers.
-        - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
-        - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. Replaces the first number of every cell. Pass in `None` to disable this.
-        - `on_feedback = None`: could be `True` or `asyncio.Future()` to return and fill, or for efficiency, a function from `feedback` (could be `None`, otherwise a NumPy array shaped the same as `data`), `cell_shape`, `part_size`, `handler`, to nothing.
-            - `.send` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
-        - `no_data = None` and `no_feedback = None`: for passing through `sn.handle(…)`'s result to another handler, like `h.send(None, *sn.handle(…), reward=None, on_feedback=...)`.
+        - `data`: a NumPy array of numbers, preferably -1…1.
+        - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. Preferably -1…1.
+        - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. In a handler, extract with `data[:, 0]`. Pass in `None` to not overwrite the first number.
         """
-        if data is None and on_feedback is None: return
-        if on_feedback is True: on_feedback = asyncio.Future()
-        assert name is None or isinstance(name, tuple) or isinstance(name, Namer)
-        assert data is None or isinstance(data, np.ndarray) or _inty(data) or (isinstance(data, tuple) or isinstance(data, list)) and all(_inty(n) for n in data)
-        assert error is None or isinstance(error, np.ndarray)
-        assert on_feedback is None or callable(on_feedback) or isinstance(on_feedback, asyncio.Future)
-        assert no_data is None and no_feedback is None or isinstance(no_data, np.ndarray) and isinstance(no_feedback, np.ndarray) and no_data.dtype == no_feedback.dtype == np.dtype('bool')
-        if not self.cell_size:
-            if on_feedback is not None:
-                on_feedback(None, self.cell_shape, self.part_size, self) if callable(on_feedback) else on_feedback.set_result(None)
-            return
-        if no_feedback is None:
-            no_feedback = not on_feedback
-        if no_data is None:
-            no_data = False if isinstance(data, np.ndarray) else True
-            if no_data: data = np.zeros((data,) if _inty(data) else data if data is not None else (0, self.cell_size), dtype=np.float32)
-        length = None
-        original_shape = None
-        if name is not None:
-            if len(data.shape) != 1: original_shape, data = data.shape, data.flatten()
-            if error is not None and len(error.shape) != 1: error = error.flatten()
-            length = data.shape[0]
-        # Name.
-        if isinstance(name, tuple) or isinstance(name, list):
-            name = Namer(*name)
-        if isinstance(name, Namer):
-            data = name.name(data, self.cell_shape, self.part_size, None)
-            error = name.name(error, self.cell_shape, self.part_size, -1.)
-        else:
-            assert name is None
-        assert len(data.shape) == 2
-        assert data.shape[-1] == self.cell_size
-        assert error is None or data.shape == error.shape
-        # Reward.
-        if reward is not None:
-            data[:, 0] = reward
-        # Send.
-        cells = data.shape[0]
-        shape = (cells,)
-        if not isinstance(no_data, np.ndarray):
-            no_data = np.full(shape, no_data)
-        if not isinstance(no_feedback, np.ndarray):
-            no_feedback = np.full(shape, no_feedback)
-        assert no_data.shape == shape
-        assert no_feedback.shape == shape
-        self._data.append(data)
-        self._error.append(error)
-        self._no_data.append(no_data)
-        self._no_feedback.append(no_feedback)
-        if on_feedback is not None:
-            self._next_fb.append((on_feedback, data.shape, self._cell, self._cell + cells, name, length, original_shape))
-        self._cell += cells
-        if isinstance(on_feedback, asyncio.Future):
-            return on_feedback
-    async def get(self, name, len, reward=0.):
-        """
-        `await sn.get(name, len, reward=0.)`
+        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
+        elif isinstance(name, str): name = Namer(name)
+        if isinstance(error, float): error = np.full_like(data, error)
 
-        Gets feedback, guaranteed. Never returns `None`, instead re-requesting until a numeric result is available.
+        assert name is None or isinstance(name, Namer)
+        assert isinstance(data, np.ndarray)
+        assert error is None or isinstance(error, np.ndarray) and data.shape == error.shape
+
+        if not self.cell_size: return
+
+        if name is not None:
+            if len(data.shape) != 1:
+                data = data.flatten()
+                data = name.name(data, data.shape[0], self.cell_shape, self.part_size, None)
+            if error is not None and len(error.shape) != 1:
+                error = error.flatten()
+                error = name.name(error, error.shape[0], self.cell_shape, self.part_size, -1.)
+        assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
+        if reward is not None: data[:, 0] = reward
+        self._data.append(data)
+        self._data_error.append(error)
+    def query(self, name=None, query=None, error=None, reward=0., callback=None):
+        """
+        ```python
+        await sn.query(name, query: int|tuple, *, reward=0.)
+        sn.query(name, query: int|tuple, *, reward=0., callback = lambda feedback, sn: ...)
+        ```
+
+        From the handler, asks for a NumPy array, or `None` (usually on transmission errors).
+
+        Args:
+        - `query`: the shape of the feedback that you want to receive.
+        - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
+            - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
+        - `name`, `reward`: see `.data`.
+        """
+        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
+        elif isinstance(name, str): name = Namer(name)
+
+        assert name is None or isinstance(name, Namer)
+        assert isinstance(query, int) or isinstance(query, tuple) or name is None and isinstance(query, np.ndarray)
+        assert callback is None or callable(callback)
+        if callback is None: callback = asyncio.Future()
+
+        if not self.cell_size:
+            if callback is not None:
+                callback(None)
+                return
+            else:
+                f = asyncio.Future()
+                f.set_result(None)
+                return f
+
+        length = None
+        if name is not None:
+            length = 1 if isinstance(query, tuple) else query
+            if isinstance(query, tuple):
+                for n in query: length *= n
+            assert isinstance(length, int) and length > 0
+            query = name.name(query, None, length, self.cell_shape, self.part_size, None)
+        assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
+        assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
+        if reward is not None: query[:, 0] = reward
+        self._query.push(query)
+        self._query_error.push(error)
+        cells = query.shape[0]
+        self._next_fb.append((callback, query, self._query_cell, self._query_cell + cells, name, length))
+        self._query_cell += cells
+        if isinstance(callback, asyncio.Future):
+            return callback
+    def pipe(self, data, query, data_error, query_error, callback=None):
+        """
+        `prev_feedback = await other_handler.pipe(*sn.handle(prev_feedback))`
+
+        Makes another handler handle this packet.
+
+        Useful if NumPy arrays have to be transferred manually, such as over the Internet.
+        """
+        self.data(None, data, data_error, None)
+        return self.query(None, query, query_error, None, callback)
+    async def get(self, name, query, error, reward=0.):
+        """
+        `await sn.get(name, query, *, reward=0.)`
+
+        Gets feedback, guaranteed.
+
+        Never returns `None`, instead re-querying until a numeric result is available.
         """
         while True:
-            fb = await self.send(name, len, reward=reward, on_feedback=True)
+            fb = await self.query(name, query, error, reward)
             if fb is not None: return fb
     def handle(self, prev_feedback=None):
         """
@@ -200,35 +219,25 @@ class Handler:
 
         Handles collected data.
 
-        Pass it the previous handling's feedback: as a NumPy array or `None` or an `await`able future of that (see `sn.wait`), or a low-level function (takes nothing, returns `False` to wait, `None` to drop, an array to respond).
+        Pass it the previous handling's feedback: as a NumPy array sized `M×cell_size` or `None` or an `await`able future of that (see `sn.wait`), or a low-level function (takes nothing, returns `False` to wait, `None` to drop, an array to respond).
 
-        This returns `(data, error, no_data, no_feedback)`.
-        - `data`: `None` or a float32 array of already-named cells of data, sized `cells×cell_size`. -1…1.
-        - `error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. -1…1.
-            - A usage example: `if error is not None: data = numpy.clip(data + (error+1) * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
-        - `no_data`: bools, sized `cells`.
-        - `no_feedback`: bools, sized `cells`.
-        - Usage:
-            - `data[:, 0]` would return per-cell rewards.
-            - `data[:, :-sn.cell_shape[-1]]` would select only names.
-            - `data[:, -sn.cell_shape[-1]:]` would select only data.
-            - `numpy.compress(~no_data, data)` would select only inputs.
-            - `numpy.compress(~no_feedback, data)` would select only queries.
-            - `numpy.put(numpy.zeros_like(data), numpy.where(~no_feedback)[0], feedback)` would put back the selected queries in-place, making `data` suitable for `prev_feedback` here.
+        This returns `(data, query, data_error, query_error)`.
+        - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
+        - `query`: same, but sized `M×name_size` (only the name).
+        - `data_error`, `query_error`: data transmission error: a `data`-sized float32 array of `abs(true_data - data) - 1`.
+            - A usage example: `if data_error is not None: data = numpy.clip(data + (data_error+1) * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
+        - (To extract rewards: `data[:, 0]` and/or `query[:, 0]`.)
         """
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.ensure_future(prev_feedback)
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
         # Collect sensor data.
         for s in self.sensors: s(self)
-        # Gather data.
-        if len(self._data):
-            data = np.concatenate(self._data, 0)
-            error = np.concatenate([e if e is not None else -np.ones((0, self.cell_size)) for e in self._error], 0) if any(e is not None for e in self._error) else None
-            no_data = np.concatenate(self._no_data, 0)
-            no_feedback = np.concatenate(self._no_feedback, 0)
-        else:
-            data, error, no_data, no_feedback = None, None, None, None
+        # Gather data/queries.
+        data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, self.cell_size))
+        query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, self.cell_size - self.cell_shape[-1]))
+        data_error = _concat_error(self._data, self._data_error, self.cell_size)
+        query_error = _concat_error(self._query, self._query_error, self.cell_size - self.cell_shape[-1])
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback
@@ -237,6 +246,7 @@ class Handler:
         self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size])
         self._next_fb = []
         self.discard()
+        # Respond to what we can.
         while True:
             feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
             if isinstance(feedback, asyncio.Future):
@@ -248,8 +258,10 @@ class Handler:
                 if feedback is False: break # Respond in-order, waiting if `False`.
             assert feedback is None or isinstance(feedback, np.ndarray)
             self._prev_fb.pop(0)
-            _feedback(callbacks, feedback, cell_shape, part_size, self)
-        return (data, error, no_data, no_feedback)
+            _feedback(callbacks, feedback, cell_shape, part_size)
+        return (data, query, data_error, query_error)
+        # TODO: Update all the tests with to use this new system!
+        # TODO: Bump up the minor version for this interface improvement.
     async def wait(self, max_simultaneous_steps = 16):
         """
         `await sn.wait(max_simultaneous_steps = 16)`
@@ -277,13 +289,13 @@ class Handler:
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
-            _feedback(self._next_fb, None, self.cell_shape, self.part_size, self)
+            _feedback(self._next_fb, None, self.cell_shape, self.part_size)
         finally:
-            self._cell = 0
+            self._query_cell = 0
             self._data.clear()
-            self._error.clear()
-            self._no_data.clear()
-            self._no_feedback.clear()
+            self._query.clear()
+            self._data_error.clear()
+            self._query_error.clear()
             self._next_fb.clear()
 
 
@@ -317,21 +329,20 @@ class Namer:
         self.part_size = None
         self.cell_size = None
         self.last_cells, self.last_name = None, None
-    def name(self, data, cell_shape, part_size, fill=None):
+    def name(self, data, length, cell_shape, part_size, fill=None):
         """
         1D to 2D.
         """
-        if data is None: return
-        assert len(data.shape) == 1
+        assert data is None or len(data.shape) == 1
         self._name_parts(cell_shape, part_size)
         # Pad & reshape `data`.
         data_size = cell_shape[-1]
         name_size = self.cell_size - data_size
-        length = data.shape[0]
         cells = -(-length // data_size)
         total = cells * data_size
-        data = _fill(data, total, 0) # Can't make it smaller, so `_unfill` will never have to make feedback larger.
-        data = np.reshape(data, (cells, data_size))
+        if data is not None:
+            data = _fill(data, total, 0) # Can't make it smaller, so `_unfill` will never have to make feedback larger.
+            data = np.reshape(data, (cells, data_size))
         # Finalize the name, then concat it before `data`.
         if fill is not None:
             name = np.full((cells, name_size), fill)
@@ -344,7 +355,7 @@ class Namer:
         else:
             name = self.last_name
         name = _fill(name, name_size, 1)
-        return np.concatenate((name, data), 1)
+        return np.concatenate((name, data), 1) if data is not None else name
     def unname(self, feedback, length, cell_shape, _):
         """
         Reverses `.name`.
@@ -441,17 +452,17 @@ def _unfill(y, size, axis=0): # → x
         x, y = folds[i-1], folds[i]
         folds[i-1] = np.copysign(.5 * (1-y), x)
     return folds[0]
-def _feedback(callbacks, feedback, cell_shape, part_size, handler):
+def _feedback(callbacks, feedback, cell_shape, part_size):
     fb = None
     got_err = None
-    for on_feedback, expected_shape, start_cell, end_cell, namer, length, original_shape in callbacks:
+    assert feedback.shape[-1] == sum(cell_shape)
+    for on_feedback, shape, start_cell, end_cell, namer, length in callbacks:
         if feedback is not None:
             fb = feedback[start_cell:end_cell, :]
-            assert fb.shape == expected_shape
             if namer is not None: fb = namer.unname(fb, length, cell_shape, part_size)
-            fb = fb.reshape(original_shape)
+            fb = fb.reshape(shape)
         try:
-            on_feedback(fb, cell_shape, part_size, handler) if callable(on_feedback) else on_feedback.set_result(fb)
+            on_feedback(fb) if callable(on_feedback) else on_feedback.set_result(fb)
         except KeyboardInterrupt as err:
             got_err = err
         except Exception as err:
@@ -459,6 +470,11 @@ def _feedback(callbacks, feedback, cell_shape, part_size, handler):
     if got_err is not None: raise got_err
 def _inty(n):
     return isinstance(n, int) and n>=0
+def _concat_error(main, error, length):
+    if any(e is not None for e in error):
+        return np.concatenate([e if e is not None else -np.ones_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length))
+    else:
+        return None
 
 
 
@@ -497,19 +513,25 @@ def shape(*k, **kw):
     r = default.shape(*k, **kw)
     cell_shape, part_size, cell_size = default.cell_shape, default.part_size, default.cell_size
     return r
-def send(*k, **kw):
-    return default.send(*k, **kw)
+def data(*k, **kw):
+    return default.data(*k, **kw)
+def query(*k, **kw):
+    return default.query(*k, **kw)
+def pipe(*k, **kw):
+    return default.pipe(*k, **kw)
+def get(*k, **kw):
+    return default.get(*k, **kw)
 def handle(*k, **kw):
     return default.handle(*k, **kw)
 def discard(*k, **kw):
     return default.discard(*k, **kw)
-def get(*k, **kw):
-    return default.get(*k, **kw)
 def wait(*k, **kw):
     return default.wait(*k, **kw)
 shape.__doc__ = Handler.shape.__doc__
-send.__doc__ = Handler.send.__doc__
+data.__doc__ = Handler.data.__doc__
+query.__doc__ = Handler.query.__doc__
+pipe.__doc__ = Handler.pipe.__doc__
+get.__doc__ = Handler.get.__doc__
 handle.__doc__ = Handler.handle.__doc__
 discard.__doc__ = Handler.discard.__doc__
-get.__doc__ = Handler.get.__doc__
 wait.__doc__ = Handler.wait.__doc__
