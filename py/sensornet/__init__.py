@@ -462,18 +462,30 @@ def _inty(n):
 
 
 
-def torch(torch, tensor):
-    """PyTorch integration, providing GPU→CPU async transfer, usable in `sn.handle(sn.torch(torch, x))`."""
+def torch(torch, tensor, awaitable=False): # pragma: no cover
+    """PyTorch integration, providing GPU→CPU async transfer, usable as `await sn.torch(torch, x, True)` or `sn.handle(sn.torch(torch, x))`. (Since PyTorch doesn't make this easy.)"""
     if not tensor.is_cuda:
-        return tensor.detach().numpy()
-    # Do not return an `await`able, since that needs `while not event.query(): await asyncio.sleep(...)` and thus queries all tensors constantly, whereas a func only queries what it needs.
+        tensor = tensor.detach().numpy()
+        if not awaitable:
+            return tensor
+        else:
+            f = asyncio.Future()
+            f.set_result(tensor)
+            return f
     with torch.no_grad():
         # https://discuss.pytorch.org/t/non-blocking-device-to-host-transfer/42353/2
         result = torch.zeros_like(tensor, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
         result.copy_(tensor, non_blocking=True)
         event = torch.cuda.Event()
         event.record()
-        return lambda: event.query() and result.numpy()
+        if not awaitable:
+            return lambda: event.query() and result.numpy()
+        else:
+            async def busyquery():
+                while True:
+                    if event.query(): return result.numpy()
+                    await asyncio.sleep(.003)
+            return busyquery()
 
 
 

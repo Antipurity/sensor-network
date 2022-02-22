@@ -156,13 +156,8 @@ def test10():
     """PyTorch tensor GPU→CPU async transfer."""
     try:
         import torch # This statement takes so long. So long. So long. So long.
-        async def get(x): # pragma: no cover
-            fn = sn.torch(torch, x)
-            if not callable(fn): return fn
-            while True:
-                r = fn()
-                if r is not False: return r
-                await asyncio.sleep(.003)
+        def get(x):
+            return sn.torch(torch, x, True)
         async def main():
             a = torch.tensor([1., 2., 3.], device='cpu')
             b = torch.tensor([1., 2., 3.], device='cuda' if torch.cuda.is_available() else 'cpu')
