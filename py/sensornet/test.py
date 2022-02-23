@@ -137,6 +137,7 @@ def test8():
         fb = None
         while finished < 6:
             await sn.wait(16)
+            sn.data(name='bees', data=np.zeros((16,)))
             fb = give_feedback_later(*sn.handle(fb))
         await asyncio.sleep(.1)
         await fb # To silence a warning.
@@ -145,13 +146,14 @@ def test8():
     asyncio.run(main())
 async def test9():
     """Pass-through of (synthetic) handler data to another one."""
-    h = sn.Handler((8, 24, 64), 8)
+    sn.shape((8, 24, 64), 8)
     shape1, shape2 = (13,96), (13,32)
-    fut = h.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
-    data, query, *_ = h.handle()
+    fut = sn.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
+    data, query, *_ = sn.handle()
     assert data.shape == shape1 and query.shape == shape2
-    h.handle(np.zeros(shape1))
+    sn.handle(np.zeros(shape1))
     assert (await fut).shape == shape1
+    sn.discard()
 def test10():
     """PyTorch tensor GPU→CPU async transfer."""
     try:
@@ -218,5 +220,5 @@ async def benchmark(N=64*10):
     h.discard()
     thr = N*4 * (96/64) * iterations / duration
     print('With', N*96//64, 'values, throughput:', thr, 'bytes/sec', f'({round(thr/1024/1024*100)/100} MiB/s)', f'({round(iterations/duration*100)/100} it/s)')
-for i in range(10):
+for i in range(3): # TODO: 10
     asyncio.run(benchmark(64*50 * (i+1)))
