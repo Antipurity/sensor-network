@@ -203,17 +203,18 @@ async def benchmark(N=64*10):
     h = sn.Handler((8, 24, 64), 8)
     iterations, feedback = 0, None
     def check_feedback(fb, *_):
-        assert fb is not None and fb.shape == (N,) and fb[0] == .2
+        assert fb is not None and fb.shape == (1,) and np.abs(fb[0]*3 - 1) < 1e-8
     send_data = np.random.randn(N)
     start, duration = time.monotonic(), 10.
     name = sn.Namer('benchmark')
     while time.monotonic() - start < duration:
         await h.wait()
         # Using Futures is a 30% slowdown. # TODO: Re-check!
+        # TODO: ...Why is it 10× slower now...
         h.data(name, data=send_data)
-        h.query(name, 1, callback=check_feedback)
-        data, error, no_data, no_feedback = h.handle(feedback)
-        feedback = np.full_like(data, .2) if data is not None else None
+        # h.query(name, 1, callback=check_feedback) # TODO:
+        data, query, data_error, query_error = h.handle(feedback)
+        feedback = np.full((query.shape[0], data.shape[1]), .2) if data is not None else None
         iterations += 1
     h.discard()
     thr = N*4 * (96/64) * iterations / duration
