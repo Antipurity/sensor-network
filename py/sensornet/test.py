@@ -104,7 +104,7 @@ def test7():
     h = sn.Handler((8, 24, 64), 8)
     got = False
     def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
-    h.data(name=('test',), data=np.zeros((2,3,4)))
+    h.data(name=('test',), data=np.zeros((2,3,4)), error=np.full((2,3,4), -.4))
     h.query(name=('test',), query=(2,3,4), callback=yes_feedback)
     data, query, *_ = h.handle()
     assert data.shape == (1,96) and query.shape == (1,32)
@@ -202,7 +202,7 @@ async def benchmark(N=64*10):
     iterations, feedback = 0, None
     def check_feedback(fb, *_):
         assert fb is not None and fb.shape == (64,) and fb[0] == .2
-    async def await_feedback(fut):
+    async def await_feedback(fut): # pragma: no cover
         check_feedback(await fut)
     send_data = np.random.randn(N)
     start, duration = time.monotonic(), 10.
