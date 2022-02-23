@@ -27,8 +27,16 @@ class SkipConnection(nn.Module):
     def forward(self, x): return self.fn(x) + x
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 hidden_sz = 128
-embed_tokens = nn.Sequential( # tokens → input
+embed_data = nn.Sequential( # data → input
     nn.Linear(sum(cell_shape), hidden_sz),
+    SkipConnection(
+        nn.ReLU(),
+        nn.LayerNorm(hidden_sz),
+        nn.Linear(hidden_sz, hidden_sz),
+    ),
+).to(device)
+embed_query = nn.Sequential( # query → input
+    nn.Linear(sum(cell_shape) - cell_shape[-1], hidden_sz),
     SkipConnection(
         nn.ReLU(),
         nn.LayerNorm(hidden_sz),
@@ -63,7 +71,8 @@ future_transition = nn.Sequential( # future → future; BYOL predictor.
     h(),
 ).to(device)
 optimizer = torch.optim.SGD([
-    *embed_tokens.parameters(),
+    *embed_data.parameters(),
+    *embed_query.parameters(),
     *incorporate_input.parameters(),
     *state_transition.parameters(),
     *state_future.parameters(),
@@ -83,15 +92,19 @@ model = RNN(
 
 
 state = torch.randn(16, sum(cell_shape), device=device)
+max_state_cells = 1024
+feedback = None
 async def main():
     while True:
-        pass
-        # TODO: Get data & query to handle.
-        # TODO: embed_tokens, of data...
-        #   ...What about the query though? Where would *that* be put?
-        # TODO: An infinite loop where we update state, and display minienv.explored().
-        # TODO: ...How to compute the actual feedback?... Wouldn't we want our `state` to contain the query in queries?...
-        #   ...Should we concat, uh, something...
+        data, query, data_error, query_error = sn.handle(feedback)
+        data = embed_data(torch.from_numpy(data).to(device))
+        query = embed_query(torch.from_numpy(query).to(device))
+        kv = torch.cat((state, data), 0)[-max_state_cells:, :]
+        q = torch.cat((state, data, query), 0)[-max_state_cells:, :]
+        state = incorporate_input(kv, q)
+        state = model(state)
+        feedback = sn.torch(torch, state[-query.shape[0]:, :])
+        print('explored', minienv.explored())
 asyncio.run(main())
 # TODO: Run & test. Try to make it work, at least via trying different normalization schemes.
 
