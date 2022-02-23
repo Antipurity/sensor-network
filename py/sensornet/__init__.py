@@ -263,7 +263,6 @@ class Handler:
             _feedback(callbacks, feedback, cell_shape, part_size)
         return (data, query, data_error, query_error)
         # TODO: Update `minienv` too.
-        # TODO: Reach 100% test coverage.
         # TODO: Bump up the minor version for this interface improvement.
     async def wait(self, max_simultaneous_steps = 16):
         """

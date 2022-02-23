@@ -46,7 +46,8 @@ def test0():
     h = sn.Handler()
     assert h.handle()[0].shape == (0,0)
     h.data('a', data=np.array([1.]))
-    h.query('b', query=1)
+    h.query('b', query=1, callback=lambda fb: ...)
+    h.query('c', query=1)
     assert h.handle()[0].shape == (0,0)
 def test1():
     """Already-named data, and transmission error."""
@@ -221,5 +222,5 @@ async def benchmark(N=64*10):
     h.discard()
     thr = N*4 * (96/64) * iterations / duration
     print('With', N*96//64, 'values, throughput:', thr, 'bytes/sec', f'({round(thr/1024/1024*100)/100} MiB/s)', f'({round(iterations/duration*100)/100} it/s)')
-for i in range(3): # TODO: 10
+for i in range(10):
     asyncio.run(benchmark(64*50 * (i+1)))
