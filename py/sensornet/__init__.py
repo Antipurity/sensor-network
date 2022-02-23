@@ -27,10 +27,10 @@ Then send/receive data:
 
 ```python
 def set():
-    h.data(name = ('name',), data = np.random.rand(32)*2-1)
+    h.data('name', np.random.rand(32)*2-1)
 
 async def get():
-    nums = await h.get(('name',), 32)
+    nums = await h.get('name', 32)
     assert nums.shape == (32,)
 ```
 
@@ -262,8 +262,6 @@ class Handler:
             self._prev_fb.pop(0)
             _feedback(callbacks, feedback, cell_shape, part_size)
         return (data, query, data_error, query_error)
-        # TODO: Update `minienv` too.
-        # TODO: Bump up the minor version for this interface improvement.
     async def wait(self, max_simultaneous_steps = 16):
         """
         `await sn.wait(max_simultaneous_steps = 16)`

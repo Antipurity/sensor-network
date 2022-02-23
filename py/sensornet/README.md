@@ -36,10 +36,10 @@ Then send/receive data:
 
 ```python
 def set():
-    h.send(name = ('name',), data = np.random.rand(32)*2-1)
+    h.data('name', np.random.rand(32)*2-1)
 
 async def get():
-    nums = await h.get(('name',), 32)
+    nums = await h.get('name', 32)
     assert nums.shape == (32,)
 ```
 
@@ -50,11 +50,11 @@ async def main():
     fb = None
     while True:
         await h.wait()
-        data, error, no_data, no_feedback = h.handle(fb)
-        fb = process(...) # See `sn.Handler.handle` for what these mean.
+        data, query, data_error, query_error = h.handle(fb)
+        fb = np.random.rand(query.shape[0], data.shape[1])*2-1)
 ```
 
-This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or Internet communication.
+This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication.
 
 (Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
 

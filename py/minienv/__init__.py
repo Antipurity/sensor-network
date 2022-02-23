@@ -117,15 +117,15 @@ def agent(sn, at=nodes['start'], resource=1., hunger=False):
                 nodes[at][3] = True
                 metrics['explored'] += 1
             # Send observations.
-            sn.send(name=(name, at, 'agent resource'), data=np.array([resource*2-1, 1. if hunger else -1.]), reward=reward)
-            sn.send(name=(at, 'node resource'), data=np.array([at_resource*2-1]), reward=reward)
-            sn.send(name=(at, 'name_vec'), data=at_name_vec, reward=reward)
+            sn.data(name=(name, at, 'agent resource'), data=np.array([resource*2-1, 1. if hunger else -1.]), reward=reward)
+            sn.data(name=(at, 'node resource'), data=np.array([at_resource*2-1]), reward=reward)
+            sn.data(name=(at, 'name_vec'), data=at_name_vec, reward=reward)
             for i, ng in enumerate(neighbors):
-                sn.send(name=(at, ng, 'neighbor '+str(i)), data=nodes[ng][1], reward=reward)
+                sn.data(name=(at, ng, 'neighbor '+str(i)), data=nodes[ng][1], reward=reward)
             reward = 0.
             # Receive actions.
             actions = 4
-            act = await sn.send(name=(name, at, 'act'), data = options['node_name_size'] + actions, on_feedback=True)
+            act = await sn.query(name=(name, at, 'act'), query = options['node_name_size'] + actions)
             if act is None: continue # Re-send observations on dropped packets.
             data, acts = act[:-actions], act[-actions:]
             # Bleed onto a random node. Die if unfortunate.
@@ -207,12 +207,12 @@ def _create_nodes(start_id):
 
 
 
-def _maybe_reset_the_world(fb, *_):
+def _maybe_reset_the_world(fb):
     if fb is not None and (fb[0] > 0).all():
         reset()
 def _top_level_actions(sn):
     if options['can_reset_the_world']:
-        sn.send(name=('world', 'reset'), data=1, on_feedback=_maybe_reset_the_world)
+        sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)
     if not options['stop']:
         if not len(agents['all']):
             if options['please_make_an_agent']:
