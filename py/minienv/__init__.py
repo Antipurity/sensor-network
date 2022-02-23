@@ -214,7 +214,7 @@ def _top_level_actions(sn):
     if options['can_reset_the_world']:
         sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)
     if not options['stop']:
-        if not len(agents['all']):
+        if not agents:
             if options['please_make_an_agent']:
                 agent(sn)
                 options['please_make_an_agent'] = False
