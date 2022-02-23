@@ -108,6 +108,7 @@ def agent(sn, at=nodes['start'], resource=1., hunger=False):
     """Creates an agent, two-way-bound to wander the graph."""
     name = _random_name()
     async def loop():
+        nonlocal name
         reward = 0.
         while True:
             _, at, resource, hunger = agents[name]
