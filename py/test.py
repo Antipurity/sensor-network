@@ -12,7 +12,6 @@ import torch.nn as nn
 import sensornet as sn
 import minienv
 from model.rnn import RNN
-from model.attention import Attention
 from model.momentum_copy import MomentumCopy
 
 
@@ -27,6 +26,15 @@ class SkipConnection(nn.Module):
     def forward(self, x):
         y = self.fn(x)
         return y + x if x.shape == y.shape else y
+class SelfAttention(nn.Module):
+    def __init__(self, *args, **kwargs): super().__init__();  self.fn = nn.MultiheadAttention(*args, **kwargs)
+    def forward(self, x):
+        x = torch.unsqueeze(x, -2)
+        y, _ = self.fn(x, x, x, need_weights=False)
+        return torch.squeeze(y, -2)
+
+
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 hidden_sz = 128
 embed_data = nn.Sequential( # data → state (to concat at the end)
@@ -47,7 +55,7 @@ embed_query = nn.Sequential( # query → state (to concat at the end)
 ).to(device)
 def h(in_sz = hidden_sz, out_sz = hidden_sz):
     return SkipConnection(
-        Attention(kv_size=in_sz, heads=2),
+        SelfAttention(embed_dim=in_sz, num_heads=2),
         nn.ReLU(),
         nn.LayerNorm(in_sz),
         nn.Linear(in_sz, out_sz),
@@ -99,12 +107,10 @@ async def main():
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = model(state)
-        # TODO: Make `attention` not do asserts in the forward pass.
-        #   TODO: ...It's warning us about floor division because of multi-headed-ness, with its division, right? How to convert to an *actual* number? Maybe pre-compute?
-        #   ...It's just spamming warnings at us.
-        #   TODO: ...Should use `nn.MultiheadAttention` instead.
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         print('explored', minienv.explored())
+        # TODO: Okay. Now. Why is exploration at 0 literally all the time?
+        #   TODO: Does a random agent achieve any exploration? Do world-resets happen every single time? (Because if random can't do anything, then we should probably make `sn` not do any fractal filling on data, and rely on users to do anything. ...Which is probably a good idea anyway, to minimize user surprise; if users need more precision, they can implement any folding themselves.)
 asyncio.run(main())
 # TODO: Run & test. Try to make it work, at least via trying different normalization schemes.
 
