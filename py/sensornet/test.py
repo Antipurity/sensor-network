@@ -30,6 +30,8 @@ coverage run --branch sensor-network/py/sensornet/test.py
 coverage report
 coverage html
 ```
+
+# TODO: Re-test all, with our new interface!
 """
 
 
@@ -43,62 +45,60 @@ import time
 
 def test0():
     """No shape, so no handling."""
-    def no_feedback(fb, *_): assert fb is None
     h = sn.Handler()
-    assert h.handle() == (None, None, None, None)
-    h.send()
-    h.send(data=np.array([1.]))
-    h.send(data=np.array([1.]), on_feedback = no_feedback)
+    assert h.handle()[0].shape == (0,0)
+    h.data(data=np.array([1.]))
+    assert h.handle()[0].shape == (0,0)
 def test1():
     """Already-named data, and transmission error."""
     h = sn.Handler((8, 24, 64), 8)
-    h.send(data = np.zeros((3, 96)), error = np.full((3, 96), -1.))
-    data, error, no_data, no_feedback = h.handle()
+    h.data(data = np.zeros((3, 96)), error = np.full((3, 96), -.7))
+    data, query, data_error, query_error = h.handle()
     assert (data == np.zeros((3, 96))).all()
-    assert (error == np.full((3, 96), -1.)).all()
-    assert (no_data == np.array([False, False, False])).all()
-    assert (no_feedback == np.array([True, True, True])).all()
+    assert (query == np.zeros((0, 32))).all()
+    assert (data_error == np.full((3, 96), -.7)).all()
+    assert query_error == None
 def test2():
     """Different kinds of names."""
     h = sn.Handler((8, 24, 64), 8)
-    h.send(name=('test',), data=np.array([-.4, -.2, .2, .4]))
-    h.send(name=('test', -.2, .2, lambda start,end,total: start/total*2-1), data=np.array([-.4, -.2, .2, .4]))
-    h.send(name=(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), data=np.array([-.4, -.2, .2, .4]))
-    data, error, no_data, no_feedback = h.handle()
+    h.data(name=('test',), data=np.array([-.4, -.2, .2, .4]))
+    h.data(name=('test', -.2, .2, lambda start,end,total: start/total*2-1), data=np.array([-.4, -.2, .2, .4]))
+    h.data(name=(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), data=np.array([-.4, -.2, .2, .4]))
+    data, query, *_ = h.handle()
     assert data.shape == (3, 96)
 def test3():
     """Named error."""
     h = sn.Handler((8, 24, 64), 8)
     def yes_feedback(fb, *_): assert fb is not None
-    h.send(name=('test',), data=np.zeros((16,)), error=np.full((16,), -.5), on_feedback=yes_feedback)
+    h.query(name=('test',), query=16, on_feedback=yes_feedback)
     h.handle()
     h.handle(np.zeros((1, 96)))
 def test4():
     """Name's error."""
     h = sn.Handler((8, 24, 64), 8)
     try:
-        h.send(name=(True,), data=np.array([1.])); assert False
+        h.data(name=(True,), data=np.array([1.])); assert False
     except TypeError:
         pass
 def test5():
     """Sensors are auto-called at each step."""
     h = sn.Handler((8, 24, 64), 8)
     def eh_feedback(fb, *_): assert fb is not None
-    h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.1, .2, .3]), on_feedback=eh_feedback))
-    h.sensors.append(lambda h: h.send(name=('test',), data=np.array([.4, .5, .6]), on_feedback=eh_feedback))
-    assert h.handle()[0].shape == (2, 96)
+    h.sensors.append(lambda h: h.query(name=('test',), query=3, on_feedback=eh_feedback))
+    h.sensors.append(lambda h: h.query(name=('test',), query=3, on_feedback=eh_feedback))
+    assert h.handle()[1].shape == (2, 32)
     h.handle(np.zeros((2, 96)))
 def test6():
     """Errors thrown by `on_feedback` are re-thrown."""
     h = sn.Handler((8, 24, 64), 8)
     def err1(*_): raise KeyboardInterrupt()
     def err2(*_): raise TypeError('damn')
-    h.send(data=None, on_feedback=err1)
-    assert h.handle()[0].shape == (0, 96)
+    h.query(query=1, on_feedback=err1)
+    assert h.handle()[1].shape == (1, 32)
     try: h.handle(); assert False
     except KeyboardInterrupt: pass
-    h.send(data=np.zeros((5, 96)), on_feedback=err2)
-    assert h.handle()[0].shape == (5, 96)
+    h.query(query=np.zeros((5, 32)), error=np.full((5, 32), -.5), on_feedback=err2)
+    assert h.handle()[1].shape == (5, 32)
     try: h.handle(); assert False
     except TypeError: pass
 def test7():
@@ -106,8 +106,10 @@ def test7():
     h = sn.Handler((8, 24, 64), 8)
     got = False
     def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
-    h.send(name=('test',), data=np.zeros((2,3,4)), on_feedback=yes_feedback)
-    assert h.handle()[0].shape == (1,96)
+    h.data(name=('test',), data=np.zeros((2,3,4)))
+    h.query(name=('test',), query=(2,3,4), on_feedback=yes_feedback)
+    data, query, *_ = h.handle()
+    assert data.shape == (1,96) and query.shape == (1,32)
     h.handle(np.zeros((1,96)))
     assert got
 def test8():
@@ -122,7 +124,7 @@ def test8():
     finished = 0
     async def request_data(h, maybe=False):
         nonlocal finished
-        fb = await (h.send(name, (3,5), reward=None, on_feedback=True) if maybe else h.get(name, (3,5)))
+        fb = await (h.query(name, (3,5)) if maybe else h.get(name, (3,5)))
         finished += 1
         if not maybe: assert fb.shape == (3,5)
     async def give_feedback_later(data, error, no_data, no_feedback):
@@ -141,17 +143,17 @@ def test8():
         await asyncio.sleep(.1)
         await fb # To silence a warning.
         await sn.wait(1) # For test coverage.
-        sn.send()
         sn.discard()
     asyncio.run(main())
-def test9():
+async def test9():
     """Pass-through of (synthetic) handler data to another one."""
     h = sn.Handler((8, 24, 64), 8)
-    def yes_feedback(fb, *_): assert fb.shape == (13, 96)
-    cells, shape = (13,), (13, 96)
-    h.send(name=None, reward=None, data=np.zeros(shape), error=np.zeros(shape), no_data=np.full(cells, True), no_feedback=np.full(cells, False), on_feedback=yes_feedback)
-    assert h.handle()[0].shape == shape
-    h.handle(np.zeros(shape))
+    shape1, shape2 = (13,96), (13,32)
+    fut = h.pipe(np.random.rand(shape1)*2-1, np.random.rand(shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
+    data, query, *_ = h.handle()
+    assert data.shape == shape1 and query.shape == shape2
+    h.handle(np.zeros(shape1))
+    assert (await fut).shape == shape1
 def test10():
     """PyTorch tensor GPU→CPU async transfer."""
     try:
@@ -173,7 +175,7 @@ def test11():
         nonlocal n, got;  n += 1
         if n == 4: got = True
         return got and np.zeros((2, 96))
-    h.send(None, np.zeros((2, 96)))
+    h.data(None, np.zeros((2, 96)))
     h.handle(feedback)
     h.handle()
     h.handle()
@@ -189,7 +191,7 @@ test5()
 test6()
 test7()
 test8()
-test9()
+asyncio.run(test9())
 test10()
 test11()
 print('Tests OK')
@@ -207,8 +209,9 @@ async def benchmark(N=64*10):
     name = sn.Namer('benchmark')
     while time.monotonic() - start < duration:
         await h.wait()
-        # Using Futures is a 30% slowdown.
-        h.send(name, data=send_data, on_feedback=check_feedback)
+        # Using Futures is a 30% slowdown. # TODO: Re-check!
+        h.data(name, data=send_data)
+        h.query(name, 1, callback=check_feedback)
         data, error, no_data, no_feedback = h.handle(feedback)
         feedback = np.full_like(data, .2) if data is not None else None
         iterations += 1

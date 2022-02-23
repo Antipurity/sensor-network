@@ -133,11 +133,10 @@ class Handler:
         if not self.cell_size: return
 
         if name is not None:
-            if len(data.shape) != 1:
-                data = data.flatten()
-                data = name.name(data, data.shape[0], self.cell_shape, self.part_size, None)
-            if error is not None and len(error.shape) != 1:
-                error = error.flatten()
+            if len(data.shape) != 1: data = data.flatten()
+            data = name.name(data, data.shape[0], self.cell_shape, self.part_size, None)
+            if error is not None:
+                if len(error.shape) != 1: error = error.flatten()
                 error = name.name(error, error.shape[0], self.cell_shape, self.part_size, -1.)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
         if reward is not None: data[:, 0] = reward
@@ -224,7 +223,7 @@ class Handler:
         This returns `(data, query, data_error, query_error)`.
         - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
         - `query`: same, but sized `M×name_size` (only the name).
-        - `data_error`, `query_error`: data transmission error: a `data`-sized float32 array of `abs(true_data - data) - 1`.
+        - `data_error`, `query_error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`.
             - A usage example: `if data_error is not None: data = numpy.clip(data + (data_error+1) * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
         - (To extract rewards: `data[:, 0]` and/or `query[:, 0]`.)
         """
@@ -234,10 +233,11 @@ class Handler:
         # Collect sensor data.
         for s in self.sensors: s(self)
         # Gather data/queries.
-        data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, self.cell_size))
-        query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, self.cell_size - self.cell_shape[-1]))
-        data_error = _concat_error(self._data, self._data_error, self.cell_size)
-        query_error = _concat_error(self._query, self._query_error, self.cell_size - self.cell_shape[-1])
+        L1, L2 = self.cell_size, self.cell_size - (self.cell_shape[-1] if len(self.cell_shape) else 0)
+        data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, L1))
+        query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, L2))
+        data_error = _concat_error(self._data, self._data_error, L1)
+        query_error = _concat_error(self._query, self._query_error, L2)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback
@@ -261,6 +261,7 @@ class Handler:
             _feedback(callbacks, feedback, cell_shape, part_size)
         return (data, query, data_error, query_error)
         # TODO: Update all the tests with to use this new system!
+        # TODO: Update `minienv` too.
         # TODO: Bump up the minor version for this interface improvement.
     async def wait(self, max_simultaneous_steps = 16):
         """
@@ -455,14 +456,15 @@ def _unfill(y, size, axis=0): # → x
 def _feedback(callbacks, feedback, cell_shape, part_size):
     fb = None
     got_err = None
-    assert feedback.shape[-1] == sum(cell_shape)
-    for on_feedback, shape, start_cell, end_cell, namer, length in callbacks:
+    assert feedback is None or feedback.shape[-1] == sum(cell_shape)
+    for callback, shape, start_cell, end_cell, namer, length in callbacks:
         if feedback is not None:
             fb = feedback[start_cell:end_cell, :]
-            if namer is not None: fb = namer.unname(fb, length, cell_shape, part_size)
-            fb = fb.reshape(shape)
+            if namer is not None:
+                fb = namer.unname(fb, length, cell_shape, part_size)
+                fb = fb.reshape(shape)
         try:
-            on_feedback(fb) if callable(on_feedback) else on_feedback.set_result(fb)
+            callback(fb) if callable(callback) else callback.set_result(fb)
         except KeyboardInterrupt as err:
             got_err = err
         except Exception as err:
