@@ -45,7 +45,8 @@ def test0():
     """No shape, so no handling."""
     h = sn.Handler()
     assert h.handle()[0].shape == (0,0)
-    h.data(data=np.array([1.]))
+    h.data('a', data=np.array([1.]))
+    h.query('b', query=1)
     assert h.handle()[0].shape == (0,0)
 def test1():
     """Already-named data, and transmission error."""

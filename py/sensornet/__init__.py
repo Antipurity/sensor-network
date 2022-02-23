@@ -167,7 +167,7 @@ class Handler:
         assert isinstance(callback, asyncio.Future) or callable(callback)
 
         if not self.cell_size:
-            if callback is not None:
+            if callable(callback):
                 callback(None)
                 return
             else:
