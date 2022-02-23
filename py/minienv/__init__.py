@@ -39,9 +39,9 @@ def reset(**opts):
     metrics['nodes'], metrics['explored'], metrics['collected'] = 0, 0, 0
 
     nodes.clear()
-    for name in agents.keys(): # TODO: ...Dictionary changed size during iteration...
+    for name in agents.keys():
         agents[name][0].cancel()
-        del agents[name]
+    agents.clear()
     if not options['stop']:
         nodes['start'] = _random_name()
         _create_nodes(nodes['start'])
