@@ -24,44 +24,42 @@ sn.shape(cell_shape, part_size)
 
 class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
-    def forward(self, x): return self.fn(x) + x
+    def forward(self, x):
+        y = self.fn(x)
+        return y + x if x.shape == y.shape else y
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 hidden_sz = 128
-embed_data = nn.Sequential( # data → input
+embed_data = nn.Sequential( # data → state (to concat at the end)
     nn.Linear(sum(cell_shape), hidden_sz),
     SkipConnection(
         nn.ReLU(),
         nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, hidden_sz),
+        nn.Linear(hidden_sz, sum(cell_shape)),
     ),
 ).to(device)
-embed_query = nn.Sequential( # query → input
+embed_query = nn.Sequential( # query → state (to concat at the end)
     nn.Linear(sum(cell_shape) - cell_shape[-1], hidden_sz),
     SkipConnection(
         nn.ReLU(),
         nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, hidden_sz),
+        nn.Linear(hidden_sz, sum(cell_shape)),
     ),
 ).to(device)
-incorporate_input = Attention( # (input, state) → state
-    kv_size = hidden_sz,
-    q_size = hidden_sz,
-    heads=2,
-).to(device)
-def h():
+def h(in_sz = hidden_sz, out_sz = hidden_sz):
     return SkipConnection(
-        Attention(kv_size=hidden_sz, heads=2),
+        Attention(kv_size=in_sz, heads=2),
         nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, hidden_sz),
+        nn.LayerNorm(in_sz),
+        nn.Linear(in_sz, out_sz),
         nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
+        nn.LayerNorm(out_sz),
     )
 state_transition = nn.Sequential( # state → state; RNN.
-    h(),
-    h(),
+    h(sum(cell_shape), sum(cell_shape)),
+    h(sum(cell_shape), sum(cell_shape)),
 ).to(device)
 state_future = nn.Sequential( # state → future; BYOL projector.
+    h(sum(cell_shape)),
     h(),
     h(),
 ).to(device)
@@ -73,7 +71,6 @@ future_transition = nn.Sequential( # future → future; BYOL predictor.
 optimizer = torch.optim.SGD([
     *embed_data.parameters(),
     *embed_query.parameters(),
-    *incorporate_input.parameters(),
     *state_transition.parameters(),
     *state_future.parameters(),
     *future_transition.parameters(),
@@ -91,7 +88,7 @@ model = RNN(
 
 
 
-state = torch.randn(16, hidden_sz, device=device)
+state = torch.randn(16, sum(cell_shape), device=device)
 max_state_cells = 1024
 feedback = None
 async def main():
@@ -100,10 +97,10 @@ async def main():
         data, query, data_error, query_error = sn.handle(feedback)
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(data, dtype=torch.float32, device=device))
-        kv = torch.cat((state, data), 0)[-max_state_cells:, :]
-        q = torch.cat((state, data, query), 0)[-max_state_cells:, :]
-        state = incorporate_input(kv, q)
+        state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = model(state)
+        print('feedback shape', state[-query.shape[0]:, :].shape)
+        # TODO: Also, the query is empty, so how can we make feedback empty too? How to perform the correct slice?
         feedback = sn.torch(torch, state[-query.shape[0]:, :])
         print('explored', minienv.explored())
 asyncio.run(main())

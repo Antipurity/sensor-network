@@ -39,7 +39,7 @@ def reset(**opts):
     metrics['nodes'], metrics['explored'], metrics['collected'] = 0, 0, 0
 
     nodes.clear()
-    for name in agents.keys():
+    for name in agents.keys(): # TODO: ...Dictionary changed size during iteration...
         agents[name][0].cancel()
         del agents[name]
     if not options['stop']:
