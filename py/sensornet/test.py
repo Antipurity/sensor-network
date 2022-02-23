@@ -149,7 +149,7 @@ async def test9():
     """Pass-through of (synthetic) handler data to another one."""
     h = sn.Handler((8, 24, 64), 8)
     shape1, shape2 = (13,96), (13,32)
-    fut = h.pipe(np.random.rand(shape1)*2-1, np.random.rand(shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
+    fut = h.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
     data, query, *_ = h.handle()
     assert data.shape == shape1 and query.shape == shape2
     h.handle(np.zeros(shape1))
