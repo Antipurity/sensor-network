@@ -175,19 +175,20 @@ class Handler:
                 return f
 
         length = None
+        shape = query
         if name is not None:
             length = 1 if isinstance(query, tuple) else query
             if isinstance(query, tuple):
                 for n in query: length *= n
             assert isinstance(length, int) and length > 0
-            query = name.name(query, None, length, self.cell_shape, self.part_size, None)
+            query = name.name(None, length, self.cell_shape, self.part_size, None)
         assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
         assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
         if reward is not None: query[:, 0] = reward
-        self._query.push(query)
-        self._query_error.push(error)
+        self._query.append(query)
+        self._query_error.append(error)
         cells = query.shape[0]
-        self._next_fb.append((callback, query, self._query_cell, self._query_cell + cells, name, length))
+        self._next_fb.append((callback, shape, self._query_cell, self._query_cell + cells, name, length))
         self._query_cell += cells
         if isinstance(callback, asyncio.Future):
             return callback

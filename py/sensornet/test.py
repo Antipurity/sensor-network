@@ -70,7 +70,7 @@ def test3():
     """Named error."""
     h = sn.Handler((8, 24, 64), 8)
     def yes_feedback(fb, *_): assert fb is not None
-    h.query(name=('test',), query=16, on_feedback=yes_feedback)
+    h.query(name=('test',), query=16, callback=yes_feedback)
     h.handle()
     h.handle(np.zeros((1, 96)))
 def test4():
