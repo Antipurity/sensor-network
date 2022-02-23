@@ -159,11 +159,11 @@ class Handler:
         """
         if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
         elif isinstance(name, str): name = Namer(name)
+        if callback is None: callback = asyncio.Future()
 
         assert name is None or isinstance(name, Namer)
-        assert isinstance(query, int) or isinstance(query, tuple) or name is None and isinstance(query, np.ndarray)
-        assert callback is None or callable(callback)
-        if callback is None: callback = asyncio.Future()
+        assert isinstance(query, np.ndarray) if name is None else (isinstance(query, int) or isinstance(query, tuple))
+        assert isinstance(callback, asyncio.Future) or callable(callback)
 
         if not self.cell_size:
             if callback is not None:
@@ -202,7 +202,7 @@ class Handler:
         """
         self.data(None, data, data_error, None)
         return self.query(None, query, query_error, None, callback)
-    async def get(self, name, query, error, reward=0.):
+    async def get(self, name, query, error=None, reward=0.):
         """
         `await sn.get(name, query, *, reward=0.)`
 
@@ -461,6 +461,7 @@ def _feedback(callbacks, feedback, cell_shape, part_size):
     for callback, shape, start_cell, end_cell, namer, length in callbacks:
         if feedback is not None:
             fb = feedback[start_cell:end_cell, :]
+            assert fb.shape[0] == end_cell - start_cell
             if namer is not None:
                 fb = namer.unname(fb, length, cell_shape, part_size)
                 fb = fb.reshape(shape)

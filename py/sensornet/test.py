@@ -84,20 +84,20 @@ def test5():
     """Sensors are auto-called at each step."""
     h = sn.Handler((8, 24, 64), 8)
     def eh_feedback(fb, *_): assert fb is not None
-    h.sensors.append(lambda h: h.query(name=('test',), query=3, on_feedback=eh_feedback))
-    h.sensors.append(lambda h: h.query(name=('test',), query=3, on_feedback=eh_feedback))
+    h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
+    h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
     assert h.handle()[1].shape == (2, 32)
     h.handle(np.zeros((2, 96)))
 def test6():
-    """Errors thrown by `on_feedback` are re-thrown."""
+    """Errors thrown by `callback` are re-thrown."""
     h = sn.Handler((8, 24, 64), 8)
     def err1(*_): raise KeyboardInterrupt()
     def err2(*_): raise TypeError('damn')
-    h.query(query=1, on_feedback=err1)
+    h.query(name='death', query=1, callback=err1)
     assert h.handle()[1].shape == (1, 32)
     try: h.handle(); assert False
     except KeyboardInterrupt: pass
-    h.query(query=np.zeros((5, 32)), error=np.full((5, 32), -.5), on_feedback=err2)
+    h.query(query=np.zeros((5, 32)), error=np.full((5, 32), -.5), callback=err2)
     assert h.handle()[1].shape == (5, 32)
     try: h.handle(); assert False
     except TypeError: pass
@@ -107,7 +107,7 @@ def test7():
     got = False
     def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
     h.data(name=('test',), data=np.zeros((2,3,4)))
-    h.query(name=('test',), query=(2,3,4), on_feedback=yes_feedback)
+    h.query(name=('test',), query=(2,3,4), callback=yes_feedback)
     data, query, *_ = h.handle()
     assert data.shape == (1,96) and query.shape == (1,32)
     h.handle(np.zeros((1,96)))
@@ -127,11 +127,11 @@ def test8():
         fb = await (h.query(name, (3,5)) if maybe else h.get(name, (3,5)))
         finished += 1
         if not maybe: assert fb.shape == (3,5)
-    async def give_feedback_later(data, error, no_data, no_feedback):
+    async def give_feedback_later(data, query, data_error, query_error):
         nonlocal n
         await asyncio.sleep(.1)
         n += 1
-        return data if n==30 or n>60 else None
+        return np.zeros((query.shape[0], data.shape[1])) if n==30 or n>60 else None
     async def main():
         for _ in range(5):
             asyncio.ensure_future(request_data(sn))
