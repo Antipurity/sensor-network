@@ -1,5 +1,5 @@
 """
-Testing how far we can push "compression = exploration", where we try to make the learned/abstract futures maximally sensitive to initial states. Probably not very far.
+Testing how far we can push "compression = exploration", where we try to make the learned/abstract futures maximally sensitive to initial states (by predicting which of a diverse set of futures we will end up in, and hoping that future-diversity translates to past-sensitivity). Probably not very far.
 """
 
 
@@ -11,7 +11,7 @@ import sensornet as sn
 import minienv
 from model.rnn import RNN
 from model.attention import Attention
-# TODO: Also have `model.momentum_copy`, copied from the earlier test.
+from model.momentum_copy import MomentumCopy
 
 
 
