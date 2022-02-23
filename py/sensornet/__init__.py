@@ -1,5 +1,5 @@
 """
-Module for differentiable sensor networks: each gathers named numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
+Bidirectional-sensor networks for ML: each gathers named numeric data and queries from anywhere, and in a loop, handles that.
 
 This is the core protocol: as flexible as you can imagine, [as fast as you need](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py), [as small as is reasonable](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/__init__.py), and [as well-tested as you can measure](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py).
 
