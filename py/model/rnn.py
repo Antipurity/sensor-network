@@ -54,6 +54,7 @@ def RNN(transition, loss, optimizer, backprop_length=64, checkpoint=True, trace=
     - `backprop_length = 64`: how many steps to backpropagate gradient through, capped off by `sum(loss).backward()`. Could be wrapped in a function such as `lambda: random.randint(1, 1024)`.
     - `checkpoint = True`: if `False`, no [checkpointing](https://pytorch.org/docs/stable/checkpoint.html): computation is fast, but used memory grows quickly because all intermediate activations are stored. If `True`, needs less memory, but the forward pass is done twice (so, about 30% slowdown).
     - `trace = True`: if `transition` has no CPU-side control flow, `True` to [precompile](https://pytorch.org/docs/stable/generated/torch.jit.trace.html) for a bit of speed.
+    - (Not included but could be in the future: `async_updates=True`: makes the slowdown-spike of `loss.backward()` through many epochs disappear if `checkpoint`, at the cost of gradient-updates being slower to propagate, by having 2 or more copies of the network, where each step, one is in forward-mode and another is in backward-mode and adding its gradient to all others.)
     """
     optimizer = optimizer(transition.parameters()) if callable(optimizer) else optimizer
     assert isinstance(optimizer, torch.optim.Optimizer)

@@ -1,7 +1,5 @@
 """
 [Attention is all you need](https://arxiv.org/abs/1706.03762), allegedly.
-
-PyTorch has [`torch.nn.MultiheadAttention`](https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html), but it's not only too bloated, but also not bloated enough, since its query size and output size have to be the same.
 """
 
 
@@ -16,6 +14,8 @@ class Attention(nn.Module):
     Simple, quadratic-time quadratic-memory dot-product [attention](https://arxiv.org/abs/1706.03762): `softmax(q @ k.T / sqrt(q_size), -1) @ v`.
 
     Position-invariant, so encode 'position' data (names) numerically.
+
+    (PyTorch has [`torch.nn.MultiheadAttention`](https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html), but it's not only too bloated, but also not bloated enough, since its query size and output size have to be the same.)
 
     Constructor args:
     - `kv_size`: the size of cells from which keys & values are computed.
