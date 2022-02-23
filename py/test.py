@@ -25,7 +25,7 @@ class SkipConnection(nn.Module):
     def forward(self, x): return self.fn(x) + x
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 hidden_sz = 128
-embed_tokens = nn.Sequential( # input → state
+embed_tokens = nn.Sequential( # tokens → input
     nn.Linear(sum(cell_shape), hidden_sz),
     SkipConnection(
         nn.ReLU(),
@@ -33,48 +33,38 @@ embed_tokens = nn.Sequential( # input → state
         nn.Linear(hidden_sz, hidden_sz),
     ),
 )
+incorporate_input = Attention( # (input, state) → state
+    kv_size = hidden_sz,
+    q_size = hidden_sz,
+    heads=2,
+)
+def h():
+    return SkipConnection(
+        Attention(kv_size=hidden_sz, heads=2),
+        nn.ReLU(),
+        nn.LayerNorm(hidden_sz),
+        nn.Linear(hidden_sz, hidden_sz),
+        nn.ReLU(),
+        nn.LayerNorm(hidden_sz),
+    )
 state_transition = nn.Sequential( # state → state; RNN.
-    # TODO: ...WAIT: we forgot to incorporate `Attention` everywhere...
-    #   Where exactly, and how?...
-    SkipConnection(
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-    ),
-    SkipConnection(
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-    ),
+    h(),
+    h(),
 )
 state_future = nn.Sequential( # state → future; BYOL projector.
-    SkipConnection(
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-    ),
-    SkipConnection(
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-    ),
+    h(),
+    h(),
 )
 slow_state_future = MomentumCopy(state_future)
 future_transition = nn.Sequential( # future → future; BYOL predictor.
-    SkipConnection(
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-    ),
-    SkipConnection(
-        nn.Linear(hidden_sz, hidden_sz),
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-    ),
+    h(),
+    h(),
 )
 # TODO: Wrap in RNN...
 #   Do we want a separate class that puts all of the above together, not putting it in the main loop?
 #   Or is all the future-stuff a part of the loss, and the main RNN just `embed_tokens` + `state_transition`?
+#     TODO: Should RNN's loss function accept both prev and next states, so that we don't have to pass in the prev state unnecessarily?
+# TODO: An optimizer for all these.
 
 
 
