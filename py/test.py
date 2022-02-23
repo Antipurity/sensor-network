@@ -96,12 +96,14 @@ async def main():
     while True:
         data, query, data_error, query_error = sn.handle(feedback)
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
-        query = embed_query(torch.as_tensor(data, dtype=torch.float32, device=device))
+        query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = model(state)
-        print('feedback shape', state[-query.shape[0]:, :].shape)
-        # TODO: Also, the query is empty, so how can we make feedback empty too? How to perform the correct slice?
-        feedback = sn.torch(torch, state[-query.shape[0]:, :])
+        # TODO: Make `attention` not do asserts in the forward pass.
+        #   TODO: ...It's warning us about floor division because of multi-headed-ness, with its division, right? How to convert to an *actual* number? Maybe pre-compute?
+        #   ...It's just spamming warnings at us.
+        #   TODO: ...Should use `nn.MultiheadAttention` instead.
+        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         print('explored', minienv.explored())
 asyncio.run(main())
 # TODO: Run & test. Try to make it work, at least via trying different normalization schemes.

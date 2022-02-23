@@ -1,5 +1,7 @@
 """
 [Attention is all you need](https://arxiv.org/abs/1706.03762), allegedly.
+
+# TODO: Since we only need self-attention in our models now, kill this file, and use the built-in `torch.nn.MultiheadAttention`.
 """
 
 
@@ -43,10 +45,10 @@ class Attention(nn.Module):
         self.kv_to_v = kv_to_v or nn.Linear(kv_size, output_size, bias=False)
         self.kv_to_k = kv_to_k or nn.Linear(kv_size, q_size, bias=False)
     def forward(self, kv, q = None):
-        if q is None: q = kv
-        assert kv.shape[-1] == self.kv_size
-        assert q.shape[-1] == self.q_size
         # Transform keys & values from the initial `kv` vector. `q` should be transformed before this if needed.
+        if q is None: q = kv
+        assert kv.shape[-1] == self.kv_size # These cause warnings with tracing.
+        assert q.shape[-1] == self.q_size
         v = self.kv_to_v(kv) # N×kv_size → N×output_size
         k = self.kv_to_k(kv) # N×kv_size → N×q_size
         v = self._pre_multihead(v)
@@ -55,7 +57,7 @@ class Attention(nn.Module):
         return self._post_multihead(torch.matmul(nn.functional.softmax(torch.matmul(q, torch.transpose(k, -2, -1)) * self.qk_mult, -1), v))
     def _pre_multihead(self, x):
         if self.heads == 1: return x
-        x = x.reshape(*x.shape[:-1], self.heads, x.shape[-1] // self.heads)
+        x = x.reshape(*x.shape[:-1], self.heads, int(x.shape[-1]) // self.heads)
         if len(x.shape) >= 3:
             x = torch.transpose(x, -2, -3)
         return x
