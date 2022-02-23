@@ -1,7 +1,7 @@
 """
 Tests and benchmarks for this Python implementation of a sensor network.
 
-Expect around 10000 steps per second or less, which should be more than enough for any AI model.
+Not counting other bottlenecks, expect up to around 10000 steps per second, which should be enough for most AI models.
 
 ```bash
 python3 sensor-network/py/sensornet/test.py
@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 289027200.0 bytes/sec (275.64 MiB/s) (15053.5 it/s)
-With 9600 values, throughput: 509157120.0 bytes/sec (485.57 MiB/s) (13259.3 it/s)
-With 14400 values, throughput: 674772480.0 bytes/sec (643.51 MiB/s) (11714.8 it/s)
-With 19200 values, throughput: 835614720.0 bytes/sec (796.9 MiB/s) (10880.4 it/s)
-With 24000 values, throughput: 916416000.0 bytes/sec (873.96 MiB/s) (9546.0 it/s)
-With 28800 values, throughput: 1017285120.0 bytes/sec (970.16 MiB/s) (8830.6 it/s)
-With 33600 values, throughput: 1075200000.0 bytes/sec (1025.39 MiB/s) (8000.0 it/s)
-With 38400 values, throughput: 707143680.0 bytes/sec (674.38 MiB/s) (4603.8 it/s)
-With 43200 values, throughput: 711987840.0 bytes/sec (679.0 MiB/s) (4120.3 it/s)
-With 48000 values, throughput: 820915200.0 bytes/sec (782.89 MiB/s) (4275.6 it/s)
+With 4800 values, throughput: 215731200.0 bytes/sec (205.74 MiB/s) (11236.0 it/s)
+With 9600 values, throughput: 402485760.0 bytes/sec (383.84 MiB/s) (10481.4 it/s)
+With 14400 values, throughput: 550494720.0 bytes/sec (524.99 MiB/s) (9557.2 it/s)
+With 19200 values, throughput: 696384000.0 bytes/sec (664.12 MiB/s) (9067.5 it/s)
+With 24000 values, throughput: 812592000.0 bytes/sec (774.95 MiB/s) (8464.5 it/s)
+With 28800 values, throughput: 899758080.0 bytes/sec (858.08 MiB/s) (7810.4 it/s)
+With 33600 values, throughput: 991656960.0 bytes/sec (945.72 MiB/s) (7378.4 it/s)
+With 38400 values, throughput: 1091082240.0 bytes/sec (1040.54 MiB/s) (7103.4 it/s)
+With 43200 values, throughput: 1165933440.0 bytes/sec (1111.92 MiB/s) (6747.3 it/s)
+With 48000 values, throughput: 1256160000.0 bytes/sec (1197.97 MiB/s) (6542.5 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
@@ -30,8 +30,6 @@ coverage run --branch sensor-network/py/sensornet/test.py
 coverage report
 coverage html
 ```
-
-# TODO: Re-test all, with our new interface!
 """
 
 
@@ -203,16 +201,17 @@ async def benchmark(N=64*10):
     h = sn.Handler((8, 24, 64), 8)
     iterations, feedback = 0, None
     def check_feedback(fb, *_):
-        assert fb is not None and fb.shape == (1,) and np.abs(fb[0]*3 - 1) < 1e-8
+        assert fb is not None and fb.shape == (64,) and fb[0] == .2
+    async def await_feedback(fut):
+        check_feedback(await fut)
     send_data = np.random.randn(N)
     start, duration = time.monotonic(), 10.
     name = sn.Namer('benchmark')
     while time.monotonic() - start < duration:
         await h.wait()
-        # Using Futures is a 30% slowdown. # TODO: Re-check!
-        # TODO: ...Why is it 10× slower now...
         h.data(name, data=send_data)
-        # h.query(name, 1, callback=check_feedback) # TODO:
+        # asyncio.ensure_future(await_feedback(h.query(name, 64))) # 15% slowdown.
+        h.query(name, 64, callback=check_feedback)
         data, query, data_error, query_error = h.handle(feedback)
         feedback = np.full((query.shape[0], data.shape[1]), .2) if data is not None else None
         iterations += 1

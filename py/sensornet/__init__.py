@@ -153,6 +153,7 @@ class Handler:
 
         Args:
         - `query`: the shape of the feedback that you want to receive.
+            - Requesting a whole cell (`sn.cell_shape[-1]`) rather than `1` number may be more performant due to implementation details.
         - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         - `name`, `reward`: see `.data`.
@@ -261,8 +262,8 @@ class Handler:
             self._prev_fb.pop(0)
             _feedback(callbacks, feedback, cell_shape, part_size)
         return (data, query, data_error, query_error)
-        # TODO: Update all the tests with to use this new system!
         # TODO: Update `minienv` too.
+        # TODO: Reach 100% test coverage.
         # TODO: Bump up the minor version for this interface improvement.
     async def wait(self, max_simultaneous_steps = 16):
         """
