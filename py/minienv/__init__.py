@@ -112,7 +112,7 @@ def agent(sn, at=nodes['start'], resource=1., hunger=False):
         reward = 0.
         while True:
             _, at, resource, hunger = agents[name]
-            neighbors, at_name_vec, at_resource, at_visited = nodes[at]
+            neighbors, at_name_vec, at_resource, at_visited = nodes[at] # TODO: Why is `at` `''`, and why is it not found?
             # Keep track of exploration.
             if not at_visited:
                 nodes[at][3] = True

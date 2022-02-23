@@ -98,8 +98,8 @@ async def main():
     global state, feedback
     while True:
         data, query, data_error, query_error = sn.handle(feedback)
-        data = embed_data(torch.from_numpy(data).to(device))
-        query = embed_query(torch.from_numpy(query).to(device))
+        data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
+        query = embed_query(torch.as_tensor(data, dtype=torch.float32, device=device))
         kv = torch.cat((state, data), 0)[-max_state_cells:, :]
         q = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = incorporate_input(kv, q)
