@@ -4,6 +4,8 @@ Testing how far we can push "compression = exploration", where we try to make th
 
 
 
+import asyncio
+import random
 import torch
 import torch.nn as nn
 
@@ -32,12 +34,12 @@ embed_tokens = nn.Sequential( # tokens → input
         nn.LayerNorm(hidden_sz),
         nn.Linear(hidden_sz, hidden_sz),
     ),
-)
+).to(device)
 incorporate_input = Attention( # (input, state) → state
     kv_size = hidden_sz,
     q_size = hidden_sz,
     heads=2,
-)
+).to(device)
 def h():
     return SkipConnection(
         Attention(kv_size=hidden_sz, heads=2),
@@ -50,25 +52,47 @@ def h():
 state_transition = nn.Sequential( # state → state; RNN.
     h(),
     h(),
-)
+).to(device)
 state_future = nn.Sequential( # state → future; BYOL projector.
     h(),
     h(),
-)
+).to(device)
 slow_state_future = MomentumCopy(state_future)
 future_transition = nn.Sequential( # future → future; BYOL predictor.
     h(),
     h(),
+).to(device)
+optimizer = torch.optim.SGD([
+    *embed_tokens.parameters(),
+    *incorporate_input.parameters(),
+    *state_transition.parameters(),
+    *state_future.parameters(),
+    *future_transition.parameters(),
+], lr=1e-3)
+def loss(prev_state, next_state):
+    A = future_transition(state_future(prev_state))
+    B = slow_state_future(next_state)
+    return (A - B).square().sum()
+model = RNN(
+    transition = state_transition,
+    loss = loss,
+    optimizer = optimizer,
+    backprop_length = lambda: random.randint(1, 16),
 )
-# TODO: Wrap in RNN...
-#   Do we want a separate class that puts all of the above together, not putting it in the main loop?
-#   Or is all the future-stuff a part of the loss, and the main RNN just `embed_tokens` + `state_transition`?
-#     TODO: Should RNN's loss function accept both prev and next states, so that we don't have to pass in the prev state unnecessarily?
-# TODO: An optimizer for all these.
 
 
 
-# TODO: An infinite loop where we update state, and display minienv.explored().
+state = torch.randn(16, sum(cell_shape), device=device)
+async def main():
+    while True:
+        pass
+        # TODO: Get data & query to handle.
+        # TODO: embed_tokens, of data...
+        #   ...What about the query though? Where would *that* be put?
+        # TODO: An infinite loop where we update state, and display minienv.explored().
+        # TODO: ...How to compute the actual feedback?... Wouldn't we want our `state` to contain the query in queries?...
+        #   ...Should we concat, uh, something...
+asyncio.run(main())
 # TODO: Run & test. Try to make it work, at least via trying different normalization schemes.
 
 

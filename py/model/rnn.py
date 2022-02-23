@@ -21,7 +21,7 @@ model = RNN(
         nn.LayerNorm(128),
         nn.Linear(128, 96),
     )),
-    lambda state, predicts: (state - predicts).square().sum(),
+    lambda state, predicts: (state - predicts).square().sum(), # TODO: prev_state and next_state.
     lambda p: torch.optim.SGD(p, lr=3e-4),
     backprop_length=lambda: random.randint(1, 10),
 )
@@ -48,8 +48,8 @@ def RNN(transition, loss, optimizer, backprop_length=64, checkpoint=True, trace=
 
     - `transition: fn(state, *args) → state`: the system dynamics.
         - (If you don't need to train it, you could just call this function function instead of `RNN`.)
-    - `loss: fn(state, *args) → number`: what to minimize via `.backward()`.
-        - Note that `state` here is post-transition, so for something like next-state prediction, delay `RNN` steps by one so that next-state is always available.
+    - `loss: fn(prev_state, next_state, *args) → number`: what to minimize via `.backward()`.
+        - (If doing something like next-state prediction, delay `RNN` steps by one so that the next-state is always available.)
     - `optimizer: torch.optim.Optimizer`: updates the system. Could be wrapped in `lambda p: torch.optim.SGD(p, lr=1e-2)`.
     - `backprop_length = 64`: how many steps to backpropagate gradient through, capped off by `sum(loss).backward()`. Could be wrapped in a function such as `lambda: random.randint(1, 1024)`.
     - `checkpoint = True`: if `False`, no [checkpointing](https://pytorch.org/docs/stable/checkpoint.html): computation is fast, but used memory grows quickly because all intermediate activations are stored. If `True`, needs less memory, but the forward pass is done twice (so, about 30% slowdown).
@@ -82,11 +82,12 @@ def RNN(transition, loss, optimizer, backprop_length=64, checkpoint=True, trace=
             with torch.no_grad():
                 transition = torch.jit.trace(transition, (state, *args))
                 trace = False
+        prev_state = state
         if not checkpoint: # pragma: no cover
             state = transition(state, *args)
         else:
             state = torch.utils.checkpoint.checkpoint(transition, state, *args)
-        total_loss += loss(state, *args)
+        total_loss += loss(prev_state, state, *args)
         if n >= n_max: state = new_bptt(state)
         return state
     return step
@@ -112,8 +113,8 @@ if __name__ == '__main__': # pragma: no cover
     import matplotlib.pyplot as plt
     import time
     start = time.monotonic()
-    def loss(state, predicts):
-        L = (state - predicts).square().sum()
+    def loss(prev_state, next_state, predicts):
+        L = (next_state - predicts).square().sum()
         cL = L.cpu().detach().numpy()
         print(''+str(iter), 'L2:', cL, '' if iter%5000 else ('  time: '+str(time.monotonic() - start)+'s'), '       ', end = '\r' if iter%5000 else '\n')
         losses.append(cL)
