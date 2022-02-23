@@ -176,7 +176,7 @@ def test11():
     def feedback():
         nonlocal n, got;  n += 1
         if n == 4: got = True
-        return got and np.zeros((2, 96))
+        return got and np.zeros((0, 96))
     h.data(None, np.zeros((2, 96)))
     h.handle(feedback)
     h.handle()

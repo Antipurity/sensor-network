@@ -84,7 +84,7 @@ class Handler:
         self._query = []
         self._data_error = []
         self._query_error = []
-        self._prev_fb = [] # [prev_feedback, …, _next_fb, …]
+        self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, part_size, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self.sensors = [] # Called by `.handle(…)`.
         self.cell_shape = ()
@@ -245,12 +245,12 @@ class Handler:
             self._prev_fb[-1][0] = prev_feedback
         else:
             assert prev_feedback is None, 'The first step cannot give feedback to its previous step'
-        self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size])
+        self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
         # Respond to what we can.
         while True:
-            feedback, callbacks, cell_shape, part_size = self._prev_fb[0]
+            feedback, callbacks, cell_shape, part_size, cell_count, cell_size = self._prev_fb[0]
             if isinstance(feedback, asyncio.Future):
                 if not feedback.done(): break
                 feedback = feedback.result()
@@ -259,6 +259,8 @@ class Handler:
                     feedback = feedback()
                 if feedback is False: break # Respond in-order, waiting if `False`.
             assert feedback is None or isinstance(feedback, np.ndarray)
+            if feedback is not None:
+                assert len(feedback.shape) == 2 and feedback.shape[0] == cell_count and feedback.shape[1] == cell_size
             self._prev_fb.pop(0)
             _feedback(callbacks, feedback, cell_shape, part_size)
         return (data, query, data_error, query_error)
