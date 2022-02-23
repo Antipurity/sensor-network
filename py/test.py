@@ -91,7 +91,7 @@ model = RNN(
 
 
 
-state = torch.randn(16, sum(cell_shape), device=device)
+state = torch.randn(16, hidden_sz, device=device)
 max_state_cells = 1024
 feedback = None
 async def main():
