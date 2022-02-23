@@ -80,7 +80,7 @@ optimizer = torch.optim.SGD([
 ], lr=1e-3)
 def loss(prev_state, next_state):
     A = future_transition(state_future(prev_state))
-    B = slow_state_future(next_state)
+    B = slow_state_future(next_state.detach())
     return (A - B).square().sum()
 model = RNN(
     transition = state_transition,
@@ -95,6 +95,7 @@ state = torch.randn(16, sum(cell_shape), device=device)
 max_state_cells = 1024
 feedback = None
 async def main():
+    global state, feedback
     while True:
         data, query, data_error, query_error = sn.handle(feedback)
         data = embed_data(torch.from_numpy(data).to(device))
@@ -118,5 +119,7 @@ asyncio.run(main())
 #     - Cumulative sum right before normalization?
 #     - Hierarchical downsampling, which may make more sense than cumsum?
 # - Weight decay with long learning?
+# - Try [Barlow twins](https://arxiv.org/pdf/2103.03230.pdf), AKA "make all futures perfectly uncorrelated". (Simpler than BYOL, but also doesn't have `future_transition` unless we try it.)
 # - If all fails, translate the "exploration = max sensitivity of future to the past" definition to code: `state.detach()` for the BYOL-loss, and to train `state`, forward-propagate its gradient to the future, and maximize the sum of its magnitudes. (Hopefully, doesn't explode.) (As a bonus, this returns us to our initial "opposing optimization forces at work" formulation. And doesn't actually contradict the BYOL-paradigm, because the BYOL paper doesn't consider gradient of inputs.)
+#     - (Need PyTorch Nightly (or 1.11) for forward-mode gradients, though.)
 # - If ALL fails, switch to SwaV.
