@@ -108,7 +108,7 @@ async def main():
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
-        print('explored', minienv.explored())
+        print('explored', str(minienv.explored()*100)+'%')
         # TODO: Okay. Now. Why is exploration at 0 literally all the time?
         #   TODO: Does a random agent achieve any exploration? Do world-resets happen every single time? (Because if random can't do anything, then we should probably make `sn` not do any fractal filling on data, and rely on users to do anything. ...Which is probably a good idea anyway, to minimize user surprise; if users need more precision, they can implement any folding themselves.)
 asyncio.run(main())

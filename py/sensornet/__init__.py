@@ -494,7 +494,7 @@ def _feedback(callbacks, feedback, cell_shape, part_size):
                 fb = namer.unname(fb, length, cell_shape, part_size)
                 fb = fb.reshape(shape)
         try:
-            callback(fb) if callable(callback) else callback.set_result(fb)
+            callback(fb) if callable(callback) else callback.set_result(fb) if not callback.cancelled() else None
         except KeyboardInterrupt as err:
             got_err = err
         except Exception as err:

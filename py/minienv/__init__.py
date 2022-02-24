@@ -128,7 +128,9 @@ def agent(sn, at=..., resource=1., hunger=False):
             reward = 0.
             # Receive actions.
             actions = 4
+            print('agent pre-act') # TODO:
             act = await sn.query(name=(name, at, 'act'), query = options['node_name_size'] + actions)
+            print('agent post-act') # TODO:
             if act is None: continue # Re-send observations on dropped packets.
             data, acts = act[:-actions], act[-actions:]
             # Bleed onto a random node. Die if unfortunate.
@@ -137,6 +139,7 @@ def agent(sn, at=..., resource=1., hunger=False):
             nodes[random.choice(nodes['all'])][2] += dresource
             at_resource = nodes[at][2]
             if resource <= 0:
+                print('agent DIED') # TODO:
                 del agents[name]
                 return
             agents[name][2] = resource
@@ -157,6 +160,7 @@ def agent(sn, at=..., resource=1., hunger=False):
                 name = neighbors[nearest_neighbor_i]
             # Un-fork.
             if acts[3]>0 and options['allow_suicide']:
+                print('agent UNFORKED') # TODO:
                 nodes[at][2] += resource
                 del agents[name]
                 return
@@ -215,7 +219,7 @@ def _maybe_reset_the_world(fb):
         print('world resets', fb is not None and fb[0]) # TODO:
         reset()
     else:
-        print('world continues', fb is not None and fb[0]) # TODO:
+        print('world continues', fb is not None and fb[0]) # TODO: ...Why was feedback literally `False` at one point...?
 def _top_level_actions(sn):
     if options['can_reset_the_world']:
         sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)
