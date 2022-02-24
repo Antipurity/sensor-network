@@ -115,7 +115,7 @@ def agent(sn, at=..., resource=1., hunger=False):
             _, at, resource, hunger = agents[name]
             neighbors, at_name_vec, at_resource, at_visited = nodes[at]
             # Keep track of exploration.
-            print('agent tick', name, at) # TODO: ...Why are there no ticks...
+            print('agent tick', name, at) # TODO: Why so rare?
             if not at_visited:
                 nodes[at][3] = True
                 metrics['explored'] += 1

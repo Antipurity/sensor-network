@@ -12,7 +12,7 @@ Python 3.5 or newer (for `asyncio` with `await`).
 pip install sensornet
 ```
 
-TODO: Publish to PyPi
+TODO: Publish to PyPi.
 
 Or, like, copy this directory.
 
@@ -51,12 +51,11 @@ And handle it:
 async def main():
     fb = None
     while True:
-        await h.wait()
-        data, query, data_error, query_error = h.handle(fb)
-        fb = np.random.rand(query.shape[0], data.shape[1])*2-1)
+        data, query, data_error, query_error = await h.handle(fb)
+        fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
-This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication.
+This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication or integration with ML-libraries.
 
 (Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
 

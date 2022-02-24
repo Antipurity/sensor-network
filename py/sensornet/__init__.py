@@ -40,9 +40,8 @@ And handle it:
 async def main():
     fb = None
     while True:
-        await h.wait() # TODO:
-        data, query, data_error, query_error = h.handle(fb)
-        fb = np.random.rand(query.shape[0], data.shape[1])*2-1)
+        data, query, data_error, query_error = await h.handle(fb)
+        fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
 This module implements this basic protocol, and does not include anything else by default, such as string/image handling or file storage or Internet communication.
@@ -303,7 +302,7 @@ class Handler:
 
         Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
         """
-        # TODO: ...Re-run all tests while measuring coverage, *again*...
+        # TODO: Also, stop fractal-filling the actual data (instead zero-fill it), for more predictability.
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         if not len(self._data) and not len(self._query):
             self._wait_for_requests = asyncio.Future()
@@ -312,18 +311,18 @@ class Handler:
         if self.n >= max_simultaneous_steps: self.n = 0
         if self.n == 0:
             await asyncio.sleep(0)
-        if len(self._prev_fb) <= max_simultaneous_steps: return self._take_data()
-        fb = self._prev_fb[0][0] # The oldest feedback, must be done.
-        if isinstance(fb, asyncio.Future) and not fb.done():
-            await fb
-            return self._take_data()
-        elif callable(fb): # pragma: no cover
-            while True:
-                r = fb()
-                if r is not False:
-                    self._prev_fb[0][0] = r
-                    return self._take_data()
-                await asyncio.sleep(.003)
+        if len(self._prev_fb) > max_simultaneous_steps:
+            fb = self._prev_fb[0][0] # The oldest feedback, must be done.
+            if isinstance(fb, asyncio.Future) and not fb.done():
+                await fb
+            elif callable(fb): # pragma: no cover
+                while True:
+                    r = fb()
+                    if r is not False:
+                        self._prev_fb[0][0] = r
+                        break
+                    await asyncio.sleep(.003)
+        return self._take_data()
 
 
 

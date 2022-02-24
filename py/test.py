@@ -102,10 +102,7 @@ feedback = None
 async def main():
     global state, feedback
     while True:
-        await sn.wait()
-        #   TODO: ...This causes 16 steps without data to happen, and agent ticks are extremely infrequent. How to fix it? Should `sn.wait()` wait until any data is available?
-        #     ...Should `handle` have a bool for async returning actually, so that users don't have to forget to `await sn.wait()`...
-        data, query, data_error, query_error = sn.handle(feedback)
+        data, query, data_error, query_error = await sn.handle(feedback)
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]

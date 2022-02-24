@@ -182,6 +182,19 @@ def test11():
     assert not got
     h.handle(None, None)
     assert got
+async def test12():
+    """Waiting for data to arrive."""
+    h = sn.Handler((8, 24, 64), 8)
+    async def data_later():
+        await asyncio.sleep(.2)
+        h.data('hey listen', np.zeros((128,)))
+    async def query_later():
+        await asyncio.sleep(.2)
+        h.query('forces of evil gather', 16)
+    asyncio.ensure_future(data_later())
+    assert (await h.handle())[0].shape == (2, 96)
+    asyncio.ensure_future(query_later())
+    assert (await h.handle())[1].shape == (1, 32)
 test0()
 test1()
 test2()
@@ -194,6 +207,7 @@ test8()
 asyncio.run(test9())
 test10()
 test11()
+asyncio.run(test12())
 print('Tests OK')
 
 
