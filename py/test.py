@@ -105,7 +105,7 @@ async def main():
         await asyncio.sleep(.1) # TODO: ...The heck's going on with not calling agents...
         #   TODO: ...Okay, then, we know that the handler is not starving agents for resources, then... What's going on?...
         data, query, data_error, query_error = await sn.handle(feedback)
-        print(data.shape[0], query.shape[0]) # TODO:
+        print(data.shape[0], query.shape[0], ' ', len(sn.default._prev_fb)) # TODO:
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]

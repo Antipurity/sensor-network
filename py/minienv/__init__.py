@@ -109,10 +109,8 @@ def agent(sn, at=..., resource=1., hunger=False):
     if at is ...: at = nodes['start']
     name = _random_name()
     async def loop():
-        nonlocal name
         reward = 0.
-        while True:
-            if name not in agents: break
+        while name in agents:
             _, at, resource, hunger = agents[name]
             neighbors, at_name_vec, at_resource, at_visited = nodes[at]
             # Keep track of exploration.
@@ -160,8 +158,9 @@ def agent(sn, at=..., resource=1., hunger=False):
             # Goto neighbor.
             if acts[2]>0 and len(neighbors):
                 nearest_neighbor_i = np.argmin(np.sum(np.abs(data - np.concatenate([nodes[ng][1] for ng in neighbors], 0)))) # TODO: ...WAIT: why is it complaining about this line ("axis 1 is out of bounds for array of dimension 1") when we keyboard-interrupt?... DAMN YOU, PYTHON
-                name = neighbors[nearest_neighbor_i]
-                print('    agent nearest neighbor is', nearest_neighbor_i, name, 'from', at) # TODO:
+                at = neighbors[nearest_neighbor_i]
+                agents[name][1]
+                print('    agent nearest neighbor is', nearest_neighbor_i, at) # TODO:
             # Un-fork.
             if acts[3]>0 and options['allow_suicide']:
                 print('    agent', name, 'UNFORKED, now have', len(agents.keys())-1) # TODO: ...Why do we seemingly continue after unforking a last agent? ...Or after another action... Without the 'agent EXITED' notification, and without ever getting past the "agent pre-act" phase (so, maybe futures are getting swallowed or something?)...
@@ -229,6 +228,7 @@ def _top_level_actions(sn):
     if options['can_reset_the_world']:
         sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)
     if not options['stop']:
+        print(' agents', len(agents.keys())) # TODO: Does this happen when we have no-action continuing... ...Wait, why is the 'unforked' agent of a different name than remaining agents? It was never even *in* `agents`; the heck?
         if not agents:
             if options['please_make_an_agent']:
                 agent(sn)
