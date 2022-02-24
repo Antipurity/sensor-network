@@ -156,7 +156,6 @@ class Handler:
 
         Args:
         - `query`: the shape of the feedback that you want to receive.
-            - Requesting a whole cell (`sn.cell_shape[-1]`) rather than `1` number may be more performant due to implementation details.
         - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         - `name`, `reward`: see `.data`.
@@ -302,7 +301,6 @@ class Handler:
 
         Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
         """
-        # TODO: Also, stop fractal-filling the actual data (instead zero-fill it), for more predictability.
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         if not len(self._data) and not len(self._query):
             self._wait_for_requests = asyncio.Future()
@@ -367,7 +365,7 @@ class Namer:
         cells = -(-length // data_size)
         total = cells * data_size
         if data is not None:
-            data = _fill(data, total, 0) # Can't make it smaller, so `_unfill` will never have to make feedback larger.
+            data = _pad(data, total, 0)
             data = np.reshape(data, (cells, data_size))
         # Finalize the name, then concat it before `data`.
         if fill is not None:
@@ -389,7 +387,7 @@ class Namer:
         # Ignore the name, only heed data.
         assert len(feedback.shape) == 2 and feedback.shape[-1] == sum(cell_shape)
         feedback = feedback[:, -cell_shape[-1]:]
-        return _unfill(feedback.flatten(), length, 0)
+        return _pad(feedback.flatten(), length, 0)
     def _name_parts(self, cell_shape, part_size):
         # Recomputes the name's parts for faster naming. MD5-hashes, and merges consecutive raw numbers.
         if cell_shape == self.cell_shape and part_size == self.part_size:
@@ -447,6 +445,14 @@ def _shape_ok(cell_shape: tuple, part_size: int):
 def _str_to_floats(string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
     return np.frombuffer(hash, dtype=np.uint8).astype(np.float32)/255.*2. - 1.
+def _pad(x, size, axis=0): # → y
+    """Ensures that an `axis` of a NumPy array `x` has the appropriate `size` by slicing or zero-padding, returning `y`. Can undo itself."""
+    if x.shape[axis] == size: return x
+    if x.shape[axis] > size: return np.take(x, range(0,size), axis)
+    shape = list(x.shape)
+    shape[axis] = size - x.shape[axis]
+    arr = np.zeros(shape, dtype=np.float32)
+    return np.concatenate((arr, x), axis)
 def _fill(x, size, axis=0): # → y
     """
     Ensures that an `axis` of a NumPy array `x` has the appropriate `size`, returning `y`.
