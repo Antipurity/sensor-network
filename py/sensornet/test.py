@@ -1,7 +1,7 @@
 """
 Tests and benchmarks for this Python implementation of a sensor network.
 
-Not counting other bottlenecks, expect up to around 10000 steps per second, which should be enough for most AI models.
+Not counting other bottlenecks, expect less than around 10000 steps per second, which should be enough for most AI models.
 
 ```bash
 python3 sensor-network/py/sensornet/test.py
@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 215731200.0 bytes/sec (205.74 MiB/s) (11236.0 it/s)
-With 9600 values, throughput: 402485760.0 bytes/sec (383.84 MiB/s) (10481.4 it/s)
-With 14400 values, throughput: 550494720.0 bytes/sec (524.99 MiB/s) (9557.2 it/s)
-With 19200 values, throughput: 696384000.0 bytes/sec (664.12 MiB/s) (9067.5 it/s)
-With 24000 values, throughput: 812592000.0 bytes/sec (774.95 MiB/s) (8464.5 it/s)
-With 28800 values, throughput: 899758080.0 bytes/sec (858.08 MiB/s) (7810.4 it/s)
-With 33600 values, throughput: 991656960.0 bytes/sec (945.72 MiB/s) (7378.4 it/s)
-With 38400 values, throughput: 1091082240.0 bytes/sec (1040.54 MiB/s) (7103.4 it/s)
-With 43200 values, throughput: 1165933440.0 bytes/sec (1111.92 MiB/s) (6747.3 it/s)
-With 48000 values, throughput: 1256160000.0 bytes/sec (1197.97 MiB/s) (6542.5 it/s)
+With 4800 values, throughput: 214391040.0 bytes/sec (204.46 MiB/s) (11166.2 it/s)
+With 9600 values, throughput: 394556160.0 bytes/sec (376.28 MiB/s) (10274.9 it/s)
+With 14400 values, throughput: 553985280.0 bytes/sec (528.32 MiB/s) (9617.8 it/s)
+With 19200 values, throughput: 658344960.0 bytes/sec (627.85 MiB/s) (8572.2 it/s)
+With 24000 values, throughput: 798220800.0 bytes/sec (761.24 MiB/s) (8314.8 it/s)
+With 28800 values, throughput: 912718080.0 bytes/sec (870.44 MiB/s) (7922.9 it/s)
+With 33600 values, throughput: 991925760.0 bytes/sec (945.97 MiB/s) (7380.4 it/s)
+With 38400 values, throughput: 1059179520.0 bytes/sec (1010.11 MiB/s) (6895.7 it/s)
+With 43200 values, throughput: 1184250240.0 bytes/sec (1129.39 MiB/s) (6853.3 it/s)
+With 48000 values, throughput: 1243065600.0 bytes/sec (1185.48 MiB/s) (6474.3 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
@@ -64,6 +64,7 @@ def test2():
     h.data(name=('test',), data=np.array([-.4, -.2, .2, .4]))
     h.data(name=('test', -.2, .2, lambda start,end,total: start/total*2-1), data=np.array([-.4, -.2, .2, .4]))
     h.data(name=(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), data=np.array([-.4, -.2, .2, .4]))
+    h.commit()
     data, query, *_ = h.handle(None, None)
     assert data.shape == (3, 96)
 def test3():
@@ -151,6 +152,7 @@ async def test9():
     fut = sn.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
     data, query, *_ = sn.handle(None, None)
     assert data.shape == shape1 and query.shape == shape2
+    sn.commit()
     sn.handle(np.zeros(shape1), None)
     assert (await fut).shape == shape1
     sn.discard()

@@ -117,7 +117,7 @@ class Handler:
             - If a tuple/list of strings and -1…1 numbers and functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, converted to a `Namer`.
                 - Recommendation: try to use at most about 3 parts, or however much the cell-shape allows for.
             - If a `Namer`, it is used.
-            - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`.
+            - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
         - `data`: a NumPy array of numbers, preferably -1…1.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. Preferably -1…1.
         - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. In a handler, extract with `data[:, 0]`. Pass in `None` to not overwrite the first number.
@@ -272,7 +272,18 @@ class Handler:
             return self._take_data()
         else:
             return self._wait_then_take_data(max_simultaneous_steps)
-    # TODO: Maybe take this opportunity to have `.commit()`?
+    def commit(self):
+        """`sn.commit()`: actually copies the provided data/queries, allowing their NumPy arrays to be written-to elsewhere."""
+        if len(self._data) == 1 and len(self._query) == 1: return
+        L1, L2 = self.cell_size, self.cell_size - (self.cell_shape[-1] if len(self.cell_shape) else 0)
+        data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, L1), dtype=np.float32)
+        query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, L2), dtype=np.float32)
+        data_error = _concat_error(self._data, self._data_error, L1)
+        query_error = _concat_error(self._query, self._query_error, L2)
+        self._data.clear();  self._data.append(data)
+        self._query.clear();  self._query.append(query)
+        self._data_error.clear();  self._data_error.append(data_error)
+        self._query_error.clear();  self._query_error.append(query_error)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
@@ -286,15 +297,15 @@ class Handler:
             self._next_fb.clear()
     def _take_data(self):
         """Gather data, queries, and their errors, and return them."""
-        L1, L2 = self.cell_size, self.cell_size - (self.cell_shape[-1] if len(self.cell_shape) else 0)
-        data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, L1))
-        query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, L2))
-        data_error = _concat_error(self._data, self._data_error, L1)
-        query_error = _concat_error(self._query, self._query_error, L2)
+        self.commit()
+        data = self._data[0];  self._data.clear()
+        query = self._query[0];  self._query.clear()
+        data_error = self._data_error[0];  self._data_error.clear()
+        query_error = self._query_error[0];  self._query_error.clear()
         self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
-        return (data, query, data_error, query_error)
+        return data, query, data_error, query_error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
         """
         Limits how many steps can be done at once, yielding if necessary (if no data and no queries, or if it's been too long since the last yield).
@@ -394,7 +405,7 @@ class Namer:
             return self.name_parts
         _shape_ok(cell_shape, part_size)
         extra_parts = sum(cell_shape[:-2]) // part_size
-        name_parts = [np.zeros((1, part_size)) for _ in range(extra_parts)]
+        name_parts = [np.zeros((1, part_size), dtype=np.float32) for _ in range(extra_parts)]
         nums = []
         for part in self.named:
             if isinstance(part, str):
@@ -459,7 +470,7 @@ def _fill(x, size, axis=0): # → y
 
     If it's too small, fractally folds `x` via repeated `x → 1 - 2*abs(x)` to increase AI-model sensitivity where we can.
 
-    >>> _fill(np.zeros((2,)), 6)
+    >>> _fill(np.zeros((2,), dtype=np.float32), 6)
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
     if x.shape[axis] == size: return x
@@ -471,19 +482,6 @@ def _fill(x, size, axis=0): # → y
     x = np.concatenate(folds, axis)
     if x.shape[axis] == size: return x
     return np.take(x, range(0,size), axis)
-def _unfill(y, size, axis=0): # → x
-    """Undoes `_fill(x, y.shape[axis], axis)→y` via `_unfill(y, x.shape[axis], axis)→x`.
-
-    `(x,y) → (copysign((1-y)/2, x), y)`"""
-    if y.shape[axis] == size: return y
-    assert y.shape[axis] > size # Users of `_unfill` never actually request the padding of data.
-    folds = np.split(y, range(size, y.shape[axis], size), axis)
-    if folds[-1].shape[0] < size:
-        folds[-1] = np.concatenate((folds[-1], 1 - 2 * np.abs(np.take(folds[-2], range(folds[-1].shape[0], size), axis))), 0)
-    for i in reversed(range(1, -(y.shape[axis] // -size))):
-        x, y = folds[i-1], folds[i]
-        folds[i-1] = np.copysign(.5 * (1-y), x)
-    return folds[0]
 def _feedback(callbacks, feedback, cell_shape, part_size):
     fb = None
     got_err = None
@@ -506,7 +504,7 @@ def _inty(n):
     return isinstance(n, int) and n>=0
 def _concat_error(main, error, length):
     if any(e is not None for e in error):
-        return np.concatenate([e if e is not None else -np.ones_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length))
+        return np.concatenate([e if e is not None else -np.ones_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length), dtype=np.float32)
     else:
         return None
 
@@ -524,7 +522,7 @@ def torch(torch, tensor, awaitable=False): # pragma: no cover
             return f
     with torch.no_grad():
         # https://discuss.pytorch.org/t/non-blocking-device-to-host-transfer/42353/2
-        result = torch.zeros_like(tensor, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
+        result = torch.zeros_like(tensor, dtype=torch.float32, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
         result.copy_(tensor, non_blocking=True)
         event = torch.cuda.Event()
         event.record()
@@ -557,12 +555,15 @@ def get(*k, **kw):
     return default.get(*k, **kw)
 def handle(*k, **kw):
     return default.handle(*k, **kw)
-def discard(*k, **kw):
-    return default.discard(*k, **kw)
+def commit():
+    return default.commit()
+def discard():
+    return default.discard()
 shape.__doc__ = Handler.shape.__doc__
 data.__doc__ = Handler.data.__doc__
 query.__doc__ = Handler.query.__doc__
 pipe.__doc__ = Handler.pipe.__doc__
 get.__doc__ = Handler.get.__doc__
 handle.__doc__ = Handler.handle.__doc__
+commit.__doc__ = Handler.commit.__doc__
 discard.__doc__ = Handler.discard.__doc__
