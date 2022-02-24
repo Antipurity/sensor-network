@@ -112,6 +112,7 @@ def agent(sn, at=..., resource=1., hunger=False):
         nonlocal name
         reward = 0.
         while True:
+            if name not in agents: break
             _, at, resource, hunger = agents[name]
             neighbors, at_name_vec, at_resource, at_visited = nodes[at]
             # Keep track of exploration.
@@ -141,7 +142,7 @@ def agent(sn, at=..., resource=1., hunger=False):
             if resource <= 0:
                 print('agent DIED') # TODO:
                 del agents[name]
-                return
+                break
             agents[name][2] = resource
             # Take resources from the cell.
             if acts[0]>0 and at_resource > 0.:
@@ -149,21 +150,25 @@ def agent(sn, at=..., resource=1., hunger=False):
                 resource += dresource;  agents[name][2] = resource
                 at_resource -= dresource;  nodes[at][2] = at_resource
                 if hunger: reward = dresource
+                print('    agent drew resources at', at) # TODO:
             # Fork. (Casually, as if you see action-space-alteration in RL often.)
             if acts[1]>0 and len(agents.keys()) < options['max_agents']:
                 ours = .5
                 agent(sn, at, resource*(1-ours), options['allow_fork_with_resource_goal'] and data[0]>0)
                 resource *= ours;  agents[name][2] = resource
+                print('    agent forked at', at) # TODO:
             # Goto neighbor.
             if acts[2]>0 and len(neighbors):
-                nearest_neighbor_i = np.argmin(np.sum(np.abs(data - np.concatenate([nodes[ng][1] for ng in neighbors], 0)), 1))
+                nearest_neighbor_i = np.argmin(np.sum(np.abs(data - np.concatenate([nodes[ng][1] for ng in neighbors], 0)))) # TODO: ...WAIT: why is it complaining about this line ("axis 1 is out of bounds for array of dimension 1") when we keyboard-interrupt?... DAMN YOU, PYTHON
                 name = neighbors[nearest_neighbor_i]
+                print('    agent nearest neighbor is', nearest_neighbor_i, name, 'from', at) # TODO:
             # Un-fork.
             if acts[3]>0 and options['allow_suicide']:
-                print('agent UNFORKED') # TODO:
+                print('    agent', name, 'UNFORKED, now have', len(agents.keys())-1) # TODO: ...Why do we seemingly continue after unforking a last agent? ...Or after another action... Without the 'agent EXITED' notification, and without ever getting past the "agent pre-act" phase (so, maybe futures are getting swallowed or something?)...
                 nodes[at][2] += resource
                 del agents[name]
-                return
+                break
+        print('agent EXITED', name) # TODO:
     agents[name] = [asyncio.ensure_future(loop()), at, resource, hunger]
     return name
 
@@ -219,7 +224,7 @@ def _maybe_reset_the_world(fb):
         print('world resets', fb is not None and fb[0]) # TODO:
         reset()
     else:
-        print('world continues', fb is not None and fb[0]) # TODO: ...Why was feedback literally `False` at one point...?
+        print('world continues', fb is not None and fb[0], 'agents', list(agents.keys())) # TODO: ...Why was feedback literally `False` at one point...? Is this experience repeatable?
 def _top_level_actions(sn):
     if options['can_reset_the_world']:
         sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)
