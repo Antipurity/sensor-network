@@ -210,17 +210,23 @@ def _create_nodes(start_id):
 
 
 def _maybe_reset_the_world(fb):
+    # TODO: Do we have any agents deployed?
     if fb is not None and (fb[0] > 0).all():
+        print('world resets', fb is not None and fb[0]) # TODO:
         reset()
+    else:
+        print('world continues', fb is not None and fb[0]) # TODO:
 def _top_level_actions(sn):
     if options['can_reset_the_world']:
         sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)
     if not options['stop']:
         if not agents:
             if options['please_make_an_agent']:
+                print('DEPLOYED') # TODO:
                 agent(sn)
                 options['please_make_an_agent'] = False
             else: # Everyone. Dead.
+                print('DEAD') # TODO:
                 reset()
 
 

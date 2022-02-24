@@ -76,13 +76,13 @@ future_transition = nn.Sequential( # future → future; BYOL predictor.
     h(),
     h(),
 ).to(device)
-optimizer = torch.optim.SGD([
+optimizer = torch.optim.Adam([
     *embed_data.parameters(),
     *embed_query.parameters(),
     *state_transition.parameters(),
     *state_future.parameters(),
     *future_transition.parameters(),
-], lr=1e-3)
+], lr=1e-4)
 def loss(prev_state, next_state):
     A = future_transition(state_future(prev_state))
     B = slow_state_future(next_state.detach())
@@ -91,7 +91,7 @@ model = RNN(
     transition = state_transition,
     loss = loss,
     optimizer = optimizer,
-    backprop_length = lambda: random.randint(1, 16),
+    backprop_length = lambda: random.randint(1, 4),
 )
 
 
