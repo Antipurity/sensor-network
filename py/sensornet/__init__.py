@@ -40,7 +40,7 @@ And handle it:
 async def main():
     fb = None
     while True:
-        await h.wait()
+        await h.wait() # TODO:
         data, query, data_error, query_error = h.handle(fb)
         fb = np.random.rand(query.shape[0], data.shape[1])*2-1)
 ```
@@ -86,6 +86,7 @@ class Handler:
         self._query_error = []
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, part_size, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
+        self._wait_for_requests = None # asyncio.Future()
         self.sensors = [] # Called by `.handle(…)`.
         self.cell_shape = ()
         self.part_size = 0
@@ -142,6 +143,9 @@ class Handler:
         if reward is not None: data[:, 0] = reward
         self._data.append(data)
         self._data_error.append(error)
+        if self._wait_for_requests is not None:
+            self._wait_for_requests.set_result(None)
+            self._wait_for_requests = None
     def query(self, name=None, query=None, error=None, reward=0., callback=None):
         """
         ```python
@@ -191,6 +195,9 @@ class Handler:
         cells = query.shape[0]
         self._next_fb.append((callback, shape, self._query_cell, self._query_cell + cells, name, length))
         self._query_cell += cells
+        if self._wait_for_requests is not None:
+            self._wait_for_requests.set_result(None)
+            self._wait_for_requests = None
         if isinstance(callback, asyncio.Future):
             return callback
     def pipe(self, data, query, data_error, query_error, callback=None):
@@ -214,15 +221,19 @@ class Handler:
         while True:
             fb = await self.query(name, query, error, reward)
             if fb is not None: return fb
-    def handle(self, prev_feedback=None):
+    def handle(self, prev_feedback=None, max_simultaneous_steps=16):
         """
-        `sn.handle(prev_feedback=None)`
+        ```python
+        await sn.handle(prev_feedback=None)
+        await sn.handle(prev_feedback=None, max_simultaneous_steps=16)
+        sn.handle(prev_feedback, None)
+        ```
 
         Handles collected data.
 
-        Pass it the previous handling's feedback: as a NumPy array sized `M×cell_size` or `None` or an `await`able future of that (see `sn.wait`), or a low-level function (takes nothing, returns `False` to wait, `None` to drop, an array to respond).
+        Pass it the previous handling's feedback: as a NumPy array sized `M×cell_size` or `None` or an `await`able future of that, or a low-level function (takes nothing, returns `False` to wait, `None` to drop, an array to respond).
 
-        This returns `(data, query, data_error, query_error)`.
+        This returns `(data, query, data_error, query_error)`, or an `await`able promise of that.
         - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
         - `query`: same, but sized `M×name_size` (only the name).
         - `data_error`, `query_error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`.
@@ -232,62 +243,38 @@ class Handler:
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.ensure_future(prev_feedback)
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
+        assert max_simultaneous_steps is None or isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         # Collect sensor data.
         for s in self.sensors: s(self)
-        # Gather data/queries.
-        L1, L2 = self.cell_size, self.cell_size - (self.cell_shape[-1] if len(self.cell_shape) else 0)
-        data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, L1))
-        query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, L2))
-        data_error = _concat_error(self._data, self._data_error, L1)
-        query_error = _concat_error(self._query, self._query_error, L2)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback
         else:
             assert prev_feedback is None, 'The first step cannot give feedback to its previous step'
-        self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size, query.shape[0], self.cell_size])
-        self._next_fb = []
-        self.discard()
         # Respond to what we can.
-        while True:
-            feedback, callbacks, cell_shape, part_size, cell_count, cell_size = self._prev_fb[0]
-            if isinstance(feedback, asyncio.Future):
-                if not feedback.done(): break
-                feedback = feedback.result()
-            else:
-                if callable(feedback):
-                    feedback = feedback()
-                if feedback is False: break # Respond in-order, waiting if `False`.
-            assert feedback is None or isinstance(feedback, np.ndarray)
-            if feedback is not None:
-                assert len(feedback.shape) == 2 and feedback.shape[0] == cell_count and feedback.shape[1] == cell_size
-            self._prev_fb.pop(0)
-            _feedback(callbacks, feedback, cell_shape, part_size)
-        return (data, query, data_error, query_error)
-    async def wait(self, max_simultaneous_steps = 16):
-        """
-        `await sn.wait(max_simultaneous_steps = 16)`
-
-        If called before each `sn.handle(…)`, will limit how many steps can be done at once, yielding if necessary.
-
-        Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
-        """
-        assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
-        self.n += 1
-        if self.n >= max_simultaneous_steps: self.n = 0
-        if self.n == 0:
-            await asyncio.sleep(0)
-        if len(self._prev_fb) <= max_simultaneous_steps: return
-        fb = self._prev_fb[0][0] # The oldest feedback, must be done.
-        if isinstance(fb, asyncio.Future) and not fb.done():
-            await fb
-        elif callable(fb): # pragma: no cover
-            while True:
-                r = fb()
-                if r is not False:
-                    self._prev_fb[0][0] = r
-                    return
-                await asyncio.sleep(.003)
+        try:
+            while len(self._prev_fb):
+                feedback, callbacks, cell_shape, part_size, cell_count, cell_size = self._prev_fb[0]
+                if isinstance(feedback, asyncio.Future):
+                    if not feedback.done(): break
+                    feedback = feedback.result()
+                else:
+                    if callable(feedback):
+                        feedback = feedback()
+                    if feedback is False: break # Respond in-order, waiting if `False`.
+                assert feedback is None or isinstance(feedback, np.ndarray)
+                if feedback is not None:
+                    assert len(feedback.shape) == 2 and feedback.shape[0] == cell_count and feedback.shape[1] == cell_size
+                self._prev_fb.pop(0)
+                _feedback(callbacks, feedback, cell_shape, part_size)
+        except:
+            self.discard()
+            raise
+        if max_simultaneous_steps is None:
+            return self._take_data()
+        else:
+            return self._wait_then_take_data(max_simultaneous_steps)
+    # TODO: Maybe take this opportunity to have `.commit()`?
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
@@ -299,6 +286,44 @@ class Handler:
             self._data_error.clear()
             self._query_error.clear()
             self._next_fb.clear()
+    def _take_data(self):
+        """Gather data, queries, and their errors, and return them."""
+        L1, L2 = self.cell_size, self.cell_size - (self.cell_shape[-1] if len(self.cell_shape) else 0)
+        data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, L1))
+        query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, L2))
+        data_error = _concat_error(self._data, self._data_error, L1)
+        query_error = _concat_error(self._query, self._query_error, L2)
+        self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size, query.shape[0], self.cell_size])
+        self._next_fb = []
+        self.discard()
+        return (data, query, data_error, query_error)
+    async def _wait_then_take_data(self, max_simultaneous_steps = 16):
+        """
+        Limits how many steps can be done at once, yielding if necessary (if no data and no queries, or if it's been too long since the last yield).
+
+        Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
+        """
+        # TODO: ...Re-run all tests while measuring coverage, *again*...
+        assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
+        if not len(self._data) and not len(self._query):
+            self._wait_for_requests = asyncio.Future()
+            await self._wait_for_requests
+        self.n += 1
+        if self.n >= max_simultaneous_steps: self.n = 0
+        if self.n == 0:
+            await asyncio.sleep(0)
+        if len(self._prev_fb) <= max_simultaneous_steps: return self._take_data()
+        fb = self._prev_fb[0][0] # The oldest feedback, must be done.
+        if isinstance(fb, asyncio.Future) and not fb.done():
+            await fb
+            return self._take_data()
+        elif callable(fb): # pragma: no cover
+            while True:
+                r = fb()
+                if r is not False:
+                    self._prev_fb[0][0] = r
+                    return self._take_data()
+                await asyncio.sleep(.003)
 
 
 
@@ -529,8 +554,6 @@ def handle(*k, **kw):
     return default.handle(*k, **kw)
 def discard(*k, **kw):
     return default.discard(*k, **kw)
-def wait(*k, **kw):
-    return default.wait(*k, **kw)
 shape.__doc__ = Handler.shape.__doc__
 data.__doc__ = Handler.data.__doc__
 query.__doc__ = Handler.query.__doc__
@@ -538,4 +561,3 @@ pipe.__doc__ = Handler.pipe.__doc__
 get.__doc__ = Handler.get.__doc__
 handle.__doc__ = Handler.handle.__doc__
 discard.__doc__ = Handler.discard.__doc__
-wait.__doc__ = Handler.wait.__doc__

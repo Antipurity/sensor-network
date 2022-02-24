@@ -44,16 +44,16 @@ import time
 def test0():
     """No shape, so no handling."""
     h = sn.Handler()
-    assert h.handle()[0].shape == (0,0)
+    assert h.handle(None, None)[0].shape == (0,0)
     h.data('a', data=np.array([1.]))
     h.query('b', query=1, callback=lambda fb: ...)
     h.query('c', query=1)
-    assert h.handle()[0].shape == (0,0)
+    assert h.handle(None, None)[0].shape == (0,0)
 def test1():
     """Already-named data, and transmission error."""
     h = sn.Handler((8, 24, 64), 8)
     h.data(data = np.zeros((3, 96)), error = np.full((3, 96), -.7))
-    data, query, data_error, query_error = h.handle()
+    data, query, data_error, query_error = h.handle(None, None)
     assert (data == np.zeros((3, 96))).all()
     assert (query == np.zeros((0, 32))).all()
     assert (data_error == np.full((3, 96), -.7)).all()
@@ -64,15 +64,15 @@ def test2():
     h.data(name=('test',), data=np.array([-.4, -.2, .2, .4]))
     h.data(name=('test', -.2, .2, lambda start,end,total: start/total*2-1), data=np.array([-.4, -.2, .2, .4]))
     h.data(name=(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), data=np.array([-.4, -.2, .2, .4]))
-    data, query, *_ = h.handle()
+    data, query, *_ = h.handle(None, None)
     assert data.shape == (3, 96)
 def test3():
     """Named error."""
     h = sn.Handler((8, 24, 64), 8)
     def yes_feedback(fb, *_): assert fb is not None
     h.query(name=('test',), query=16, callback=yes_feedback)
-    h.handle()
-    h.handle(np.zeros((1, 96)))
+    h.handle(None, None)
+    h.handle(np.zeros((1, 96)), None)
 def test4():
     """Name's error."""
     h = sn.Handler((8, 24, 64), 8)
@@ -86,20 +86,20 @@ def test5():
     def eh_feedback(fb, *_): assert fb is not None
     h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
     h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
-    assert h.handle()[1].shape == (2, 32)
-    h.handle(np.zeros((2, 96)))
+    assert h.handle(None, None)[1].shape == (2, 32)
+    h.handle(np.zeros((2, 96)), None)
 def test6():
     """Errors thrown by `callback` are re-thrown."""
     h = sn.Handler((8, 24, 64), 8)
     def err1(*_): raise KeyboardInterrupt()
     def err2(*_): raise TypeError('damn')
     h.query(name='death', query=1, callback=err1)
-    assert h.handle()[1].shape == (1, 32)
-    try: h.handle(); assert False
+    assert h.handle(None, None)[1].shape == (1, 32)
+    try: h.handle(None, None); assert False
     except KeyboardInterrupt: pass
     h.query(query=np.zeros((5, 32)), error=np.full((5, 32), -.5), callback=err2)
-    assert h.handle()[1].shape == (5, 32)
-    try: h.handle(); assert False
+    assert h.handle(None, None)[1].shape == (5, 32)
+    try: h.handle(None, None); assert False
     except TypeError: pass
 def test7():
     """Non-1D data and feedback."""
@@ -108,9 +108,9 @@ def test7():
     def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
     h.data(name=('test',), data=np.zeros((2,3,4)), error=np.full((2,3,4), -.4))
     h.query(name=('test',), query=(2,3,4), callback=yes_feedback)
-    data, query, *_ = h.handle()
+    data, query, *_ = h.handle(None, None)
     assert data.shape == (1,96) and query.shape == (1,32)
-    h.handle(np.zeros((1,96)))
+    h.handle(np.zeros((1,96)), None)
     assert got
 def test8():
     """Async operations."""
@@ -138,12 +138,10 @@ def test8():
         asyncio.ensure_future(request_data(sn, True))
         fb = None
         while finished < 6:
-            await sn.wait(16)
             sn.data(name='bees', data=np.zeros((16,)))
-            fb = give_feedback_later(*sn.handle(fb))
+            fb = give_feedback_later(*(await sn.handle(fb)))
         await asyncio.sleep(.1)
         await fb # To silence a warning.
-        await sn.wait(1) # For test coverage.
         sn.discard()
     asyncio.run(main())
 async def test9():
@@ -151,9 +149,9 @@ async def test9():
     sn.shape((8, 24, 64), 8)
     shape1, shape2 = (13,96), (13,32)
     fut = sn.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
-    data, query, *_ = sn.handle()
+    data, query, *_ = sn.handle(None, None)
     assert data.shape == shape1 and query.shape == shape2
-    sn.handle(np.zeros(shape1))
+    sn.handle(np.zeros(shape1), None)
     assert (await fut).shape == shape1
     sn.discard()
 def test10():
@@ -171,18 +169,18 @@ def test10():
 def test11():
     """Low-level functions as substitutes for `asyncio.Future`s."""
     h = sn.Handler((8, 24, 64), 8)
-    h.handle()
+    h.handle(None, None)
     n, got = 0, False
     def feedback():
         nonlocal n, got;  n += 1
         if n == 4: got = True
         return got and np.zeros((0, 96))
     h.data(None, np.zeros((2, 96)))
-    h.handle(feedback)
-    h.handle()
-    h.handle()
+    h.handle(feedback, None)
+    h.handle(None, None)
+    h.handle(None, None)
     assert not got
-    h.handle()
+    h.handle(None, None)
     assert got
 test0()
 test1()
@@ -212,11 +210,10 @@ async def benchmark(N=64*10):
     start, duration = time.monotonic(), 10.
     name = sn.Namer('benchmark')
     while time.monotonic() - start < duration:
-        await h.wait()
         h.data(name, data=send_data)
         # asyncio.ensure_future(await_feedback(h.query(name, 64))) # 15% slowdown.
         h.query(name, 64, callback=check_feedback)
-        data, query, data_error, query_error = h.handle(feedback)
+        data, query, data_error, query_error = await h.handle(feedback)
         feedback = np.full((query.shape[0], data.shape[1]), .2) if data is not None else None
         iterations += 1
     h.discard()
