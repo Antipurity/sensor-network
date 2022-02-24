@@ -102,8 +102,7 @@ feedback = None
 async def main():
     global state, feedback
     while True:
-        await asyncio.sleep(.1) # TODO: ...The heck's going on with not calling agents...
-        #   TODO: ...Okay, then, we know that the handler is not starving agents for resources, then... What's going on?...
+        await asyncio.sleep(.1) # TODO: Uncomment. It serves no purpose now, other than going slower.
         data, query, data_error, query_error = await sn.handle(feedback)
         print(data.shape[0], query.shape[0], ' ', len(sn.default._prev_fb)) # TODO:
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
@@ -114,6 +113,7 @@ async def main():
         # print('explored', str(minienv.explored()*100)+'%') # TODO:
         # TODO: Okay. Now. Why is exploration at exactly 1 node literally all the time?
         #   TODO: Does a random agent achieve any exploration? Do world-resets happen every single time? (Because if random can't do anything, then we should probably make `sn` not do any fractal filling on data, and rely on users to do anything. ...Which is probably a good idea anyway, to minimize user surprise; if users need more precision, they can implement any folding themselves.)
+        # ...I'm seeing very little actual diversity between steps. Maybe we really should maximize sensitivity of futures to observed outputs?
 asyncio.run(main())
 # TODO: Run & test. Try to make it work, at least via trying different normalization schemes.
 

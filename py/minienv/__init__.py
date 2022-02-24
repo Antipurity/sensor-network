@@ -114,7 +114,7 @@ def agent(sn, at=..., resource=1., hunger=False):
             _, at, resource, hunger = agents[name]
             neighbors, at_name_vec, at_resource, at_visited = nodes[at]
             # Keep track of exploration.
-            print('agent tick', name, at) # TODO: Why so rare?
+            print('agent tick', name, at, len(neighbors), 'neighbors') # TODO:
             if not at_visited:
                 nodes[at][3] = True
                 metrics['explored'] += 1
@@ -127,9 +127,7 @@ def agent(sn, at=..., resource=1., hunger=False):
             reward = 0.
             # Receive actions.
             actions = 4
-            print('  agent pre-act', name) # TODO:
             act = await sn.query(name=(name, at, 'act'), query = options['node_name_size'] + actions)
-            print('  agent post-act', name) # TODO:
             if act is None: continue # Re-send observations on dropped packets.
             data, acts = act[:-actions], act[-actions:]
             # Bleed onto a random node. Die if unfortunate.
@@ -157,22 +155,21 @@ def agent(sn, at=..., resource=1., hunger=False):
                 print('    agent forked at', at) # TODO:
             # Goto neighbor.
             if acts[2]>0 and len(neighbors):
-                nearest_neighbor_i = np.argmin(np.sum(np.abs(data - np.concatenate([nodes[ng][1] for ng in neighbors], 0)))) # TODO: ...Why is it now complaining that "operands could not be broadcast together with shapes (16,) (32,)"...
+                diffs = data - np.stack([nodes[ng][1] for ng in neighbors])
+                nearest_neighbor_i = np.argmin(np.sum(np.abs(diffs), -1))
                 at = neighbors[nearest_neighbor_i]
-                agents[name][1]
-                print('    agent nearest neighbor is', nearest_neighbor_i, at) # TODO:
+                agents[name][1] = at
+                print('    agent nearest neighbor is', nearest_neighbor_i, 'from', len(neighbors), 'at', at) # TODO: ...Why does the starting node seemingly only have one nearest neighbor. What is this? (...Or maybe it's some node that is reachable from the start?)
+                #   TODO: ...Maybe, try printing the tree, starting from the starting node?...
             # Un-fork.
             if acts[3]>0 and options['allow_suicide']:
-                print('    agent', name, 'UNFORKED, now have', len(agents.keys())-1) # TODO: ...Why do we seemingly continue after unforking a last agent? ...Or after another action... Without the 'agent EXITED' notification, and without ever getting past the "agent pre-act" phase (so, maybe futures are getting swallowed or something?)...
-                #   TODO: ...But we've also seen post-act being OK, but nothing afterwards...
-                #   TODO: ...We've also seen stalling after successfully unforking the last agent. What? ...Maybe, the handler expects data, but we only provide data in the sensor, which no longer even provides data apart from creating agents...
+                print('    agent', name, 'UNFORKED') # TODO:
                 nodes[at][2] += resource
                 del agents[name]
                 break
-        print('agent EXITED', name, 'resetting:', not agents) # TODO:
         if not agents:
             reset(**options)
-            agent(sn) # TODO: WHY DID THIS NOT SOLVE THIS COMPLETELY
+            agent(sn)
     agents[name] = [asyncio.ensure_future(loop()), at, resource, hunger]
     return name
 
@@ -232,12 +229,9 @@ def _maybe_reset_the_world(fb):
 def _top_level_actions(sn):
     if options['can_reset_the_world']:
         sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)
-    if not options['stop']:
-        print(' agents', list(agents.keys())) # TODO: Does this happen when we have no-action continuing... ...Wait, why is the 'unforked' agent of a different name than remaining agents? It was never even *in* `agents`; the heck?
-        if not agents:
-            if options['please_make_an_agent']:
-                agent(sn)
-                options['please_make_an_agent'] = False
+    if not options['stop'] and not agents and options['please_make_an_agent']:
+        agent(sn)
+        options['please_make_an_agent'] = False
 
 
 
