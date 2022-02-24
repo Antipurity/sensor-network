@@ -115,6 +115,7 @@ def agent(sn, at=..., resource=1., hunger=False):
             _, at, resource, hunger = agents[name]
             neighbors, at_name_vec, at_resource, at_visited = nodes[at]
             # Keep track of exploration.
+            print('agent tick', name, at) # TODO: ...Why are there no ticks...
             if not at_visited:
                 nodes[at][3] = True
                 metrics['explored'] += 1
@@ -210,7 +211,6 @@ def _create_nodes(start_id):
 
 
 def _maybe_reset_the_world(fb):
-    # TODO: Do we have any agents deployed?
     if fb is not None and (fb[0] > 0).all():
         print('world resets', fb is not None and fb[0]) # TODO:
         reset()
@@ -222,11 +222,9 @@ def _top_level_actions(sn):
     if not options['stop']:
         if not agents:
             if options['please_make_an_agent']:
-                print('DEPLOYED') # TODO:
                 agent(sn)
                 options['please_make_an_agent'] = False
             else: # Everyone. Dead.
-                print('DEAD') # TODO:
                 reset()
 
 
