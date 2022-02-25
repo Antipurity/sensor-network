@@ -27,7 +27,7 @@ This simple sensor-network environment consists of a few parts:
 
 Reset with `.reset(**options)` (see `.options` for what can be changed, which is quite a lot), read the desired metric with `.explored()` (0…1). Don't overfit to this metric, this is *exploration*, not *reward*.
 
-TODO: Test.
+TODO: Test & fix.
 """
 
 
@@ -80,6 +80,8 @@ default_options = {
     'allow_fork_with_resource_goal': True, # Exploration that can choose to maximize.
     'step_takes_resources': .01, # The resource is moved to a random node, so total resources are conserved.
     'resource_consumption_speed': .1,
+    # Verbose output.
+    'debug': True, # TODO:
 }
 metrics = {
     'nodes':0,
@@ -114,7 +116,6 @@ def agent(sn, at=..., resource=1., hunger=False):
             _, at, resource, hunger = agents[name]
             neighbors, at_name_vec, at_resource, at_visited = nodes[at]
             # Keep track of exploration.
-            print('agent tick', name, at, len(neighbors), 'neighbors') # TODO:
             if not at_visited:
                 nodes[at][3] = True
                 metrics['explored'] += 1
@@ -135,8 +136,9 @@ def agent(sn, at=..., resource=1., hunger=False):
             resource -= dresource
             nodes[random.choice(nodes['all'])][2] += dresource
             at_resource = nodes[at][2]
+            if options['debug']: print('agent tick', name, 'at', at[:8], 'with', len(neighbors), 'neighbors')
             if resource <= 0:
-                print('agent DIED', name) # TODO:
+                if options['debug']: print('agent DIED', name)
                 del agents[name]
                 break
             agents[name][2] = resource
@@ -146,24 +148,24 @@ def agent(sn, at=..., resource=1., hunger=False):
                 resource += dresource;  agents[name][2] = resource
                 at_resource -= dresource;  nodes[at][2] = at_resource
                 if hunger: reward = dresource
-                print('    agent drew resources at', at) # TODO:
+                if options['debug']: print('    agent drew resources at', at[:8])
             # Fork. (Casually, as if you see action-space-alteration in RL often.)
             if acts[1]>0 and len(agents.keys()) < options['max_agents']:
                 ours = .5
                 agent(sn, at, resource*(1-ours), options['allow_fork_with_resource_goal'] and data[0]>0)
                 resource *= ours;  agents[name][2] = resource
-                print('    agent forked at', at) # TODO:
+                if options['debug']: print('    agent forked at', at[:8])
             # Goto neighbor.
             if acts[2]>0 and len(neighbors):
                 diffs = data - np.stack([nodes[ng][1] for ng in neighbors])
                 nearest_neighbor_i = np.argmin(np.sum(np.abs(diffs), -1))
+                prev_at = at
                 at = neighbors[nearest_neighbor_i]
                 agents[name][1] = at
-                print('    agent nearest neighbor is', nearest_neighbor_i, 'from', len(neighbors), 'at', at) # TODO: ...Why does the starting node seemingly only have one nearest neighbor. What is this? (...Or maybe it's some node that is reachable from the start?)
-                #   TODO: ...Maybe, try printing the tree, starting from the starting node?...
+                if options['debug']: print('    agent goes to neighbor', prev_at[:8], '→', at[:8], '('+str(nearest_neighbor_i)+'/'+str(len(neighbors))+')')
             # Un-fork.
             if acts[3]>0 and options['allow_suicide']:
-                print('    agent', name, 'UNFORKED') # TODO:
+                if options['debug']: print('    agent UNFORKED')
                 nodes[at][2] += resource
                 del agents[name]
                 break
@@ -184,6 +186,7 @@ def _create_nodes(start_id):
     prob = random.random
     def new_node(parent_id, id = None):
         if id is None: id = _random_name()
+        if parent_id is not None: nodes[parent_id][0].append(id) # Parents know about children.
         neighbors = []
         if prob() < options['loopback_to_start_probability']: neighbors.append(start_id)
         if prob() < options['loopback_to_parent_probability'] and parent_id is not None:
@@ -217,15 +220,25 @@ def _create_nodes(start_id):
         for _ in range(children): new_node(id)
     # Note: we're cutting off at `max_nodes`, so there's a chance for some nodes to have no neighbors and be inescapable black holes.
     #   It's a feature, since this gives a reason for forking to exist.
+def _reachable(*node_names): # TODO: Since we're now sure that it's 100%, could just not use this, right?
+    stack, visited = list(node_names), set(node_names)
+    while len(stack):
+        name = stack.pop()
+        neighbors = nodes[name][0]
+        for ng in neighbors:
+            if ng not in visited:
+                stack.append(ng)
+                visited.add(ng)
+    return len(visited) / len(nodes['all'])
 
 
 
 def _maybe_reset_the_world(fb):
     if fb is not None and (fb[0] > 0).all():
-        print('world resets', fb is not None and fb[0]) # TODO:
+        if options['debug']: print('world resets', fb is not None and fb[0])
         reset()
     else:
-        print('world continues', fb is not None and fb[0], 'agents', list(agents.keys())) # TODO: ...Why was feedback literally `False` at one point...? Is this experience repeatable?
+        if options['debug']: print('world continues', fb is not None and fb[0], 'agents', list(agents.keys()))
 def _top_level_actions(sn):
     if options['can_reset_the_world']:
         sn.query(name=('world', 'reset'), query=sn.cell_shape[-1], callback=_maybe_reset_the_world)

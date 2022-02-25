@@ -53,32 +53,38 @@ embed_query = nn.Sequential( # query → state (to concat at the end)
         nn.Linear(hidden_sz, sum(cell_shape)),
     ),
 ).to(device)
+def f(in_sz = hidden_sz, out_sz = hidden_sz):
+    return SkipConnection(
+        nn.LayerNorm(in_sz),
+        nn.ReLU(),
+        nn.Linear(in_sz, out_sz),
+    )
 def h(in_sz = hidden_sz, out_sz = hidden_sz):
     return SkipConnection(
         SelfAttention(embed_dim=in_sz, num_heads=2),
-        nn.ReLU(),
-        nn.LayerNorm(in_sz),
-        nn.Linear(in_sz, out_sz),
-        nn.ReLU(),
+        f(in_sz, out_sz),
         nn.LayerNorm(out_sz),
+        nn.ReLU(),
     )
+incorporate_input = h(sum(cell_shape), sum(cell_shape)).to(device)
 state_transition = nn.Sequential( # state → state; RNN.
     h(sum(cell_shape), sum(cell_shape)),
     h(sum(cell_shape), sum(cell_shape)),
 ).to(device)
 state_future = nn.Sequential( # state → future; BYOL projector.
-    h(sum(cell_shape)),
-    h(),
-    h(),
+    f(sum(cell_shape)),
+    f(),
+    f(),
 ).to(device)
 slow_state_future = MomentumCopy(state_future)
 future_transition = nn.Sequential( # future → future; BYOL predictor.
-    h(),
-    h(),
+    f(),
+    f(),
 ).to(device)
 optimizer = torch.optim.Adam([
     *embed_data.parameters(),
     *embed_query.parameters(),
+    *incorporate_input.parameters(),
     *state_transition.parameters(),
     *state_future.parameters(),
     *future_transition.parameters(),
@@ -86,6 +92,7 @@ optimizer = torch.optim.Adam([
 def loss(prev_state, next_state):
     A = future_transition(state_future(prev_state))
     B = slow_state_future(next_state.detach())
+    # TODO: Normalize both across dimension 0 (so cells have diverse futures). DON'T LayerNorm.
     return (A - B).square().sum()
 model = RNN(
     transition = state_transition,
@@ -102,12 +109,15 @@ feedback = None
 async def main():
     global state, feedback
     while True:
-        await asyncio.sleep(.1) # TODO: Uncomment. It serves no purpose now, other than going slower.
+        # (Might want to also split data/query into multiple RNN updates if we have too much data.)
+        #   (Let the RNN learn the time dynamics, a Transformer is more of a reach-extension mechanism.)
+        await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower.
         data, query, data_error, query_error = await sn.handle(feedback)
         print(data.shape[0], query.shape[0], ' ', len(sn.default._prev_fb)) # TODO:
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
+        state = incorporate_input(state)
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         # print('explored', str(minienv.explored()*100)+'%') # TODO:
