@@ -512,8 +512,8 @@ def _concat_error(main, error, length):
 
 def torch(torch, tensor, awaitable=False): # pragma: no cover
     """PyTorch integration, providing GPU→CPU async transfer, usable as `await sn.torch(torch, x, True)` or `sn.handle(sn.torch(torch, x))`. (Since PyTorch doesn't make this easy.)"""
-    if not tensor.is_cuda:
-        tensor = tensor.detach().numpy()
+    if not tensor.is_cuda or not isinstance(tensor, torch.Tensor):
+        tensor = tensor.detach().numpy() if isinstance(tensor, torch.Tensor) else tensor
         if not awaitable:
             return tensor
         else:

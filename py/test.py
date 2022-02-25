@@ -90,10 +90,12 @@ optimizer = torch.optim.Adam([
     *future_transition.parameters(),
 ], lr=1e-4)
 def loss(prev_state, next_state):
+    global loss_was
     A = future_transition(state_future(prev_state))
     B = slow_state_future(next_state.detach())
     # TODO: Normalize both across dimension 0 (so cells have diverse futures). DON'T LayerNorm.
-    return (A - B).square().sum()
+    loss_was = (A - B).square().sum()
+    return loss_was
 model = RNN(
     transition = state_transition,
     loss = loss,
@@ -106,6 +108,10 @@ model = RNN(
 state = torch.randn(16, sum(cell_shape), device=device)
 max_state_cells = 1024
 feedback = None
+loss_was = 0.
+async def print_loss(data_len, query_len, explored, loss):
+    loss = await sn.torch(torch, loss, True)
+    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(round(explored*100, 2)).rjust(5)+'%', '  L2', str(loss))
 async def main():
     global state, feedback
     while True:
@@ -119,7 +125,7 @@ async def main():
         state = incorporate_input(state)
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
-        print(str(data.shape[0]).rjust(3), str(query.shape[0]).ljust(2), 'explored', str(round(minienv.explored()*100, 2)).rjust(5)+'%') # TODO: Also print the loss.
+        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was))
         # TODO: Why is exploration mostly at .1%, sometimes at only a couple nodes? Can we make it work better?
         # ...I'm seeing very little actual diversity between steps. Maybe we really should maximize sensitivity of futures to observed outputs?
         # TODO: Compare to baselines: random agent, no-loss.
