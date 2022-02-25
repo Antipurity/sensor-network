@@ -26,8 +26,6 @@ This simple sensor-network environment consists of a few parts:
 - The world can end at each step if chosen, just to make exploration more difficult.
 
 Reset with `.reset(**options)` (see `.options` for what can be changed, which is quite a lot), read the desired metric with `.explored()` (0…1). Don't overfit to this metric, this is *exploration*, not *reward*.
-
-TODO: Test & fix.
 """
 
 
@@ -65,7 +63,7 @@ default_options = {
     # Kill-switch.
     'stop': False,
     # The graph to explore.
-    'max_nodes': 1024,
+    'max_nodes': 1000,
     'node_name_size': 16,
     'child_probabilities': {1:.7, 2:.1, 3:.1, 4:.1},
     'loopback_to_start_probability': .75,
@@ -81,7 +79,7 @@ default_options = {
     'step_takes_resources': .01, # The resource is moved to a random node, so total resources are conserved.
     'resource_consumption_speed': .1,
     # Verbose output.
-    'debug': True, # TODO:
+    'debug': False,
 }
 metrics = {
     'nodes':0,
@@ -220,7 +218,7 @@ def _create_nodes(start_id):
         for _ in range(children): new_node(id)
     # Note: we're cutting off at `max_nodes`, so there's a chance for some nodes to have no neighbors and be inescapable black holes.
     #   It's a feature, since this gives a reason for forking to exist.
-def _reachable(*node_names): # TODO: Since we're now sure that it's 100%, could just not use this, right?
+def _reachable(*node_names): # TODO: Since we're now sure that it's 100%, could just not use this, right? (Or do we want to use it for estimating max exploration from current agent positions?)
     stack, visited = list(node_names), set(node_names)
     while len(stack):
         name = stack.pop()

@@ -111,21 +111,20 @@ async def main():
     while True:
         # (Might want to also split data/query into multiple RNN updates if we have too much data.)
         #   (Let the RNN learn the time dynamics, a Transformer is more of a reach-extension mechanism.)
-        await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower.
+        await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower. (The fan hardly being active sure is nice, though.)
         data, query, data_error, query_error = await sn.handle(feedback)
-        print(data.shape[0], query.shape[0], ' ', len(sn.default._prev_fb)) # TODO:
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = incorporate_input(state)
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
-        # print('explored', str(minienv.explored()*100)+'%') # TODO:
-        # TODO: Okay. Now. Why is exploration at exactly 1 node literally all the time?
-        #   TODO: Does a random agent achieve any exploration? Do world-resets happen every single time? (Because if random can't do anything, then we should probably make `sn` not do any fractal filling on data, and rely on users to do anything. ...Which is probably a good idea anyway, to minimize user surprise; if users need more precision, they can implement any folding themselves.)
+        print(str(data.shape[0]).rjust(3), str(query.shape[0]).ljust(2), 'explored', str(round(minienv.explored()*100, 2)).rjust(5)+'%') # TODO: Also print the loss.
+        # TODO: Why is exploration mostly at .1%, sometimes at only a couple nodes? Can we make it work better?
         # ...I'm seeing very little actual diversity between steps. Maybe we really should maximize sensitivity of futures to observed outputs?
+        # TODO: Compare to baselines: random agent, no-loss.
 asyncio.run(main())
-# TODO: Run & test. Try to make it work, at least via trying different normalization schemes.
+# TODO: Try different normalization schemes.
 
 
 
