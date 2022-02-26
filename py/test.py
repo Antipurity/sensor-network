@@ -32,11 +32,14 @@ class SelfAttention(nn.Module):
         x = torch.unsqueeze(x, -2)
         y, _ = self.fn(x, x, x, need_weights=False)
         return torch.squeeze(y, -2)
+class Sum(nn.Module):
+    def __init__(self): super().__init__()
+    def forward(self, x): return x.sum(0)
 
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-hidden_sz, fut_sz = 128, 4
+hidden_sz, fut_sz = 128, 128
 embed_data = nn.Sequential( # data → state (to concat at the end)
     nn.Linear(sum(cell_shape), hidden_sz),
     SkipConnection(
@@ -72,14 +75,13 @@ state_transition = nn.Sequential( # state → state; RNN.
     h(sum(cell_shape), sum(cell_shape)),
 ).to(device)
 state_future = nn.Sequential( # state → future; BYOL projector.
-    f(sum(cell_shape), hidden_sz),
-    f(hidden_sz, hidden_sz),
-    f(hidden_sz, fut_sz),
+    h(sum(cell_shape), fut_sz),
+    Sum(),
 ).to(device)
 slow_state_future = MomentumCopy(state_future)
 future_transition = nn.Sequential( # future → future; BYOL predictor.
-    h(fut_sz, hidden_sz),
-    h(hidden_sz, fut_sz),
+    f(fut_sz, hidden_sz),
+    f(hidden_sz, fut_sz),
 ).to(device)
 optimizer = torch.optim.Adam([
     *embed_data.parameters(),
@@ -93,11 +95,8 @@ def loss(prev_state, next_state):
     global loss_was
     A = future_transition(state_future(prev_state))
     B = slow_state_future(next_state.detach())
-    # A = A - A.mean(0).unsqueeze(0) # TODO:
-    # A = A / (A.std(0).unsqueeze(0) + 1e-5)
-    # B = B - B.mean(0).unsqueeze(0)
-    # B = B / (B.std(0).unsqueeze(0) + 1e-5)
-    A = A - A.mean() # TODO:
+    slow_state_future.update()
+    A = A - A.mean()
     A = A / (A.std() + 1e-5)
     B = B - B.mean()
     B = B / (B.std() + 1e-5)
@@ -115,14 +114,9 @@ model = RNN(
 
 
 state = torch.randn(16, sum(cell_shape), device=device)
-# TODO: Have `state_goals`, kept of the same shape as `state`.
-#   ...What, they won't be updated, only pushed off? Seems very wrong...
-#   Should we also have `goal_transition` for compressing past goals?
-#     Would our objective ensure that the compression actually preserves those goals, or try to push them into irrelevancy to optimize future goals? Do we need to delay goals so that `future<state_transition> = goal = goal_transition(past_goal)` (...which wouldn't actually train `goal_transition`); or maybe train this completely separately (...but then we'd just create an identity)...
-#     ...Time and goals intertwine and cause problems here, which we're trying not to think about... (In a simple RNN, would have been much simpler...)
-# TODO: ...How to goal-condition the RNN state, exactly? Do we just put `state`+`state_goals` through an MLP at each step?
-# TODO: What about one top-level goal, from which each cell's goal emerges? Should we condition state on that, or should we condition per-cell goals on that at creation-time?
-#   (The alternative would be to make literally every data's and query's initial goal completely random, and try to compress the resulting infinite space. Is that possible/useful?)
+# TODO: Have `goal`: a vector of length fut_sz.
+# TODO: …Condition RNN state on the `goal`: concat it to each cell and put everything through an MLP…
+# TODO: …Make futures predict goals, but not with all weights, but with RNN weights…
 max_state_cells = 1024
 feedback = None
 loss_was = 0.
@@ -153,6 +147,8 @@ async def main():
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was))
 
+        # TODO: Change `goal` sometimes (10% iterations?).
+
         # import numpy as np # TODO:
         # sn.data(None, np.random.rand(1, 96)*2-1) # TODO:
         #   TODO: Instead of this, concat that noise to `data`, so that we don't get ghost steps.
@@ -168,7 +164,7 @@ asyncio.run(main())
 # TODO: That "normalization of futures will lead to exploration" seems like a big weak point. So, try (reporting avg-of-peaks exploration):
 # - ❌ Make future-nets have no attention, so every cell fends for itself. (Slightly better. Which makes no sense: post-RNN-transition cells are not in the same place, so we need attention.)
 # - Baselines:
-#     - ⋯ Random agent.
+#     - ✓ Random agent. .37%
 #     - ⋯ No-BYOL-loss agent (frozen-weights RNN).
 # - Normalization:
 #     - ❌ Cross-cell normalization.
@@ -185,14 +181,17 @@ asyncio.run(main())
 #         - Cumulative sum right before normalization?
 #         - Hierarchical downsampling, which may make more sense than cumsum?
 #         - Weight decay with long learning?
-# - ⋯ Disallow suicide?
-# - ⋯ Try to sometimes reset state to a random vector. (And/or try making `trivial_exploration_test.py` use proper RNN machinery, and see whether its exploration disappears. Is our normalization not good enough to ensure uniform sampling in a space we should care about?)
-#     - ⋯ A sensor of random data??
-# - ⋯ Try many batches at the same time, rewriting `minienv` to allow that?
-# - ⋯ Alternative losses:
-#     - ⋯ Try [Barlow twins](https://arxiv.org/pdf/2103.03230.pdf), AKA "make all futures perfectly uncorrelated". (Simpler than BYOL, but also doesn't have `future_transition` unless we try it.)
-#     - ⋯ If all fails, translate the "exploration = max sensitivity of future to the past" definition to code: `state.detach()` for the BYOL-loss, and to train `state`, forward-propagate its gradient to the future, and maximize the sum of its magnitudes. (Hopefully, doesn't explode.) (As a bonus, this returns us to our initial "opposing optimization forces at work" formulation. And doesn't actually contradict the BYOL-paradigm, because the BYOL paper doesn't consider gradient of inputs.)
-#         - (Need `pytorch-nightly` (or 1.11) for forward-mode gradients here, though.)
+# - ⋯ Try having only one future vector, rather than per-cell vectors; BYOL doesn't have normalization issues, so why should we? Were we failing because our BYOL impl was wrong? (What does it even mean to encode the future state of a cell rather than a system, anyway?)
+#     - (Proven to be no use by itself, but goal-directedness won't work without this.)
+# - Put off:
+#     - ⋯ Disallow suicide?
+#     - ⋯ Try to sometimes reset state to a random vector. (And/or try making `trivial_exploration_test.py` use proper RNN machinery, and see whether its exploration disappears. Is our normalization not good enough to ensure uniform sampling in a space we should care about?)
+#         - ⋯ A sensor of random data??
+#     - ⋯ Try many batches at the same time, rewriting `minienv` to allow that?
+#     - ⋯ Alternative losses:
+#         - ⋯ Try [Barlow twins](https://arxiv.org/pdf/2103.03230.pdf), AKA "make all futures perfectly uncorrelated". (Simpler than BYOL, but also doesn't have `future_transition` unless we try it.)
+#         - ⋯ If all fails, translate the "exploration = max sensitivity of future to the past" definition to code: `state.detach()` for the BYOL-loss, and to train `state`, forward-propagate its gradient to the future, and maximize the sum of its magnitudes. (Hopefully, doesn't explode.) (As a bonus, this returns us to our initial "opposing optimization forces at work" formulation. And doesn't actually contradict the BYOL-paradigm, because the BYOL paper doesn't consider gradient of inputs.)
+#             - (Need `pytorch-nightly` (or 1.11) for forward-mode gradients here, though.)
 # - ⋯ If all fails, go back to RL's "compression may be good for exploration" that we were trying to average-away by "compression is exploration": have a non-differentiable `goal` state (sized `cells×fut_sz`) on which state is conditioned, updated randomly sometimes, and make futures predict `goal` (possibly through a critic that predicts futures, to interfere with gradient less) (or `.detach()`ing BYOL-loss and making the RNN maximize goal-ness of the future).
 #     - (A much more principled way of adding noise than "just inject noise into internal state". So it's very good and should be implemented, right?)
 #     - (It's basically pretraining for RL: actual goal-maximization could be concerned with just predicting per-cell goals since they can control everything, and thus be much more efficient.)

@@ -50,14 +50,14 @@ def RNN(transition, loss, optimizer, backprop_length=64, checkpoint=True, trace=
         - (If you don't need to train it, you could just call this function function instead of `RNN`.)
     - `loss: fn(prev_state, next_state, *args) → number`: what to minimize via `.backward()`.
         - (If doing something like next-state prediction, delay `RNN` steps by one so that the next-state is always available.)
-    - `optimizer: torch.optim.Optimizer`: updates the system. Could be wrapped in `lambda p: torch.optim.SGD(p, lr=1e-2)`.
+    - `optimizer: torch.optim.Optimizer`: updates the system. Could be wrapped in `lambda p: torch.optim.SGD(p, lr=1e-2)`, or be `lambda p: lambda: update_weights()`.
     - `backprop_length = 64`: how many steps to backpropagate gradient through, capped off by `sum(loss).backward()`. Could be wrapped in a function such as `lambda: random.randint(1, 1024)`.
     - `checkpoint = True`: if `False`, no [checkpointing](https://pytorch.org/docs/stable/checkpoint.html): computation is fast, but used memory grows quickly because all intermediate activations are stored. If `True`, needs less memory, but the forward pass is done twice (so, about 30% slowdown).
     - `trace = True`: if `transition` has no CPU-side control flow, `True` to [precompile](https://pytorch.org/docs/stable/generated/torch.jit.trace.html) for a bit of speed.
     - (Not included but could be in the future: `async_updates=True`: makes the slowdown-spike of `loss.backward()` through many epochs disappear if `checkpoint`, at the cost of gradient-updates being slower to propagate, by having 2 or more copies of the network, where each step, one is in forward-mode and another is in backward-mode and adding its gradient to all others.)
     """
     optimizer = optimizer(transition.parameters()) if callable(optimizer) else optimizer
-    assert isinstance(optimizer, torch.optim.Optimizer)
+    assert callable(optimizer) or isinstance(optimizer, torch.optim.Optimizer)
     n, n_max = 0, 0
     total_loss = 0.
     def new_bptt(state):
@@ -68,8 +68,10 @@ def RNN(transition, loss, optimizer, backprop_length=64, checkpoint=True, trace=
         total_loss = 0.
         state = state.detach().requires_grad_(True)
         # Update.
-        optimizer.step()
-        optimizer.zero_grad(True)
+        if callable(optimizer): optimizer()
+        else:
+            optimizer.step()
+            optimizer.zero_grad(True)
         # Read params for the next BPTT.
         n, n_max = 0, backprop_length() if callable(backprop_length) else backprop_length
         assert isinstance(n_max, int)

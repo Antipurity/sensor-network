@@ -15,7 +15,7 @@ class MomentumCopy(nn.Module):
 
     A version of the `module` that is updated slowly, by making its weights the exponentially-moving-average of `module`'s weights. This can help stabilize training, when used as a moving target for prediction.
 
-    (Backprop through a momentum-copy is currently not implemented.)
+    Remember to `.update()`, either at call, or near the optimizer's step.
     """
     def __init__(self, f, momentum = .999):
         import copy
@@ -26,7 +26,8 @@ class MomentumCopy(nn.Module):
         for p in self.gp: p.requires_grad_(False)
         self.momentum = momentum
     def forward(self, x):
+        return self.g(x)
+    def update(self):
         with torch.no_grad():
             for i in range(len(self.fp)):
                 self.gp[i][:] = self.gp[i] * self.momentum + (1-self.momentum) * self.fp[i]
-            return self.g(x) # Cannot backprop through it because the in-place modification above does not play nicely with that.
