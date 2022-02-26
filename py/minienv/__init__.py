@@ -46,6 +46,7 @@ def reset(**opts):
         options['please_make_an_agent'] = True
     metrics['nodes'] = len(nodes['all'])
 def explored(): return metrics['explored'] / metrics['nodes']
+def reachable(): return _reachable(*[agents[a][1] for a in agents.keys()])
 
 
 
@@ -71,7 +72,7 @@ default_options = {
     'random_connection_probability': .03,
     'avg_resource': .1, # The actual initial resource in a node is 0…avg_resource*2.
     # The top-level-action options.
-    'can_reset_the_world': False, # If checked, each step has a 50% chance of resetting the world, which only adds to exploration. # TODO: Disabled, only for testing.
+    'can_reset_the_world': True, # If checked, each step has a 50% chance of resetting the world, which only adds to exploration.
     # Agents that act on the graph.
     'max_agents': 16, # 1 to disallow forking.
     'allow_suicide': True, # Look at all this proof-of-exploration opportunity.
@@ -218,7 +219,7 @@ def _create_nodes(start_id):
         for _ in range(children): new_node(id)
     # Note: we're cutting off at `max_nodes`, so there's a chance for some nodes to have no neighbors and be inescapable black holes.
     #   It's a feature, since this gives a reason for forking to exist.
-def _reachable(*node_names): # TODO: Since we're now sure that it's 100%, could just not use this, right? (Or do we want to use it for estimating max exploration from current agent positions?)
+def _reachable(*node_names):
     stack, visited = list(node_names), set(node_names)
     while len(stack):
         name = stack.pop()
@@ -234,7 +235,7 @@ def _reachable(*node_names): # TODO: Since we're now sure that it's 100%, could 
 def _maybe_reset_the_world(fb):
     if fb is not None and (fb[0] > 0).all():
         if options['debug']: print('world resets', fb is not None and fb[0])
-        reset()
+        reset(**options)
     else:
         if options['debug']: print('world continues', fb is not None and fb[0], 'agents', list(agents.keys()))
 def _top_level_actions(sn):

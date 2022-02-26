@@ -11,13 +11,15 @@ import torch.nn as nn
 
 import sensornet as sn
 import minienv
-from model.rnn import RNN # TODO: Maybe, allow its `optimizer` to be a function.
-from model.momentum_copy import MomentumCopy # TODO: Maybe, extract its weight-update into a separate function `.update()`, and make optimizer steps perform that (so that we could backprop through this).
+from model.rnn import RNN
+from model.momentum_copy import MomentumCopy
 
 
 
 cell_shape, part_size = (8, 24, 64), 8
 sn.shape(cell_shape, part_size)
+
+minienv.reset(can_reset_the_world = False, allow_suicide = False)
 
 
 
@@ -102,6 +104,7 @@ def loss(prev_state, next_state):
     B = B / (B.std() + 1e-5)
     loss_was = (A - B).square().sum()
     # TODO: ...How to maximize agreement of the computed future (no-grad except to the RNN? through the momentum-copy, maybe?) and our (prev) goals (which we'll be giving as an extra arg)?
+    #   Maybe just minimize L2 loss (since we now have only 1 state vector)?
     return loss_was
 model = RNN(
     transition = state_transition,
@@ -121,7 +124,7 @@ max_state_cells = 1024
 feedback = None
 loss_was = 0.
 exploration_peaks = [0.]
-async def print_loss(data_len, query_len, explored, loss):
+async def print_loss(data_len, query_len, explored, loss, reachable):
     loss = await sn.torch(torch, loss, True)
     explored = round(explored*100, 2)
     if explored >= exploration_peaks[-1]: exploration_peaks[-1] = explored
@@ -129,7 +132,7 @@ async def print_loss(data_len, query_len, explored, loss):
     if len(exploration_peaks) > 2048:
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
-    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', '  L2', str(loss))
+    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss))
 async def main():
     global state, feedback
     while True:
@@ -140,12 +143,11 @@ async def main():
         data, query, data_error, query_error = await sn.handle(feedback)
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
-        # TODO: Append to `goals` too. (What, a random vector? Would goals really have time to roll out then?)
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = incorporate_input(state)
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
-        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was))
+        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was, minienv.reachable()))
 
         # TODO: Change `goal` sometimes (10% iterations?).
 
@@ -164,7 +166,7 @@ asyncio.run(main())
 # TODO: That "normalization of futures will lead to exploration" seems like a big weak point. So, try (reporting avg-of-peaks exploration):
 # - ❌ Make future-nets have no attention, so every cell fends for itself. (Slightly better. Which makes no sense: post-RNN-transition cells are not in the same place, so we need attention.)
 # - Baselines:
-#     - ✓ Random agent. .37%
+#     - ✓ Random agent. .37% (1.5% with allow_suicide=False)
 #     - ⋯ No-BYOL-loss agent (frozen-weights RNN).
 # - Normalization:
 #     - ❌ Cross-cell normalization.
@@ -192,6 +194,7 @@ asyncio.run(main())
 #         - ⋯ Try [Barlow twins](https://arxiv.org/pdf/2103.03230.pdf), AKA "make all futures perfectly uncorrelated". (Simpler than BYOL, but also doesn't have `future_transition` unless we try it.)
 #         - ⋯ If all fails, translate the "exploration = max sensitivity of future to the past" definition to code: `state.detach()` for the BYOL-loss, and to train `state`, forward-propagate its gradient to the future, and maximize the sum of its magnitudes. (Hopefully, doesn't explode.) (As a bonus, this returns us to our initial "opposing optimization forces at work" formulation. And doesn't actually contradict the BYOL-paradigm, because the BYOL paper doesn't consider gradient of inputs.)
 #             - (Need `pytorch-nightly` (or 1.11) for forward-mode gradients here, though.)
+#     - ⋯ …Add noise to prior state, to match [Mean Teacher](https://arxiv.org/pdf/1703.01780.pdf) better?…
 # - ⋯ If all fails, go back to RL's "compression may be good for exploration" that we were trying to average-away by "compression is exploration": have a non-differentiable `goal` state (sized `cells×fut_sz`) on which state is conditioned, updated randomly sometimes, and make futures predict `goal` (possibly through a critic that predicts futures, to interfere with gradient less) (or `.detach()`ing BYOL-loss and making the RNN maximize goal-ness of the future).
 #     - (A much more principled way of adding noise than "just inject noise into internal state". So it's very good and should be implemented, right?)
 #     - (It's basically pretraining for RL: actual goal-maximization could be concerned with just predicting per-cell goals since they can control everything, and thus be much more efficient.)
