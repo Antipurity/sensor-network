@@ -71,7 +71,6 @@ def h(in_sz = hidden_sz, out_sz = hidden_sz):
         SelfAttention(embed_dim=in_sz, num_heads=2),
         f(in_sz, out_sz),
     )
-incorporate_input = h(sum(cell_shape), sum(cell_shape)).to(device)
 state_transition = nn.Sequential( # state → state; RNN.
     h(sum(cell_shape), sum(cell_shape)),
     h(sum(cell_shape), sum(cell_shape)),
@@ -85,19 +84,23 @@ future_transition = nn.Sequential( # future → future; BYOL predictor.
     f(fut_sz, hidden_sz),
     f(hidden_sz, fut_sz),
 ).to(device)
-optimizer = torch.optim.Adam([
-    *embed_data.parameters(),
-    *embed_query.parameters(),
-    *incorporate_input.parameters(),
-    *state_transition.parameters(),
-    *state_future.parameters(),
-    *future_transition.parameters(),
-], lr=1e-4)
+def optimizer_stepper(p):
+    optimizer = torch.optim.Adam([
+        *embed_data.parameters(),
+        *embed_query.parameters(),
+        *state_transition.parameters(),
+        *state_future.parameters(),
+        *future_transition.parameters(),
+    ], lr=1e-4)
+    def step():
+        optimizer.step()
+        optimizer.zero_grad(True)
+        slow_state_future.update()
+    return step
 def loss(prev_state, next_state):
     global loss_was
     A = future_transition(state_future(prev_state))
     B = slow_state_future(next_state.detach())
-    slow_state_future.update()
     A = A - A.mean()
     A = A / (A.std() + 1e-5)
     B = B - B.mean()
@@ -105,21 +108,20 @@ def loss(prev_state, next_state):
     loss_was = (A - B).square().sum()
     # TODO: ...How to maximize agreement of the computed future (no-grad except to the RNN? through the momentum-copy, maybe?) and our (prev) goals (which we'll be giving as an extra arg)?
     #   Maybe just minimize L2 loss (since we now have only 1 state vector)?
+    # TODO: …Make the future predict `goal`, but not with all weights, but with RNN weights…
     return loss_was
 model = RNN(
     transition = state_transition,
     loss = loss,
-    optimizer = optimizer,
+    optimizer = optimizer_stepper,
     backprop_length = lambda: random.randint(2, 3), # TODO: (Figure out what's up with the crazy memory usage.)
-    trace = False, # TODO: (…This doesn't help reduce memory usage… False advertising? …Or is it due to the non-RNN `embed_data` and `embed_query` and `incorporate_input`, and actually, `future_transition` and `state_future` too?)
+    trace = False, # TODO: (…This doesn't help reduce memory usage… Is it due to the non-RNN `embed_data` and `embed_query`, and actually, `future_transition` and `state_future` too?)
 )
 
 
 
 state = torch.randn(16, sum(cell_shape), device=device)
-# TODO: Have `goal`: a vector of length fut_sz.
-# TODO: …Condition RNN state on the `goal`: concat it to each cell and put everything through an MLP…
-# TODO: …Make futures predict goals, but not with all weights, but with RNN weights…
+goal = torch.randn(fut_sz, device=device)
 max_state_cells = 1024
 feedback = None
 loss_was = 0.
@@ -144,7 +146,7 @@ async def main():
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
-        state = incorporate_input(state)
+        # TODO: …Condition RNN state on the `goal`: concat it to each cell and put everything through the `goal_condition(torch.cat((state, goal), 1)) → state` MLP.
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was, minienv.reachable()))
@@ -152,8 +154,7 @@ async def main():
         # TODO: Change `goal` sometimes (10% iterations?).
 
         # import numpy as np # TODO:
-        # sn.data(None, np.random.rand(1, 96)*2-1) # TODO:
-        #   TODO: Instead of this, concat that noise to `data`, so that we don't get ghost steps.
+        # sn.data(None, np.random.rand(1, 96)*2-1) # TODO: Instead of this, concat that noise to `data`, so that we don't get ghost steps.
 asyncio.run(main())
 
 
@@ -197,5 +198,5 @@ asyncio.run(main())
 #     - ⋯ …Add noise to prior state, to match [Mean Teacher](https://arxiv.org/pdf/1703.01780.pdf) better?…
 # - ⋯ If all fails, go back to RL's "compression may be good for exploration" that we were trying to average-away by "compression is exploration": have a non-differentiable `goal` state (sized `cells×fut_sz`) on which state is conditioned, updated randomly sometimes, and make futures predict `goal` (possibly through a critic that predicts futures, to interfere with gradient less) (or `.detach()`ing BYOL-loss and making the RNN maximize goal-ness of the future).
 #     - (A much more principled way of adding noise than "just inject noise into internal state". So it's very good and should be implemented, right?)
-#     - (It's basically pretraining for RL: actual goal-maximization could be concerned with just predicting per-cell goals since they can control everything, and thus be much more efficient.)
+#     - (It's basically pretraining for RL: actual goal-maximization could be concerned with just predicting per-cell goals since they can control everything, and thus be much more efficient.) (Very similar to [RIG in visual RL](https://arxiv.org/pdf/1807.04742.pdf), but with BYOL instead of VAE, and with memory, and without reward.)
 #     - (If only that works, then we can think about 1> simplification and 2> trying to achieve exponentially-many goals in linear time.)
