@@ -11,8 +11,8 @@ import torch.nn as nn
 
 import sensornet as sn
 import minienv
-from model.rnn import RNN
-from model.momentum_copy import MomentumCopy
+from model.rnn import RNN # TODO: Maybe, allow its `optimizer` to be a function.
+from model.momentum_copy import MomentumCopy # TODO: Maybe, extract its weight-update into a separate function `.update()`, and make optimizer steps perform that (so that we could backprop through this).
 
 
 
@@ -78,8 +78,8 @@ state_future = nn.Sequential( # state → future; BYOL projector.
 ).to(device)
 slow_state_future = MomentumCopy(state_future)
 future_transition = nn.Sequential( # future → future; BYOL predictor.
-    f(fut_sz, hidden_sz),
-    f(hidden_sz, fut_sz),
+    h(fut_sz, hidden_sz),
+    h(hidden_sz, fut_sz),
 ).to(device)
 optimizer = torch.optim.Adam([
     *embed_data.parameters(),
@@ -102,6 +102,7 @@ def loss(prev_state, next_state):
     B = B - B.mean()
     B = B / (B.std() + 1e-5)
     loss_was = (A - B).square().sum()
+    # TODO: ...How to maximize agreement of the computed future (no-grad except to the RNN? through the momentum-copy, maybe?) and our (prev) goals (which we'll be giving as an extra arg)?
     return loss_was
 model = RNN(
     transition = state_transition,
@@ -114,6 +115,14 @@ model = RNN(
 
 
 state = torch.randn(16, sum(cell_shape), device=device)
+# TODO: Have `state_goals`, kept of the same shape as `state`.
+#   ...What, they won't be updated, only pushed off? Seems very wrong...
+#   Should we also have `goal_transition` for compressing past goals?
+#     Would our objective ensure that the compression actually preserves those goals, or try to push them into irrelevancy to optimize future goals? Do we need to delay goals so that `future<state_transition> = goal = goal_transition(past_goal)` (...which wouldn't actually train `goal_transition`); or maybe train this completely separately (...but then we'd just create an identity)...
+#     ...Time and goals intertwine and cause problems here, which we're trying not to think about... (In a simple RNN, would have been much simpler...)
+# TODO: ...How to goal-condition the RNN state, exactly? Do we just put `state`+`state_goals` through an MLP at each step?
+# TODO: What about one top-level goal, from which each cell's goal emerges? Should we condition state on that, or should we condition per-cell goals on that at creation-time?
+#   (The alternative would be to make literally every data's and query's initial goal completely random, and try to compress the resulting infinite space. Is that possible/useful?)
 max_state_cells = 1024
 feedback = None
 loss_was = 0.
@@ -132,10 +141,12 @@ async def main():
     while True:
         # (Might want to also split data/query into multiple RNN updates if we have too much data.)
         #   (Let the RNN learn the time dynamics, a Transformer is more of a reach-extension mechanism.)
+        # (Might also want to do proper GPT-style pre-training, predicting shifted-by-1-to-the-left input, or ensuring that resulting representations stay the same.)
         await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower. (The fan hardly being active sure is nice, though.)
         data, query, data_error, query_error = await sn.handle(feedback)
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
+        # TODO: Append to `goals` too. (What, a random vector? Would goals really have time to roll out then?)
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
         state = incorporate_input(state)
         state = model(state)
@@ -155,7 +166,7 @@ asyncio.run(main())
 
 
 # TODO: That "normalization of futures will lead to exploration" seems like a big weak point. So, try (reporting avg-of-peaks exploration):
-# - ✓ Make future-nets have no attention, so every cell fends for itself. (Slightly better.)
+# - ❌ Make future-nets have no attention, so every cell fends for itself. (Slightly better. Which makes no sense: post-RNN-transition cells are not in the same place, so we need attention.)
 # - Baselines:
 #     - ⋯ Random agent.
 #     - ⋯ No-BYOL-loss agent (frozen-weights RNN).
