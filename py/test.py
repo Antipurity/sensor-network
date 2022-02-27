@@ -71,6 +71,7 @@ def h(in_sz = hidden_sz, out_sz = hidden_sz):
         SelfAttention(embed_dim=in_sz, num_heads=2),
         f(in_sz, out_sz),
     )
+condition_state_on_goal = f(sum(cell_shape) + fut_sz, sum(cell_shape))
 state_transition = nn.Sequential( # state → state; RNN.
     h(sum(cell_shape), sum(cell_shape)),
     h(sum(cell_shape), sum(cell_shape)),
@@ -88,6 +89,7 @@ def optimizer_stepper(p):
     optimizer = torch.optim.Adam([
         *embed_data.parameters(),
         *embed_query.parameters(),
+        *condition_state_on_goal.parameters(),
         *state_transition.parameters(),
         *state_future.parameters(),
         *future_transition.parameters(),
@@ -99,16 +101,19 @@ def optimizer_stepper(p):
     return step
 def loss(prev_state, next_state):
     global loss_was
+    eps = 1e-5
+    # BYOL loss: `predictor(projector(state1)) = sg(projector(state2))`
     A = future_transition(state_future(prev_state))
-    B = slow_state_future(next_state.detach())
-    A = A - A.mean()
-    A = A / (A.std() + 1e-5)
-    B = B - B.mean()
-    B = B / (B.std() + 1e-5)
+    A = (A - A.mean()) / (A.std() + eps)
+    with torch.no_grad():
+        B = slow_state_future(next_state.detach())
+        B = (B - B.mean()) / (B.std() + eps)
     loss_was = (A - B).square().sum()
-    # TODO: ...How to maximize agreement of the computed future (no-grad except to the RNN? through the momentum-copy, maybe?) and our (prev) goals (which we'll be giving as an extra arg)?
-    #   Maybe just minimize L2 loss (since we now have only 1 state vector)?
-    # TODO: …Make the future predict `goal`, but not with all weights, but with RNN weights…
+    # Exploration loss: `projector<RNN>(state) = goal`
+    C = slow_state_future(next_state)
+    C = (C - C.mean()) / (C.std() + eps)
+    D = (goal - goal.mean()) / (goal.std() + eps)
+    loss_was = loss_was + 1. * (C - D).square().sum() # (…Might want to experiment with the coefficient.)
     return loss_was
 model = RNN(
     transition = state_transition,
@@ -121,7 +126,7 @@ model = RNN(
 
 
 state = torch.randn(16, sum(cell_shape), device=device)
-goal = torch.randn(fut_sz, device=device)
+goal = torch.randn(fut_sz, device=device) # The RNN will try to make BYOL state match this.
 max_state_cells = 1024
 feedback = None
 loss_was = 0.
@@ -138,20 +143,22 @@ async def print_loss(data_len, query_len, explored, loss, reachable):
 async def main():
     global state, feedback
     while True:
-        # (Might want to also split data/query into multiple RNN updates if we have too much data.)
+        # (…Might want to also split data/query into multiple RNN updates if we have too much data.)
         #   (Let the RNN learn the time dynamics, a Transformer is more of a reach-extension mechanism.)
-        # (Might also want to do proper GPT-style pre-training, predicting shifted-by-1-to-the-left input, or ensuring that resulting representations stay the same.)
+        # (…Might also want to do proper GPT-style pre-training, predicting shifted-by-1-to-the-left input, or ensuring that resulting representations stay the same.)
         await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower. (The fan hardly being active sure is nice, though.)
         data, query, data_error, query_error = await sn.handle(feedback)
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
-        # TODO: …Condition RNN state on the `goal`: concat it to each cell and put everything through the `goal_condition(torch.cat((state, goal), 1)) → state` MLP.
+        state = condition_state_on_goal(torch.cat((state, goal.unsqueeze(0)), 1))
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was, minienv.reachable()))
 
-        # TODO: Change `goal` sometimes (10% iterations?).
+        # Change the goal sometimes.
+        if random.randint(1, 10) == 0:
+            goal = torch.randn(fut_sz, device=device)
 
         # import numpy as np # TODO:
         # sn.data(None, np.random.rand(1, 96)*2-1) # TODO: Instead of this, concat that noise to `data`, so that we don't get ghost steps.
@@ -184,8 +191,8 @@ asyncio.run(main())
 #         - Cumulative sum right before normalization?
 #         - Hierarchical downsampling, which may make more sense than cumsum?
 #         - Weight decay with long learning?
-# - ⋯ Try having only one future vector, rather than per-cell vectors; BYOL doesn't have normalization issues, so why should we? Were we failing because our BYOL impl was wrong? (What does it even mean to encode the future state of a cell rather than a system, anyway?)
-#     - (Proven to be no use by itself, but goal-directedness won't work without this.)
+# - ✓ Try having only one future vector, rather than per-cell vectors; BYOL doesn't have normalization issues, so why should we? Were we failing because our BYOL impl was wrong? (What does it even mean to encode the future state of a cell rather than a system, anyway?)
+#     - (Proven to be no use by itself, but goal-directedness won't work without this. No one will miss the previous version which was not any better than random chance.)
 # - Put off:
 #     - ⋯ Disallow suicide?
 #     - ⋯ Try to sometimes reset state to a random vector. (And/or try making `trivial_exploration_test.py` use proper RNN machinery, and see whether its exploration disappears. Is our normalization not good enough to ensure uniform sampling in a space we should care about?)
