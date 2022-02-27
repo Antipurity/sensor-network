@@ -71,7 +71,7 @@ def h(in_sz = hidden_sz, out_sz = hidden_sz):
         SelfAttention(embed_dim=in_sz, num_heads=2),
         f(in_sz, out_sz),
     )
-condition_state_on_goal = f(sum(cell_shape) + fut_sz, sum(cell_shape))
+condition_state_on_goal = f(sum(cell_shape) + fut_sz, sum(cell_shape)).to(device)
 state_transition = nn.Sequential( # state → state; RNN.
     h(sum(cell_shape), sum(cell_shape)),
     h(sum(cell_shape), sum(cell_shape)),
@@ -125,9 +125,9 @@ model = RNN(
 
 
 
+max_state_cells = 1024
 state = torch.randn(16, sum(cell_shape), device=device)
 goal = torch.randn(fut_sz, device=device) # The RNN will try to make BYOL state match this.
-max_state_cells = 1024
 feedback = None
 loss_was = 0.
 exploration_peaks = [0.]
@@ -141,7 +141,7 @@ async def print_loss(data_len, query_len, explored, loss, reachable):
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
     print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss))
 async def main():
-    global state, feedback
+    global state, goal, feedback
     while True:
         # (…Might want to also split data/query into multiple RNN updates if we have too much data.)
         #   (Let the RNN learn the time dynamics, a Transformer is more of a reach-extension mechanism.)
@@ -151,13 +151,13 @@ async def main():
         data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
-        state = condition_state_on_goal(torch.cat((state, goal.unsqueeze(0)), 1))
+        state = condition_state_on_goal(torch.cat((state, goal.unsqueeze(0).expand(state.shape[0], goal.shape[-1])), 1))
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was, minienv.reachable()))
 
         # Change the goal sometimes.
-        if random.randint(1, 10) == 0:
+        if random.randint(1, 10) == 1:
             goal = torch.randn(fut_sz, device=device)
 
         # import numpy as np # TODO:
