@@ -1,5 +1,9 @@
 """
 Testing how far we can push "compression = exploration", where we try to make the learned/abstract futures maximally sensitive to initial states (by predicting which of a diverse set of futures we will end up in, and hoping that future-diversity translates to past-sensitivity). Probably not very far.
+
+(SSL + RL sure is not a fertile field for copy-pasting. There are some papers, but relatively limited. Have to… try to apply some cleverness.)
+
+# TODO: We might be starting to have a holistic understanding of unsupervised RL (`eventual(prev_state) = eventual(next_state).detach()` for state-compression (fixed-point extraction) (…may not end up extracting *diverse* states, but maybe some cross-correlation tricks like Barlow twins, or VAEs or GANs could help?) and the `(state, eventual(state))→state` RNN, and obviously non-trainable input-incorporation and action-extraction), so use the Feynman technique to clarify every last detail; if OK, we can abandon the ill-considered approach below and try doing something more principled, making sure that optimization is stable enough to work at every step of the way.
 """
 
 
@@ -80,7 +84,7 @@ state_future = nn.Sequential( # state → future; BYOL projector.
     h(sum(cell_shape), fut_sz),
     Sum(),
 ).to(device)
-slow_state_future = MomentumCopy(state_future)
+slow_state_future = MomentumCopy(state_future, .99)
 future_transition = nn.Sequential( # future → future; BYOL predictor.
     f(fut_sz, hidden_sz),
     f(hidden_sz, fut_sz),
@@ -103,23 +107,26 @@ def loss(prev_state, next_state):
     global loss_was
     eps = 1e-5
     # BYOL loss: `predictor(projector(state1)) = sg(projector(state2))`
-    A = future_transition(state_future(prev_state))
+    A = future_transition(state_future(prev_state.detach())) # TODO: Detach this maybe?
     A = (A - A.mean()) / (A.std() + eps)
     with torch.no_grad():
         B = slow_state_future(next_state.detach())
         B = (B - B.mean()) / (B.std() + eps)
     loss_was = (A - B).square().sum()
     # Exploration loss: `projector<RNN>(state) = goal`
-    C = slow_state_future(next_state)
+    for p in state_future.parameters(): p.requires_grad_(False)
+    C = state_future(prev_state) # TODO: prev_state maybe?
+    for p in state_future.parameters(): p.requires_grad_(True)
+    #   TODO: Try the actual state_future, with params frozen? ….65%…
     C = (C - C.mean()) / (C.std() + eps)
     D = (goal - goal.mean()) / (goal.std() + eps)
-    loss_was = loss_was + 1. * (C - D).square().sum() # (…Might want to experiment with the coefficient.)
+    loss_was = loss_was + 1. * (C - D).square().sum() # (TODO: …Might want to experiment with the coefficient.)
     return loss_was
 model = RNN(
     transition = state_transition,
     loss = loss,
     optimizer = optimizer_stepper,
-    backprop_length = lambda: random.randint(2, 3), # TODO: (Figure out what's up with the crazy memory usage.)
+    backprop_length = lambda: random.randint(2, 32), # TODO: (Figure out what's up with the crazy memory usage.) # TODO: Try making this longer again.
     trace = False, # TODO: (…This doesn't help reduce memory usage… Is it due to the non-RNN `embed_data` and `embed_query`, and actually, `future_transition` and `state_future` too?)
 )
 
@@ -139,7 +146,7 @@ async def print_loss(data_len, query_len, explored, loss, reachable):
     if len(exploration_peaks) > 2048:
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
-    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss))
+    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss)) # TODO: Should have a little system where we call a func with keyword args and it measures max-str-len-so-far and prints everything correctly.
 async def main():
     global state, goal, feedback
     while True:
@@ -204,6 +211,8 @@ asyncio.run(main())
 #             - (Need `pytorch-nightly` (or 1.11) for forward-mode gradients here, though.)
 #     - ⋯ …Add noise to prior state, to match [Mean Teacher](https://arxiv.org/pdf/1703.01780.pdf) better?…
 # - ⋯ If all fails, go back to RL's "compression may be good for exploration" that we were trying to average-away by "compression is exploration": have a non-differentiable `goal` state (sized `cells×fut_sz`) on which state is conditioned, updated randomly sometimes, and make futures predict `goal` (possibly through a critic that predicts futures, to interfere with gradient less) (or `.detach()`ing BYOL-loss and making the RNN maximize goal-ness of the future).
+#     - .68%, .75% (improves extremely slowly) (still very much non-diverse; is our BYOL loss even working?)
+#         - TODO: Why doesn't it work?
 #     - (A much more principled way of adding noise than "just inject noise into internal state". So it's very good and should be implemented, right?)
 #     - (It's basically pretraining for RL: actual goal-maximization could be concerned with just predicting per-cell goals since they can control everything, and thus be much more efficient.) (Very similar to [RIG in visual RL](https://arxiv.org/pdf/1807.04742.pdf), but with BYOL instead of VAE, and with memory, and without reward.)
 #     - (If only that works, then we can think about 1> simplification and 2> trying to achieve exponentially-many goals in linear time.)
