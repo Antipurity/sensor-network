@@ -37,8 +37,11 @@ class CrossCorrelationLoss(nn.Module):
     def forward(self, x, y):
         # Not particularly efficient.
         assert x.shape == y.shape
-        while len(x.shape) < 2: x = x.unsqueeze(0);  y = y.unsqueeze(0)
-        x = x.transpose(self.axis, -2);  y = y.transpose(self.axis, -2)
+        assert x.shape[self.axis] > 1
+        axis = self.axis if self.axis >= 0 else self.axis + len(x.shape)
+        while len(x.shape) < 2:
+            x = x.unsqueeze(0);  y = y.unsqueeze(0);  axis += 1
+        x = x.transpose(axis, -2);  y = y.transpose(axis, -2)
         x = (x - x.mean(-2)) / (x.std(-2) + 1e-5)
         y = (y - y.mean(-2)) / (y.std(-2) + 1e-5)
         cc = torch.matmul(x, y.transpose(-2, -1))
@@ -54,10 +57,21 @@ class CrossCorrelationLoss(nn.Module):
 
 
 
-if __name__ == '__main__':
+if __name__ == '__main__': # Tests.
+    from torch import randn
+    from torch.optim import SGD
+    CCL = CrossCorrelationLoss
+    # Testing 1 dim.
+    input, fn, output, loss, losses = randn(128), nn.Linear(128, 96), randn(96), CCL(), []
+    opt = SGD(fn.parameters(), 1e-3)
+    for _ in range(5000):
+        L = loss(fn(input), output)
+        print(L.detach().cpu().numpy()) # TODO: ...Uh-oh: why isn't it improving... Is it just because of network capacity?
+        L.backward();  opt.step();  opt.zero_grad()
     pass
-    # TODO: Tests of all parameter configurations, especially that a shuffle-invariant loss always converges to a shuffled identity matrix.
+    # ...Do we want all tests to be of the "given an input, regress the output" variety? Yeah.
     # TODO: Test that 1 dim works.
+    # TODO: Test that 2 dims work.
     # TODO: Test that 3 dims work.
     # TODO: Test decorrelation_strength.
     # TODO: Test L1/L2.
