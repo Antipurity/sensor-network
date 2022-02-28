@@ -1,9 +1,23 @@
 """
-Testing how far we can push "compression = exploration", where we try to make the learned/abstract futures maximally sensitive to initial states (by predicting which of a diverse set of futures we will end up in, and hoping that future-diversity translates to past-sensitivity). Probably not very far.
+Testing how far we can push "compression = exploration", where we try to make the learned/abstract futures maximally sensitive to initial states (by predicting which of a diverse set of futures we will end up in, and hoping that future-diversity translates to past-sensitivity). Probably not very far. TODO: We won't be doing this anymore. Remove?
 
 (SSL + RL sure is not a fertile field for copy-pasting. There are some papers, but relatively limited. Have to… try to apply some cleverness.)
 
 # TODO: We might be starting to have a holistic understanding of unsupervised RL (`eventual(prev_state) = eventual(next_state).detach()` for state-compression (fixed-point extraction) (…may not end up extracting *diverse* states, but maybe some cross-correlation tricks like Barlow twins, or VAEs or GANs could help?) and the `(state, eventual(state))→state` RNN, and obviously non-trainable input-incorporation and action-extraction), so use the Feynman technique to clarify every last detail; if OK, we can abandon the ill-considered approach below and try doing something more principled, making sure that optimization is stable enough to work at every step of the way.
+
+---
+
+# TODO: In RL without [reward](https://arxiv.org/abs/2201.12417), all we have is an environment that gives observations and receives actions. Without rewards, goals can only be states, which incorporate observations and produce actions as they are unrolled in time. "Goals=states" actually makes things simpler than with reward, for which we'd have to construct a separate model to maximize (& a link to Actor-Critic).
+
+# TODO: To prepare for goal-directed behavior, should practice reaching all possible goals: state is conditioned on a non-differentiable goal (taking it as an input), and the future goal-aligned-ness is maximized via gradient descent. Essentially, we want a map of how to get from any state to any other state, which downstream tasks can easily use.
+
+# TODO: Potential trajectories are practically infinitely diverse, and so are potential goals. The question is how to do goal-practice efficiently.
+#   TODO: The simplest but inefficient way is to pick a goal randomly, unroll states for a while, then minimize L2 loss between the final state and the initial goal.
+#   TODO: A more efficient way is to say "yeah I meant to do that" by setting the actual final state as our goal.
+#     TODO: (To make this practical, we have to limit to finite state sequences, but we can still make final-state determination infinite by bootstrapping it: `final_state(past_state) = final_state(future_state).detach()`.)
+#     TODO: ...Wait, what else are we predicting, exactly? Goal-bootstrapping can't possibly be enough, right? ...Even the initial analysis suggests that it is, since actions are already goal-conditioned... Would action sequences really just aggregate into shortest paths like we want, without anything special?...
+#     TODO: ...But wouldn't this self-behavior-cloning collapse diversity since these are deterministic RNNs and not some randomness-preserving thing?...
+#     TODO: Write down our new bidirectional-loss fixed-point-chasing understanding. (It's still actually similar to our supervised approaches, kinda combining BYOL and Barlow twins in a well-founded way.)
 """
 
 
@@ -17,6 +31,8 @@ import sensornet as sn
 import minienv
 from model.rnn import RNN
 from model.momentum_copy import MomentumCopy
+# TODO: ...A module for cross-correlation loss (normalize inputs and make x@y.t the identity matrix), with a mode for being shuffle-invariant via making targets 1s wherever they are the max on both axes, with a correlation-removal-strength coefficient, with L1 and L2 modes, accepting an axis to cross-correlate over... With tests of all configurations, especially that a shuffle-invariant loss always converges to a shuffled identity matrix...
+#   ("Unlike linear-time losses like L2 or cross-entropy, this loss actually enforces lack of redundancy and so can be used for predicting your own output." with a link to Barlow twins.)
 
 
 
