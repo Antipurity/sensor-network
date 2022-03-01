@@ -60,19 +60,29 @@ class CrossCorrelationLoss(nn.Module):
         if not self.shuffle_invariant:
             mask = torch.eye(cc.shape[-2], cc.shape[-1], device = x.device)
         else:
-            A1 = (cc - cc.max(-2, True)[0]).sign()+1.
-            # TODO: ...Should we modify cc to not contain entries from A1?... Would that really ensure orderliness though?...
-            A2 = (cc - cc.max(-1, True)[0]).sign()+1.
-            # TODO: Why is this broken, even just the separate A1/A2? Can we make it not-broken?
-            #   (After all, Transformers are unordered, so can we really just impose ordered CCL on their outputs?)
-            mask = A1 # (A1 + A2) / 2 # torch.maximum(A1, A2)
+            with torch.no_grad(): # Try to find the closest shuffle.
+                # Taking max along one dim may cause repetition and missing entries along the other (which shuffles don't have). So approximate fixing it, iteratively. # TODO: So use a heuristic to quickly fix it. ...Impossible.
+                min, max_cand = cc.min(), cc - cc.max()
+                mask = (cc - cc.max(-2, True)[0]).sign()+1.
+                for i in range(10): # TODO: ...What we want is to find points that are maxima in *both* dimensions, not one of them... Is it correct?... Is it possible to do that directly?...
+                    dim, dim2 = -1 if i%2 == 0 else -2, -2 if i%2 == 0 else -1
+                    first_solutions_1 = (1. - (mask.cumsum(dim) - mask).sign())
+                    first_solutions_2 = (1. - (mask.cumsum(dim2) - mask).sign())
+                    mask = mask * first_solutions_1 * first_solutions_2 # Deduplicate.
+                    f = mask + (1.-mask) * max_cand # Put fallbacks into the mask.
+                    mask = (f - f.max(dim, True)[0]).sign()+1. # Fill.
+                    mask = mask.maximum((f - f.max(dim2, True)[0]).sign()+1.) # Fill.
+                # TODO: Wait, how did we want to fill in the missing entries, again... Replace 0s with max_cand, and find the max along the dim.
+                # TODO: Why is this broken? Can we make it not-broken?
+                #   (After all, Transformers are unordered, so can we really just impose ordered CCL on their outputs?)
+                # TODO: ...Why does the mask still contain clear duplications along the most-recently-deduplicated dimension?... (Or maybe the other dim.) Is always picking the first max a too-strong prior; but how would we pick a random max?...
         target = (mask - mask.mean())
         if random.randint(1,1) == 1: # TODO: Remove this, after we've debugged shuffle.
             global IM
             if IM is None:
                 IM = plt.imshow(mask.detach().cpu().numpy()) # TODO:
             else:
-                IM.set_data(mask.detach().cpu().numpy()) # TODO: Does this mask just converge to this, or is our computation broken? Looks like extremely-fast convergence...
+                IM.set_data(mask.detach().cpu().numpy()) # TODO: Looks very wrong. Fix it.
             plt.pause(.01)
         cc = cc - target
         part1 = mask * (cc.square() if self.l2 else cc.abs())
