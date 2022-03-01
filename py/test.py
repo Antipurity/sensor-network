@@ -1,23 +1,47 @@
 """
-Testing how far we can push "compression = exploration", where we try to make the learned/abstract futures maximally sensitive to initial states (by predicting which of a diverse set of futures we will end up in, and hoping that future-diversity translates to past-sensitivity). Probably not very far. TODO: We won't be doing this anymore. Remove?
-
-(SSL + RL sure is not a fertile field for copy-pasting. There are some papers, but relatively limited. Have to… try to apply some cleverness.)
-
-# TODO: We might be starting to have a holistic understanding of unsupervised RL (`eventual(prev_state) = eventual(next_state).detach()` for state-compression (fixed-point extraction) (…may not end up extracting *diverse* states, but maybe some cross-correlation tricks like Barlow twins, or VAEs or GANs could help?) and the `(state, eventual(state))→state` RNN, and obviously non-trainable input-incorporation and action-extraction), so use the Feynman technique to clarify every last detail; if OK, we can abandon the ill-considered approach below and try doing something more principled, making sure that optimization is stable enough to work at every step of the way.
+Testing how far we can push "compression = exploration".
 
 ---
 
-# TODO: In RL without [reward](https://arxiv.org/abs/2201.12417), all we have is an environment that gives observations and receives actions. Without rewards, goals can only be states, which incorporate observations and produce actions as they are unrolled in time. "Goals=states" actually makes things simpler than with reward, for which we'd have to construct a separate model to maximize (& a link to Actor-Critic).
+RL is notoriously difficult to train. It hasn't had its BERT moment yet.
 
-# TODO: To prepare for goal-directed behavior, should practice reaching all possible goals: state is conditioned on a non-differentiable goal (taking it as an input), and the future goal-aligned-ness is maximized via gradient descent. Essentially, we want a map of how to get from any state to any other state, which downstream tasks can easily use.
+Let's not mistake ambition for wisdom. So if we want to proceed, we'd better make sure that we have an idea of what we're doing. Let's try the Feynman technique: creation by teaching, useful because in good teaching, concepts must be as simple as possible.
 
-# TODO: Potential trajectories are practically infinitely diverse, and so are potential goals. The question is how to do goal-practice efficiently.
-#   TODO: The simplest but inefficient way is to pick a goal randomly, unroll states for a while, then minimize L2 loss between the final state and the initial goal.
-#   TODO: A more efficient way is to say "yeah I meant to do that" by setting the actual final state as our goal.
-#     TODO: (To make this practical, we have to limit to finite state sequences, but we can still make final-state determination infinite by bootstrapping it: `final_state(past_state) = final_state(future_state).detach()`.)
-#     TODO: ...Wait, what else are we predicting, exactly? Goal-bootstrapping can't possibly be enough, right? ...Even the initial analysis suggests that it is, since actions are already goal-conditioned... Would action sequences really just aggregate into shortest paths like we want, without anything special?...
-#     TODO: ...But wouldn't this self-behavior-cloning collapse diversity since these are deterministic RNNs and not some randomness-preserving thing?...
-#     TODO: Write down our new bidirectional-loss fixed-point-chasing understanding. (It's still actually similar to our supervised approaches, kinda combining BYOL and Barlow twins in a well-founded way.)
+# Unsupervised RL: state is the goal
+
+In Reinforcement Learning without reinforcement, all we have is an environment that gives observations to our agent and receives actions.
+
+Without rewards, goals can only be (dependent on) states, which incorporate observations and produce actions as they are unrolled in time: `goal = ev(state)`. Postulating "goals are basically states" actually makes things simpler than with reward, for which we'd have to construct a separate differentiable model [(the critic)](https://hal.archives-ouvertes.fr/hal-00756747/file/ivo_smcc12_survey.pdf) to maximize [(the actor)](https://hal.archives-ouvertes.fr/hal-00756747/file/ivo_smcc12_survey.pdf) and [have problems with properly incorporating the future.](https://arxiv.org/abs/2201.12417)
+
+To prepare for goal-directed behavior, should practice reaching all possible goals, and build a good map of how to get from anywhere to anywhere, for downstream tasks to use.
+
+What can we learn from a dataset of `next: state → state` trajectories, and in particular, from a `src → state → … → state → dst` trajectory? (Note that `next` is a function like in programming, and can also do input/output: non-differentiably, incorporate observations and produce actions.)
+
+# Actions have goals, so infer our goal (actions define goals: critic)
+
+A quick example: say we have an action that means "how hard to press this button", and there are two possible consequences: either it's pressed, or not pressed. A random `next` policy would just emit basically-random numbers as actions, but how do we know what those would lead to, or in other words, compress actions into their goal?
+
+If the goal did direct this trajectory, then it stayed constant, meaning `ev(src) = ev(dst)`. We should extract this invariant through learning, via gradient descent because deep learning performs well.
+
+(The astute among you may have noticed that saying "THE goal" is presumptuous, for there could be many. Meaning that we'd need to model its distribution, not just its average. Could be a direction of future work, or of this one if averaging is not enough in practice.)
+
+Through SGD, we want to ensure: `prev_goal = sg(next_goal)`, or `ev(state) = sg(ev(next(state)))`. (`sg` is for stop-gradient, AKA don't-learn, because goals can't just decide to have had different actions.)
+
+(This can of course be repeated for more than one step, but one-step is simpler.)
+
+# Actions must be goal-directed (goals define actions: actor)
+
+But suppose we do know the goal, such as "press this button"; how to actually plan out a trajectory to it?
+
+The main transition `next: state → state` should know its `ev`entual goal by being `next: (prev_state, goal) → next_state` instead, and learning how to reach that (unchangable) goal.
+
+We want to ensure: `sg(prev_goal) = next_goal`, or `sg(ev(state)) = ev(next(state, ev(state)))`. (`sg` is because actions can't just decide that a goal is not worth going to.)
+
+# TODO: Putting it all together: removing stop-grad. Also mention the connections to recent methods in SSL (which is actually how I had the idea for this).
+
+# TODO: Write down our new bidirectional-loss fixed-point-chasing understanding. (It's still actually similar to our supervised approaches, kinda combining BYOL and Barlow twins in a well-founded way.)
+
+# TODO: Abandon all hatred. Spread love. No ill-considered approaches. Only the well-founded Unsupervised RL (URL). Inspect and support its every step on the way.
 """
 
 
@@ -31,8 +55,7 @@ import sensornet as sn
 import minienv
 from model.rnn import RNN
 from model.momentum_copy import MomentumCopy
-# TODO: ...A module for cross-correlation loss (normalize inputs and make x@y.t the identity matrix), with a mode for being shuffle-invariant via making targets 1s wherever they are the max on both axes, with a correlation-removal-strength coefficient, with L1 and L2 modes, accepting an axis to cross-correlate over... With tests of all configurations, especially that a shuffle-invariant loss always converges to a shuffled identity matrix...
-#   ("Unlike linear-time losses like L2 or cross-entropy, this loss actually enforces lack of redundancy and so can be used for predicting your own output." with a link to Barlow twins.)
+from model.loss import CrossCorrelationLoss
 
 
 

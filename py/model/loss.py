@@ -62,16 +62,33 @@ class CrossCorrelationLoss(nn.Module):
         else:
             with torch.no_grad(): # Try to find the closest shuffle.
                 # Taking max along one dim may cause repetition and missing entries along the other (which shuffles don't have). So approximate fixing it, iteratively. # TODO: So use a heuristic to quickly fix it. ...Impossible.
-                min, max_cand = cc.min(), cc - cc.max()
+                min, max_cand = cc.min() - cc.max(), cc - cc.max()
                 mask = (cc - cc.max(-2, True)[0]).sign()+1.
-                for i in range(10): # TODO: ...What we want is to find points that are maxima in *both* dimensions, not one of them... Is it correct?... Is it possible to do that directly?...
-                    dim, dim2 = -1 if i%2 == 0 else -2, -2 if i%2 == 0 else -1
-                    first_solutions_1 = (1. - (mask.cumsum(dim) - mask).sign())
+                for i in range(1): # TODO: ...What we want is to find points that are maxima in *both* dimensions, not one of them... Is it correct?... Is it possible to do that directly?...
+                    dim1, dim2 = -1 if i%2 == 0 else -2, -2 if i%2 == 0 else -1
+                    # Fill, wherever there's a hole in both axes.
+                    MASK=mask # TODO:
+                    occ1 = mask.sum(dim1, True)
+                    occ2 = mask.sum(dim2, True)
+                    occupied = (occ1 + occ2).sign() # TODO: ...What do we do with this, exactly?
+                    #   Where occupied, put `min` so that our max does not take that; then take a max of the result along dim1, and turn it into a 0/1 mask then add it to `mask`.
+                    f = (1.-occupied) * max_cand + occupied * min
+                    # new1 = (f - f.max(dim1, True)[0]).sign()+1.
+                    new2 = (f - f.max(dim2, True)[0]).sign()+1.
+                    # TODO: ...Is adding both really a good idea...
+                    mask = mask + (1.-occupied) * new2 #torch.maximum(new1, new2) # TODO: ...Wait, why do we still get lines... Shouldn't it be impossible to get them with our new method?...
+                    #   ...Aren't these lines because `new` doesn't check for *self*-intersections, and introduces new vertical lines merrily...
+                    #   TODO: Definitely seeing a `2` dot sometimes. We must be doing things wrong...
+                    # f = mask + (1.-mask) * max_cand # Put fallbacks into the mask.
+                    # mask = (f - f.max(dim1, True)[0]).sign()+1.
+                    # mask = mask.maximum((f - f.max(dim2, True)[0]).sign()+1.)
+                    # TODO: ...Can we fill only the maxima that have no neighbors on both axes, not just on one? ...How to make `mask` cast 0-shadows on `max_cand` in both directions along each axis...
+                    #   ...Should we compute sums along axes, and wherever that's 0 for both axes, allow filling? Mult of sums, and sign of that?
+                    # Deduplicate along both axes.
+                    first_solutions_1 = (1. - (mask.cumsum(dim1) - mask).sign())
                     first_solutions_2 = (1. - (mask.cumsum(dim2) - mask).sign())
-                    mask = mask * first_solutions_1 * first_solutions_2 # Deduplicate.
-                    f = mask + (1.-mask) * max_cand # Put fallbacks into the mask.
-                    mask = (f - f.max(dim, True)[0]).sign()+1. # Fill.
-                    mask = mask.maximum((f - f.max(dim2, True)[0]).sign()+1.) # Fill.
+                    mask = mask * first_solutions_1 # TODO: ...Why does deduplication just remove everything?
+                # mask = mask * first_solutions_2
                 # TODO: Wait, how did we want to fill in the missing entries, again... Replace 0s with max_cand, and find the max along the dim.
                 # TODO: Why is this broken? Can we make it not-broken?
                 #   (After all, Transformers are unordered, so can we really just impose ordered CCL on their outputs?)
@@ -82,7 +99,13 @@ class CrossCorrelationLoss(nn.Module):
             if IM is None:
                 IM = plt.imshow(mask.detach().cpu().numpy()) # TODO:
             else:
-                IM.set_data(mask.detach().cpu().numpy()) # TODO: Looks very wrong. Fix it.
+                # IM.set_data((mask + .5*occupied + .1*first_solutions_1 + .2*first_solutions_2 + .4*torch.maximum(new1, new2)).detach().cpu().numpy()) # TODO: Looks very wrong. Fix it.
+                #   TODO: ...Why is the mask still not filled fully...
+                #   TODO: Looking at the deduplication mask, it clearly contains big areas that have nothing left to live for... Why?...
+                #     ...Wait, why do so many vertical lines terminate at nothingness?... They were originating at points that were obscured by another axis, which were deleted because of that, but still cast a shadow.
+                print(occ1.shape, occ2.shape)
+                IM.set_data((occ1.sign()*.3 + occ2.sign()*.7).detach().cpu().numpy())
+                #   TODO: Why is `occupied` along only 1 axis?!
             plt.pause(.01)
         cc = cc - target
         part1 = mask * (cc.square() if self.l2 else cc.abs())
