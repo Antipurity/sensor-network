@@ -35,7 +35,7 @@ class CrossCorrelationLoss(nn.Module):
     - `decorrelation_strength > 0` and `prediction = 'l1'`: learning hardly happens, because gradients self-interfere too much.
     - Performs best when both `x` and `y` are differentiable, not one of them.
     - The more data, the better it learns (L2 loss of normalized vectors can get lower).
-    - Optimizing with Adam seems to perform much better than with SGD or RMSprop.
+    - Optimizing with Adam performs much better than with SGD or RMSprop. Gradient magnitude is typically small.
     """
     def __init__(self, axis = -1, decorrelation_strength = .1, prediction = 'l2', shuffle_invariant = False, also_return_l2 = False, eps = 1e-5):
         assert prediction == 'l1' or prediction == 'l2'
@@ -54,7 +54,6 @@ class CrossCorrelationLoss(nn.Module):
         while len(x.shape) < 2:
             x = x.unsqueeze(0);  y = y.unsqueeze(0);  axis += 1
         x = x.transpose(axis, -2);  y = y.transpose(axis, -2)
-        # TODO: ...Inspect actual gradient magnitude to x and y, and how close to 0 we are (which would mean heavy self-cancellation), because Adam significantly outperforming SGD is a sign of small gradient, right?
         x = (x - x.mean(-2, True)) / (x.std(-2, keepdim=True) + self.eps)
         y = (y - y.mean(-2, True)) / (y.std(-2, keepdim=True) + self.eps)
         cc = torch.matmul(x, y.transpose(-2, -1)) / x.shape[-2]
@@ -62,7 +61,7 @@ class CrossCorrelationLoss(nn.Module):
         target = (mask - mask.mean())
         cc = cc - target
         cc = cc.square() if self.l2 else cc.abs()
-        L = (mask * cc + self.decorrelation_strength * (1 - mask) * cc).mean(-2).sum()
+        L = (mask * cc + self.decorrelation_strength * (1 - mask) * cc).sum()
         if not self.also_return_l2: return L
         indices = mask.argmax(-1)
         while len(indices.shape) > 1: # Just don't deal with 3D+ cc because selection is a bit hard.
@@ -70,7 +69,7 @@ class CrossCorrelationLoss(nn.Module):
             i = random.randrange(indices.shape[0])
             x, y, indices = x[i], y[i], indices[i]
         y = torch.index_select(y, -2, indices)
-        return (L, (x - y).square().mean(-2).sum())
+        return (L, (x - y).square().sum())
     def target_for(self, cc):
         """Given a cross-correlation matrix, returns the 0|1 target that it should predict. (This is an approximate solution, but it works well enough. Needs `O(N^2*log(N))` time. Might not handle non-power-of-2 sizes as well.)"""
         # Do several max-swaps to approximate global-optimum.
@@ -108,7 +107,7 @@ class CrossCorrelationLoss(nn.Module):
 
 if __name__ == '__main__': # Tests.
     from torch import randn
-    from torch.optim import Adam
+    from torch.optim import SGD
     CCL = CrossCorrelationLoss
 
     cells, out_sz = 16, 128
@@ -129,17 +128,21 @@ if __name__ == '__main__': # Tests.
         nn.ReLU(),
         nn.Linear(128, out_sz),
     )
-    opt = Adam([*fn.parameters(), *fn2.parameters()], 1e-4)
-    for _ in range(2000):
+    opt = SGD([*fn.parameters(), *fn2.parameters()], 1e-2)
+    for _ in range(200):
         A, B = fn(input), fn2(output)
         L, L2 = loss(A, B)
-        print('norm CCL', str(L.detach().cpu().numpy()).ljust(11), '    norm L2', L2.detach().cpu().numpy())
         L.backward();  opt.step();  opt.zero_grad()
-        ccls.append(float(L.detach().cpu().numpy()))
-        l2s.append(float(L2.detach().cpu().numpy()))
+
+        ccl, l2 = L.detach().cpu().numpy(), L2.detach().cpu().numpy()
+        print('norm CCL', str(ccl).ljust(11), '    norm L2', l2)
+        ccls.append(float(ccl))
+        l2s.append(float(l2))
     import matplotlib.pyplot as plt
     plt.clf()
+    plt.subplot(2,1,1, ylabel='Cross-correlation')
     plt.plot(ccls)
+    plt.subplot(2,1,2, ylabel='L2 loss')
     plt.plot(l2s)
     plt.pause(1)
     plt.show()
