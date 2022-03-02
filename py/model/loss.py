@@ -11,9 +11,6 @@ import torch.nn as nn
 
 
 
-import random # TODO:
-import matplotlib.pyplot as plt # TODO:
-IM = None # TODO:
 class CrossCorrelationLoss(nn.Module):
     """
     `CrossCorrelationLoss(axis = -1, decorrelation_strength = 1., ...)(x, y)`
@@ -63,14 +60,6 @@ class CrossCorrelationLoss(nn.Module):
         cc = torch.matmul(x, y.transpose(-2, -1)) / x.shape[-2]
         mask = self.target_for(cc)
         target = (mask - mask.mean())
-        import random
-        if random.randint(1,10) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did. Didn't we need this for something though? Oh yeah: better consider the loss. ...We did, and decided that we were happier with max-finding.
-            global IM
-            img = cc
-            while len(img.shape) > 2: img = img[0]
-            if IM is None: IM = plt.imshow(img.detach().cpu().numpy())
-            else: IM.set_data(img.detach().cpu().numpy())
-            plt.pause(.01)
         cc = cc - target
         cc = cc.square() if self.l2 else cc.abs()
         L = (mask * cc + self.decorrelation_strength * (1 - mask) * cc).mean(-2).sum()
@@ -141,13 +130,13 @@ if __name__ == '__main__': # Tests.
         nn.Linear(128, out_sz),
     )
     opt = Adam([*fn.parameters(), *fn2.parameters()], 1e-4)
-    for _ in range(1000):
+    for _ in range(2000):
         A, B = fn(input), fn2(output)
         L, L2 = loss(A, B)
         print('norm CCL', str(L.detach().cpu().numpy()).ljust(11), '    norm L2', L2.detach().cpu().numpy())
         L.backward();  opt.step();  opt.zero_grad()
-        ccls.append(L.detach().cpu().numpy())
-        l2s.append(L2.detach().cpu().numpy())
+        ccls.append(float(L.detach().cpu().numpy()))
+        l2s.append(float(L2.detach().cpu().numpy()))
     import matplotlib.pyplot as plt
     plt.clf()
     plt.plot(ccls)
