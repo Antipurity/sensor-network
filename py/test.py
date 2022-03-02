@@ -1,5 +1,5 @@
 """
-Testing how far we can push "compression = exploration": compression reduces redundancies to only convey the outliers, exploration seeks out novel cases, so there must be a deep connection here.
+Testing how far we can push "compression = exploration": compression reduces redundancies to only convey the outliers, while exploration seeks out novel cases, so there must be some deep connection here.
 
 ---
 
@@ -45,9 +45,17 @@ Summing both options, we get the loss: `ev(state) = ev(next(state, ev(state)))`
 
 We only need to ensure that we don't converge to trivial solutions such as "all-zeroes". For example, could [use cross-correlation](https://arxiv.org/abs/2103.03230): `from model.loss import CrossCorrelationLoss`.
 
-# TODO: What about exploration? We don't explicitly do anything to ensure that the futures are sampled uniformly. Is multi-environment (or even forking, which minienv supports) the answer, given that we kinda normalize internal state? Or does our invariance-extraction reduce redundancies enough to cause exploration?
+That's the conclusion. If all steps leading to it were correct and well-founded, then the conclusion must be correct and well-founded too, and we can use it to perform Unsupervised RL (URL).
 
-# TODO: Also mention the connections to recent methods in SSL (we're kinda combining BYOL and Barlow twins in a well-founded way, which can be understood as special cases where the 'environment transition function' is a random augmentation and there are no actions (and one could imagine NLP having a 'next word' augmentation); this suggests that, for example, a human eye provides natural agent-decided image augmentations: crop (movement & eyelids), brightness (eyelashes), blur (un/focus), scale (body movement)) (which is actually how I had the idea for this).
+# Wait but how is this related to exploration
+
+Ideally. By extracting invariants, meaningless wandering is cut off, and coherent plans solidify. These plans not only make tricky spots in state-space easier to go to for learned-later plans, but also make sure that the past is not forgotten amid all the novelty-seeking. Which is arguably what exploration is all about. So, ideally, the exploration percentage should just go up.
+
+But if not, we always have contingencies within contingencies. To ensure that futures are sampled uniformly, could have a large batch size (instantiate many pasts at once and [batch-normalize](https://arxiv.org/abs/1502.03167) the goals: be multi-environment) or just allow forking in environments (which `import minienv` here does). To prioritize novelty, could make loss the actual reward and bring in RL for that. No plan survives contact with the enemy, though.
+
+# What else is this related to
+
+TODO: Also mention the connections to recent methods in SSL (we're kinda combining BYOL and Barlow twins in a well-founded way, which can be understood as special cases where the 'environment transition function' is a random augmentation and there are no actions (and one could imagine NLP having a 'next word' augmentation); this suggests that, for example, a human eye provides natural agent-decided image augmentations: crop (movement & eyelids), grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale (body movement), blur (un/focus), brightness (eyelashes)) (which is actually how I had the idea for this).
 
 # TODO: Abandon all hatred. Spread love. No ill-considered approaches. Only the well-founded Unsupervised RL (URL). Inspect and support its every step on the way.
 """
