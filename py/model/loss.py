@@ -62,7 +62,7 @@ class CrossCorrelationLoss(nn.Module):
         cc = torch.matmul(x, y.transpose(-2, -1)) / x.shape[-2]
         mask = self.target_for(cc)
         target = (mask - mask.mean())
-        if random.randint(1,10) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did.
+        if random.randint(1,100) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did. Didn't we need this for something though? Oh yeah: better consider the loss.
             global IM
             if IM is None:
                 IM = plt.imshow(cc.detach().cpu().numpy())
@@ -111,20 +111,34 @@ if __name__ == '__main__': # Tests.
     CCL = CrossCorrelationLoss
 
     cells, out_sz = 16, 128
-    input, fn, fn2, output, loss, losses = randn(cells, out_sz), nn.Sequential(
+    input, output, loss = randn(cells, out_sz), randn(cells, out_sz), CCL(
+        axis=-1,
+        decorrelation_strength=.1,
+        shuffle_invariant=True,
+        also_return_l2=True,
+    )
+    ccls, l2s = [], []
+    fn = nn.Sequential(
         nn.Linear(out_sz, 128),
         nn.ReLU(),
         nn.Linear(128, out_sz),
-    ), nn.Sequential(
+    )
+    fn2 = nn.Sequential(
         nn.Linear(out_sz, 128),
         nn.ReLU(),
         nn.Linear(128, out_sz),
-    ), randn(cells, out_sz), CCL(axis=-1, decorrelation_strength=.1, shuffle_invariant=True, also_return_l2=True), [] # TODO: .1
+    )
     opt = Adam([*fn.parameters(), *fn2.parameters()], 1e-4)
-    for _ in range(5000): # TODO: 5000
+    for _ in range(1000):
         A, B = fn(input), fn2(output)
         L, L2 = loss(A, B)
         print('norm CCL', str(L.detach().cpu().numpy()).ljust(11), '    norm L2', L2.detach().cpu().numpy())
         L.backward();  opt.step();  opt.zero_grad()
-
-    # TODO: Test that shuffle-invariance always converges to a `target` matrix with .sum() being x.shape[-2]. (& fix.)
+        ccls.append(L.detach().cpu().numpy())
+        l2s.append(L2.detach().cpu().numpy())
+    import matplotlib.pyplot as plt
+    plt.clf()
+    plt.plot(ccls)
+    plt.plot(l2s)
+    plt.pause(1)
+    plt.show()
