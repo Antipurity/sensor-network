@@ -1,5 +1,5 @@
 """
-Testing how far we can push "compression = exploration".
+Testing how far we can push "compression = exploration": compression reduces redundancies to only convey the outliers, exploration seeks out novel cases, so there must be a deep connection here.
 
 ---
 
@@ -37,9 +37,17 @@ The main transition `next: state → state` should know its `ev`entual goal by b
 
 We want to ensure: `sg(prev_goal) = next_goal`, or `sg(ev(state)) = ev(next(state, ev(state)))`. (`sg` is because actions can't just decide that a goal is not worth going to.)
 
-# TODO: Putting it all together: removing stop-grad. Also mention the connections to recent methods in SSL (which is actually how I had the idea for this).
+# Putting it all together
 
-# TODO: Write down our new bidirectional-loss fixed-point-chasing understanding. (It's still actually similar to our supervised approaches, kinda combining BYOL and Barlow twins in a well-founded way.)
+Learning representations end-to-end is good, so let's learn the critic and the actor at the same time.
+
+Summing both options, we get the loss: `ev(state) = ev(next(state, ev(state)))`
+
+We only need to ensure that we don't converge to trivial solutions such as "all-zeroes". For example, could [use cross-correlation](https://arxiv.org/abs/2103.03230): `from model.loss import CrossCorrelationLoss`.
+
+# TODO: What about exploration? We don't explicitly do anything to ensure that the futures are sampled uniformly. Is multi-environment (or even forking, which minienv supports) the answer, given that we kinda normalize internal state? Or does our invariance-extraction reduce redundancies enough to cause exploration?
+
+# TODO: Also mention the connections to recent methods in SSL (we're kinda combining BYOL and Barlow twins in a well-founded way, which can be understood as special cases where the 'environment transition function' is a random augmentation and there are no actions (and one could imagine NLP having a 'next word' augmentation); this suggests that, for example, a human eye provides natural agent-decided image augmentations: crop (movement & eyelids), brightness (eyelashes), blur (un/focus), scale (body movement)) (which is actually how I had the idea for this).
 
 # TODO: Abandon all hatred. Spread love. No ill-considered approaches. Only the well-founded Unsupervised RL (URL). Inspect and support its every step on the way.
 """
@@ -80,6 +88,10 @@ class SelfAttention(nn.Module):
 class Sum(nn.Module):
     def __init__(self): super().__init__()
     def forward(self, x): return x.sum(0)
+
+
+
+# TODO: Destroy what's below, and remake it into our new image.
 
 
 
