@@ -63,18 +63,23 @@ class CrossCorrelationLoss(nn.Module):
         cc = torch.matmul(x, y.transpose(-2, -1)) / x.shape[-2]
         mask = self.target_for(cc)
         target = (mask - mask.mean())
+        import random
         if random.randint(1,10) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did. Didn't we need this for something though? Oh yeah: better consider the loss. ...We did, and decided that we were happier with max-finding.
             global IM
-            if IM is None:
-                IM = plt.imshow(cc.detach().cpu().numpy())
-            else:
-                IM.set_data((cc + mask).detach().cpu().numpy())
+            img = cc
+            while len(img.shape) > 2: img = img[0]
+            if IM is None: IM = plt.imshow(img.detach().cpu().numpy())
+            else: IM.set_data(img.detach().cpu().numpy())
             plt.pause(.01)
         cc = cc - target
         cc = cc.square() if self.l2 else cc.abs()
         L = (mask * cc + self.decorrelation_strength * (1 - mask) * cc).mean(-2).sum()
         if not self.also_return_l2: return L
         indices = mask.argmax(-1)
+        while len(indices.shape) > 1: # Just don't deal with 3D+ cc because selection is a bit hard.
+            import random # (It's just for debugging, so it shouldn't matter.)
+            i = random.randrange(indices.shape[0])
+            x, y, indices = x[i], y[i], indices[i]
         y = torch.index_select(y, -2, indices)
         return (L, (x - y).square().mean(-2).sum())
     def target_for(self, cc):
@@ -82,7 +87,8 @@ class CrossCorrelationLoss(nn.Module):
         # Do several max-swaps to approximate global-optimum.
         #   Probably not optimal, but good enough, and deterministic.
         #     (Besides, more optimal solutions seem to change quicker between epochs, making learning more challenging.)
-        mask = torch.eye(cc.shape[-2], cc.shape[-1], device = cc.device) # TODO: ...Wait, what about 3D: shouldn't we insert extra dimensions, to handle them separately?
+        mask = torch.eye(cc.shape[-2], cc.shape[-1], device = cc.device)
+        while len(mask.shape) < len(cc.shape): mask = mask.unsqueeze(0)
         if not self.shuffle_invariant: return mask
         def swap(a, k):
             """Each column in `a` is swapped with its cyclically-shifted-by-`k`-indices-down column."""
