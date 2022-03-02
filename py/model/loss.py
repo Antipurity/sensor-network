@@ -62,12 +62,12 @@ class CrossCorrelationLoss(nn.Module):
         cc = torch.matmul(x, y.transpose(-2, -1)) / x.shape[-2]
         mask = self.target_for(cc)
         target = (mask - mask.mean())
-        if random.randint(1,100) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did. Didn't we need this for something though? Oh yeah: better consider the loss.
+        if random.randint(1,1) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did. Didn't we need this for something though? Oh yeah: better consider the loss.
             global IM
             if IM is None:
                 IM = plt.imshow(cc.detach().cpu().numpy())
             else:
-                IM.set_data((cc + .3*mask).detach().cpu().numpy())
+                IM.set_data((cc + mask).detach().cpu().numpy())
             plt.pause(.01)
         cc = cc - target
         cc = cc.square() if self.l2 else cc.abs()
@@ -77,7 +77,7 @@ class CrossCorrelationLoss(nn.Module):
         y = torch.index_select(y, -2, indices)
         return (L, (x - y).square().mean(-2).sum())
     def target_for(self, cc):
-        """Given a cross-correlation matrix, returns the 0|1 target that it should predict."""
+        """Given a cross-correlation matrix, returns the 0|1 target that it should predict. (This is an approximate solution, but it works well enough.)"""
         mask = torch.eye(cc.shape[-2], cc.shape[-1], device = cc.device) # TODO: ...Wait, what about 3D: shouldn't we insert extra dimensions, to handle them separately?
         if not self.shuffle_invariant: return mask
         def swap(a, k):
@@ -88,19 +88,27 @@ class CrossCorrelationLoss(nn.Module):
             which = torch.div(torch.arange(0,N), k, rounding_mode='trunc') % 2 == 0
             return torch.where(which, down, up)
         def max_swap(a, k, cc):
-            """Swaps columns of `a` with those shifted by `k`, but wherever this minimizes the distance from cross-correlation `cc`."""
+            """Swaps columns of `a` with those shifted by `k`, but only wherever this minimizes the distance from cross-correlation `cc`."""
+            # (Minimizing L2 loss seems to result in slightly more instability than maximizing `cc*a`.)
             b = swap(a, k)
-            sumA = swap(cc * a, k).sum(-2, True) # TODO: How to compute the actual difference, not just the picked maximum?
+            sumA = swap(cc * a, k).sum(-2, True)
             sumA = sumA + swap(sumA, k)
             sumB = swap(cc * b, k).sum(-2, True)
             sumB = sumB + swap(sumB, k)
             return torch.where(sumA > sumB, a, b)
         # Do several max-swaps to approximate global-optimum. Probably not optimal, but good enough, and deterministic.
         with torch.no_grad():
-            k = 1
+            # k = 1
+            # while k < cc.shape[-1]:
+            #     mask = max_swap(mask, k, cc)
+            #     k = k * 2
+            # for k in range(1, cc.shape[-1]): mask = max_swap(mask, k, cc) # TODO: ...Why does this break the mask completely?!
+            k, ks = 1, []
             while k < cc.shape[-1]:
-                mask = max_swap(mask, k, cc)
+                ks.append(k)
                 k = k * 2
+            for k in reversed(ks): mask = max_swap(mask, k, cc)
+            # TODO: ...Why does the shape of the target (like the diagonals along which the points seem to be clustered) depend so heavily on the order of our operations... And why can we break the mask...
             return mask
 
 
@@ -129,7 +137,7 @@ if __name__ == '__main__': # Tests.
         nn.Linear(128, out_sz),
     )
     opt = Adam([*fn.parameters(), *fn2.parameters()], 1e-4)
-    for _ in range(1000):
+    for _ in range(5000): # TODO: 1000
         A, B = fn(input), fn2(output)
         L, L2 = loss(A, B)
         print('norm CCL', str(L.detach().cpu().numpy()).ljust(11), '    norm L2', L2.detach().cpu().numpy())
