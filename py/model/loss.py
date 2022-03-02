@@ -32,6 +32,7 @@ class CrossCorrelationLoss(nn.Module):
     - `prediction = 'l2'`: [either `'l1'` or `'l2'`.](https://machine-learning-note.readthedocs.io/en/latest/basic/loss_functions.html)
     - `shuffle_invariant = False`: could be useful if the inputs were computed by a Transformer. If `True`, the target cross-correlation of a sequence of random vectors with itself (an identity matrix) is computed with its shuffle instead, such that it is closest to the actual cross-correlation.
     - `also_return_l2 = False`: if `True`, each call's result is not the scalar `loss` but the tuple-of-scalars `(loss, L2)`. Useful for debugging: since the actual cross-correlation loss often gets stuck at seemingly-high values while learning is still happening, printing the closest L2 post-normalization loss instead may be a better performance metric. (This correctly handles `shuffle_invariant=True`.)
+    - `eps = 1e-5`: prevents division-by-0 in normalization, which is `x → (x - x.mean()) / (x.std() + eps)`.
 
     Notes:
     - `decorrelation_strength > 0` and `prediction = 'l1'`: learning hardly happens, because gradients self-interfere too much.
@@ -39,7 +40,7 @@ class CrossCorrelationLoss(nn.Module):
     - The more data, the better it learns (L2 loss of normalized vectors can get lower).
     - Optimizing with Adam seems to perform much better than with SGD or RMSprop.
     """
-    def __init__(self, axis = -1, decorrelation_strength = .1, prediction = 'l2', shuffle_invariant = False, also_return_l2 = False):
+    def __init__(self, axis = -1, decorrelation_strength = .1, prediction = 'l2', shuffle_invariant = False, also_return_l2 = False, eps = 1e-5):
         assert prediction == 'l1' or prediction == 'l2'
         super().__init__()
         self.axis = axis
@@ -47,6 +48,7 @@ class CrossCorrelationLoss(nn.Module):
         self.l2 = prediction == 'l2'
         self.shuffle_invariant = shuffle_invariant
         self.also_return_l2 = also_return_l2
+        self.eps = eps
     def forward(self, x, y):
         # Not particularly efficient. But it works.
         assert x.shape == y.shape
@@ -55,14 +57,13 @@ class CrossCorrelationLoss(nn.Module):
         while len(x.shape) < 2:
             x = x.unsqueeze(0);  y = y.unsqueeze(0);  axis += 1
         x = x.transpose(axis, -2);  y = y.transpose(axis, -2)
-        eps = 1e-5 # TODO: Make it another parameter.
         # TODO: ...Inspect actual gradient magnitude to x and y, and how close to 0 we are (which would mean heavy self-cancellation), because Adam significantly outperforming SGD is a sign of small gradient, right?
-        x = (x - x.mean(-2, True)) / (x.std(-2, keepdim=True) + eps)
-        y = (y - y.mean(-2, True)) / (y.std(-2, keepdim=True) + eps)
+        x = (x - x.mean(-2, True)) / (x.std(-2, keepdim=True) + self.eps)
+        y = (y - y.mean(-2, True)) / (y.std(-2, keepdim=True) + self.eps)
         cc = torch.matmul(x, y.transpose(-2, -1)) / x.shape[-2]
         mask = self.target_for(cc)
         target = (mask - mask.mean())
-        if random.randint(1,1) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did. Didn't we need this for something though? Oh yeah: better consider the loss.
+        if random.randint(1,10) == 1: # TODO: Remove this, after we've debugged shuffle. ...We did. Didn't we need this for something though? Oh yeah: better consider the loss. ...We did, and decided that we were happier with max-finding.
             global IM
             if IM is None:
                 IM = plt.imshow(cc.detach().cpu().numpy())
@@ -77,7 +78,10 @@ class CrossCorrelationLoss(nn.Module):
         y = torch.index_select(y, -2, indices)
         return (L, (x - y).square().mean(-2).sum())
     def target_for(self, cc):
-        """Given a cross-correlation matrix, returns the 0|1 target that it should predict. (This is an approximate solution, but it works well enough.)"""
+        """Given a cross-correlation matrix, returns the 0|1 target that it should predict. (This is an approximate solution, but it works well enough. Needs `O(N^2*log(N))` time. Might not handle non-power-of-2 sizes as well.)"""
+        # Do several max-swaps to approximate global-optimum.
+        #   Probably not optimal, but good enough, and deterministic.
+        #     (Besides, more optimal solutions seem to change quicker between epochs, making learning more challenging.)
         mask = torch.eye(cc.shape[-2], cc.shape[-1], device = cc.device) # TODO: ...Wait, what about 3D: shouldn't we insert extra dimensions, to handle them separately?
         if not self.shuffle_invariant: return mask
         def swap(a, k):
@@ -96,19 +100,13 @@ class CrossCorrelationLoss(nn.Module):
             sumB = swap(cc * b, k).sum(-2, True)
             sumB = sumB + swap(sumB, k)
             return torch.where(sumA > sumB, a, b)
-        # Do several max-swaps to approximate global-optimum. Probably not optimal, but good enough, and deterministic.
         with torch.no_grad():
-            # k = 1
-            # while k < cc.shape[-1]:
-            #     mask = max_swap(mask, k, cc)
-            #     k = k * 2
-            # for k in range(1, cc.shape[-1]): mask = max_swap(mask, k, cc) # TODO: ...Why does this break the mask completely?!
-            k, ks = 1, []
-            while k < cc.shape[-1]:
-                ks.append(k)
-                k = k * 2
-            for k in reversed(ks): mask = max_swap(mask, k, cc)
-            # TODO: ...Why does the shape of the target (like the diagonals along which the points seem to be clustered) depend so heavily on the order of our operations... And why can we break the mask...
+            # Halve the offset until we're fine-tuning.
+            k = cc.shape[-1] // 2
+            while k > 0:
+                mask = max_swap(mask, k, cc)
+                k = (k+1) // 2
+                if k <= 1: break
             return mask
 
 
@@ -137,7 +135,7 @@ if __name__ == '__main__': # Tests.
         nn.Linear(128, out_sz),
     )
     opt = Adam([*fn.parameters(), *fn2.parameters()], 1e-4)
-    for _ in range(5000): # TODO: 1000
+    for _ in range(1000):
         A, B = fn(input), fn2(output)
         L, L2 = loss(A, B)
         print('norm CCL', str(L.detach().cpu().numpy()).ljust(11), '    norm L2', L2.detach().cpu().numpy())
