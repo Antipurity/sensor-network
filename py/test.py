@@ -92,7 +92,7 @@ from model.log import log
 
 cell_shape, part_size = (8, 24, 64), 8
 sn.shape(cell_shape, part_size)
-state_sz, goal_sz = 128, 128 # TODO: Actually, we do want bigger cells, and when we return feedback, just slice away the extra numbers. ...And this `state_sz` is misnamed, should still be `hidden_sz`... Or maybe just make NNs use not `sum(cell_shape)` as sizes but `state_sz`.
+state_sz, goal_sz = 128, 128
 max_state_cells = 1024
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False)
@@ -110,13 +110,13 @@ class SelfAttention(nn.Module):
         x = torch.unsqueeze(x, -2)
         y, _ = self.fn(x, x, x, need_weights=False)
         return torch.squeeze(y, -2)
-def f(in_sz = state_sz, out_sz = state_sz):
+def f(in_sz = state_sz, out_sz = state_sz): # A per-cell transform.
     return SkipConnection(
         nn.LayerNorm(in_sz),
         nn.ReLU(),
         nn.Linear(in_sz, out_sz),
     )
-def h(in_sz = state_sz, out_sz = state_sz):
+def h(in_sz = state_sz, out_sz = state_sz): # A cross-cell transform.
     return SkipConnection(
         nn.LayerNorm(in_sz),
         nn.ReLU(),
@@ -148,28 +148,19 @@ class Next(nn.Module):
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 embed_data = nn.Sequential( # data → state (to concat at the end)
     nn.Linear(sum(cell_shape), state_sz),
-    SkipConnection(
-        nn.ReLU(),
-        nn.LayerNorm(state_sz),
-        nn.Linear(state_sz, sum(cell_shape)),
-    ),
+    f(state_sz),
 ).to(device)
 embed_query = nn.Sequential( # query → state (to concat at the end)
     nn.Linear(sum(cell_shape) - cell_shape[-1], state_sz),
-    SkipConnection(
-        nn.ReLU(),
-        nn.LayerNorm(state_sz),
-        nn.Linear(state_sz, sum(cell_shape)),
-    ),
+    f(state_sz),
 ).to(device)
-condition_state_on_goal = h(sum(cell_shape) + goal_sz, sum(cell_shape)).to(device)
+condition_state_on_goal = h(state_sz + goal_sz, state_sz).to(device)
 transition = nn.Sequential( # state → state; the differentiable part of the RNN transition.
-    h(sum(cell_shape), sum(cell_shape)),
-    h(sum(cell_shape), sum(cell_shape)),
+    h(state_sz, state_sz),
+    h(state_sz, state_sz),
 ).to(device)
 ev = nn.Sequential( # state → goal.
-    h(sum(cell_shape), goal_sz),
-    h(sum(cell_shape), goal_sz),
+    h(state_sz, goal_sz),
 ).to(device)
 next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
 loss = CrossCorrelationLoss(
@@ -197,7 +188,7 @@ model = RNN(
 
 
 
-state = torch.randn(16, sum(cell_shape), device=device)
+state = torch.randn(16, state_sz, device=device)
 feedback = None
 exploration_peaks = [0.]
 async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
@@ -216,7 +207,7 @@ async def main():
         await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
         state = model(state, data, query)
-        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
+        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[0]])
 
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable(), CCL_was, L2_was))
 asyncio.run(main()) # TODO: ...Maybe, should have the `sn.run` decorator so that users don't have to waste 2 lines on this...
