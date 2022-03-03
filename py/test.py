@@ -92,8 +92,9 @@ from model.loss import CrossCorrelationLoss
 
 
 cell_shape, part_size = (8, 24, 64), 8
-state_sz, goal_sz = 128, 128
 sn.shape(cell_shape, part_size)
+state_sz, goal_sz = 128, 128
+max_state_cells = 1024
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False)
 
@@ -123,6 +124,23 @@ def h(in_sz = state_sz, out_sz = state_sz):
         SelfAttention(embed_dim=in_sz, num_heads=2),
         f(in_sz, out_sz),
     )
+class Next(nn.Module):
+    """Incorporate observations, and transition the state.
+
+    (For stability, would be a good idea to split `data` & `query` if their concatenation is too long and transition for each chunk, to not forget too much of our internal state: let the RNN learn time-dynamics, Transformer is just a reach-extension mechanism for better optimization. Currently not implemented.)"""
+    def __init__(self, embed_data, embed_query, transition, condition_state_on_goal, max_state_cells):
+        self.embed_data = embed_data
+        self.embed_query = embed_query
+        self.transition = transition
+        self.condition_state_on_goal = condition_state_on_goal
+        self.max_state_cells = max_state_cells
+    def forward(self, state, data, query):
+        data = self.embed_data(torch.as_tensor(data, dtype=torch.float32, device=state.device))
+        query = self.embed_query(torch.as_tensor(query, dtype=torch.float32, device=state.device))
+        state = torch.cat((state, data, query), 0)[-self.max_state_cells:, :]
+        state = self.condition_state_on_goal(torch.cat((state, ev(state)), 1))
+        state = self.transition(state)
+        return state
 
 
 
@@ -144,7 +162,7 @@ embed_query = nn.Sequential( # query → state (to concat at the end)
     ),
 ).to(device)
 condition_state_on_goal = h(sum(cell_shape) + goal_sz, sum(cell_shape)).to(device)
-next = nn.Sequential( # state → state; RNN.
+transition = nn.Sequential( # state → state; the differentiable part of the RNN transition.
     h(sum(cell_shape), sum(cell_shape)),
     h(sum(cell_shape), sum(cell_shape)),
 ).to(device)
@@ -152,47 +170,34 @@ ev = nn.Sequential( # state → goal.
     h(sum(cell_shape), goal_sz),
     h(sum(cell_shape), goal_sz),
 ).to(device)
-# TODO: Code up an actual Module that incorporates data & query and does a transition and returns feedback (through a global variable, or its own variable, probably). Use that as `RNN`'s transition. Don't just call `embed_data`/`embed_query`/`condition_state_on_goal` in the loop, that'll consume memory when we don't want it to.
+next = Next(embed_data, embed_query, transition, condition_state_on_goal, max_state_cells)
 loss = CrossCorrelationLoss(
     axis=-2, # TODO: (Also try the "cross-norm along -1" variant.)
     decorrelation_strength=.1,
     shuffle_invariant=True,
     also_return_l2=True,
 )
-def optimizer_stepper(p):
-    optimizer = torch.optim.Adam([ # TODO: Would be able to use `p` with an actual Module.
-        *embed_data.parameters(),
-        *embed_query.parameters(),
-        *condition_state_on_goal.parameters(),
-        *next.parameters(),
-        *ev.parameters(),
-    ], lr=1e-4)
-    def step():
-        optimizer.step()
-        optimizer.zero_grad(True)
-    return step
 def loss_func(prev_state, next_state):
-    global loss_was
+    global loss_was, L2_was
     eps = 1e-5
     A, B = ev(prev_state), ev(next_state)
     A = (A - A.mean(-1)) / (A.std(-1) + eps)
     B = (B - B.mean(-1)) / (B.std(-1) + eps)
-    loss_was = loss(A, B)
+    loss_was, L2_was = loss(A, B)
     return loss_was
 model = RNN(
     transition = next,
     loss = loss_func,
-    optimizer = optimizer_stepper, # TODO: We *could* just create an actual optimizer, now.
+    optimizer = lambda p: torch.optim.Adam(p, lr=1e-3),
     backprop_length = lambda: random.randint(2, 4), # TODO: (Figure out what's up with the crazy memory usage.)
     trace = False, # TODO:
 )
 
 
 
-max_state_cells = 1024
 state = torch.randn(16, sum(cell_shape), device=device)
 feedback = None
-loss_was = 0.
+loss_was, L2_was = 0.
 exploration_peaks = [0.]
 async def print_loss(data_len, query_len, explored, loss, reachable):
     loss = await sn.torch(torch, loss, True)
@@ -203,19 +208,13 @@ async def print_loss(data_len, query_len, explored, loss, reachable):
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
     print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss)) # TODO: Should have a little system where we call a func with keyword args and it measures max-str-len-so-far and prints everything correctly. ...In `model.logging`.
+    # TODO: Also print `L2_was`. And `loss_was`.
 async def main():
     global state, feedback
     while True:
-        # (…Might want to also split data/query into multiple RNN updates if we have too much data.)
-        #   (Let the RNN learn the time dynamics, a Transformer is more of a reach-extension mechanism.)
-        # (…Might also want to do proper GPT-style pre-training, predicting shifted-by-1-to-the-left input, or ensuring that resulting representations stay the same.)
         await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower. (The fan hardly being active sure is nice, though.)
         data, query, data_error, query_error = await sn.handle(feedback)
-        data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device)) # TODO: This input-incorporation should happen in the transition instead. (Would take much less memory.)
-        query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
-        state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
-        state = condition_state_on_goal(torch.cat((state, ev(state)), 1))
-        state = model(state)
+        state = model(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was, minienv.reachable()))
 asyncio.run(main()) # TODO: ...Maybe, should have the `sn.run` decorator so that users don't have to waste 2 lines on this...
