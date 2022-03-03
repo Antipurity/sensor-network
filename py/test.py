@@ -11,7 +11,7 @@ Let's not mistake ambition for wisdom. So if we want to proceed, we'd better mak
 
 In Reinforcement Learning without reinforcement, all we have is an environment that gives observations to our agent and receives actions.
 
-Without rewards, goals can only be (dependent on) states, which incorporate observations and produce actions as they are unrolled in time: `goal = ev(state)`. Postulating "goals are basically states" actually makes things simpler than with reward, for which we'd have to construct a separate differentiable model [(the critic)](https://hal.archives-ouvertes.fr/hal-00756747/file/ivo_smcc12_survey.pdf) to maximize [(the actor)](https://hal.archives-ouvertes.fr/hal-00756747/file/ivo_smcc12_survey.pdf) and [have problems with properly incorporating the future.](https://arxiv.org/abs/2201.12417)
+Without rewards, goals can only be (dependent on) states, which incorporate observations and produce actions as they are unrolled in time: `goal = ev(state)`. Postulating "goals are `ev`entual states" actually makes things simpler than with reward, for which we'd have to construct a separate differentiable model [(the critic)](https://hal.archives-ouvertes.fr/hal-00756747/file/ivo_smcc12_survey.pdf) to maximize [(the actor)](https://hal.archives-ouvertes.fr/hal-00756747/file/ivo_smcc12_survey.pdf) and [still have problems with properly incorporating the future.](https://arxiv.org/abs/2201.12417)
 
 To prepare for goal-directed behavior, should practice reaching all possible goals, and build a good map of how to get from anywhere to anywhere, for downstream tasks to use.
 
@@ -124,20 +124,21 @@ def h(in_sz = state_sz, out_sz = state_sz):
         f(in_sz, out_sz),
     )
 class Next(nn.Module):
-    """Incorporate observations, and transition the state.
+    """Incorporate observations & queries, and transition the state. Take feedback directly from the resulting state.
 
     (For stability, would be a good idea to split `data` & `query` if their concatenation is too long and transition for each chunk, to not forget too much of our internal state: let the RNN learn time-dynamics, Transformer is just a reach-extension mechanism for better optimization. Currently not implemented.)"""
-    def __init__(self, embed_data, embed_query, transition, condition_state_on_goal, max_state_cells):
+    def __init__(self, embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, goal):
         self.embed_data = embed_data
         self.embed_query = embed_query
+        self.max_state_cells = max_state_cells
         self.transition = transition
         self.condition_state_on_goal = condition_state_on_goal
-        self.max_state_cells = max_state_cells
+        self.goal = goal
     def forward(self, state, data, query):
         data = self.embed_data(torch.as_tensor(data, dtype=torch.float32, device=state.device))
         query = self.embed_query(torch.as_tensor(query, dtype=torch.float32, device=state.device))
         state = torch.cat((state, data, query), 0)[-self.max_state_cells:, :]
-        state = self.condition_state_on_goal(torch.cat((state, ev(state)), 1)) # TODO: NEED TO PASS IN `ev` TOO
+        state = self.condition_state_on_goal(torch.cat((state, self.goal(state)), 1))
         state = self.transition(state)
         return state
 # TODO: Also have a module for stochastic sampling, which splits its input into 2 parts and interprets them as mean & stdev of Gaussians. (Right before its uses, should either have soft-constraints like VAE's regularization (basically, make mean into 0 and stdev into 1) or hard-constraints via actual LayerNorm or BatchNorm.) (May want to make `transition` stochastic with this, to avoid a poor init preventing exploration.)
@@ -170,7 +171,7 @@ ev = nn.Sequential( # state → goal.
     h(sum(cell_shape), goal_sz),
     h(sum(cell_shape), goal_sz),
 ).to(device)
-next = Next(embed_data, embed_query, transition, condition_state_on_goal, max_state_cells)
+next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
 loss = CrossCorrelationLoss(
     axis=-2, # TODO: (Also try the "cross-norm along -1" variant. Possibly even both at the same time.)
     decorrelation_strength=.1,
