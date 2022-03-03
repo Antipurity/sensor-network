@@ -171,7 +171,7 @@ loss = CrossCorrelationLoss(
     also_return_l2=True,
 )
 CCL_was, L2_was = 0., 0.
-def loss_func(prev_state, next_state):
+def loss_func(prev_state, next_state, *_):
     global CCL_was, L2_was
     eps = 1e-5
     A, B = ev(prev_state), ev(next_state)
