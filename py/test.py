@@ -86,14 +86,14 @@ import torch.nn as nn
 import sensornet as sn
 import minienv
 from model.rnn import RNN
-from model.momentum_copy import MomentumCopy
 from model.loss import CrossCorrelationLoss
+from model.log import log # TODO: Use this, not our bad logging solution somewhere below.
 
 
 
 cell_shape, part_size = (8, 24, 64), 8
 sn.shape(cell_shape, part_size)
-state_sz, goal_sz = 128, 128
+state_sz, goal_sz = 128, 128 # TODO: Actually, we do want bigger cells, and when we return feedback, just slice away the extra numbers. ...And this `state_sz` is misnamed, should still be `hidden_sz`... Or maybe just make NNs use not `sum(cell_shape)` as sizes but `state_sz`.
 max_state_cells = 1024
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False)
