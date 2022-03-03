@@ -83,7 +83,7 @@ class CrossCorrelationLoss(nn.Module):
             N = a.shape[-1]
             down = torch.cat(list(reversed(torch.split(a, (k, N-k), -1))), -1)
             up = torch.cat(list(reversed(torch.split(a, (N-k, k), -1))), -1)
-            which = torch.div(torch.arange(0,N), k, rounding_mode='trunc') % 2 == 0
+            which = torch.div(torch.arange(0,N, device=a.device), k, rounding_mode='trunc') % 2 == 0
             return torch.where(which, down, up)
         def max_swap(a, k, cc):
             """Swaps columns of `a` with those shifted by `k`, but only wherever this minimizes the distance from cross-correlation `cc`."""
