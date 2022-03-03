@@ -169,6 +169,7 @@ transition = nn.Sequential( # state → state; the differentiable part of the RN
     nn.LayerNorm(2*state_sz),
     NormalSamples(),
     h(state_sz, state_sz),
+    h(state_sz, state_sz),
 ).to(device)
 ev = nn.Sequential( # state → goal.
     h(state_sz, goal_sz),
@@ -190,10 +191,10 @@ def loss_func(prev_state, next_state, *_):
     global CCL_was, L2_was
     eps = 1e-5
     A, B = ev(prev_state), ev(next_state)
-    A = (A - A.mean(-1, True)) / (A.std(-1, keepdim=True) + eps)
-    B = (B - B.mean(-1, True)) / (B.std(-1, keepdim=True) + eps)
+    # A = (A - A.mean(-1, True)) / (A.std(-1, keepdim=True) + eps)
+    # B = (B - B.mean(-1, True)) / (B.std(-1, keepdim=True) + eps)
     # A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
-    CCL_was, L2_was = number_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
+    CCL_was, L2_was = cell_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
     return CCL_was
 model = RNN(
     transition = next,
@@ -218,7 +219,6 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
     reachable = round(reachable*100, 2)
-    clear(1024)
     # Ignored: `data_len`, `query_len`, `reachable`, `CCL`, `L2`
     #   TODO: Maybe, instead of ignoring them, should have a positional arg to `log` that determines which bucket they fall into?
     log(explored=explored, explored_avg=explored_avg)
@@ -226,7 +226,7 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
 async def main():
     global state, feedback
     while True:
-        await asyncio.sleep(.05) # TODO: Remove this to go fast.
+        # await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
         # import numpy as np;  data = np.concatenate((np.random.randn(1, data.shape[-1]), data)) # TODO: This simple data noise is not a principled approach at all.
         # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
