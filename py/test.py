@@ -142,10 +142,15 @@ class Next(nn.Module):
         state = self.condition_state_on_goal(torch.cat((state, self.goal(state)), 1))
         state = self.transition(state)
         return state
-# TODO: Also have a module for stochastic sampling, which splits its input into 2 parts and interprets them as mean & stdev of Gaussians. (Right before its uses, should either have soft-constraints like VAE's regularization (basically, make mean into 0 and stdev into 1) or hard-constraints via actual LayerNorm or BatchNorm.) (May want to make `transition` stochastic with this, to avoid a poor init preventing exploration.)
-#   You know, looking at how many back-and-forth loops there really are, I think we really need this. Pretty sure that our extreme non-diversity might just be the main reason behind trash-like performance.
-#   (Alternatively, `minienv` might be a bad environment for this kind of thing. Maybe implement something like the Pendulum environment.)
-#   What would we name it?
+class NormalSamples(nn.Module):
+    """The [reparameterization trick](https://arxiv.org/abs/1312.6114v10) for sampling values from Gaussian distributions with learned mean & stddev.
+
+    The input vector must be twice as big as the output. And, normalize it, since we don't impose a loss-based regularization on mean & stddev here like VAEs do."""
+    def __init__(self): super().__init__()
+    def forward(self, mean_std):
+        mean, std = mean_std.split(int(mean_std.shape[-1]) // 2, -1)
+        noise = torch.randn_like(mean)
+        return mean + noise*std
 
 
 
@@ -160,7 +165,9 @@ embed_query = nn.Sequential( # query → state (to concat at the end)
 ).to(device)
 condition_state_on_goal = h(state_sz + goal_sz, state_sz).to(device)
 transition = nn.Sequential( # state → state; the differentiable part of the RNN transition.
-    h(state_sz, state_sz),
+    h(state_sz, 2*state_sz),
+    nn.LayerNorm(2*state_sz),
+    NormalSamples(),
     h(state_sz, state_sz),
 ).to(device)
 ev = nn.Sequential( # state → goal.
@@ -221,7 +228,7 @@ async def main():
     while True:
         await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
-        import numpy as np;  data = np.concatenate((np.random.randn(1, data.shape[-1]), data)) # TODO:
+        # import numpy as np;  data = np.concatenate((np.random.randn(1, data.shape[-1]), data)) # TODO: This simple data noise is not a principled approach at all.
         # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
         state = model(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
