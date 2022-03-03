@@ -74,7 +74,6 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 # TODO: Abandon all hatred. Spread love. No ill-considered approaches like before. Only the well-founded URL. Inspect and support its every step on the way.
 """
-# TODO: (Also, make logging create and interactively-update plots for all the values. ...In fact, should have the `logging` module that does that...)
 
 
 
@@ -87,7 +86,7 @@ import sensornet as sn
 import minienv
 from model.rnn import RNN
 from model.loss import CrossCorrelationLoss
-from model.log import log # TODO: Use this, not our bad logging solution somewhere below.
+from model.log import log
 
 
 
@@ -138,9 +137,10 @@ class Next(nn.Module):
         data = self.embed_data(torch.as_tensor(data, dtype=torch.float32, device=state.device))
         query = self.embed_query(torch.as_tensor(query, dtype=torch.float32, device=state.device))
         state = torch.cat((state, data, query), 0)[-self.max_state_cells:, :]
-        state = self.condition_state_on_goal(torch.cat((state, ev(state)), 1))
+        state = self.condition_state_on_goal(torch.cat((state, ev(state)), 1)) # TODO: NEED TO PASS IN `ev` TOO
         state = self.transition(state)
         return state
+# TODO: Also have a module for stochastic sampling, which splits its input into 2 parts and interprets them as mean & stdev of Gaussians. (Right before its uses, should either have soft-constraints like VAE's regularization (basically, make mean into 0 and stdev into 1) or hard-constraints via actual LayerNorm or BatchNorm.) (May want to make `transition` stochastic with this, to avoid a poor init preventing exploration.)
 
 
 
@@ -172,49 +172,50 @@ ev = nn.Sequential( # state → goal.
 ).to(device)
 next = Next(embed_data, embed_query, transition, condition_state_on_goal, max_state_cells)
 loss = CrossCorrelationLoss(
-    axis=-2, # TODO: (Also try the "cross-norm along -1" variant.)
+    axis=-2, # TODO: (Also try the "cross-norm along -1" variant. Possibly even both at the same time.)
     decorrelation_strength=.1,
     shuffle_invariant=True,
     also_return_l2=True,
 )
+CCL_was, L2_was = 0., 0.
 def loss_func(prev_state, next_state):
-    global loss_was, L2_was
+    global CCL_was, L2_was
     eps = 1e-5
     A, B = ev(prev_state), ev(next_state)
     A = (A - A.mean(-1)) / (A.std(-1) + eps)
     B = (B - B.mean(-1)) / (B.std(-1) + eps)
-    loss_was, L2_was = loss(A, B)
-    return loss_was
+    CCL_was, L2_was = loss(A, B)
+    return CCL_was
 model = RNN(
     transition = next,
     loss = loss_func,
     optimizer = lambda p: torch.optim.Adam(p, lr=1e-3),
-    backprop_length = lambda: random.randint(2, 4), # TODO: (Figure out what's up with the crazy memory usage.)
-    trace = False, # TODO:
+    backprop_length = lambda: random.randint(2, 4), # TODO:
+    trace = False, # TODO: (The loss is still not grad-checkpointed, though. ...Maybe `RNN` could allow returning tuples from transitions, and pass all to loss then discard all non-first results? Then we won't need memory, though print_loss will be a bit out of date... As a bonus, we won't have to compute `ev(prev_state)` twice.)
 )
 
 
 
 state = torch.randn(16, sum(cell_shape), device=device)
 feedback = None
-loss_was, L2_was = 0.
 exploration_peaks = [0.]
-async def print_loss(data_len, query_len, explored, loss, reachable):
-    loss = await sn.torch(torch, loss, True)
+async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
+    CCL, L2 = sn.torch(torch, CCL, True), sn.torch(torch, L2, True)
+    CCL, L2 = await CCL, await L2
     explored = round(explored*100, 2)
     if explored >= exploration_peaks[-1]: exploration_peaks[-1] = explored
     else: exploration_peaks.append(explored)
     if len(exploration_peaks) > 2048:
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
-    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss)) # TODO: Should have a little system where we call a func with keyword args and it measures max-str-len-so-far and prints everything correctly. ...In `model.logging`.
-    # TODO: Also print `L2_was`. And `loss_was`.
+    log(data=data_len, query=query_len, explored=explored, explored_avg=explored_avg, reachable=reachable, CCL=CCL, L2=L2)
 async def main():
     global state, feedback
     while True:
-        await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower. (The fan hardly being active sure is nice, though.)
+        await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
         state = model(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
-        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was, minienv.reachable()))
+
+        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable(), CCL_was, L2_was))
 asyncio.run(main()) # TODO: ...Maybe, should have the `sn.run` decorator so that users don't have to waste 2 lines on this...
