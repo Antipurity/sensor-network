@@ -3,7 +3,7 @@ Testing how far we can push "compression = exploration": compression reduces red
 
 ---
 
-RL is notoriously difficult to train. It hasn't had its BERT moment yet.
+[RL is notoriously difficult to train agents with.](https://www.alexirpan.com/2018/02/14/rl-hard.html) It hasn't had its BERT moment yet.
 
 Let's not mistake ambition for wisdom. So if we want to proceed, we'd better make sure that we have an idea of what we're doing. Let's try the Feynman technique: creation by teaching, useful because in good teaching, concepts must be as simple as possible.
 
@@ -74,6 +74,7 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 # TODO: Abandon all hatred. Spread love. No ill-considered approaches like before. Only the well-founded URL. Inspect and support its every step on the way.
 """
+# TODO: (Also, make logging create and interactively-update plots for all the values. ...In fact, should have the `logging` module that does that...)
 
 
 
@@ -91,6 +92,7 @@ from model.loss import CrossCorrelationLoss
 
 
 cell_shape, part_size = (8, 24, 64), 8
+state_sz, goal_sz = 128, 128
 sn.shape(cell_shape, part_size)
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False)
@@ -108,107 +110,87 @@ class SelfAttention(nn.Module):
         x = torch.unsqueeze(x, -2)
         y, _ = self.fn(x, x, x, need_weights=False)
         return torch.squeeze(y, -2)
-class Sum(nn.Module):
-    def __init__(self): super().__init__()
-    def forward(self, x): return x.sum(0)
-
-
-
-# TODO: Destroy what's below, and remake it into our new image.
-
-
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-hidden_sz, fut_sz = 128, 128
-embed_data = nn.Sequential( # data → state (to concat at the end)
-    nn.Linear(sum(cell_shape), hidden_sz),
-    SkipConnection(
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, sum(cell_shape)),
-    ),
-).to(device)
-embed_query = nn.Sequential( # query → state (to concat at the end)
-    nn.Linear(sum(cell_shape) - cell_shape[-1], hidden_sz),
-    SkipConnection(
-        nn.ReLU(),
-        nn.LayerNorm(hidden_sz),
-        nn.Linear(hidden_sz, sum(cell_shape)),
-    ),
-).to(device)
-def f(in_sz = hidden_sz, out_sz = hidden_sz):
+def f(in_sz = state_sz, out_sz = state_sz):
     return SkipConnection(
         nn.LayerNorm(in_sz),
         nn.ReLU(),
         nn.Linear(in_sz, out_sz),
     )
-def h(in_sz = hidden_sz, out_sz = hidden_sz):
+def h(in_sz = state_sz, out_sz = state_sz):
     return SkipConnection(
         nn.LayerNorm(in_sz),
         nn.ReLU(),
         SelfAttention(embed_dim=in_sz, num_heads=2),
         f(in_sz, out_sz),
     )
-condition_state_on_goal = f(sum(cell_shape) + fut_sz, sum(cell_shape)).to(device)
-state_transition = nn.Sequential( # state → state; RNN.
+
+
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+embed_data = nn.Sequential( # data → state (to concat at the end)
+    nn.Linear(sum(cell_shape), state_sz),
+    SkipConnection(
+        nn.ReLU(),
+        nn.LayerNorm(state_sz),
+        nn.Linear(state_sz, sum(cell_shape)),
+    ),
+).to(device)
+embed_query = nn.Sequential( # query → state (to concat at the end)
+    nn.Linear(sum(cell_shape) - cell_shape[-1], state_sz),
+    SkipConnection(
+        nn.ReLU(),
+        nn.LayerNorm(state_sz),
+        nn.Linear(state_sz, sum(cell_shape)),
+    ),
+).to(device)
+condition_state_on_goal = h(sum(cell_shape) + goal_sz, sum(cell_shape)).to(device)
+next = nn.Sequential( # state → state; RNN.
     h(sum(cell_shape), sum(cell_shape)),
     h(sum(cell_shape), sum(cell_shape)),
 ).to(device)
-state_future = nn.Sequential( # state → future; BYOL projector.
-    h(sum(cell_shape), fut_sz),
-    Sum(),
+ev = nn.Sequential( # state → goal.
+    h(sum(cell_shape), goal_sz),
+    h(sum(cell_shape), goal_sz),
 ).to(device)
-slow_state_future = MomentumCopy(state_future, .99)
-future_transition = nn.Sequential( # future → future; BYOL predictor.
-    f(fut_sz, hidden_sz),
-    f(hidden_sz, fut_sz),
-).to(device)
+# TODO: Code up an actual Module that incorporates data & query and does a transition and returns feedback (through a global variable, or its own variable, probably). Use that as `RNN`'s transition. Don't just call `embed_data`/`embed_query`/`condition_state_on_goal` in the loop, that'll consume memory when we don't want it to.
+loss = CrossCorrelationLoss(
+    axis=-2, # TODO: (Also try the "cross-norm along -1" variant.)
+    decorrelation_strength=.1,
+    shuffle_invariant=True,
+    also_return_l2=True,
+)
 def optimizer_stepper(p):
-    optimizer = torch.optim.Adam([
+    optimizer = torch.optim.Adam([ # TODO: Would be able to use `p` with an actual Module.
         *embed_data.parameters(),
         *embed_query.parameters(),
         *condition_state_on_goal.parameters(),
-        *state_transition.parameters(),
-        *state_future.parameters(),
-        *future_transition.parameters(),
+        *next.parameters(),
+        *ev.parameters(),
     ], lr=1e-4)
     def step():
         optimizer.step()
         optimizer.zero_grad(True)
-        slow_state_future.update()
     return step
-def loss(prev_state, next_state):
+def loss_func(prev_state, next_state):
     global loss_was
     eps = 1e-5
-    # BYOL loss: `predictor(projector(state1)) = sg(projector(state2))`
-    A = future_transition(state_future(prev_state.detach())) # TODO: Detach this maybe?
-    A = (A - A.mean()) / (A.std() + eps)
-    with torch.no_grad():
-        B = slow_state_future(next_state.detach())
-        B = (B - B.mean()) / (B.std() + eps)
-    loss_was = (A - B).square().sum()
-    # Exploration loss: `projector<RNN>(state) = goal`
-    for p in state_future.parameters(): p.requires_grad_(False)
-    C = state_future(prev_state) # TODO: prev_state maybe?
-    for p in state_future.parameters(): p.requires_grad_(True)
-    #   TODO: Try the actual state_future, with params frozen? ….65%…
-    C = (C - C.mean()) / (C.std() + eps)
-    D = (goal - goal.mean()) / (goal.std() + eps)
-    loss_was = loss_was + 1. * (C - D).square().sum() # (TODO: …Might want to experiment with the coefficient.)
+    A, B = ev(prev_state), ev(next_state)
+    A = (A - A.mean(-1)) / (A.std(-1) + eps)
+    B = (B - B.mean(-1)) / (B.std(-1) + eps)
+    loss_was = loss(A, B)
     return loss_was
 model = RNN(
-    transition = state_transition,
-    loss = loss,
-    optimizer = optimizer_stepper,
-    backprop_length = lambda: random.randint(2, 32), # TODO: (Figure out what's up with the crazy memory usage.) # TODO: Try making this longer again.
-    trace = False, # TODO: (…This doesn't help reduce memory usage… Is it due to the non-RNN `embed_data` and `embed_query`, and actually, `future_transition` and `state_future` too?)
+    transition = next,
+    loss = loss_func,
+    optimizer = optimizer_stepper, # TODO: We *could* just create an actual optimizer, now.
+    backprop_length = lambda: random.randint(2, 4), # TODO: (Figure out what's up with the crazy memory usage.)
+    trace = False, # TODO:
 )
 
 
 
 max_state_cells = 1024
 state = torch.randn(16, sum(cell_shape), device=device)
-goal = torch.randn(fut_sz, device=device) # The RNN will try to make BYOL state match this.
 feedback = None
 loss_was = 0.
 exploration_peaks = [0.]
@@ -220,73 +202,20 @@ async def print_loss(data_len, query_len, explored, loss, reachable):
     if len(exploration_peaks) > 2048:
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
-    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss)) # TODO: Should have a little system where we call a func with keyword args and it measures max-str-len-so-far and prints everything correctly.
+    print(str(data_len).rjust(3), str(query_len).ljust(2), 'explored', str(explored).rjust(5)+'%', ' avg', str(round(explored_avg, 2)).rjust(5)+'%', ' reachable', str(round(reachable*100, 2)).rjust(5)+'%', '  L2', str(loss)) # TODO: Should have a little system where we call a func with keyword args and it measures max-str-len-so-far and prints everything correctly. ...In `model.logging`.
 async def main():
-    global state, goal, feedback
+    global state, feedback
     while True:
         # (…Might want to also split data/query into multiple RNN updates if we have too much data.)
         #   (Let the RNN learn the time dynamics, a Transformer is more of a reach-extension mechanism.)
         # (…Might also want to do proper GPT-style pre-training, predicting shifted-by-1-to-the-left input, or ensuring that resulting representations stay the same.)
         await asyncio.sleep(.05) # TODO: Remove. It serves no purpose now, other than going slower. (The fan hardly being active sure is nice, though.)
         data, query, data_error, query_error = await sn.handle(feedback)
-        data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device))
+        data = embed_data(torch.as_tensor(data, dtype=torch.float32, device=device)) # TODO: This input-incorporation should happen in the transition instead. (Would take much less memory.)
         query = embed_query(torch.as_tensor(query, dtype=torch.float32, device=device))
         state = torch.cat((state, data, query), 0)[-max_state_cells:, :]
-        state = condition_state_on_goal(torch.cat((state, goal.unsqueeze(0).expand(state.shape[0], goal.shape[-1])), 1))
+        state = condition_state_on_goal(torch.cat((state, ev(state)), 1))
         state = model(state)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :])
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), loss_was, minienv.reachable()))
-
-        # Change the goal sometimes.
-        if random.randint(1, 10) == 1:
-            goal = torch.randn(fut_sz, device=device)
-
-        # import numpy as np # TODO:
-        # sn.data(None, np.random.rand(1, 96)*2-1) # TODO: Instead of this, concat that noise to `data`, so that we don't get ghost steps.
-asyncio.run(main())
-
-
-
-
-# TODO: Fix exploration. Try different normalization schemes. Simplify the problem and/or models. Establish *some* ground that works at least a bit, or else we'll just be floundering forever.
-
-
-
-# TODO: That "normalization of futures will lead to exploration" seems like a big weak point. So, try (reporting avg-of-peaks exploration):
-# - ❌ Make future-nets have no attention, so every cell fends for itself. (Slightly better. Which makes no sense: post-RNN-transition cells are not in the same place, so we need attention.)
-# - Baselines:
-#     - ✓ Random agent. .37% (1.5% with allow_suicide=False)
-#     - ⋯ No-BYOL-loss agent (frozen-weights RNN).
-# - Normalization:
-#     - ❌ Cross-cell normalization.
-#         - Single-cell 4-number futures: .1%, .1%, .13%, .15%, .24%, .28% (usually doesn't converge)
-#     - ❌ Per-cell normalization (LayerNorm at the end of the future-predictor).
-#         - Single-cell 4-number futures: .14%, .18%, .22%, .25%, .45%
-#     - ❌ Whole-state normalization (empirically the best, though not by much).
-#         - Single-cell 4-number futures: .1%, .11%, .18%, .55%, .78%
-#         - Single-cell 128-number futures: .23% .29% .34% .41% .5% (may seem better, but the reporting method actually changed to have less bugs and no longer penalize .1%-swathes, so, about the same as 4-num-fut)
-#         - With `state_future` using attention and not just linear layers: .1% .1% .1% .1% .1% .11% .12% .15% .42%
-#     - ⋯ Running statistics (BatchNorm in eval mode).
-# - ❌ Very small future-representations. (No significant advantage.)
-#     - ONLY if successful:
-#         - Cumulative sum right before normalization?
-#         - Hierarchical downsampling, which may make more sense than cumsum?
-#         - Weight decay with long learning?
-# - ✓ Try having only one future vector, rather than per-cell vectors; BYOL doesn't have normalization issues, so why should we? Were we failing because our BYOL impl was wrong? (What does it even mean to encode the future state of a cell rather than a system, anyway?)
-#     - (Proven to be no use by itself, but goal-directedness won't work without this. No one will miss the previous version which was not any better than random chance.)
-# - Put off:
-#     - ⋯ Disallow suicide?
-#     - ⋯ Try to sometimes reset state to a random vector. (And/or try making `trivial_exploration_test.py` use proper RNN machinery, and see whether its exploration disappears. Is our normalization not good enough to ensure uniform sampling in a space we should care about?)
-#         - ⋯ A sensor of random data??
-#     - ⋯ Try many batches at the same time, rewriting `minienv` to allow that?
-#     - ⋯ Alternative losses:
-#         - ⋯ Try [Barlow twins](https://arxiv.org/pdf/2103.03230.pdf), AKA "make all futures perfectly uncorrelated". (Simpler than BYOL, but also doesn't have `future_transition` unless we try it.)
-#         - ⋯ If all fails, translate the "exploration = max sensitivity of future to the past" definition to code: `state.detach()` for the BYOL-loss, and to train `state`, forward-propagate its gradient to the future, and maximize the sum of its magnitudes. (Hopefully, doesn't explode.) (As a bonus, this returns us to our initial "opposing optimization forces at work" formulation. And doesn't actually contradict the BYOL-paradigm, because the BYOL paper doesn't consider gradient of inputs.)
-#             - (Need `pytorch-nightly` (or 1.11) for forward-mode gradients here, though.)
-#     - ⋯ …Add noise to prior state, to match [Mean Teacher](https://arxiv.org/pdf/1703.01780.pdf) better?…
-# - ⋯ If all fails, go back to RL's "compression may be good for exploration" that we were trying to average-away by "compression is exploration": have a non-differentiable `goal` state (sized `cells×fut_sz`) on which state is conditioned, updated randomly sometimes, and make futures predict `goal` (possibly through a critic that predicts futures, to interfere with gradient less) (or `.detach()`ing BYOL-loss and making the RNN maximize goal-ness of the future).
-#     - .68%, .75% (improves extremely slowly) (still very much non-diverse; is our BYOL loss even working?)
-#         - TODO: Why doesn't it work?
-#     - (A much more principled way of adding noise than "just inject noise into internal state". So it's very good and should be implemented, right?)
-#     - (It's basically pretraining for RL: actual goal-maximization could be concerned with just predicting per-cell goals since they can control everything, and thus be much more efficient.) (Very similar to [RIG in visual RL](https://arxiv.org/pdf/1807.04742.pdf), but with BYOL instead of VAE, and with memory, and without reward.)
-#     - (If only that works, then we can think about 1> simplification and 2> trying to achieve exponentially-many goals in linear time.)
+asyncio.run(main()) # TODO: ...Maybe, should have the `sn.run` decorator so that users don't have to waste 2 lines on this...
