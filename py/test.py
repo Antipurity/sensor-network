@@ -175,8 +175,8 @@ def loss_func(prev_state, next_state, *_):
     global CCL_was, L2_was
     eps = 1e-5
     A, B = ev(prev_state), ev(next_state)
-    A = (A - A.mean(-1)) / (A.std(-1) + eps)
-    B = (B - B.mean(-1)) / (B.std(-1) + eps)
+    A = (A - A.mean(-1, True)) / (A.std(-1, keepdim=True) + eps)
+    B = (B - B.mean(-1, True)) / (B.std(-1, keepdim=True) + eps)
     CCL_was, L2_was = loss(A, B)
     return CCL_was
 model = RNN(
@@ -189,7 +189,7 @@ model = RNN(
 
 
 
-state = torch.randn(16, state_sz, device=device)
+state = torch.randn(max_state_cells, state_sz, device=device)
 feedback = None
 exploration_peaks = [0.]
 async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
