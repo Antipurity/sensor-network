@@ -210,6 +210,6 @@ async def main():
         data, query, data_error, query_error = await sn.handle(feedback)
         # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
         state = model(state, data, query)
-        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[0]])
+        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
 
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable(), CCL_was, L2_was))
