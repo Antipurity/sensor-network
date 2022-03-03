@@ -86,14 +86,14 @@ import sensornet as sn
 import minienv
 from model.rnn import RNN
 from model.loss import CrossCorrelationLoss
-from model.log import log
+from model.log import log, clear
 
 
 
 cell_shape, part_size = (8, 24, 64), 8
 sn.shape(cell_shape, part_size)
 state_sz, goal_sz = 128, 128
-max_state_cells = 1024
+max_state_cells = 256
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False)
 
@@ -143,6 +143,9 @@ class Next(nn.Module):
         state = self.transition(state)
         return state
 # TODO: Also have a module for stochastic sampling, which splits its input into 2 parts and interprets them as mean & stdev of Gaussians. (Right before its uses, should either have soft-constraints like VAE's regularization (basically, make mean into 0 and stdev into 1) or hard-constraints via actual LayerNorm or BatchNorm.) (May want to make `transition` stochastic with this, to avoid a poor init preventing exploration.)
+#   You know, looking at how many back-and-forth loops there really are, I think we really need this. Pretty sure that our extreme non-diversity might just be the main reason behind trash-like performance.
+#   (Alternatively, `minienv` might be a bad environment for this kind of thing. Maybe implement something like the Pendulum environment.)
+#   What would we name it?
 
 
 
@@ -164,10 +167,15 @@ ev = nn.Sequential( # state → goal.
     h(state_sz, goal_sz),
 ).to(device)
 next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
-loss = CrossCorrelationLoss(
-    axis=-2, # TODO: (Also try the "cross-norm along -1" variant. Possibly even both at the same time.)
+number_loss = CrossCorrelationLoss(
+    axis=-2,
     decorrelation_strength=.1,
-    shuffle_invariant=True,
+    shuffle_invariant=False, # TODO:
+    also_return_l2=True,
+)
+cell_loss = CrossCorrelationLoss(
+    axis=-1,
+    decorrelation_strength=.1,
     also_return_l2=True,
 )
 CCL_was, L2_was = 0., 0.
@@ -177,13 +185,14 @@ def loss_func(prev_state, next_state, *_):
     A, B = ev(prev_state), ev(next_state)
     A = (A - A.mean(-1, True)) / (A.std(-1, keepdim=True) + eps)
     B = (B - B.mean(-1, True)) / (B.std(-1, keepdim=True) + eps)
-    CCL_was, L2_was = loss(A, B)
+    # A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
+    CCL_was, L2_was = number_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
     return CCL_was
 model = RNN(
     transition = next,
     loss = loss_func,
-    optimizer = lambda p: torch.optim.Adam(p, lr=1e-3),
-    backprop_length = lambda: random.randint(2, 4), # TODO:
+    optimizer = lambda p: torch.optim.Adam(p, lr=1e-4),
+    backprop_length = lambda: random.randint(2, 16), # TODO:
     trace = False, # TODO: (The loss is still not grad-checkpointed, though. ...Maybe `RNN` could allow returning tuples from transitions, and pass all to loss then discard all non-first results? Then we won't need memory, though print_loss will be a bit out of date... As a bonus, we won't have to compute `ev(prev_state)` twice.)
 )
 
@@ -201,13 +210,18 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
     if len(exploration_peaks) > 2048:
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
-    log(data=data_len, query=query_len, explored=explored, explored_avg=explored_avg, reachable=reachable, CCL=CCL, L2=L2)
+    reachable = round(reachable*100, 2)
+    clear(1024)
+    # Ignored: `data_len`, `query_len`, `reachable`, `CCL`, `L2`
+    #   TODO: Maybe, instead of ignoring them, should have a positional arg to `log` that determines which bucket they fall into?
+    log(explored=explored, explored_avg=explored_avg)
 @sn.run
 async def main():
     global state, feedback
     while True:
         await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
+        import numpy as np;  data = np.concatenate((np.random.randn(1, data.shape[-1]), data)) # TODO:
         # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
         state = model(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
