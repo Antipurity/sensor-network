@@ -128,6 +128,7 @@ class Next(nn.Module):
 
     (For stability, would be a good idea to split `data` & `query` if their concatenation is too long and transition for each chunk, to not forget too much of our internal state: let the RNN learn time-dynamics, Transformer is just a reach-extension mechanism for better optimization. Currently not implemented.)"""
     def __init__(self, embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, goal):
+        super().__init__()
         self.embed_data = embed_data
         self.embed_query = embed_query
         self.max_state_cells = max_state_cells
