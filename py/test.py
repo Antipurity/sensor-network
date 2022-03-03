@@ -201,13 +201,14 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
         exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
     log(data=data_len, query=query_len, explored=explored, explored_avg=explored_avg, reachable=reachable, CCL=CCL, L2=L2)
+@sn.run
 async def main():
     global state, feedback
     while True:
         await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
+        # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
         state = model(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[0]])
 
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable(), CCL_was, L2_was))
-asyncio.run(main()) # TODO: ...Maybe, should have the `sn.run` decorator so that users don't have to waste 2 lines on this...

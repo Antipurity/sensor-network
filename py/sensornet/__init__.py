@@ -37,6 +37,7 @@ async def get():
 And handle it:
 
 ```python
+@sn.run
 async def main():
     fb = None
     while True:
@@ -534,6 +535,12 @@ def torch(torch, tensor, awaitable=False): # pragma: no cover
                     if event.query(): return result.numpy()
                     await asyncio.sleep(.003)
             return busyquery()
+
+
+
+def run(fn, *args, **kwargs):
+    """A convenience async-function decorator: equivalent to `import asyncio;  asyncio.run(fn())`."""
+    return asyncio.run(fn(*args, **kwargs))
 
 
 

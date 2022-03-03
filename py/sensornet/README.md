@@ -48,6 +48,7 @@ async def get():
 And handle it:
 
 ```python
+@sn.run
 async def main():
     fb = None
     while True:
