@@ -93,7 +93,7 @@ from model.log import log, clear
 cell_shape, part_size = (8, 24, 64), 8
 sn.shape(cell_shape, part_size)
 state_sz, goal_sz = 128, 128
-max_state_cells = 128
+max_state_cells = 256
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False)
 
@@ -185,8 +185,8 @@ ev = nn.Sequential( # state → goal.
 next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
 number_loss = CrossCorrelationLoss(
     axis=-2,
-    decorrelation_strength=.001,
-    shuffle_invariant=True, # TODO:
+    decorrelation_strength=.01,
+    shuffle_invariant=True, # TODO: ...Wait, why is shuffle-invariance like the magic sauce? ...Is it because it makes optimization impossible... Yep. All our results were complete bullshit.
     also_return_l2=True,
 )
 cell_loss = CrossCorrelationLoss(
@@ -199,14 +199,12 @@ def loss_func(prev_state, next_state, *_):
     global CCL_was, L2_was
     A, B = norm(ev(prev_state)), norm(ev(next_state))
     # A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
-    A.register_hook(lambda g: print('grad A', g.std().detach().cpu().numpy())) # TODO:
-    B.register_hook(lambda g: print('grad B', g.std().detach().cpu().numpy())) # TODO:
     CCL_was, L2_was = number_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
-    return CCL_was
+    return CCL_was *0
 model = RNN(
     transition = next,
     loss = loss_func,
-    optimizer = lambda p: torch.optim.Adam(p, lr=1e-2),
+    optimizer = lambda p: torch.optim.Adam(p, lr=1e-4),
     backprop_length = lambda: random.randint(2, 16), # TODO:
     trace = False, # TODO: (The loss is still not grad-checkpointed, though. ...Maybe `RNN` could allow returning tuples from transitions, and pass all to loss then discard all non-first results? Then we won't need memory, though print_loss will be a bit out of date... As a bonus, we won't have to compute `ev(prev_state)` twice.)
 )
