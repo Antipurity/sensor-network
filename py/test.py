@@ -123,6 +123,11 @@ def h(in_sz = state_sz, out_sz = state_sz): # A cross-cell transform.
         SelfAttention(embed_dim=in_sz, num_heads=2),
         f(in_sz, out_sz),
     )
+def norm(x, axis=None, eps=1e-5):
+    if axis is not None:
+        return (x - x.mean(axis, True)) / (x.std(axis, keepdim=True) + eps)
+    else:
+        return (x - x.mean()) / (x.std() + eps)
 class Next(nn.Module):
     """Incorporate observations & queries, and transition the state. Take feedback directly from the resulting state.
 
@@ -149,6 +154,7 @@ class NormalSamples(nn.Module):
     def __init__(self): super().__init__()
     def forward(self, mean_std):
         mean, std = mean_std.split(int(mean_std.shape[-1]) // 2, -1)
+        mean, std = norm(mean), norm(std) + 1 # TODO: Does this help anything? ...Maybe? Can't tell...
         noise = torch.randn_like(mean)
         return mean + noise*std
 
@@ -165,42 +171,42 @@ embed_query = nn.Sequential( # query → state (to concat at the end)
 ).to(device)
 condition_state_on_goal = h(state_sz + goal_sz, state_sz).to(device)
 transition = nn.Sequential( # state → state; the differentiable part of the RNN transition.
+    h(state_sz, state_sz),
     h(state_sz, 2*state_sz),
-    nn.LayerNorm(2*state_sz),
+    # nn.LayerNorm(2*state_sz), # TODO: ...Maybe try not this but normalizing all dimensions at once?... (Possibly even normalize mean & std separately, in `NormalSamples`.)
     NormalSamples(),
     h(state_sz, state_sz),
     h(state_sz, state_sz),
 ).to(device)
 ev = nn.Sequential( # state → goal.
     h(state_sz, goal_sz),
+    h(goal_sz, goal_sz),
 ).to(device)
 next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
 number_loss = CrossCorrelationLoss(
     axis=-2,
-    decorrelation_strength=.1,
+    decorrelation_strength=.001,
     shuffle_invariant=False, # TODO:
     also_return_l2=True,
 )
 cell_loss = CrossCorrelationLoss(
     axis=-1,
-    decorrelation_strength=.1,
+    decorrelation_strength=.001,
     also_return_l2=True,
 )
 CCL_was, L2_was = 0., 0.
 def loss_func(prev_state, next_state, *_):
     global CCL_was, L2_was
     eps = 1e-5
-    A, B = ev(prev_state), ev(next_state)
-    # A = (A - A.mean(-1, True)) / (A.std(-1, keepdim=True) + eps)
-    # B = (B - B.mean(-1, True)) / (B.std(-1, keepdim=True) + eps)
+    A, B = norm(ev(prev_state), -1), norm(ev(next_state), -1)
     # A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
     CCL_was, L2_was = cell_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
     return CCL_was
 model = RNN(
     transition = next,
     loss = loss_func,
-    optimizer = lambda p: torch.optim.Adam(p, lr=1e-4),
-    backprop_length = lambda: random.randint(2, 16), # TODO:
+    optimizer = lambda p: torch.optim.SGD(p, lr=1e-4),
+    backprop_length = lambda: random.randint(2, 2), # TODO:
     trace = False, # TODO: (The loss is still not grad-checkpointed, though. ...Maybe `RNN` could allow returning tuples from transitions, and pass all to loss then discard all non-first results? Then we won't need memory, though print_loss will be a bit out of date... As a bonus, we won't have to compute `ev(prev_state)` twice.)
 )
 
@@ -215,13 +221,14 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
     explored = round(explored*100, 2)
     if explored >= exploration_peaks[-1]: exploration_peaks[-1] = explored
     else: exploration_peaks.append(explored)
-    if len(exploration_peaks) > 2048:
-        exploration_peaks[:-1024] = [sum(exploration_peaks[:-1024]) / len(exploration_peaks[:-1024])]
+    if len(exploration_peaks) > 17:
+        exploration_peaks[:-16] = [sum(exploration_peaks[:-16]) / len(exploration_peaks[:-16])]
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
     reachable = round(reachable*100, 2)
-    # Ignored: `data_len`, `query_len`, `reachable`, `CCL`, `L2`
-    #   TODO: Maybe, instead of ignoring them, should have a positional arg to `log` that determines which bucket they fall into?
-    log(explored=explored, explored_avg=explored_avg)
+    # Ignored: `data_len`, `query_len`, `reachable`
+    log(explored=explored, explored_avg=explored_avg) # TODO: ...What the fuck, why are we seeing so many...
+    log(1, False, CCL=CCL)
+    log(2, False, L2=L2) # TODO: ...Wait, why is it consistently at 60k? Do we just never learn anything at all? THIS IS SO BAD
 @sn.run
 async def main():
     global state, feedback
@@ -234,3 +241,5 @@ async def main():
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
 
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable(), CCL_was, L2_was))
+
+        # if random.randint(1,200) == 1: state = torch.randn_like(state, requires_grad=True) # TODO: Does this help exploration? ...A bit, I guess? Uniform improvement to ~3%, except when representations collapse or something.

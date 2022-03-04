@@ -216,7 +216,8 @@ def _create_nodes(start_id):
             if p < 0:
                 children = ch
                 break
-        for _ in range(children): new_node(id)
+        for _ in range(children):
+            if len(nodes['all']) < options['max_nodes']: new_node(id)
     # Note: we're cutting off at `max_nodes`, so there's a chance for some nodes to have no neighbors and be inescapable black holes.
     #   It's a feature, since this gives a reason for forking to exist.
 def _reachable(*node_names):
