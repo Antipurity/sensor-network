@@ -75,6 +75,13 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 # TODO: Abandon all hatred. Spread love. No ill-considered approaches like before. Only the well-founded URL. Inspect and support its every step on the way.
 """
 
+# TODO: Our loss appears to be trash, at least in the online setting.
+#   TODO: So, create an on-disk dataset of no-loss experiences, then try training on it.
+#   TODO: First train sg-on-right, then let it run.
+#   TODO: Then train sg-on-left, then let it run; if our loss doesn't collapse actions when trained properly, this should explore more than the random policy.
+#   (Don't know why our loss would just collapse action diversity.)
+#   TODO: We clearly didn't learn the lessons about exploration that needed to be learned, so go off to non-`sn` environments again.
+
 
 
 import asyncio
@@ -92,10 +99,10 @@ from model.log import log, clear
 
 cell_shape, part_size = (8, 24, 64), 8
 sn.shape(cell_shape, part_size)
-state_sz, goal_sz = 128, 128
+state_sz, goal_sz = 96, 96
 max_state_cells = 256
 
-minienv.reset(can_reset_the_world = False, allow_suicide = False)
+minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
 
 
 
@@ -155,8 +162,9 @@ class NormalSamples(nn.Module):
     def forward(self, mean_std):
         mean, std = mean_std.split(int(mean_std.shape[-1]) // 2, -1)
         mean, std = norm(mean), norm(std) + 1 # TODO: Does this help anything? ...Maybe? Can't tell...
+        #   TODO: ...Can we apply actual regularization, not just normalization?
         noise = torch.randn_like(mean)
-        return mean + noise*std
+        return mean + noise # TODO: *std
 
 
 
@@ -171,11 +179,8 @@ embed_query = nn.Sequential( # query → state (to concat at the end)
 ).to(device)
 condition_state_on_goal = h(state_sz + goal_sz, state_sz).to(device)
 transition = nn.Sequential( # state → state; the differentiable part of the RNN transition.
-    h(state_sz, state_sz),
     h(state_sz, 2*state_sz),
-    # nn.LayerNorm(2*state_sz), # TODO: ...Maybe try not this but normalizing all dimensions at once?... (Possibly even normalize mean & std separately, in `NormalSamples`.)
     NormalSamples(),
-    h(state_sz, state_sz),
     h(state_sz, state_sz),
 ).to(device)
 ev = nn.Sequential( # state → goal.
@@ -185,8 +190,8 @@ ev = nn.Sequential( # state → goal.
 next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
 number_loss = CrossCorrelationLoss(
     axis=-2,
-    decorrelation_strength=.01,
-    shuffle_invariant=True, # TODO: ...Wait, why is shuffle-invariance like the magic sauce? ...Is it because it makes optimization impossible... Yep. All our results were complete bullshit.
+    decorrelation_strength=.00,
+    shuffle_invariant=False, # TODO: ...Wait, why is shuffle-invariance like the magic sauce? ...Is it because it makes optimization impossible... Yep. All our results were complete bullshit.
     also_return_l2=True,
 )
 cell_loss = CrossCorrelationLoss(
@@ -198,14 +203,15 @@ CCL_was, L2_was = 0., 0.
 def loss_func(prev_state, next_state, *_):
     global CCL_was, L2_was
     A, B = norm(ev(prev_state)), norm(ev(next_state))
-    # A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
-    CCL_was, L2_was = number_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
-    return CCL_was *0
+    A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
+    CCL_was, L2_was = cell_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
+    # TODO: ...Wait, if CCL is so low, then how can L2 still be stuck at 60k...? WHAT IS GOING ON
+    return CCL_was
 model = RNN(
     transition = next,
     loss = loss_func,
     optimizer = lambda p: torch.optim.Adam(p, lr=1e-4),
-    backprop_length = lambda: random.randint(2, 16), # TODO:
+    backprop_length = lambda: random.randint(2, 4), # TODO:
     trace = False, # TODO: (The loss is still not grad-checkpointed, though. ...Maybe `RNN` could allow returning tuples from transitions, and pass all to loss then discard all non-first results? Then we won't need memory, though print_loss will be a bit out of date... As a bonus, we won't have to compute `ev(prev_state)` twice.)
 )
 
@@ -225,9 +231,9 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
     explored_avg = sum(exploration_peaks) / len(exploration_peaks)
     reachable = round(reachable*100, 2)
     # Ignored: `data_len`, `query_len`, `reachable`
-    log(explored=explored, explored_avg=explored_avg) # TODO: ...What the fuck, why are we seeing so many...
+    log(explored=explored, explored_avg=explored_avg)
     log(1, False, CCL=CCL)
-    log(2, False, L2=L2) # TODO: ...Wait, why is it consistently at 60k? Do we just never learn anything at all? THIS IS SO BAD
+    log(2, False, L2=L2)
 @sn.run
 async def main():
     global state, feedback
