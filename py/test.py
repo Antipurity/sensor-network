@@ -93,7 +93,7 @@ from model.log import log, clear
 cell_shape, part_size = (8, 24, 64), 8
 sn.shape(cell_shape, part_size)
 state_sz, goal_sz = 128, 128
-max_state_cells = 256
+max_state_cells = 128
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False)
 
@@ -186,27 +186,28 @@ next = Next(embed_data, embed_query, max_state_cells, transition, condition_stat
 number_loss = CrossCorrelationLoss(
     axis=-2,
     decorrelation_strength=.001,
-    shuffle_invariant=False, # TODO:
+    shuffle_invariant=True, # TODO:
     also_return_l2=True,
 )
 cell_loss = CrossCorrelationLoss(
     axis=-1,
-    decorrelation_strength=.001,
+    decorrelation_strength=1,
     also_return_l2=True,
 )
 CCL_was, L2_was = 0., 0.
 def loss_func(prev_state, next_state, *_):
     global CCL_was, L2_was
-    eps = 1e-5
-    A, B = norm(ev(prev_state), -1), norm(ev(next_state), -1)
+    A, B = norm(ev(prev_state)), norm(ev(next_state))
     # A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
-    CCL_was, L2_was = cell_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
+    A.register_hook(lambda g: print('grad A', g.std().detach().cpu().numpy())) # TODO:
+    B.register_hook(lambda g: print('grad B', g.std().detach().cpu().numpy())) # TODO:
+    CCL_was, L2_was = number_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
     return CCL_was
 model = RNN(
     transition = next,
     loss = loss_func,
-    optimizer = lambda p: torch.optim.SGD(p, lr=1e-4),
-    backprop_length = lambda: random.randint(2, 2), # TODO:
+    optimizer = lambda p: torch.optim.Adam(p, lr=1e-2),
+    backprop_length = lambda: random.randint(2, 16), # TODO:
     trace = False, # TODO: (The loss is still not grad-checkpointed, though. ...Maybe `RNN` could allow returning tuples from transitions, and pass all to loss then discard all non-first results? Then we won't need memory, though print_loss will be a bit out of date... As a bonus, we won't have to compute `ev(prev_state)` twice.)
 )
 
@@ -232,10 +233,13 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
 @sn.run
 async def main():
     global state, feedback
+    n = 0
     while True:
+        n += 1
+        if n == 1000 or n == 10000: clear()
         # await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
-        # import numpy as np;  data = np.concatenate((np.random.randn(1, data.shape[-1]), data)) # TODO: This simple data noise is not a principled approach at all.
+        # import numpy as np;  data = np.concatenate((np.random.randn(10, data.shape[-1]), data)) # TODO: This simple data noise is not a principled approach at all.
         # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
         state = model(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
