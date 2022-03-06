@@ -81,6 +81,8 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 #   TODO: Then train sg-on-left, then let it run; if our loss doesn't collapse actions when trained properly, this should explore more than the random policy.
 #   (Don't know why our loss would just collapse action diversity.)
 #   TODO: We clearly didn't learn the lessons about exploration that needed to be learned, so go off to non-`sn` environments again.
+#     ...What env, exactly? Should we make our metaphor of learning a map from anywhere to anywhere very explicit, by having an env of an 8x8 board (positions being 1-hot-encoded) and 1 agent that can go to any of the 4 neighboring cells (x+-1, y+-1), computed in-batch on GPU, and do like 256 iterations per gradient update, possibly even with a random policy with teacher forcing? (Then, as tests-of-working, could fix a cell and pick initial states/goals randomly and visualize the distribution (at least cross-correlation, and/or mean & stddev) (we'd have to implement similarity-matching-of-embeddings-by-2D ourselves though) (a uniform distribution means OK, though we don't actually ensure output-uniformity-wrt-input in any way, so it would be a surprise), and fixing a cell and varying goals and seeing where we end up (a uniform distribution means OK, else either targets are uneven with respect to our sampling (then, may need to train another net from cell to a distribution of goals that reach it), or we're incompetent at reaching goals), and a matrix of how often one cell goes to another, and of avg-path-length; and only learning plans by forcing goals to be target-cells and the RNN to only output the action, and gradually introducing more self-sufficiency while ensuring that it still works, and only learning eventual-goals of a fixed policy. ...This is way richer than minienv, and actually contains steps that we can actually deploy techniques on to get past.)
+#     (...You know, URL was because we wanted to turn one-goal-chasing into exponentially-many-goals-chasing. And, learning from single data points at a time kinda suffers from the same problem. Is there some way to, I dunno, turn several data points into fewer at runtime such that all loss is still ok; or replace datapoints with their clustered features...?... Aren't these just compression though?)
 
 
 
@@ -245,6 +247,11 @@ async def main():
         data, query, data_error, query_error = await sn.handle(feedback)
         # import numpy as np;  data = np.concatenate((np.random.randn(10, data.shape[-1]), data)) # TODO: This simple data noise is not a principled approach at all.
         # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
+
+        # noise_level = abs(2*(n%500) - n%1000) # Go up, then go down, then repeat.
+        # state = state + torch.rand_like(state)*noise_level*2-1
+        # state = norm(state) # ...This is even more counterproductive than expected.
+
         state = model(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
 
