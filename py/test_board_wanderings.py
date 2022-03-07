@@ -79,7 +79,10 @@ for iters in range(50000):
 #     - Would conditioning on extra RNN-state help us disambiguate trajectories?… In effect, we'd be training a diffusion model, from initial state to a sample-of the distribution of correct trajectories… Sounds tricky, but also like the only approach that could work without RL-machinery.
 #       - …But how do we actually learn this… What's the actual loss…
 #         - The simplest diffusion-model way: given a board→board predictor, could initialize with a random initial state and train an initial-state denoiser on those initial states that reach the target quickly enough; won't even use RNN-ness tho, and thus won't train the RNN itself, only its initial state. (Sounds like a loooot of compute. Is there no way to learn this better, using more structure…)
+#           - …Maybe in an RNN, both `ev` and `next` could denoise its output, by accepting it as an input (a random vector initially), and we should maintain like 100 ever-more-noised states, and make each more-noisy level predict the less-noisy version…
+#           - ⋯ For speed, could make `ev` and `next` self-denoising (accept its output as an input, initially a random vector), and make less-denoisings-branches predict more-denoisings-branches, but only for successful trajectories. (Sounds quite trainable, but might collapse diversity like it did in our flat experiments.)
 #         - The GAN way: learn to discriminate whether an initial-state will reach the target-state, and maximize generated-initial-state reached-ness. (Again, doesn't train the actual RNN.)
-#         - DAMN
+#           - ⋯ Have a discriminator (from state and target-state) of whether the state will reach a target-state (decided & predicted after a whole rollout), which is maximized by all RNN transitions.
+#         - ...2 variants...
 #   - URL, where target-of-target is learned too (having sampled a goal, could learn a distribution of its plans; having sampled a plan, could learn a distribution of its goals; the board has no singularities, so learning one goal of a plan makes no sense): goal:ev(state);  goal=ev(next(state, goal))
 #   (…When we put it all like that, it all seems quite doable, if difficult. Distributions are key.)
