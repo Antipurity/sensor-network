@@ -74,15 +74,10 @@ for iters in range(50000):
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
 #   - ✓ From board and neighboring-board (gotten via env_step with a random action) to action (the randomly-generated one) — will be so easy that it's pointless to implement.
-#   - From board and target-board (& extra state) to the next action (& extra state) (average makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target)
-#     - (We'd need to limit sequence-length, right? Otherwise, like, any action-sequence will be able to be generated… But no conditioning on sequence-length, right?)
-#     - Would conditioning on extra RNN-state help us disambiguate trajectories?… In effect, we'd be training a diffusion model, from initial state to a sample-of the distribution of correct trajectories… Sounds tricky, but also like the only approach that could work without RL-machinery.
-#       - …But how do we actually learn this… What's the actual loss…
-#         - The simplest diffusion-model way: given a board→board predictor, could initialize with a random initial state and train an initial-state denoiser on those initial states that reach the target quickly enough; won't even use RNN-ness tho, and thus won't train the RNN itself, only its initial state. (Sounds like a loooot of compute. Is there no way to learn this better, using more structure…)
-#           - …Maybe in an RNN, both `ev` and `next` could denoise its output, by accepting it as an input (a random vector initially), and we should maintain like 100 ever-more-noised states, and make each more-noisy level predict the less-noisy version…
-#           - ⋯ For speed, could make `ev` and `next` self-denoising (accept its output as an input, initially a random vector), and make less-denoisings-branches predict more-denoisings-branches, but only for successful trajectories. (Sounds quite trainable, but might collapse diversity like it did in our flat experiments.)
-#         - The GAN way: learn to discriminate whether an initial-state will reach the target-state, and maximize generated-initial-state reached-ness. (Again, doesn't train the actual RNN.)
-#           - ⋯ Have a discriminator (from state and target-state) of whether the state will reach a target-state (decided & predicted after a whole rollout), which is maximized by all RNN transitions.
-#         - ...2 variants...
-#   - URL, where target-of-target is learned too (having sampled a goal, could learn a distribution of its plans; having sampled a plan, could learn a distribution of its goals; the board has no singularities, so learning one goal of a plan makes no sense): goal:ev(state);  goal=ev(next(state, goal))
-#   (…When we put it all like that, it all seems quite doable, if difficult. Distributions are key.)
+#   - From board & target-board & extra-state & whole-output (or a random vector initially), to the next action & extra state: `next`.
+#     - (Need to limit the unroll-length, or else practically everything will count as reachable.)
+#     - Average-plan makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target, so either:
+#       - ⋯ DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.)
+#       - ⋯ GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
+#   - Almost-URL: learn the distribution of targets, along with distributions of plans to reach them (learning eventual-RNN-states would have been full URL).
+#   - Full URL, where goal-of-state is learned too: goal:ev(state);  goal=ev(next(state, goal))
