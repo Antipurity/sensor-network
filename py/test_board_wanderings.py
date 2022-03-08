@@ -90,7 +90,7 @@ for iters in range(50000):
             nexts.append(next(torch.cat((board, target_board, state, nexts[-1]), -1)))
         for noised in nexts[1:-1]:
             # (Preserve the batch dimension, so that we could select which to minimize.)
-            L2 = L2 + (noised - nexts[1:-1]).square().sum(-1)
+            L2 = L2 + (noised - nexts[-1]).square().sum(-1)
         state = nexts[-1]
         board = env_step(N, board, state[..., 0:2])
         achieved_target = achieved_target | (board == target_board).all(-1)
