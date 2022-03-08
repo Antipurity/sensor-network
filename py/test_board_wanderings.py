@@ -29,12 +29,11 @@ def env_step(N, board, xy): # → board
     board_mx = torch.cat((board[..., :, 1:], board[..., :, :1], ), -1).reshape(sh)
     board_my = torch.cat((board[..., 1:, :], board[..., :1, :], ), -2).reshape(sh)
     is_x = xy[..., :1].abs() > xy[..., 1:].abs()
-    next_board = torch.where(
+    return torch.where(
         is_x,
         torch.where(xy[..., :1] > 0, board_px, board_mx),
         torch.where(xy[..., 1:] > 0, board_py, board_my),
     )
-    return next_board
 
 
 
@@ -47,30 +46,60 @@ class SkipConnection(nn.Module):
 
 
 N, batch_size = 8, 1000
+state_sz = 64
 overparameterized = 4
-next_board = nn.Sequential(
-    nn.Linear(N*N + 2, N*N*overparameterized),
+
+unroll_len, denoising_levels = N*2, 3
+
+
+
+next = nn.Sequential( # (board, target_board, state, output) → output_state
+    # (`output` is for sampling from the action distribution on each step, initially a random vector in each iteration, denoised one or more times.)
+    # (The actions are simply sliced from `output_state`.)
+    nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
     SkipConnection(nn.Sequential(
-        nn.LayerNorm(N*N*overparameterized),
+        nn.LayerNorm(overparameterized * state_sz),
         nn.ReLU(),
-        nn.Linear(N*N*overparameterized, N*N*overparameterized),
+        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
     )),
-    nn.LayerNorm(N*N*overparameterized),
+    SkipConnection(nn.Sequential(
+        nn.LayerNorm(overparameterized * state_sz),
+        nn.ReLU(),
+        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
+    )),
+    nn.LayerNorm(overparameterized * state_sz),
     nn.ReLU(),
-    nn.Linear(N*N*overparameterized, N*N),
+    nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
-opt = torch.optim.Adam(next_board.parameters(), lr=1e-2)
+opt = torch.optim.Adam(next.parameters(), lr=1e-4)
 for iters in range(50000):
-    board = env_init(N, batch_size)
-    action = torch.randn(batch_size, 2, device=device)
-    real_next = env_step(N, board, action)
-    pred_next = next_board(torch.cat((board, action), -1))
-    loss = (real_next - pred_next).square().sum()
-    loss.backward();  opt.step();  opt.zero_grad()
+    # TODO: Run & fix. (Maybe not as good as a GAN, but maybe we can actually get the correct-target-percentage to go up.)
+    # Sample a batch of trajectories (pre-deciding the target-board), accumulating the denoising loss, and minimizing it wherever we've reached the target.
+    L2 = 0
+    state = torch.zeros(batch_size, state_sz, device=device) # For now, only use the max-denoised state.
+    board = env_init(N, batch_size=batch_size)
+    target_board = env_init(N, batch_size=batch_size)
+    achieved_target = torch.full((batch_size,), False, device=device)
+    for u in range(unroll_len):
+        # Do the RNN transition (and an environment step), `unroll_len` times.
+        nexts = [torch.randn(batch_size, state_sz, device=device)]
+        for _ in range(denoising_levels):
+            # Denoise the next-state, `denoising_levels` times.
+            #   (Diffusion models learn to reverse gradual noising of samples, with thousands of denoising steps. That's too slow in an RNN, so we learn the reversing directly.)
+            #   (…Would this just learn the fixed-points and then stop producing any diversity?… I think it would, since the only randomness is at the beginning, which we learn to ignore by design… Would diffusion models fare better…? Probably; but would a GAN? I think a GAN is pretty much the same, honestly, just with a learned target (changes in which might actually save us).)
+            nexts.append(next(torch.cat((board, target_board, state, nexts[-1]), -1)))
+        for noised in nexts[1:-1]:
+            # (Preserve the batch dimension, so that we could select which to minimize.)
+            L2 = L2 + (noised - nexts[1:-1]).square().sum(-1)
+        state = nexts[-1]
+        board = env_step(N, board, state[..., 0:2])
+        achieved_target = achieved_target | (board == target_board).all(-1)
+    L2 = (L2 * achieved_target.float()).sum()
+    L2.backward()
+    opt.step();  opt.zero_grad(True)
     with torch.no_grad():
-        real_pos, pred_pos = real_next.argmax(-1), pred_next.argmax(-1)
-        correct_perc = (real_pos == pred_pos).float().sum() / batch_size
-        print(str(iters).rjust(6), 'L2', str(loss.detach().cpu().numpy()).ljust(11), 'correct position', str((correct_perc*100).cpu().numpy())+'%')
+        correct_frac = achieved_target.float().sum() / batch_size
+        print(str(iters).rjust(6), 'L2', str(L2.detach().cpu().numpy()).ljust(11), 'correct target', str((correct_frac*100).cpu().numpy())+'%')
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
 #   - ✓ From board and neighboring-board (gotten via env_step with a random action) to action (the randomly-generated one) — will be so easy that it's pointless to implement.
