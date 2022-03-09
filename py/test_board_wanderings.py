@@ -107,8 +107,7 @@ for iters in range(50000):
             #   (Doesn't seem to work, though. Maybe a GAN would have better luck.)
             nexts.append(next(torch.cat((board, target_board, state, nexts[-1]), -1)))
             input = torch.cat((board, target_board, state, nexts[-1]), -1)
-            print(input[0].detach().cpu().numpy()) # TODO: Well, we're clearly always going to the right here, right?...
-            #   ...Why is it changing between 4 states? ...Per-`board`, right?
+            # print(input[0].detach().cpu().numpy()) # TODO:
             target_reachable.append(next_discriminator(input.detach()).sum(-1))
             print(target_reachable[-1].mean().detach().cpu().numpy()) # TODO: ...Wait, why is it all negative? Quite suspicious, honestly...
             #   TODO: ...And why is this mean going toward `1` when the correct-target percentage is 25% and such?!
@@ -126,7 +125,8 @@ for iters in range(50000):
     for reachable in target_reachable:
         print('                                                                 discriminator guessed correctly', str((((reachable > 0).float() == achieved_target).float().mean()*100).round().detach().cpu().numpy())+'%', '>0', str(((reachable > 0).float().mean()*100).round().detach().cpu().numpy())+'%') # TODO: ...How can it possibly be such a high percentage from the very start?! ...Probably all-OK or all-non-OK, since percentages match. ...But why is that even so...
         #   Why is nearly every run initialized to be discriminated as an extreme?! AND WHY CAN'T IT EVEN CONVERGE ON THIS TRIVIAL TASK, OF FITTING 4 FIXED INPUTS TO 4 FIXED OUTPUTS?!
-        L22 = L22 + (reachable - achieved_target*2-1).square().sum() # TODO: ...Why can't we learn this, even still??
+        L22 = L22 + (reachable - (achieved_target*2-1)).square().sum() # TODO: ...Why can't we learn this, even still??
+        #   TODO: ...Wait, something is still very wrong: why is the mean very decidedly going up, when `achieved_targets.mean()` is very clearly ~25%?! ...And why is putting `-` instead of `+` here not repel `reachable` from 0 but instead always make it negative even if it was positive at the beginning...
     (L2 + L22).backward()
     opt.step();  opt.zero_grad(True);  next_discriminator_copy.update()
     with torch.no_grad():
