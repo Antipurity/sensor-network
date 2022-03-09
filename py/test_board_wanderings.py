@@ -44,19 +44,17 @@ def env_step(N, board, xy): # → board
 
 class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
-    def forward(self, x):
-        y = self.fn(x)
-        return y + x if x.shape == y.shape else y
+    def forward(self, x): return self.fn(x) + x
 
 
 
-# (TODO: This only worked once, with super-simple hyperparams, can't reproduce, so should try a GAN.)
-N, batch_size = 8, 100
-state_sz = 16
-overparameterized = 8
+N, batch_size = 3, 100
+state_sz = 2
+overparameterized = 32
 
-# unroll_len, denoising_levels = 1, 1
 unroll_len, denoising_levels = 2*N-2, 1
+
+generator_loss_mult = 1.
 
 
 
@@ -64,11 +62,6 @@ next = nn.Sequential( # (board, target_board, state, output) → output_state
     # (`output` is for sampling from the action distribution on each step, initially a random vector in each iteration, denoised one or more times.)
     # (The actions are simply sliced from `output_state`.)
     nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
-    # SkipConnection(nn.Sequential(
-    #     nn.LayerNorm(overparameterized * state_sz),
-    #     nn.ReLU(),
-    #     nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
-    # )),
     nn.LayerNorm(overparameterized * state_sz),
     nn.ReLU(),
     nn.Linear(overparameterized * state_sz, state_sz),
@@ -85,10 +78,12 @@ next_discriminator = nn.Sequential( # (board, target_board, state, output) → w
     nn.Linear(overparameterized * state_sz, 1, bias=False),
     nn.Softsign(),
 ).to(device)
-next_discriminator_copy = MomentumCopy(next_discriminator, .999)
+next_discriminator_copy = MomentumCopy(next_discriminator, .99)
 opt = torch.optim.Adam([*next.parameters(), *next_discriminator.parameters()], lr=1e-4)
 for iters in range(50000):
-    # TODO: Run & fix. (Maybe not as good as a GAN, but maybe we can actually get the correct-target-percentage to go up. …We couldn't, in the end.)
+    # TODO: Run & fix.
+    #   …GANs are seriously disappointing too: 10k epochs to get to 70% from 30%, SOMETIMES, with LOTS of instability and performance-regression, after a lot of tuning, on a task so toy that it can be solved in 1.
+    #   …So what do we do now? Can we re-examine denoising? (I mean, if distribution-modeling is *significantly* worse than averaging, then we can hardly use it in place of averaging, can we?)
     # Sample a batch of trajectories (pre-deciding the target-board), accumulating the denoising loss, and minimizing it wherever we've reached the target.
     L2 = 0
     state = torch.zeros(batch_size, state_sz, device=device)
@@ -106,17 +101,19 @@ for iters in range(50000):
             nexts.append(next(torch.cat((board, target_board, state, nexts[-1]), -1)))
             input = torch.cat((board, target_board, state, nexts[-1]), -1)
             target_reachable.append(next_discriminator(input.detach()).sum(-1))
-            L2 = L2 + (next_discriminator_copy(input) - 1).square().sum() # TODO: …Why doesn't this seem to help make more targets correct?…
-            #   …Wait, suddenly it did… Once; the rest of the time, goes up to 75% intermittently, and is unstable…
-            #   TODO: ...So wait a second: why is generator loss so much higher than discriminator loss (100K vs 1K)? Seems suspicious...
+            if generator_loss_mult:
+                CP = next_discriminator_copy(input)
+                print((CP/2+.5).mean().detach().cpu().numpy(), (CP - 1).square().sum().detach().cpu().numpy()) # TODO:
+                L2 = L2 + generator_loss_mult * (CP - 1).square().sum()
         for lvl, noised in enumerate(nexts[1:-1]):
             # (Preserve the batch dimension, so that we could select which to minimize.)
             L2 = L2 + (noised - nexts[-1]).square().sum(-1)
+            # (TODO: …Wait: maybe, to become more like diffusion models, make our targets not just the final thing but more-noised versions of the last one?… With enough denoising steps, the loss just becomes just gradual-noise-removal but with a self-generated target…)
+            #   How exactly should we generate the more-noised versions? A linear blend from nexts[0] to nexts[-1], maybe — or maybe an exponentially-moving-average blend, each prev denoising target being an avg?
         state = nexts[-1]
         board = env_step(N, board, state[..., 0:2])
         achieved_target = achieved_target | (board == target_board).all(-1)
     achieved_target = achieved_target.float()
-    L2 = (L2 * achieved_target).sum()
     L22 = 0
     for reachable in target_reachable:
         # print('                                                                 discriminator guessed correctly', str((((reachable > 0).float() == achieved_target).float().mean()*100).round().detach().cpu().numpy())+'%', '>0', str(((reachable > 0).float().mean()*100).round().detach().cpu().numpy())+'%') # TODO:
@@ -128,12 +125,7 @@ for iters in range(50000):
         log(0, False, generator_L2 = L2.detach().cpu().numpy())
         log(1, False, discriminator_L2 = L22.detach().cpu().numpy())
         log(2, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
-        print(
-            str(iters).rjust(6),
-            # 'denoising L2', str(L2.detach().cpu().numpy()).ljust(13),
-            # 'discriminator L2', str(L22.detach().cpu().numpy()).ljust(13),
-            # 'correct target', str((correct_frac*100).round().cpu().numpy())+'%',
-        )
+        print(str(iters).rjust(6))
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
 #   - ✓ From board and neighboring-board (gotten via env_step with a random action) to action (the randomly-generated one) — will be so easy that it's pointless to implement.
