@@ -52,9 +52,10 @@ N, batch_size = 3, 100
 state_sz = 2
 overparameterized = 32
 
-unroll_len, denoising_levels = 2*N-2, 1
+unroll_len, denoising_levels = 1, 20
+# unroll_len, denoising_levels = 2*N-2, 100
 
-generator_loss_mult = 1.
+generator_loss_mult = 0.
 
 
 
@@ -79,11 +80,25 @@ next_discriminator = nn.Sequential( # (board, target_board, state, output) → w
     nn.Softsign(),
 ).to(device)
 next_discriminator_copy = MomentumCopy(next_discriminator, .99)
-opt = torch.optim.Adam([*next.parameters(), *next_discriminator.parameters()], lr=1e-4)
+opt = torch.optim.Adam([*next.parameters(), *next_discriminator.parameters()], lr=1e-3)
 for iters in range(50000):
     # TODO: Run & fix.
     #   …GANs are seriously disappointing too: 10k epochs to get to 70% from 30%, SOMETIMES, with LOTS of instability and performance-regression, after a lot of tuning, on a task so toy that it can be solved in 1.
-    #   …So what do we do now? Can we re-examine denoising? (I mean, if distribution-modeling is *significantly* worse than averaging, then we can hardly use it in place of averaging, can we?)
+    #   …So what do we do now? Can we re-examine denoising, caring not only about its result but also the intermediate slightly-more-denoised prediction targets?
+    #     Seems to perform even worse than GANs, always slightly reducing correctness and nothing else.
+    #   …May have to think about direct prediction harder… (I mean, if distribution-modeling is *significantly* worse than averaging, then we can hardly use it in place of averaging, can we? Not sure if it's the state of modern ML that's failing us here, or our impl, or generativeness is just the wrong approach for learning a transitive closure.)
+
+
+
+    #   …If we had a way to assign preference of which trajectory should be preserved, then we wouldn't have needed to remember distributions, just predict the avg action… In the discrete-target case, could order by how many actions we took, and always prefer the shortest path. And if in URL, the learned states carry *all* information, then it makes sense to always prefer quickest routes, since whole-distributions likely carry exponentially-much superfluous info. If we had explicit transition probabilities, could have multiplied them to get path-probability to maximize. But what's the continuous analogue of shortest-route?!
+    #     …Could "shortest" really mean "most probable" in densely-connected environments, meaning that we could just TODO: Do what, exactly? Do we want an action-dependent target estimator, and train that? What other values could be connected through prediction, in the more general case that doesn't have a binary reachability criteria? What should our first action predict: the first action of the closest of the two sampled trajectories (action weighed by min minus target-prediction loss)? Can we hallucinate extra trajectories for this, to not have to do extra unrolls?…
+    #       And what about not just far-off-target but closer-targets; how to make "closer targets are preferred" soft?… Would summing losses suffice, or do we need to multiply loss-weighted distances?
+    #       (In the actual URL, this would amount to an additional term on the state itself, which selects most-immediately-successful transitions somehow… Unlike how the ∞-limit target is made predictive, changing the actions that led to it to be more eventually-successful — which might not even be the right approach, since it ignores practicality…)
+    #         (If we have a `next` (state,goal)→state model, then we shouldn't sample few discrete trajectories at test-time, we should learn to make output (state & action in one) minimize the distances, prioritizing fewer-steps.)
+    #       TODO: At least try directly predicting the action of the shortest-path same-target-board trajectory; only the first action I guess. (Should work very well, but be specialized to this board env. If OK, we can move on to continuous-izing it.)
+
+
+
     # Sample a batch of trajectories (pre-deciding the target-board), accumulating the denoising loss, and minimizing it wherever we've reached the target.
     L2 = 0
     state = torch.zeros(batch_size, state_sz, device=device)
@@ -105,15 +120,18 @@ for iters in range(50000):
                 CP = next_discriminator_copy(input)
                 print((CP/2+.5).mean().detach().cpu().numpy(), (CP - 1).square().sum().detach().cpu().numpy()) # TODO:
                 L2 = L2 + generator_loss_mult * (CP - 1).square().sum()
+        first, last = nexts[0], nexts[-1]
         for lvl, noised in enumerate(nexts[1:-1]):
             # (Preserve the batch dimension, so that we could select which to minimize.)
-            L2 = L2 + (noised - nexts[-1]).square().sum(-1)
-            # (TODO: …Wait: maybe, to become more like diffusion models, make our targets not just the final thing but more-noised versions of the last one?… With enough denoising steps, the loss just becomes just gradual-noise-removal but with a self-generated target…)
-            #   How exactly should we generate the more-noised versions? A linear blend from nexts[0] to nexts[-1], maybe — or maybe an exponentially-moving-average blend, each prev denoising target being an avg?
+            frac = (lvl+1) / (denoising_levels-2)
+            target = (1-frac)*first + frac*last
+            L2 = L2 + (noised - target).square().sum(-1)
         state = nexts[-1]
         board = env_step(N, board, state[..., 0:2])
         achieved_target = achieved_target | (board == target_board).all(-1)
     achieved_target = achieved_target.float()
+    # L2 = L2 * achieved_target # (This is only for denoising.)
+    L2 = L2.sum()
     L22 = 0
     for reachable in target_reachable:
         # print('                                                                 discriminator guessed correctly', str((((reachable > 0).float() == achieved_target).float().mean()*100).round().detach().cpu().numpy())+'%', '>0', str(((reachable > 0).float().mean()*100).round().detach().cpu().numpy())+'%') # TODO:
@@ -134,5 +152,6 @@ for iters in range(50000):
 #     - Average-plan makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target, so either:
 #       - ⋯ DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.)
 #       - ⋯ GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
+#       - ⋯ …Rethink whether we really couldn't enforce a sensible priority on which plans from a distribution we pick, because of impl troubles…
 #   - Almost-URL: learn the distribution of targets, along with distributions of plans to reach them (learning eventual-RNN-states would have been full URL).
 #   - Full URL, where goal-of-state is learned too: goal:ev(state);  goal=ev(next(state, goal))
