@@ -52,8 +52,7 @@ N, batch_size = 3, 100
 state_sz = 2
 overparameterized = 32
 
-unroll_len, denoising_levels = 1, 20
-# unroll_len, denoising_levels = 2*N-2, 100
+unroll_len, denoising_levels = 2*N-2, 1
 
 generator_loss_mult = 0.
 
@@ -94,8 +93,11 @@ for iters in range(50000):
     #     …Could "shortest" really mean "most probable" in densely-connected environments, meaning that we could just TODO: Do what, exactly? Do we want an action-dependent target estimator, and train that? What other values could be connected through prediction, in the more general case that doesn't have a binary reachability criteria? What should our first action predict: the first action of the closest of the two sampled trajectories (action weighed by min minus target-prediction loss)? Can we hallucinate extra trajectories for this, to not have to do extra unrolls?…
     #       And what about not just far-off-target but closer-targets; how to make "closer targets are preferred" soft?… Would summing losses suffice, or do we need to multiply loss-weighted distances?
     #       (In the actual URL, this would amount to an additional term on the state itself, which selects most-immediately-successful transitions somehow… Unlike how the ∞-limit target is made predictive, changing the actions that led to it to be more eventually-successful — which might not even be the right approach, since it ignores practicality…)
-    #         (If we have a `next` (state,goal)→state model, then we shouldn't sample few discrete trajectories at test-time, we should learn to make output (state & action in one) minimize the distances, prioritizing fewer-steps.)
+    #         (If we have a `next` (state,goal)→state model, then we shouldn't sample few discrete trajectories at test-time, we should learn to make output (state & action in one) minimize the distances, prioritizing fewer-steps. …This isn't learned and so can't generalize to longer trajectories than we'd sample in-simulation (which is probably like 2)… So should we learn the distance-to-completion then?… One number?…)
+    #           (I guess the loss would be `next_loss = prev_loss + prev_loss*(state-target)**2`, possibly with a more normalized loss than L2 or simply clamping L2 to -1…1; not summing up the loss (so, more precision on which parts will be OK) is probably fine. We *might* be able to bootstrap a predictor, though that multiplication might prevent that: `prev_loss=0` prevents all alterations, and `prev_loss>1` has a multiplicative effect on itself if we try bootstrapping the same trajectory many times… Maybe remove the multiplication…)
+    #             (WHY DID WE ARRIVE AT MORE-OR-LESS THE INITIAL URL FORMULATION AGAIN, though now `target` really does refer to the state and not its eventual-target…?)
     #       TODO: At least try directly predicting the action of the shortest-path same-target-board trajectory; only the first action I guess. (Should work very well, but be specialized to this board env. If OK, we can move on to continuous-izing it.)
+    #         …How do we compute the path length, exactly? And the picked action with the same target in this batch?
 
 
 
@@ -104,7 +106,10 @@ for iters in range(50000):
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     target_board = env_init(N, batch_size=batch_size)
+    target_ind = target_board.argmax(-1) # For special-casing discrete targets (see below).
+    states = [] # For special-casing discrete targets (see below).
     achieved_target = torch.full((batch_size,), False, device=device)
+    path_len = torch.full((batch_size,), float(unroll_len), device=device)
     target_reachable = []
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
@@ -128,7 +133,22 @@ for iters in range(50000):
             L2 = L2 + (noised - target).square().sum(-1)
         state = nexts[-1]
         board = env_step(N, board, state[..., 0:2])
-        achieved_target = achieved_target | (board == target_board).all(-1)
+        achieved_target_now = (board == target_board).all(-1)
+        prev_achieved_target = achieved_target
+        achieved_target = achieved_target | achieved_target_now
+
+        # Special-casing for this discrete-targets-only environment, to see how well directly predicting the shortest path works.
+        #   (Ideally, should have a smooth loss on states/actions, able to handle continuous targets gracefully.)
+        path_len = torch.where(~prev_achieved_target & achieved_target_now, torch.full_like(path_len, u), path_len)
+        states.append(state)
+    matching_path_len = torch.where(target_ind.unsqueeze(-1) == target_ind, path_len, torch.full((batch_size, batch_size), float(unroll_len+1), device=device) - torch.eye(batch_size, device=device))
+    nearest_target = matching_path_len.argmin(-1)
+    for st in states: # Yes, finally we directly predict the shortest same-target actions.
+        tt = torch.index_select(st, 0, nearest_target)
+        L2 = L2 + (st - tt).square().sum()
+    # TODO: Figure out why this doesn't work. Because it really should, at least a little!
+    #   …How do we debug this…
+
     achieved_target = achieved_target.float()
     # L2 = L2 * achieved_target # (This is only for denoising.)
     L2 = L2.sum()
@@ -153,5 +173,6 @@ for iters in range(50000):
 #       - ⋯ DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.)
 #       - ⋯ GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
 #       - ⋯ …Rethink whether we really couldn't enforce a sensible priority on which plans from a distribution we pick, because of impl troubles…
+#     - (Until we can reliably learn the next action, with a batch-size of 1, without non-transferrable tasks.)
 #   - Almost-URL: learn the distribution of targets, along with distributions of plans to reach them (learning eventual-RNN-states would have been full URL).
 #   - Full URL, where goal-of-state is learned too: goal:ev(state);  goal=ev(next(state, goal))
