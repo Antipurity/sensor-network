@@ -48,13 +48,13 @@ class SkipConnection(nn.Module):
 
 
 
-N, batch_size = 3, 100
+N, batch_size = 4, 1000
 state_sz = 2
 overparameterized = 32
 
 unroll_len, denoising_levels = 2*N-2, 1
 
-generator_loss_mult = 0.
+generator_loss_mult = .0
 
 
 
@@ -62,21 +62,20 @@ next = nn.Sequential( # (board, target_board, state, output) → output_state
     # (`output` is for sampling from the action distribution on each step, initially a random vector in each iteration, denoised one or more times.)
     # (The actions are simply sliced from `output_state`.)
     nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
-    nn.LayerNorm(overparameterized * state_sz),
     nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
 next_discriminator = nn.Sequential( # (board, target_board, state, output) → will_reach_target
     nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
     SkipConnection(nn.Sequential(
-        nn.LayerNorm(overparameterized * state_sz),
         nn.ReLU(),
+        nn.LayerNorm(overparameterized * state_sz),
         nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
     )),
-    nn.LayerNorm(overparameterized * state_sz),
     nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, 1, bias=False),
-    nn.Softsign(),
 ).to(device)
 next_discriminator_copy = MomentumCopy(next_discriminator, .99)
 opt = torch.optim.Adam([*next.parameters(), *next_discriminator.parameters()], lr=1e-3)
@@ -90,23 +89,24 @@ for iters in range(50000):
 
 
     #   …If we had a way to assign preference of which trajectory should be preserved, then we wouldn't have needed to remember distributions, just predict the avg action… In the discrete-target case, could order by how many actions we took, and always prefer the shortest path. And if in URL, the learned states carry *all* information, then it makes sense to always prefer quickest routes, since whole-distributions likely carry exponentially-much superfluous info. If we had explicit transition probabilities, could have multiplied them to get path-probability to maximize. But what's the continuous analogue of shortest-route?!
-    #     …Could "shortest" really mean "most probable" in densely-connected environments, meaning that we could just TODO: Do what, exactly? Do we want an action-dependent target estimator, and train that? What other values could be connected through prediction, in the more general case that doesn't have a binary reachability criteria? What should our first action predict: the first action of the closest of the two sampled trajectories (action weighed by min minus target-prediction loss)? Can we hallucinate extra trajectories for this, to not have to do extra unrolls?…
+    #     …Could "shortest" really mean "most probable" in densely-connected environments, meaning that we could just make our first action predict: the first action of the closest of the two sampled trajectories (action weighed by min minus target-prediction loss)? Can we hallucinate extra trajectories for this, to not have to do extra unrolls, or even 'consider-all beforehand' AKA minimize via learning?
     #       And what about not just far-off-target but closer-targets; how to make "closer targets are preferred" soft?… Would summing losses suffice, or do we need to multiply loss-weighted distances?
     #       (In the actual URL, this would amount to an additional term on the state itself, which selects most-immediately-successful transitions somehow… Unlike how the ∞-limit target is made predictive, changing the actions that led to it to be more eventually-successful — which might not even be the right approach, since it ignores practicality…)
     #         (If we have a `next` (state,goal)→state model, then we shouldn't sample few discrete trajectories at test-time, we should learn to make output (state & action in one) minimize the distances, prioritizing fewer-steps. …This isn't learned and so can't generalize to longer trajectories than we'd sample in-simulation (which is probably like 2)… So should we learn the distance-to-completion then?… One number?…)
     #           (I guess the loss would be `next_loss = prev_loss + prev_loss*(state-target)**2`, possibly with a more normalized loss than L2 or simply clamping L2 to -1…1; not summing up the loss (so, more precision on which parts will be OK) is probably fine. We *might* be able to bootstrap a predictor, though that multiplication might prevent that: `prev_loss=0` prevents all alterations, and `prev_loss>1` has a multiplicative effect on itself if we try bootstrapping the same trajectory many times… Maybe remove the multiplication…)
     #             (WHY DID WE ARRIVE AT MORE-OR-LESS THE INITIAL URL FORMULATION AGAIN, though now `target` really does refer to the state and not its eventual-target…?)
     #       TODO: At least try directly predicting the action of the shortest-path same-target-board trajectory; only the first action I guess. (Should work very well, but be specialized to this board env. If OK, we can move on to continuous-izing it.)
-    #         …How do we compute the path length, exactly? And the picked action with the same target in this batch?
+    #         TODO: Make it work? Come on, not being able to know which way to go on a 4×4 board is embarrassing.
 
 
 
     # Sample a batch of trajectories (pre-deciding the target-board), accumulating the denoising loss, and minimizing it wherever we've reached the target.
     L2 = 0
     state = torch.zeros(batch_size, state_sz, device=device)
-    board = env_init(N, batch_size=batch_size)
+    # board = env_init(N, batch_size=batch_size) # TODO: Try making it the same?… Doesn't help too much…
+    board = env_init(N, batch_size=1).expand(batch_size, N*N)
     target_board = env_init(N, batch_size=batch_size)
-    target_ind = target_board.argmax(-1) # For special-casing discrete targets (see below).
+    target_ind = N*N*board.argmax(-1) + target_board.argmax(-1) # For special-casing discrete targets (see below).
     states = [] # For special-casing discrete targets (see below).
     achieved_target = torch.full((batch_size,), False, device=device)
     path_len = torch.full((batch_size,), float(unroll_len), device=device)
@@ -141,13 +141,19 @@ for iters in range(50000):
         #   (Ideally, should have a smooth loss on states/actions, able to handle continuous targets gracefully.)
         path_len = torch.where(~prev_achieved_target & achieved_target_now, torch.full_like(path_len, u), path_len)
         states.append(state)
-    matching_path_len = torch.where(target_ind.unsqueeze(-1) == target_ind, path_len, torch.full((batch_size, batch_size), float(unroll_len+1), device=device) - torch.eye(batch_size, device=device))
+    matching_path_len = torch.where(
+        (target_ind.unsqueeze(-1) == target_ind) & achieved_target,
+        path_len,
+        torch.full((batch_size, batch_size), float(unroll_len+1), device=device) - torch.eye(batch_size, device=device),
+    )
     nearest_target = matching_path_len.argmin(-1)
     for st in states: # Yes, finally we directly predict the shortest same-target actions.
         tt = torch.index_select(st, 0, nearest_target)
         L2 = L2 + (st - tt).square().sum()
-    # TODO: Figure out why this doesn't work. Because it really should, at least a little!
-    #   …How do we debug this…
+    # TODO: Figure out why shortest-plan prediction doesn't work. Because it really should, at least a little!
+    #   …Well, now it's SLIGHTLY better, but why is its performance still so poor? Even GANs (30% on 4×4, unstable-ish) are beating it (25% on 4×4, very consistent)… This can't be right.
+    #   TODO: Try printing the actions, as in, how frequent each of the 4 actions is, both any-taken and only-when-target-was-reached?
+    #   TODO: Try printing the shortest trajectories (in `board` indices, or even xy coords — along with the target), which shouldn't change significantly over time, and be sensible to boot?
 
     achieved_target = achieved_target.float()
     # L2 = L2 * achieved_target # (This is only for denoising.)

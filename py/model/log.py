@@ -48,6 +48,8 @@ def log(subplot=0, do_print=True, **metrics):
         finish(False)
         dur = time.monotonic() - start
         _allow_printing_at = start + dur*19 # 19 = 100%/5% - 1
+    if plt is not None:
+        plt.pause(.0001)
 
 def finish(final = True):
     """Updates the plots, and allows users to inspect it for as long as they want."""
