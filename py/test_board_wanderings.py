@@ -13,6 +13,10 @@ from model.log import log
 
 
 
+from itertools import chain
+
+
+
 import torch
 import torch.nn as nn
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -91,9 +95,7 @@ for iters in range(50000):
     #       - (With a sum, we don't have to materialize full trajectories to learn distances, we can just bootstrap from single transitions via `future_dist(prev, goal) = (future_dist(next, goal) + dist(prev, goal)).detach()`.)
     #     - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
 
-    # TODO: On every `next` transition, freeze `future_dist`'s and `next_board`'s parameters and add `future_dist(cat(next_board(board, next(…)), target_board.detach())).sum()` to the loss and unfreeze `future_dist`'s and `next_board`'s parameters.
-    #   dist_min_loss
-    # TODO: Log all parts of the loss separately, so that we can see which parts are failing.
+    # TODO: Run & fix. (It looks like a neural-net reformulation of a dynamic programming problem, so it shouldn't really fail barring optimization difficulties, right?)
 
 
 
@@ -136,6 +138,11 @@ for iters in range(50000):
         fut_dist_pred = future_dist(torch.cat((prev_board, target_board), -1))
         fut_dist_targ = (future_dist(torch.cat((next_board_is, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist
         dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
+        # Minimize that sum-of-future-distances by actions.
+        for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(False)
+        next_board_is = next_board(torch.cat((prev_board, state), -1))
+        dist_min_loss = dist_min_loss + future_dist(torch.cat((next_board_is, target_board.detach()), -1)).sum()
+        for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(True)
 
         # Special-casing for this discrete-targets-only environment, to see how well directly predicting the shortest path works.
         #   (Ideally, should have a smooth loss on states/actions, able to handle continuous targets gracefully.)
@@ -149,18 +156,22 @@ for iters in range(50000):
     nearest_target = matching_path_len.argmin(-1)
     for st in states: # Yes, finally we directly predict the shortest same-target actions.
         tt = torch.index_select(st, 0, nearest_target)
-        denoising_loss = denoising_loss + (st - tt.detach()).square().sum()
+        # denoising_loss = denoising_loss + (st - tt.detach()).square().sum()
+        #   Hopefully, this special-casing won't be necessary anymore, and we can delete it entirely.
 
     achieved_target = achieved_target.float()
     # denoising_loss = denoising_loss * achieved_target # (This is only for denoising.)
-    (torch.sum(denoising_loss) + next_board_loss + dist_pred_loss + dist_min_loss).backward()
+    if isinstance(denoising_loss, torch.Tensor): denoising_loss = denoising_loss.sum()
+    (denoising_loss + next_board_loss + dist_pred_loss + dist_min_loss).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         correct_frac = achieved_target.mean()
         log(0, False, denoising_loss = denoising_loss.detach().cpu().numpy())
         log(1, False, next_board_loss = next_board_loss.detach().cpu().numpy())
-        log(2, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
-        log(3, False, state_mean = state.mean().cpu().numpy(), state_std = state.std().cpu().numpy())
+        log(2, False, dist_pred_loss = dist_pred_loss.detach().cpu().numpy())
+        log(3, False, dist_min_loss = dist_min_loss.detach().cpu().numpy())
+        log(4, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
+        log(5, False, state_mean = state.mean().cpu().numpy(), state_std = state.std().cpu().numpy())
         print(str(iters).rjust(6))
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
