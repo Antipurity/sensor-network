@@ -91,15 +91,16 @@ for iters in range(50000):
     #       - (With a sum, we don't have to materialize full trajectories to learn distances, we can just bootstrap from single transitions via `future_dist(prev, goal) = (future_dist(next, goal) + dist(prev, goal)).detach()`.)
     #     - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
 
-    #  TODO: Every time we call `env_step` to get `board`, add `(next_board(torch.cat((prev_board, state.detach()), -1)) - board).square().sum()` to the loss.
-    #  TODO: On every `next` transition, add `(future_dist(cat(prev_board, target_board)) - ((future_dist(cat(next_board, target_board)) if u<unroll_len-1 else 0) + (prev_board - target_board).abs()).detach()).square().sum()` to the loss.
-    #  TODO: On every `next` transition, freeze `future_dist`'s and `next_board`'s parameters and add `future_dist(cat(next_board(board, next(…)), target_board.detach())).sum()` to the loss and unfreeze `future_dist`'s and `next_board`'s parameters.
-    #  TODO: Log all parts of the loss separately, so that we can see which parts are failing.
+    # TODO: On every `next` transition, add `(future_dist(cat(prev_board, target_board)) - ((future_dist(cat(next_board, target_board)) if u<unroll_len-1 else 0) + (prev_board - target_board).abs()).detach()).square().sum()` to the loss.
+    #   dist_pred_loss
+    # TODO: On every `next` transition, freeze `future_dist`'s and `next_board`'s parameters and add `future_dist(cat(next_board(board, next(…)), target_board.detach())).sum()` to the loss and unfreeze `future_dist`'s and `next_board`'s parameters.
+    #   dist_min_loss
+    # TODO: Log all parts of the loss separately, so that we can see which parts are failing.
 
 
 
     # Sample a batch of trajectories (pre-deciding the target-board), accumulating the denoising loss, and minimizing it wherever we've reached the target.
-    L2 = 0
+    denoising_loss, next_board_loss, dist_pred_loss, dist_min_loss = 0, 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     target_board = env_init(N, batch_size=batch_size)
@@ -120,12 +121,15 @@ for iters in range(50000):
         for lvl, noised in enumerate(nexts[1:-1]):
             # (Preserve the batch dimension, so that we could select which to minimize and thus model the distribution of.)
             target = last
-            L2 = L2 + (noised - target.detach()).square().sum(-1)
+            denoising_loss = denoising_loss + (noised - target.detach()).square().sum(-1)
         state = nexts[-1]
-        board = env_step(N, board, state[..., 0:2])
+        prev_board, board = board, env_step(N, board, state[..., 0:2])
         achieved_target_now = (board == target_board).all(-1)
         prev_achieved_target = achieved_target
         achieved_target = achieved_target | achieved_target_now
+
+        # Be able to predict the next board from prev & action. (Technically unnecessary, but why not?)
+        next_board_loss = next_board_loss + (next_board(torch.cat((prev_board, state.detach()), -1)) - board).square().sum()
 
         # Special-casing for this discrete-targets-only environment, to see how well directly predicting the shortest path works.
         #   (Ideally, should have a smooth loss on states/actions, able to handle continuous targets gracefully.)
@@ -139,17 +143,18 @@ for iters in range(50000):
     nearest_target = matching_path_len.argmin(-1)
     for st in states: # Yes, finally we directly predict the shortest same-target actions.
         tt = torch.index_select(st, 0, nearest_target)
-        L2 = L2 + (st - tt.detach()).square().sum()
+        denoising_loss = denoising_loss + (st - tt.detach()).square().sum()
 
     achieved_target = achieved_target.float()
-    # L2 = L2 * achieved_target # (This is only for denoising.)
-    L2.sum().backward()
+    # denoising_loss = denoising_loss * achieved_target # (This is only for denoising.)
+    denoising_loss.sum().backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         correct_frac = achieved_target.mean()
-        log(0, False, L2 = L2.detach().cpu().numpy())
-        log(1, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
-        log(2, False, state_mean = state.mean().cpu().numpy(), state_std = state.std().cpu().numpy())
+        log(0, False, denoising_loss = denoising_loss.detach().cpu().numpy())
+        log(1, False, next_board_loss = next_board_loss.detach().cpu().numpy())
+        log(2, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
+        log(3, False, state_mean = state.mean().cpu().numpy(), state_std = state.std().cpu().numpy())
         print(str(iters).rjust(6))
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
