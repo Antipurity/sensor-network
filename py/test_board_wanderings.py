@@ -64,7 +64,21 @@ next = nn.Sequential( # (board, target_board, state, output) → output_state
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
-opt = torch.optim.Adam([*next.parameters()], lr=1e-3)
+next_board = nn.Sequential( # (board, state) → next_board (state AKA action)
+    # (So that goals don't have to be non-human-comprehensible.)
+    nn.Linear(N*N + state_sz, overparameterized * state_sz),
+    nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
+    nn.Linear(overparameterized * state_sz, N*N),
+).to(device)
+future_dist = nn.Sequential( # (next_board, target_board) → future_distance_sum
+    # (For picking an action that leads to getting to the target board the fastest.)
+    nn.Linear(N*N + N*N, overparameterized * state_sz),
+    nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
+    nn.Linear(overparameterized * state_sz, N*N),
+).to(device)
+opt = torch.optim.Adam([*next.parameters(), *next_board.parameters(), *future_dist.parameters()], lr=1e-3)
 for iters in range(50000):
 
     # Ultimately, to pre-train for all possible goals, we want to learn how to eventually get from anywhere to anywhere in `state`-space.
@@ -76,13 +90,10 @@ for iters in range(50000):
     #     - The less transitions until we're at `goal`, and the longer we stay there afterward, the better. The future distance being the *sum* of individual `dist`ances fits this quite nicely, and is easy to learn.
     #       - (With a sum, we don't have to materialize full trajectories to learn distances, we can just bootstrap from single transitions via `future_dist(prev, goal) = (future_dist(next, goal) + dist(prev, goal)).detach()`.)
     #     - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
-    #  TODO: Neural nets for:
-    #    next: (prev_board, target_board, _, random) → action (the same as before)
-    #    next_board: (prev_board, action) → next_board (so that states & goals can be in the easily-tracable )
-    #    future_dist: (next_board, target_board) → future_distance_sum
+
     #  TODO: Every time we call `env_step` to get `board`, add `(next_board(torch.cat((prev_board, state.detach()), -1)) - board).square().sum()` to the loss.
     #  TODO: On every `next` transition, add `(future_dist(cat(prev_board, target_board)) - ((future_dist(cat(next_board, target_board)) if u<unroll_len-1 else 0) + (prev_board - target_board).abs()).detach()).square().sum()` to the loss.
-    #  TODO: On every `next` transition, freeze `future_dist`'s parameters and add `future_dist(cat(board, target_board.detach())).sum()` to the loss and unfreeze `future_dist`'s parameters.
+    #  TODO: On every `next` transition, freeze `future_dist`'s and `next_board`'s parameters and add `future_dist(cat(next_board(board, next(…)), target_board.detach())).sum()` to the loss and unfreeze `future_dist`'s and `next_board`'s parameters.
     #  TODO: Log all parts of the loss separately, so that we can see which parts are failing.
 
 
