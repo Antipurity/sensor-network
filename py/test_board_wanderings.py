@@ -54,8 +54,6 @@ overparameterized = 32
 
 unroll_len, denoising_levels = 2*N-2, 1
 
-generator_loss_mult = .0
-
 
 
 next = nn.Sequential( # (board, target_board, state, output) → output_state
@@ -66,20 +64,7 @@ next = nn.Sequential( # (board, target_board, state, output) → output_state
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
-next_discriminator = nn.Sequential( # (board, target_board, state, output) → will_reach_target
-    # TODO: …Remove GANs now. I don't they are… going to be necessary…
-    nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
-    SkipConnection(nn.Sequential(
-        nn.ReLU(),
-        nn.LayerNorm(overparameterized * state_sz),
-        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
-    )),
-    nn.ReLU(),
-    nn.LayerNorm(overparameterized * state_sz),
-    nn.Linear(overparameterized * state_sz, 1, bias=False),
-).to(device)
-next_discriminator_copy = MomentumCopy(next_discriminator, .99)
-opt = torch.optim.Adam([*next.parameters(), *next_discriminator.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*next.parameters()], lr=1e-3)
 for iters in range(50000):
 
 
@@ -91,7 +76,11 @@ for iters in range(50000):
     #         (If we have a `next` (state,goal)→state model, then we shouldn't sample few discrete trajectories at test-time, we should learn to make output (state & action in one) minimize the distances, prioritizing fewer-steps. …This isn't learned and so can't generalize to longer trajectories than we'd sample in-simulation (which is probably like 2)… So should we learn the distance-to-completion then?… One number?…)
     #           (I guess the loss would be `next_loss = prev_loss + prev_loss*(state-target)**2`, possibly with a more normalized loss than L2 or simply clamping L2 to -1…1; not summing up the loss (so, more precision on which parts will be OK) is probably fine. We *might* be able to bootstrap a predictor, though that multiplication might prevent that: `prev_loss=0` prevents all alterations, and `prev_loss>1` has a multiplicative effect on itself if we try bootstrapping the same trajectory many times… Maybe remove the multiplication, so, `next_loss = prev_loss + (state-target.detach())**2`…)
     #             (WHY DID WE ARRIVE AT MORE-OR-LESS THE INITIAL URL FORMULATION AGAIN, though now `target` really does refer to the state and not its eventual-target…?)
-    #       TODO: Refine the continuous-state loss, and implement it!
+    #             …In this 2D world, does that mean that targets are no longer goals but are actual states?
+    #               But then, how could we possibly measure whether we've reached a target-board successfully? …Maybe our 'states' here should be the predicted-next-boards (from prev-boards and actions), and our path-changing here should only change the predicted-prev-board or something…?
+    #             …Would this loss really be able to represent whole future plans, not just their first steps? Should we first try unrolling a whole simulation for each step, to sum up the loss — then see how we can replicate its performance in linear-time? …Should we predict the loss itself; but then if we just add it, how would gradient descent possibly minimize it — wouldn't it just give the same gradient to both branches of a sum…? Oh, unless that learned loss is actually dependent on the action that we take…?… This has potential…
+    #       TODO: Refine the continuous-state loss, and implement it! …And a ladder of steps-to-do that we can climb up to it, since it's probably too hard to do it in one go…
+    # TODO: Write down a simplified explanation of it, at least, at first. (Probably smth about 'for every state in a trajectory: among paths that reach a goal, pick one with the shortest distance, and memorize/predict its first action' but for continuous goals & reachability & distance, which amounts to minimizing the sum of future differences from the target…)
 
 
 
@@ -103,8 +92,7 @@ for iters in range(50000):
     target_ind = N*N*board.argmax(-1) + target_board.argmax(-1) # For special-casing discrete targets (see below).
     states = [] # For special-casing discrete targets (see below).
     achieved_target = torch.full((batch_size,), False, device=device)
-    path_len = torch.full((batch_size,), float(unroll_len), device=device)
-    target_reachable = []
+    path_len = torch.full((batch_size,), float(unroll_len), device=device) # For special-casing discrete targets (see below).
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
         nexts = [torch.randn(batch_size, state_sz, device=device)]
@@ -114,10 +102,6 @@ for iters in range(50000):
             #   (Doesn't seem to work, though. Maybe a GAN would have better luck.)
             nexts.append(next(torch.cat((board, target_board, state, nexts[-1]), -1)))
             input = torch.cat((board, target_board, state, nexts[-1]), -1)
-            target_reachable.append(next_discriminator(input.detach()).sum(-1))
-            if generator_loss_mult:
-                CP = next_discriminator_copy(input)
-                L2 = L2 + generator_loss_mult * (CP - 1).square().sum()
         first, last = nexts[0], nexts[-1]
         for lvl, noised in enumerate(nexts[1:-1]):
             # (Preserve the batch dimension, so that we could select which to minimize and thus model the distribution of.)
@@ -145,18 +129,13 @@ for iters in range(50000):
 
     achieved_target = achieved_target.float()
     # L2 = L2 * achieved_target # (This is only for denoising.)
-    L2 = L2.sum()
-    L22 = 0
-    for reachable in target_reachable:
-        L22 = L22 + (reachable - (achieved_target*2-1)).square().sum()
-    (L2 + L22).backward()
-    opt.step();  opt.zero_grad(True);  next_discriminator_copy.update()
+    L2.sum().backward()
+    opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         correct_frac = achieved_target.mean()
-        log(0, False, generator_L2 = L2.detach().cpu().numpy())
-        log(1, False, discriminator_L2 = L22.detach().cpu().numpy())
-        log(2, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
-        log(3, False, state_mean = state.mean().cpu().numpy(), state_std = state.std().cpu().numpy())
+        log(0, False, L2 = L2.detach().cpu().numpy())
+        log(1, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
+        log(2, False, state_mean = state.mean().cpu().numpy(), state_std = state.std().cpu().numpy())
         print(str(iters).rjust(6))
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
@@ -164,9 +143,9 @@ for iters in range(50000):
 #   - From board & target-board & extra-state & whole-output (or a random vector initially), to the next action & extra state: `next`.
 #     - (Need to limit the unroll-length, or else practically everything will count as reachable.)
 #     - Average-plan makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target, so either:
-#       - ⋯ [Good: 40%] DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.)
-#       - [Bad: 30%] ⋯ GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
-#       - [Good: 40%, very fast convergence] ⋯ Abandon distributions, pick only their shortest paths; special-case our discrete case to see how viable this is. (Very viable: didn't implement prior-path-conditioning, so all shortest paths interfere, making 40% on 4×4 even more impressive.)
+#       - ✓ [Good: 40%] DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.)
+#       - ❌ [Bad: 30%, highly unstable] GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
+#       - ⋯ [Good: 40% with partial impl, very fast convergence] Abandon distributions, pick only their shortest paths; special-case our discrete case to see how viable this is. (Very viable: didn't implement prior-path-conditioning, so all shortest paths interfere, making 40% on 4×4 even more impressive.)
 #         - (Performance deterioration is because there are always 2+ valid actions, so when they collide, predicted action goes toward 0 and causes instability before long. So, not worth caring about.) (unroll_len=1 is max-performance while the others are worse because targets are not path-dependent, which I think would be included in the final loss, but may take too much effort to manually engineer here.)
 #       - ⋯ …Rethink whether we really couldn't enforce a sensible priority on which plans from a distribution we pick, because of impl and/or optim troubles…
 #     - (Until we can reliably learn the next action, with a batch-size of 1, without non-transferrable tasks.)
