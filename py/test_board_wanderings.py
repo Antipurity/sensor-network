@@ -91,8 +91,6 @@ for iters in range(50000):
     #       - (With a sum, we don't have to materialize full trajectories to learn distances, we can just bootstrap from single transitions via `future_dist(prev, goal) = (future_dist(next, goal) + dist(prev, goal)).detach()`.)
     #     - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
 
-    # TODO: On every `next` transition, add `(future_dist(cat(prev_board, target_board)) - ((future_dist(cat(next_board, target_board)) if u<unroll_len-1 else 0) + (prev_board - target_board).abs()).detach()).square().sum()` to the loss.
-    #   dist_pred_loss
     # TODO: On every `next` transition, freeze `future_dist`'s and `next_board`'s parameters and add `future_dist(cat(next_board(board, next(…)), target_board.detach())).sum()` to the loss and unfreeze `future_dist`'s and `next_board`'s parameters.
     #   dist_min_loss
     # TODO: Log all parts of the loss separately, so that we can see which parts are failing.
@@ -128,8 +126,16 @@ for iters in range(50000):
         prev_achieved_target = achieved_target
         achieved_target = achieved_target | achieved_target_now
 
-        # Be able to predict the next board from prev & action. (Technically unnecessary, but why not?)
+        # Be able to predict the next board from prev & action.
+        #   (Technically unnecessary here since we have `board` anyway, but why not?)
         next_board_loss = next_board_loss + (next_board(torch.cat((prev_board, state.detach()), -1)) - board).square().sum()
+        # Be able to predict sum-of-future-distances from prev & target, to minimize.
+        #   (Technically unnecessary here since we could just have a table from all-past-actions & current-board & target-board to distance, but at that point, why even have neural nets at all?)
+        next_board_is = next_board(torch.cat((prev_board, state), -1)).detach()
+        micro_dist = (next_board_is - target_board).abs()
+        fut_dist_pred = future_dist(torch.cat((prev_board, target_board), -1))
+        fut_dist_targ = (future_dist(torch.cat((next_board_is, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist
+        dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
 
         # Special-casing for this discrete-targets-only environment, to see how well directly predicting the shortest path works.
         #   (Ideally, should have a smooth loss on states/actions, able to handle continuous targets gracefully.)
@@ -147,7 +153,7 @@ for iters in range(50000):
 
     achieved_target = achieved_target.float()
     # denoising_loss = denoising_loss * achieved_target # (This is only for denoising.)
-    denoising_loss.sum().backward()
+    (torch.sum(denoising_loss) + next_board_loss + dist_pred_loss + dist_min_loss).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         correct_frac = achieved_target.mean()
