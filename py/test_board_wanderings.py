@@ -58,8 +58,8 @@ N, batch_size = 4, 100
 state_sz = 8
 overparameterized = 8
 
-unroll_len, denoising_levels = 1, 1
-# unroll_len, denoising_levels = N-1, 0 # TODO:
+unroll_len = 1
+# unroll_len = N-1 # TODO:
 
 
 
@@ -123,33 +123,21 @@ for iters in range(50000):
 
 
 
-    # Sample a batch of trajectories (pre-deciding the target-board), accumulating the denoising loss, and minimizing it wherever we've reached the target.
-    denoising_loss, next_board_loss, dist_pred_loss, dist_min_loss = 0, 0, 0, 0
+    # Sample a batch of trajectories (pre-deciding the target-board).
+    next_board_loss, dist_pred_loss, dist_min_loss = 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     target_board = env_init(N, batch_size=batch_size)
-    target_ind = N*N*board.argmax(-1) + target_board.argmax(-1) # For special-casing discrete targets (see below).
-    states = [] # For special-casing discrete targets (see below).
     achieved_target = torch.full((batch_size,), False, device=device)
-    path_len = torch.full((batch_size,), float(unroll_len), device=device) # For special-casing discrete targets (see below).
     distances = [] # For direct future-distance prediction, w/o bootstrapping.
     # distances.append((future_dist(torch.cat((board, state, target_board), -1)), 0)) # TODO:
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
-        nexts = [torch.randn(batch_size, state_sz, device=device)]
+        random = torch.randn(batch_size, state_sz, device=device)
         # TODO: …Yeah, we should really materialize the 4 possible actions and pick the min-predicted-future-distance one, because our action space is really unsuited to gradient-based minimization (pretty sure).
-        for lvl in range(denoising_levels):
-            # Denoise the next-state, `denoising_levels` times.
-            #   (Diffusion models learn to reverse gradual noising of samples, with thousands of denoising steps. That's too slow in an RNN, so we learn the reversing directly.)
-            #   (Doesn't seem to work, though. Maybe a GAN would have better luck.)
-            nexts.append(next(torch.cat((board, target_board, state, nexts[-1]), -1)))
-            input = torch.cat((board, target_board, state, nexts[-1]), -1)
-        first, last = nexts[0], nexts[-1]
-        for lvl, noised in enumerate(nexts[1:-1]):
-            # (Preserve the batch dimension, so that we could select which to minimize and thus model the distribution of.)
-            target = last
-            denoising_loss = denoising_loss + (noised - target.detach()).square().sum(-1)
-        state = nexts[-1]
+        #   …Or maybe, don't just hardcode states, but try inverting & swapping the first two numbers of output states?
+        state = next(torch.cat((board, target_board, state, random), -1))
+
         prev_board, board = board, env_step(N, board, state[..., 0:2])
         achieved_target_now = (board == target_board).all(-1)
         prev_achieved_target = achieved_target
@@ -170,20 +158,6 @@ for iters in range(50000):
         dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target_board), -1)).sum() # TODO:
         for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(True)
 
-        # Special-casing for this discrete-targets-only environment, to see how well directly predicting the shortest path works.
-        #   (Ideally, should have a smooth loss on states/actions, able to handle continuous targets gracefully.)
-        path_len = torch.where(~prev_achieved_target & achieved_target_now, torch.full_like(path_len, u), path_len)
-        states.append(state)
-    matching_path_len = torch.where(
-        (target_ind.unsqueeze(-1) == target_ind) & achieved_target,
-        path_len,
-        torch.full((batch_size, batch_size), float(unroll_len+1), device=device) - torch.eye(batch_size, device=device),
-    )
-    nearest_target = matching_path_len.argmin(-1)
-    for st in states: # Yes, finally we directly predict the shortest same-target actions.
-        tt = torch.index_select(st, 0, nearest_target)
-        # denoising_loss = denoising_loss + (st - tt.detach()).square().sum()
-        #   Hopefully, this special-casing won't be necessary anymore, and we can delete it entirely.
     # Predict future-distances directly.
     for i in reversed(range(1, len(distances))):
         distances[i-1] = (distances[i-1][0], distances[i-1][1] + distances[i][1])
@@ -206,18 +180,15 @@ for iters in range(50000):
     if iters == 100: clear()
 
     achieved_target = achieved_target.float()
-    # denoising_loss = denoising_loss * achieved_target # (This is only for denoising.)
-    if isinstance(denoising_loss, torch.Tensor): denoising_loss = denoising_loss.sum()
-    (denoising_loss + next_board_loss + dist_pred_loss + dist_min_loss).backward()
+    (next_board_loss + dist_pred_loss + dist_min_loss).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         correct_frac = achieved_target.mean()
-        log(0, False, denoising_loss = to_np(denoising_loss))
-        log(1, False, next_board_loss = to_np(next_board_loss))
-        log(2, False, dist_pred_loss = to_np(dist_pred_loss))
-        log(3, False, dist_min_loss = to_np(dist_min_loss))
-        log(4, False, correct_target_perc = to_np((correct_frac*100).round()))
-        log(5, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(0, False, next_board_loss = to_np(next_board_loss))
+        log(1, False, dist_pred_loss = to_np(dist_pred_loss))
+        log(2, False, dist_min_loss = to_np(dist_min_loss))
+        log(3, False, correct_target_perc = to_np((correct_frac*100).round()))
+        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
         print(str(iters).rjust(6))
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
@@ -225,7 +196,7 @@ for iters in range(50000):
 #   - From board & target-board & extra-state & whole-output (or a random vector initially), to the next action & extra state: `next`.
 #     - (Need to limit the unroll-length, or else practically everything will count as reachable.)
 #     - Average-plan makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target, so either:
-#       - ✓ [Good: 40%] DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.)
+#       - ✓ [Good: 40%] DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.) (Eventually removed the impl here.)
 #       - ❌ [Bad: 30%, highly unstable] GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
 #       - ⋯ [Good: 40% with partial impl, very fast convergence] Abandon distributions, pick only their shortest paths; special-case our discrete case to see how viable this is. (Very viable: didn't implement prior-path-conditioning, so all shortest paths interfere, making 40% on 4×4 even more impressive.)
 #         - (Performance deterioration is because there are always 2+ valid actions, so when they collide, predicted action goes toward 0 and causes instability before long. So, not worth caring about.) (unroll_len=1 is max-performance while the others are worse because targets are not path-dependent, which I think would be included in the final loss, but may take too much effort to manually engineer here.)
