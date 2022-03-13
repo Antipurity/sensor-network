@@ -49,6 +49,7 @@ def env_step(N, board, xy): # → board
 class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
     def forward(self, x): return self.fn(x) + x
+def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
 
 
 
@@ -166,12 +167,12 @@ for iters in range(50000):
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         correct_frac = achieved_target.mean()
-        log(0, False, denoising_loss = denoising_loss.detach().cpu().numpy())
-        log(1, False, next_board_loss = next_board_loss.detach().cpu().numpy())
-        log(2, False, dist_pred_loss = dist_pred_loss.detach().cpu().numpy())
-        log(3, False, dist_min_loss = dist_min_loss.detach().cpu().numpy())
-        log(4, False, correct_target_perc = (correct_frac*100).round().cpu().numpy())
-        log(5, False, state_mean = state.mean().cpu().numpy(), state_std = state.std().cpu().numpy())
+        log(0, False, denoising_loss = to_np(denoising_loss))
+        log(1, False, next_board_loss = to_np(next_board_loss))
+        log(2, False, dist_pred_loss = to_np(dist_pred_loss))
+        log(3, False, dist_min_loss = to_np(dist_min_loss))
+        log(4, False, correct_target_perc = to_np((correct_frac*100).round()))
+        log(5, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
         print(str(iters).rjust(6))
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ From board and action (randomly-generated) to board — EASY
