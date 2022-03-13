@@ -53,9 +53,9 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 4, 1000
+N, batch_size = 4, 100
 state_sz = 2
-overparameterized = 32
+overparameterized = 64
 
 unroll_len, denoising_levels = 2*N-2, 1
 
@@ -97,6 +97,14 @@ for iters in range(50000):
     #     - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
 
     # TODO: Run & fix. (It looks like a neural-net reformulation of a dynamic programming problem, so it shouldn't really fail barring optimization difficulties, right?)
+    #   …Why is the distance-prediction loss still high?
+    #   TODO: Figure out why it doesn't work:
+    #     TODO: Try predicting the sum of future distances directly, without bootstrapping. (See whether we can get its loss to 0, which bootstrapping doesn't seem to be able to do.)
+    #       TODO: If it fails, try visualizing fixed-target predicted distances.
+    #       …Still doesn't converge, so maybe, the problem is in adjusting the picked action?
+    #       …Okay, how to construct that image?
+    #     TODO: Try printing a trajectory's distance predictions. (See whether they decrease over time as they should.)
+    #     TODO: Try turning our actions into next-board-state proposals, where the one with the highest value in one of the 4 neighbors wins? (Then, we won't need `next_board`.)
 
 
 
@@ -109,6 +117,7 @@ for iters in range(50000):
     states = [] # For special-casing discrete targets (see below).
     achieved_target = torch.full((batch_size,), False, device=device)
     path_len = torch.full((batch_size,), float(unroll_len), device=device) # For special-casing discrete targets (see below).
+    distances = [] # For direct future-distance prediction, w/o bootstrapping.
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
         nexts = [torch.randn(batch_size, state_sz, device=device)]
@@ -134,11 +143,11 @@ for iters in range(50000):
         next_board_loss = next_board_loss + (next_board(torch.cat((prev_board, state.detach()), -1)) - board).square().sum()
         # Be able to predict sum-of-future-distances from prev & target, to minimize.
         #   (Technically unnecessary here since we could just have a table from all-past-actions & current-board & target-board to distance, but at that point, why even have neural nets at all?)
-        next_board_is = next_board(torch.cat((prev_board, state), -1)).detach()
-        micro_dist = (next_board_is - target_board).abs()
+        micro_dist = (board - target_board).abs()
         fut_dist_pred = future_dist(torch.cat((prev_board, target_board), -1))
-        fut_dist_targ = (future_dist(torch.cat((next_board_is, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist
-        dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
+        distances.append((fut_dist_pred, micro_dist))
+        # fut_dist_targ = (future_dist(torch.cat((board, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist
+        # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
         # Minimize that sum-of-future-distances by actions.
         for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(False)
         next_board_is = next_board(torch.cat((prev_board, state), -1))
@@ -159,6 +168,21 @@ for iters in range(50000):
         tt = torch.index_select(st, 0, nearest_target)
         # denoising_loss = denoising_loss + (st - tt.detach()).square().sum()
         #   Hopefully, this special-casing won't be necessary anymore, and we can delete it entirely.
+    # Predict future-distances directly.
+    for i in reversed(range(1, len(distances))):
+        distances[i-1] = (distances[i-1][0], distances[i-1][1] + distances[i][1])
+    for pred, targ in distances:
+        dist_pred_loss = dist_pred_loss + (pred - targ.detach()).square().sum()
+    if (iters+1) % 1000 == 0: # For debugging, visualize distances from anywhere to a target.
+        # TODO: ...This ain't right... Why?...
+        import matplotlib.pyplot as plt
+        src = torch.eye(N*N, device=device)
+        dst = env_init(N, 1).expand(N*N, N*N)
+        dist = future_dist(torch.cat((src, dst), -1)).sum(-1).reshape(N, N).detach().cpu().numpy()
+        plt.clf()
+        plt.imshow(dist)
+        plt.pause(1)
+        plt.show()
 
     achieved_target = achieved_target.float()
     # denoising_loss = denoising_loss * achieved_target # (This is only for denoising.)
