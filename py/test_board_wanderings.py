@@ -43,7 +43,6 @@ def env_step(N, board, xy): # → board
         torch.where(xy[..., :1] > 0, board_px, board_mx),
         torch.where(xy[..., 1:] > 0, board_py, board_my),
     )
-# TODO: …`env_step2`, which 
 
 
 
@@ -59,7 +58,7 @@ state_sz = 8
 overparameterized = 8
 
 unroll_len = 1
-# unroll_len = N-1 # TODO:
+# unroll_len = N-1 # TODO: Test our per-action minimizer with this.
 
 
 
@@ -77,16 +76,14 @@ next = nn.Sequential( # (board, target_board, state, output) → output_state
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
 next_board = nn.Sequential( # (board, state) → next_board (state AKA action)
-    # TODO: …By passing `state` to `future_dist`, we've made this obsolete, haven't we?… (Unless we bootstrap.)
     # (So that goals don't have to be non-human-comprehensible.)
+    # TODO: …By passing `state` to `future_dist`, we've made this obsolete, haven't we?…
     nn.Linear(N*N + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, N*N),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, state, target_board) → future_distance_sum
-    # TODO: Are we still averaging? (If not, could try several initial-`output`s, and make all actions predict the min-predicted-distance one — not follow the gradient.)
-    #   What input are we missing?
     # (For picking an action that leads to getting to the target board the fastest.)
     nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
     nn.ReLU(),
@@ -104,7 +101,7 @@ for iters in range(50000):
     # Ultimately, to pre-train for all possible goals, we want to learn how to eventually get from anywhere to anywhere in `state`-space.
     #   Let's define our transition model as `next: (prev_state, goal) → next_state` (which also includes input/output inside of it for simplicity of our analysis). We'd like to learn good `next_state` — but where could we possibly get a good loss to do that?
     #   There exist many `state→state→…→state→state` trajectories, and we'd like to make sure that they all encounter `goal` as soon as possible. Moreover, we only really need to know one trajectory for each `(state, goal)` pair, the shortest one (which rules out the hard generative-modeling and allows using the easy prediction): if our `state`-space is a faithfully-compressed representation of inputs/outputs, then state-goals won't miss any details and thus won't have to intervene on trajectories to patch up blindspots.
-    #   We need to consider a trajectory's first transition to its `next` state, and for each possible action (`next_state`), measure/learn its future's distance to the `goal`, and minimize that. Succeed at this everywhere, and our map is learned.
+    #   We need to consider a trajectory's first transition to its `next` state, and for each possible action (`next_state`), measure/learn its future's distance to the `goal`, and minimize that (this problem is known as [optimal control](http://www.scholarpedia.org/article/Optimal_control#:~:text=Optimal%20control%20is%20the%20process,to%20minimise%20a%20performance%20index.)). Succeed at this everywhere, and our map is learned.
     #   1. A neural net that would learn the future-distance: `future_dist: (state, goal) → future_distance`. Should be learned like a GAN: learned without gradient to `state` & `goal` (only its params), and minimized with gradient only to `state` & `goal` (not to its params, to not undo learning).
     #   2. The actual distance, on a trajectory? Note that our states/goals are continuous, so we can't just count transitions until equality, nor can we explicitly dream up individual trajectories to pick the shortest one (there are infinitely many, so that's either inaccurate or taking too long).
     #     - The less transitions until we're at `goal`, and the longer we stay there afterward, the better. The future distance being the *sum* of individual `dist`ances fits this quite nicely, and is easy to learn.
@@ -112,14 +109,6 @@ for iters in range(50000):
     #     - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
 
     # TODO: Run & fix. (It looks like a neural-net reformulation of a dynamic programming problem, so it shouldn't really fail barring optimization difficulties, right?)
-    #   …Why is the distance-prediction loss still high?
-    #   TODO: Figure out why it doesn't work:
-    #     TODO: Try predicting the sum of future distances directly, without bootstrapping. (See whether we can get its loss to 0, which bootstrapping doesn't seem to be able to do. And visualize fixed-target predicted distances.) …Why can't we learn it, still?
-    #     TODO: Try random-actions. …Is our distance metric just bad?
-    #       …Why aren't even random actions working well? Should we try making a better metric, or?…
-    #       …Wait, not even 1-action-long thing is working. The heck? How can this possibly be?
-    #     TODO: Try printing a trajectory's distance predictions. (See whether they decrease over time as they should.)
-    #     TODO: Try turning our actions into next-board-state proposals, where the one with the highest value in one of the 4 neighbors wins? (Then, we won't need `next_board`.)
 
 
 
@@ -130,13 +119,30 @@ for iters in range(50000):
     target_board = env_init(N, batch_size=batch_size)
     achieved_target = torch.full((batch_size,), False, device=device)
     distances = [] # For direct future-distance prediction, w/o bootstrapping.
-    # distances.append((future_dist(torch.cat((board, state, target_board), -1)), 0)) # TODO:
+    distances.append((future_dist(torch.cat((board, state, target_board), -1)), 0)) # TODO: (This is just so that we could effortlessly visualize any-action distances as an image, by setting `state=0`.)
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
         random = torch.randn(batch_size, state_sz, device=device)
-        # TODO: …Yeah, we should really materialize the 4 possible actions and pick the min-predicted-future-distance one, because our action space is really unsuited to gradient-based minimization (pretty sure).
-        #   …Or maybe, don't just hardcode states, but try inverting & swapping the first two numbers of output states?
+        # Minimize the future-distance-sum by considering all 4 possible actions right here.
+        #   (Minimizing by gradient descent in this environment is no bueno.)
         state = next(torch.cat((board, target_board, state, random), -1))
+        sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
+        state_candidates = [
+            state,
+            torch.cat((sy, sx, srest), -1),
+            torch.cat((-sx, -sy, srest), -1),
+            torch.cat((-sy, -sx, srest), -1),
+        ]
+        min_state, min_dist = None, None
+        with torch.no_grad():
+            for state in state_candidates:
+                dist = future_dist(torch.cat((board, state, target_board), -1)).sum(-1, keepdim=True)
+                if min_dist is None: min_state, min_dist = state, dist
+                else:
+                    mask = dist < min_dist
+                    min_state = torch.where(mask, state, min_state)
+                    min_dist = torch.where(mask, dist, min_dist)
+        state = min_state
 
         prev_board, board = board, env_step(N, board, state[..., 0:2])
         achieved_target_now = (board == target_board).all(-1)
@@ -154,25 +160,22 @@ for iters in range(50000):
         # fut_dist_targ = (future_dist(torch.cat((board, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist # TODO: The next state in the middle, computed from the next board… (Bootstrap.)
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
         # Minimize that sum-of-future-distances by actions.
-        for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(False)
-        dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target_board), -1)).sum() # TODO:
-        for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(True)
+        # for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(False)
+        # dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target_board), -1)).sum() # TODO:
+        # for p in chain(future_dist.parameters(), next_board.parameters()): p.requires_grad_(True)
 
-    # Predict future-distances directly.
+    # Predict future-distances directly. # TODO: Bootstrap instead.
     for i in reversed(range(1, len(distances))):
         distances[i-1] = (distances[i-1][0], distances[i-1][1] + distances[i][1])
-        print(to_np(distances[i-1][1][0].sum())) # TODO:
     for pred, targ in distances:
         dist_pred_loss = dist_pred_loss + (pred - targ.detach()).square().sum()
-    if (iters+1) % 1000 == 0: # For debugging, visualize distances from anywhere to a target.
-        # TODO: ...This ain't right... Why?... (Probably because actions can't minimize themselves for shit.)
-        # TODO: ...Try disabling minimization? Doesn't even change anything. Our optimization is so bad.
+    if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
         import matplotlib.pyplot as plt
         src = torch.eye(N*N, device=device)
         state = torch.zeros(N*N, state_sz, device=device)
         dst = torch.eye(1, N*N, device=device).expand(N*N, N*N)
         dist = future_dist(torch.cat((src, state, dst), -1)).sum(-1).reshape(N, N).detach().cpu().numpy()
-        # TODO: Maybe, in this visualization, have 4 prior `state`s and pick the min between their future-distances?
+        # TODO: Maybe, in this visualization, have 4 prior `state`s and pick the min between their future-distances? …Or just rely on prediction.
         plt.clf()
         plt.imshow(dist)
         plt.pause(1)
