@@ -4,16 +4,34 @@ Pretraining for all possible goals is like learning a map of how to get from any
 We have a square board here, and 1 agent that can only walk it. If we can't learn a map here, then how can we expect to learn a map in more complex environments?
 
 NO RL machinery! Lessons must be transferrable all the way.
+
+---
+
+Ultimately, to pre-train for all possible goals, we want to learn how to eventually get from anywhere to anywhere in `state`-space.
+
+
+Let's define our transition model as `next: (prev_state, goal) → next_state` (which also includes input/output inside of it for simplicity of our analysis). We'd like to learn good `next_state` — but where could we possibly get a good loss to do that?
+
+There exist many `state→state→…→state→state` trajectories, and we'd like to make sure that they all encounter `goal` as soon as possible. Moreover, we only really need to know one trajectory for each `(state, goal)` pair, the shortest one (which rules out the hard generative-modeling and allows using the easy prediction): if our `state`-space is a faithfully-compressed representation of inputs/outputs, then state-goals won't miss any details and thus won't have to intervene on trajectories to patch up blindspots.
+
+We need to consider a trajectory's first transition to its `next` state, and for each possible action (`next_state`), measure/learn its future's distance to the `goal`, and minimize that (this problem is known as [optimal control](http://www.scholarpedia.org/article/Optimal_control#:~:text=Optimal%20control%20is%20the%20process,to%20minimise%20a%20performance%20index.)). Succeed at this everywhere, and our map is learned.
+
+1. A neural net that would learn the future-distance: `future_dist: (state, goal) → future_distance`. Should be learned like a GAN: learned without gradient to `state` & `goal` (only its params), and minimized with gradient only to `state` & `goal` (not to its params, to not undo learning).
+2. The actual distance, on a trajectory? Note that our states/goals are continuous, so we can't just count transitions until equality, nor can we explicitly dream up individual trajectories to pick the shortest one (there are infinitely many, so that's either inaccurate or taking too long).
+  - The less transitions until we're at `goal`, and the longer we stay there afterward, the better. The future distance being the *sum* of individual `dist`ances fits this quite nicely, and is easy to learn.
+    - (With a sum, we don't have to materialize full trajectories to learn distances, we can just bootstrap from single transitions via `future_dist(prev, goal) = (future_dist(next, goal) + dist(prev, goal)).detach()`.)
+  - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
+
+Our current impl's scalability problems:
+- Not using grad-based min, only min via considering all 4 actions at each step. The action space is really discontinuous; can only hope that compression (like Barlow twins) can help.
+- Even N=8 seems to be too hard to learn, possibly because `state` contains too much variability for `future_dist` to easily learn (compared to what we would have had with clean one-hot actions and the one-hot step count/number/index).
+- Low batch sizes don't really work, which is a big problem if we want to have only 1 thread of experience.
+- Minor/temporary: no bootstrapping, randomly-selected goals.
 """
 
 
 
-from model.momentum_copy import MomentumCopy
 from model.log import log, clear, finish
-
-
-
-from itertools import chain
 
 
 
@@ -89,21 +107,21 @@ future_dist = nn.Sequential( # (prev_board, state, target_board) → future_dist
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 for iters in range(50000):
 
-    # TODO: Write this explanation into the intro, because it seems to work very well.
-    # Ultimately, to pre-train for all possible goals, we want to learn how to eventually get from anywhere to anywhere in `state`-space.
-    #   Let's define our transition model as `next: (prev_state, goal) → next_state` (which also includes input/output inside of it for simplicity of our analysis). We'd like to learn good `next_state` — but where could we possibly get a good loss to do that?
-    #   There exist many `state→state→…→state→state` trajectories, and we'd like to make sure that they all encounter `goal` as soon as possible. Moreover, we only really need to know one trajectory for each `(state, goal)` pair, the shortest one (which rules out the hard generative-modeling and allows using the easy prediction): if our `state`-space is a faithfully-compressed representation of inputs/outputs, then state-goals won't miss any details and thus won't have to intervene on trajectories to patch up blindspots.
-    #   We need to consider a trajectory's first transition to its `next` state, and for each possible action (`next_state`), measure/learn its future's distance to the `goal`, and minimize that (this problem is known as [optimal control](http://www.scholarpedia.org/article/Optimal_control#:~:text=Optimal%20control%20is%20the%20process,to%20minimise%20a%20performance%20index.)). Succeed at this everywhere, and our map is learned.
-    #   1. A neural net that would learn the future-distance: `future_dist: (state, goal) → future_distance`. Should be learned like a GAN: learned without gradient to `state` & `goal` (only its params), and minimized with gradient only to `state` & `goal` (not to its params, to not undo learning).
-    #   2. The actual distance, on a trajectory? Note that our states/goals are continuous, so we can't just count transitions until equality, nor can we explicitly dream up individual trajectories to pick the shortest one (there are infinitely many, so that's either inaccurate or taking too long).
-    #     - The less transitions until we're at `goal`, and the longer we stay there afterward, the better. The future distance being the *sum* of individual `dist`ances fits this quite nicely, and is easy to learn.
-    #       - (With a sum, we don't have to materialize full trajectories to learn distances, we can just bootstrap from single transitions via `future_dist(prev, goal) = (future_dist(next, goal) + dist(prev, goal)).detach()`.)
-    #     - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
-    # Our current impl's scalability problems:
-    #   - Not using grad-based min, only min via considering all 4 actions at each step.
-    #   - Even N=8 seems to be too hard to learn, possibly because `state` contains too much variability for `future_dist` to easily learn (compared to what we would have had with clean one-hot actions and the one-hot step count/number/index).
-
-    # TODO: What do we do right now, exactly?
+    # TODO: Come up with a plan on how to get from our neural pathfinding here to URL:
+    # The differences between URL (`ev(prev_state).detach() = ev(next_state)`) and neural pathfinding:
+    #   1. We minimize not just single steps but whole future paths. But, we can invert future/past:
+    #     Minimizing the sum of future distances is the same as minimizing the past distance at every step (min-a-sum is min-each-term), same as URL but with a more distant-past goal.
+    #       (Won't even need `future_dist`.)
+    #       The problem here is that this board environment does not play nice with grad-min.
+    #   2. We put completely random targets in, not a learned `ev` state.
+    #     But if we just put in the first state as the goal, then we can't go anywhere else; URL itself is too single-step to learn effectively.
+    #     Should we learn (or preserve via sampling-from-a-buffer) a distribution of past states…? (Which is kinda how we do it in this 2D env.)
+    #       Or even somehow, minimize distances from all past states…?
+    #         (One way to do this is to learn a distance function (though that would learn to reach only the easiest targets, not all targets), but can we go the same route as we did for analyzing future-minimization?)
+    #     (Though URL's intention was to have the past-state be a prediction of a future-state, which just complicates things even more.)
+    #   3. We have no `ev`.
+    #     (If we want to still be able to set board states as targets, then probably can't touch this.)
+    #     …Can this help us in getting past this env's grad-min limitation?…
 
 
 
@@ -148,7 +166,8 @@ for iters in range(50000):
         micro_dist = (board - target_board).abs()
         fut_dist_pred = future_dist(torch.cat((prev_board, state, target_board), -1))
         distances.append((fut_dist_pred, micro_dist))
-        # fut_dist_targ = (future_dist(torch.cat((board, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist # TODO: The next state in the middle, computed from the next board… (Bootstrap.)
+        # next_state = next(torch.cat((board, target_board, state, random), -1)) # TODO: Do bootstrap (no benefit over direct-prediction, so who cares right now).
+        # fut_dist_targ = (future_dist(torch.cat((board, next_state, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
         # Minimize that sum-of-future-distances by actions.
         # for p in future_dist.parameters(): p.requires_grad_(False)
@@ -185,16 +204,13 @@ for iters in range(50000):
         print(str(iters).rjust(6))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
-#   - ✓ From board and action (randomly-generated) to board — EASY
-#   - ✓ From board and neighboring-board (gotten via env_step with a random action) to action (the randomly-generated one) — will be so easy that it's pointless to implement.
-#   - From board & target-board & extra-state & whole-output (or a random vector initially), to the next action & extra state: `next`.
-#     - (Need to limit the unroll-length, or else practically everything will count as reachable.)
-#     - Average-plan makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target, so either:
-#       - ✓ [Good: 40%] DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising (accept its output as an input, initially a random vector), and wherever we have a loss (here, just: make less-denoised outputs predict more-denoised outputs, only in trajectories that reached the target), make predict-branches have less denoisings than stopgrad-branches to make denoising learned. Possibly, have completely separate RNN-states for different denoising levels. (Sounds quite trainable, but might just collapse diversity like in the initial experiments; maybe using CCL for prediction could help.) (Eventually removed the impl here.)
+#   - ✓ Learning transitions: from board and action (randomly-generated) to board — EASY.
+#   - ✓ Learning plans: from board & target-board & extra-state & whole-output (or a random vector initially), to the next action & extra state: `next`. (Limiting the unroll-length, of course.)
+#     - ❌ Average-plan makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target, so either:
+#       - ✓ [Good: 40%] DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising: make it accept its output as an input, initially a random vector, then unroll its RNN and make all stages predict the final one (or a variation on that). (Eventually removed the impl here, and all its tricks.)
 #       - ❌ [Bad: 30%, highly unstable] GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
-#       - ⋯ [Good: 40% with partial impl, very fast convergence] Abandon distributions, pick only their shortest paths; special-case our discrete case to see how viable this is. (Very viable: didn't implement prior-path-conditioning, so all shortest paths interfere, making 40% on 4×4 even more impressive.)
-#         - (Performance deterioration is because there are always 2+ valid actions, so when they collide, predicted action goes toward 0 and causes instability before long. So, not worth caring about.) (unroll_len=1 is max-performance while the others are worse because targets are not path-dependent, which I think would be included in the final loss, but may take too much effort to manually engineer here.)
-#       - ⋯ …Rethink whether we really couldn't enforce a sensible priority on which plans from a distribution we pick, because of impl and/or optim troubles…
-#     - (Until we can reliably learn the next action, with a batch-size of 1, without non-transferrable tasks.)
-#   - Almost-URL: learn the distribution of targets, along with distributions of plans to reach them (learning eventual-RNN-states would have been full URL).
-#   - Full URL, where goal-of-state is learned too: goal:ev(state);  goal=ev(next(state, goal))
+#     - ✓ [Good: 40% with partial impl] Abandon distributions, pick only their shortest paths; special-case our discrete case to see how viable this is. Very viable: didn't even implement prior-path-conditioning, so all shortest paths interfere, making 40% on 4×4 even more impressive. (Performance deterioration is because there are always many valid paths, so when they collide, predicted action goes toward 0 and causes instability before long.)
+#     - ✓ [Perfect: 95%] Neural pathfinding: explicitly learn the sum of future L1 distances (here, this is twice the number of steps until target), and minimize that. (Grad-min doesn't work, but considering all 4 actions at each step does.)
+#   - ⋯ Also learn targets, don't just decide them randomly…
+#   - ⋯ Figure out how to use grad-min instead of action-min, because a simplification relies on this.
+#   - ⋯ Don't use boards as states & goals directly, instead compress them with `ev` (such as via Barlow twins).
