@@ -71,16 +71,15 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 5, 100
-state_sz = 4
-overparameterized = 16
+N, batch_size = 4, 100
+state_sz = 64
+overparameterized = 1
 
 unroll_len = N
 
 
 
-next = nn.Sequential( # (board, target_board, state, output) → output_state
-    # (`output` is for sampling from the action distribution on each step, initially a random vector in each iteration, denoised one or more times.)
+next = nn.Sequential( # (board, target_board, state, random) → output_state
     # (The actions are simply sliced from `output_state`.)
     nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
@@ -107,21 +106,20 @@ future_dist = nn.Sequential( # (prev_board, state, target_board) → future_dist
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 for iters in range(50000):
 
-    # TODO: Come up with a plan on how to get from our neural pathfinding here to URL:
-    # The differences between URL (`ev(prev_state).detach() = ev(next_state)`) and neural pathfinding:
-    #   1. We minimize not just single steps but whole future paths. But, we can invert future/past:
-    #     Minimizing the sum of future distances is the same as minimizing the past distance at every step (min-a-sum is min-each-term), same as URL but with a more distant-past goal.
-    #       (Won't even need `future_dist`.)
-    #       The problem here is that this board environment does not play nice with grad-min.
-    #   2. We put completely random targets in, not a learned `ev` state.
-    #     But if we just put in the first state as the goal, then we can't go anywhere else; URL itself is too single-step to learn effectively.
-    #     Should we learn (or preserve via sampling-from-a-buffer) a distribution of past states…? (Which is kinda how we do it in this 2D env.)
-    #       Or even somehow, minimize distances from all past states…?
-    #         (One way to do this is to learn a distance function (though that would learn to reach only the easiest targets, not all targets), but can we go the same route as we did for analyzing future-minimization?)
-    #     (Though URL's intention was to have the past-state be a prediction of a future-state, which just complicates things even more.)
-    #   3. We have no `ev`.
-    #     (If we want to still be able to set board states as targets, then probably can't touch this.)
-    #     …Can this help us in getting past this env's grad-min limitation?…
+    # TODO: Have `ev(board, state, random)`, and learn to make two consecutive outputs the same with a CCL loss (don't use these for anything yet) (log the L2 loss).
+
+    # TODO: Use `ev`:
+    #   TODO: Forego the completion percentage; log the future-distance-sum instead.
+    #     (…Or possibly restore it, by learning a NN from target-board to `ev`-space goal.)
+    #   TODO: Make `future_dist` learn how far away the `ev` goal is, not the target-board.
+    #   TODO: Make results of `ev` the targets.
+    #     TODO: Learn to accomplish same-goal rollouts:
+    #       TODO: Try deciding the goal of each rollout randomly (randn).
+    #       TODO: Try having a buffer of like 64*1024 `ev`-results at the end of a rollout, and sample goals from that.
+    #       TODO: Try adding a `random` input to `ev`.
+    #     TODO: If same-goal rollouts are learned successfully:
+    #       TODO: Try deciding a new goal each step (different `random` input to `ev`), bootstrapping all predictions.
+    #   (Damn, even more phase-transitions to try to survive through.)
 
 
 
