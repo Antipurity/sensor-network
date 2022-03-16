@@ -32,6 +32,7 @@ Our current impl's scalability problems:
 
 
 from model.log import log, clear, finish
+from model.loss import CrossCorrelationLoss
 
 
 
@@ -96,17 +97,29 @@ future_dist = nn.Sequential( # (prev_board, state, target_board) → future_dist
         nn.ReLU(),
         nn.LayerNorm(overparameterized * state_sz),
     ),
+    nn.Linear(overparameterized * state_sz, N*N),
+).to(device)
+ev = nn.Sequential( # (board, state, random) → compressed
+    # (For extracting invariants from env/RNN transitions.)
+    nn.Linear(N*N + state_sz + state_sz, overparameterized * state_sz),
+    nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
     SkipConnection(
         nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
         nn.ReLU(),
         nn.LayerNorm(overparameterized * state_sz),
     ),
-    nn.Linear(overparameterized * state_sz, N*N),
+    nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
-opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
-for iters in range(50000):
+opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters()], lr=1e-3)
 
-    # TODO: Have `ev(board, state, random)`, and learn to make two consecutive outputs the same with a CCL loss (don't use these for anything yet) (log the L2 loss).
+loss = CrossCorrelationLoss(
+    axis=-1,
+    decorrelation_strength=1,
+    also_return_l2=True,
+)
+
+for iters in range(50000):
 
     # TODO: Use `ev`:
     #   TODO: Forego the completion percentage; log the future-distance-sum instead.
@@ -124,7 +137,7 @@ for iters in range(50000):
 
 
     # Sample a batch of trajectories (pre-deciding the target-board).
-    dist_pred_loss, dist_min_loss = 0, 0
+    dist_pred_loss, dist_min_loss, ev_loss, ev_l2 = 0, 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     target_board = env_init(N, batch_size=batch_size)
@@ -132,10 +145,12 @@ for iters in range(50000):
     distances = [] # For direct future-distance prediction, w/o bootstrapping.
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
+        zeros = torch.zeros(batch_size, state_sz, device=device)
         random = torch.randn(batch_size, state_sz, device=device)
+        prev_state = state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        state = next(torch.cat((board, target_board, state, random), -1))
+        state = next(torch.cat((board, target_board, prev_state, random), -1))
         sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
         state_candidates = [
             state,
@@ -159,6 +174,14 @@ for iters in range(50000):
         prev_achieved_target = achieved_target
         achieved_target = achieved_target | achieved_target_now
 
+        # Compress transitions.
+        A, B = loss(
+            ev(torch.cat((prev_board, prev_state, random), -1).unsqueeze(-2)),
+            ev(torch.cat((board, state, random), -1).unsqueeze(-2)),
+        )
+        ev_loss = ev_loss + A
+        ev_l2 = ev_l2 + B.detach()
+
         # Be able to predict sum-of-future-distances from prev & target, to minimize.
         #   (Technically unnecessary here since we could just have a table from all-past-actions & current-board & target-board to distance, but at that point, why even have neural nets at all?)
         micro_dist = (board - target_board).abs()
@@ -167,6 +190,7 @@ for iters in range(50000):
         # next_state = next(torch.cat((board, target_board, state, random), -1)) # TODO: Do bootstrap (no benefit over direct-prediction, so who cares right now).
         # fut_dist_targ = (future_dist(torch.cat((board, next_state, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
+
         # Minimize that sum-of-future-distances by actions.
         # for p in future_dist.parameters(): p.requires_grad_(False)
         # dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target_board), -1)).sum() # TODO:
@@ -191,14 +215,15 @@ for iters in range(50000):
     if iters == 100: clear()
 
     achieved_target = achieved_target.float()
-    (dist_pred_loss + dist_min_loss).backward()
+    (dist_pred_loss + dist_min_loss + ev_loss).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         correct_frac = achieved_target.mean()
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
-        log(2, False, correct_target_perc = to_np((correct_frac*100).round()))
-        log(3, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(2, False, ev_l2 = to_np(ev_l2))
+        log(3, False, correct_target_perc = to_np((correct_frac*100).round()))
+        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
         print(str(iters).rjust(6))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
