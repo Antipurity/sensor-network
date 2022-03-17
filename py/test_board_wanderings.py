@@ -224,7 +224,6 @@ for iters in range(50000):
         log(3, False, avg_distance = distances[0][1].sum(-1).mean())
         log(4, False, correct_target_perc = to_np((correct_frac*100).round()))
         log(5, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
-        print(str(iters).rjust(6))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ Learning transitions: from board and action (randomly-generated) to board — EASY.
