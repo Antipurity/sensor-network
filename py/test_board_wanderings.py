@@ -80,16 +80,16 @@ unroll_len = N
 
 
 
-next = nn.Sequential( # (board, target_board, state, random) → output_state
+next = nn.Sequential( # (board, target, state, random) → state
     # (The actions are simply sliced from `output_state`.)
-    nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
+    nn.Linear(N*N + state_sz + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
-future_dist = nn.Sequential( # (prev_board, state, target_board) → future_distance_sum
+future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
-    nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
+    nn.Linear(N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     SkipConnection(
@@ -110,6 +110,7 @@ ev = nn.Sequential( # (board, state, random) → compressed
         nn.LayerNorm(overparameterized * state_sz),
     ),
     nn.Linear(overparameterized * state_sz, state_sz),
+    nn.LayerNorm(state_sz),
 ).to(device)
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters()], lr=1e-3)
 
@@ -122,7 +123,6 @@ loss = CrossCorrelationLoss(
 for iters in range(50000):
 
     # TODO: Use `ev`:
-    #   TODO: Make `future_dist` learn how far away the `ev` goal is, not the target-board.
     #   TODO: Make results of `ev` the targets.
     #     TODO: Learn to accomplish same-goal rollouts:
     #       TODO: Try deciding the goal of each rollout randomly (randn).
@@ -138,8 +138,8 @@ for iters in range(50000):
     dist_pred_loss, dist_min_loss, ev_loss, ev_l2 = 0, 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
-    target_board = env_init(N, batch_size=batch_size) # TODO: Try sampling this randomly.
-    #   TODO: Rename this to just `target`. And, decide it by picking a randn vector batch (I guess).
+    # target_board = env_init(N, batch_size=batch_size) # TODO:
+    target = torch.randn(batch_size, state_sz, device=device).detach() # TODO: …This is our most tinkerable part, isn't it…
     distances = [] # For direct future-distance prediction, w/o bootstrapping.
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
@@ -148,7 +148,7 @@ for iters in range(50000):
         prev_state = state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        state = next(torch.cat((board, target_board, prev_state, random), -1))
+        state = next(torch.cat((board, target, prev_state, random), -1))
         #   Using `zeros` in place of `random` here is 2× slower to converge.
         sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
         state_candidates = [
@@ -160,7 +160,7 @@ for iters in range(50000):
         min_state, min_dist = None, None
         with torch.no_grad():
             for state in state_candidates:
-                dist = future_dist(torch.cat((board, state, target_board), -1)).sum(-1, keepdim=True)
+                dist = future_dist(torch.cat((board, state, target), -1)).sum(-1, keepdim=True)
                 if min_dist is None: min_state, min_dist = state, dist
                 else:
                     mask = dist < min_dist
@@ -181,19 +181,19 @@ for iters in range(50000):
 
         # Be able to predict sum-of-future-distances from prev & target, to minimize.
         #   (Technically unnecessary here since we could just have a table from all-past-actions & current-board & target-board to distance, but at that point, why even have neural nets at all?)
-        micro_dist = (board - target_board).abs() # TODO: Make `future_dist` learn how far away the `ev` goal is, not the target-board.
-        #   TODO: …Should we try just `A` and `B`?
+        micro_dist = (ev2 - target).abs()
+        #   TODO: …Should we try just `ev1` and `ev2`?
         #     …No, we can only do that with bootstrapping, because otherwise we need to ensure that the goal is the same during the whole trajectory.
         #       (…Though if we DO do bootstrapping, then wouldn't we accelerate learning by considering nearby targets more often?…)
-        fut_dist_pred = future_dist(torch.cat((prev_board, state, target_board), -1))
+        fut_dist_pred = future_dist(torch.cat((prev_board, state, target), -1))
         distances.append((fut_dist_pred, micro_dist))
-        # next_state = next(torch.cat((board, target_board, state, random), -1)) # TODO: Do bootstrap (no benefit over direct-prediction, so who cares right now).
-        # fut_dist_targ = (future_dist(torch.cat((board, next_state, target_board), -1)) if u<unroll_len-1 else 0) + micro_dist
+        # next_state = next(torch.cat((board, target, state, random), -1)) # TODO: Do bootstrap (only if/when learned-targets can be reached).
+        # fut_dist_targ = (future_dist(torch.cat((board, next_state, target), -1)) if u<unroll_len-1 else 0) + micro_dist
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().sum()
 
         # Minimize that sum-of-future-distances by actions.
         # for p in future_dist.parameters(): p.requires_grad_(False)
-        # dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target_board), -1)).sum() # TODO:
+        # dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target), -1)).sum() # TODO:
         # for p in future_dist.parameters(): p.requires_grad_(True)
 
     # Predict future-distances directly. # TODO: Bootstrap instead.
