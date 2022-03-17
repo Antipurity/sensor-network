@@ -122,10 +122,9 @@ loss = CrossCorrelationLoss(
 for iters in range(50000):
 
     # TODO: Use `ev`:
-    #   TODO: Forego the completion percentage; log the future-distance-sum instead.
-    #     (…Or possibly restore it, by learning a NN from target-board to `ev`-space goal.)
     #   TODO: Make `future_dist` learn how far away the `ev` goal is, not the target-board.
     #   TODO: Make results of `ev` the targets.
+    #     TODO: No longer log the completion percentage.
     #     TODO: Learn to accomplish same-goal rollouts:
     #       TODO: Try deciding the goal of each rollout randomly (randn).
     #       TODO: Try having a buffer of like 64*1024 `ev`-results at the end of a rollout, and sample goals from that.
@@ -176,8 +175,8 @@ for iters in range(50000):
 
         # Compress transitions.
         A, B = loss(
-            ev(torch.cat((prev_board, prev_state, random), -1).unsqueeze(-2)),
-            ev(torch.cat((board, state, random), -1).unsqueeze(-2)),
+            ev(torch.cat((prev_board, prev_state, zeros), -1).unsqueeze(-2)),
+            ev(torch.cat((board, state, zeros), -1).unsqueeze(-2)),
         )
         ev_loss = ev_loss + A
         ev_l2 = ev_l2 + B.detach()
@@ -222,8 +221,9 @@ for iters in range(50000):
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
         log(2, False, ev_l2 = to_np(ev_l2))
-        log(3, False, correct_target_perc = to_np((correct_frac*100).round()))
-        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(3, False, avg_distance = distances[0][1].sum(-1).mean())
+        log(4, False, correct_target_perc = to_np((correct_frac*100).round()))
+        log(5, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
         print(str(iters).rjust(6))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
