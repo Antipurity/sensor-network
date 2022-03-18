@@ -97,7 +97,7 @@ future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_s
         nn.ReLU(),
         nn.LayerNorm(overparameterized * state_sz),
     ),
-    nn.Linear(overparameterized * state_sz, N*N),
+    nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
 ev = nn.Sequential( # (board, state, random) → compressed
     # (For extracting invariants from env/RNN transitions.)
