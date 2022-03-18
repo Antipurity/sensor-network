@@ -72,9 +72,11 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 4, 100
+N, batch_size = 4, 10
 state_sz = 64
 overparameterized = 1
+out_mult = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
+#   TODO: (…Should targets be in RNN-state-space, not the blown-up cross-correlation space?…)
 
 unroll_len = N
 
@@ -82,14 +84,14 @@ unroll_len = N
 
 next = nn.Sequential( # (board, target, state, random) → state
     # (The actions are simply sliced from `output_state`.)
-    nn.Linear(N*N + state_sz + state_sz + state_sz, overparameterized * state_sz),
+    nn.Linear(N*N + out_mult*state_sz + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
-    nn.Linear(N*N + state_sz + state_sz, overparameterized * state_sz),
+    nn.Linear(N*N + state_sz + out_mult*state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     SkipConnection(
@@ -97,7 +99,7 @@ future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_s
         nn.ReLU(),
         nn.LayerNorm(overparameterized * state_sz),
     ),
-    nn.Linear(overparameterized * state_sz, state_sz),
+    nn.Linear(overparameterized * state_sz, out_mult * state_sz),
 ).to(device)
 ev = nn.Sequential( # (board, state, random) → compressed
     # (For extracting invariants from env/RNN transitions.)
@@ -109,14 +111,14 @@ ev = nn.Sequential( # (board, state, random) → compressed
         nn.ReLU(),
         nn.LayerNorm(overparameterized * state_sz),
     ),
-    nn.Linear(overparameterized * state_sz, state_sz),
-    nn.LayerNorm(state_sz),
+    nn.Linear(overparameterized * state_sz, out_mult * state_sz),
+    nn.LayerNorm(out_mult * state_sz),
 ).to(device)
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters()], lr=1e-3)
 
 loss = CrossCorrelationLoss(
     axis=-1,
-    decorrelation_strength=.01,
+    decorrelation_strength=.001,
     also_return_l2=True,
 )
 
@@ -139,7 +141,8 @@ for iters in range(50000):
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     # target_board = env_init(N, batch_size=batch_size) # TODO:
-    target = torch.randn(batch_size, state_sz, device=device).detach() # TODO: …This is our most tinkerable part, isn't it…
+    target = torch.randn(batch_size, out_mult * state_sz, device=device).detach() # TODO: …This is our most tinkerable part, isn't it…
+    target = (target - target.mean(-1, keepdim=True)) / target.std(-1, keepdim=True) # TODO:
     distances = [] # For direct future-distance prediction, w/o bootstrapping.
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
@@ -171,12 +174,14 @@ for iters in range(50000):
         prev_board, board = board, env_step(N, board, state[..., 0:2])
 
         # Compress transitions.
-        #   (Not sure whether `.unsqueeze(-2)` makes this or breaks this.)
+        #   (Not sure whether `.unsqueeze(-2)` on the input makes this or breaks this.)
         #     (L2 doesn't go to 0 without that, but with that, it goes to 0 suspiciously quickly.)
-        ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1).unsqueeze(-2))
-        ev2 = ev(torch.cat((board, state, zeros), -1).unsqueeze(-2))
+        #     TODO: …With unsqueezing, the distance-prediction loss is SUSPICIOUSLY high, right? Meaning that all information is lost, right? Meaning that we have to figure out how to not unsqueeze…
+        #       TODO: …But then, what the HECK are we supposed to do with something that refuses to converge?!
+        ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1))
+        ev2 = ev(torch.cat((board, state, zeros), -1))
         A, B = loss(ev1, ev2)
-        ev_loss = ev_loss + A
+        ev_loss = ev_loss + A # TODO:
         ev_l2 = ev_l2 + B.detach()
 
         # Be able to predict sum-of-future-distances from prev & target, to minimize.
