@@ -72,10 +72,10 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 4, 10
+N, batch_size = 4, 100
 state_sz = 64
 overparameterized = 1
-out_mult = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
+ev_output_overparameterized = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
 #   TODO: (…Should targets be in RNN-state-space, not the blown-up cross-correlation space?…)
 
 unroll_len = N
@@ -106,8 +106,8 @@ ev = nn.Sequential( # (board, state, random) → compressed
     nn.Linear(N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
-    nn.Linear(overparameterized * state_sz, out_mult * state_sz),
-    nn.LayerNorm(out_mult * state_sz),
+    nn.Linear(overparameterized * state_sz, ev_output_overparameterized * state_sz),
+    nn.LayerNorm(ev_output_overparameterized * state_sz),
 ).to(device)
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters()], lr=1e-3)
 
@@ -117,6 +117,12 @@ loss = CrossCorrelationLoss(
     also_return_l2=True,
 )
 
+target = torch.randn(batch_size, state_sz, device=device).detach() # TODO: …This is our most tinkerable part, isn't it…
+#   TODO: DEFINITELY try picking `target` not entirely randomly but from the results of calling `ev`.
+#     …How do we do that, exactly…
+#       Should we try just taking the previous last-state?…
+#       Should we try taking a random state from the previous unroll — but how to combine them randomly?…
+#       …What else can we do?… I think that's all we can do…
 for iters in range(50000):
 
     # TODO: Use `ev`:
@@ -138,12 +144,8 @@ for iters in range(50000):
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     # target_board = env_init(N, batch_size=batch_size) # TODO:
-    target = torch.randn(batch_size, state_sz, device=device).detach() # TODO: …This is our most tinkerable part, isn't it…
-    #   TODO: DEFINITELY try picking `target` not entirely randomly but from the results of calling `ev`.
-    #     …How do we do that, exactly…
-    target = (target - target.mean(-1, keepdim=True)) / target.std(-1, keepdim=True) # TODO:
-    distances = [] # For direct future-distance prediction, w/o bootstrapping.
-    boards_states = [(board, state)] # For changing the `future_dist` prediction target after an unroll.
+    target = (target - target.mean(-1, keepdim=True)) / (target.std(-1, keepdim=True) + 1e-5) # TODO:
+    boards_states = [] # For changing the `future_dist` prediction target after an unroll.
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
         zeros = torch.zeros(batch_size, state_sz, device=device)
@@ -179,21 +181,32 @@ for iters in range(50000):
         #   (Not sure whether `.unsqueeze(-2)` on the input makes this or breaks this.)
         #     (L2 doesn't go to 0 without that, but with that, it goes to 0 suspiciously quickly.)
         #       (Though, increasing decorrelated-output-size and reducing decorrelation strength helps the former a lot.)
-        ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1))
-        ev2 = ev(torch.cat((board, state, zeros), -1))
-        A, B = loss(ev1, ev2)
-        ev_loss = ev_loss + A
-        ev_l2 = ev_l2 + B.detach()
+        # ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1)) # TODO:
+        # ev2 = ev(torch.cat((board, state, zeros), -1))
+        # A, B = loss(ev1, ev2)
+        # ev_loss = ev_loss + A
+        # ev_l2 = ev_l2 + B.detach()
 
     # We now know the distance to the last state, which we retroactively take as the `target` here.
-    target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way…
-    for board, state in boards_states:
-        # TODO: (…Maybe try a double-loop, to extract as much training data for distances from a single unroll as possible.)
+    # distances = [] # For direct future-distance prediction, w/o bootstrapping. # TODO:
+    target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
+    #   Seems we're able to reach prediction L2 of 4, which actually allows the distance to go down a bit.
+    distance_sum = 0
+    for i, (board, state) in enumerate(reversed(boards_states)):
+        # TODO: (…Maybe try a double-loop, to extract as much training data for distances from a single unroll as possible. …Yeah, should.)
+        #   …How, exactly?
+        #   …Also, wait, is *this* loop the place to do it…
         # Be able to predict sum-of-future-distances from prev & target, to minimize.
-        #   (Technically unnecessary here since we could just have a table from all-past-actions & current-board & target-board to distance, but at that point, why even have neural nets at all?)
-        micro_dist = (state - target).abs()
-        fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
-        distances.append((fut_dist_pred, micro_dist))
+        dist_sum = 0
+        for _, target in boards_states[i+1:]:
+            # TODO: …This double-loop doesn't seem to do anything for us… Should we go back to single…
+            micro_dist = (state - target).abs()
+            distance_sum = distance_sum + micro_dist
+            dist_sum = dist_sum + micro_dist
+            fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
+            # Predict future-distances directly.
+            dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).abs().mean(0).sum()
+
         # Bootstrap. TODO: Only if/when learned-targets can be reached.
         # next_state = next(torch.cat((board, target, state, random), -1))
         # fut_dist_targ = (future_dist(torch.cat((board, next_state, target), -1)) if u<unroll_len-1 else 0) + micro_dist
@@ -201,14 +214,8 @@ for iters in range(50000):
 
         # Minimize that sum-of-future-distances by actions.
         for p in future_dist.parameters(): p.requires_grad_(False)
-        dist_min_loss = dist_min_loss + future_dist(torch.cat((board, state, target), -1)).sum() # TODO:
+        dist_min_loss = dist_min_loss + future_dist(torch.cat((board, state, target), -1)).mean(0).sum() # TODO:
         for p in future_dist.parameters(): p.requires_grad_(True)
-
-    # Predict future-distances directly. # TODO: Bootstrap instead.
-    for i in reversed(range(1, len(distances))):
-        distances[i-1] = (distances[i-1][0], distances[i-1][1] + distances[i][1])
-    for pred, targ in distances:
-        dist_pred_loss = dist_pred_loss + (pred - targ.detach()).square().mean(0).sum()
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
     #     # (Should, instead of relying on prediction-at-state=0, consider 4 states and display the min.)
@@ -229,8 +236,9 @@ for iters in range(50000):
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
         log(2, False, ev_l2 = to_np(ev_l2))
-        log(3, False, avg_distance = (distances[0][1].sum(-1).mean() + .3) / (2*N))
+        log(3, False, avg_distance = (distance_sum.sum(-1).mean() + .3) / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
+        state = boards_states[-1][1]
         log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
