@@ -76,7 +76,6 @@ N, batch_size = 4, 100
 state_sz = 64
 overparameterized = 1
 ev_output_overparameterized = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
-#   TODO: (…Should targets be in RNN-state-space, not the blown-up cross-correlation space?…)
 
 unroll_len = N
 
@@ -117,12 +116,7 @@ loss = CrossCorrelationLoss(
     also_return_l2=True,
 )
 
-target = torch.randn(batch_size, state_sz, device=device).detach() # TODO: …This is our most tinkerable part, isn't it…
-#   TODO: DEFINITELY try picking `target` not entirely randomly but from the results of calling `ev`.
-#     …How do we do that, exactly…
-#       Should we try just taking the previous last-state?…
-#       Should we try taking a random state from the previous unroll — but how to combine them randomly?…
-#       …What else can we do?… I think that's all we can do…
+target = torch.randn(batch_size, state_sz, device=device).detach()
 for iters in range(50000):
 
     # TODO: Use `ev`:
@@ -191,21 +185,14 @@ for iters in range(50000):
     # distances = [] # For direct future-distance prediction, w/o bootstrapping. # TODO:
     target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
     #   Seems we're able to reach prediction L2 of 4, which actually allows the distance to go down a bit.
-    distance_sum = 0
-    for i, (board, state) in enumerate(reversed(boards_states)):
-        # TODO: (…Maybe try a double-loop, to extract as much training data for distances from a single unroll as possible. …Yeah, should.)
-        #   …How, exactly?
-        #   …Also, wait, is *this* loop the place to do it…
-        # Be able to predict sum-of-future-distances from prev & target, to minimize.
-        dist_sum = 0
-        for _, target in boards_states[i+1:]:
-            # TODO: …This double-loop doesn't seem to do anything for us… Should we go back to single…
-            micro_dist = (state - target).abs()
-            distance_sum = distance_sum + micro_dist
-            dist_sum = dist_sum + micro_dist
-            fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
-            # Predict future-distances directly.
-            dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).abs().mean(0).sum()
+    #     …Wait, since all plots are so correlated, I don't think we're actually learning anything at all, just accidentally making the final state close to the first one.
+    dist_sum = 0
+    for board, state in reversed(boards_states):
+        # Predict sum-of-future-distances from prev & target directly, to minimize later.
+        micro_dist = (state - target).abs()
+        dist_sum = dist_sum + micro_dist
+        fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
+        dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).abs().mean(0).sum()
 
         # Bootstrap. TODO: Only if/when learned-targets can be reached.
         # next_state = next(torch.cat((board, target, state, random), -1))
@@ -236,7 +223,7 @@ for iters in range(50000):
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
         log(2, False, ev_l2 = to_np(ev_l2))
-        log(3, False, avg_distance = (distance_sum.sum(-1).mean() + .3) / (2*N))
+        log(3, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
         state = boards_states[-1][1]
         log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
