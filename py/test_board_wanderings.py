@@ -98,7 +98,12 @@ future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_s
         nn.ReLU(),
         nn.LayerNorm(overparameterized * state_sz),
     ),
-    nn.Linear(overparameterized * state_sz, state_sz),
+    SkipConnection(
+        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
+        nn.ReLU(),
+        nn.LayerNorm(overparameterized * state_sz),
+    ),
+    nn.Linear(overparameterized * state_sz, 1),
 ).to(device)
 ev = nn.Sequential( # (board, state, random) → compressed
     # (For extracting invariants from env/RNN transitions.)
@@ -116,8 +121,8 @@ loss = CrossCorrelationLoss(
     also_return_l2=True,
 )
 
-target = torch.randn(batch_size, state_sz, device=device).detach()
 for iters in range(50000):
+    target = torch.randn(batch_size, state_sz, device=device).detach()
 
     # TODO: Use `ev`:
     #   TODO: Make results of `ev` the targets.
@@ -147,7 +152,7 @@ for iters in range(50000):
         prev_state = state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        state = next(torch.cat((board, target, prev_state, zeros), -1))
+        state = next(torch.cat((board, target, prev_state, random), -1))
         #   Using `zeros` in place of `random` here is 2× slower to converge.
         sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
         state_candidates = [
@@ -183,26 +188,33 @@ for iters in range(50000):
 
     # We now know the distance to the last state, which we retroactively take as the `target` here.
     # distances = [] # For direct future-distance prediction, w/o bootstrapping. # TODO:
-    target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
+    # target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
     #   Seems we're able to reach prediction L2 of 4, which actually allows the distance to go down a bit.
     #     …Wait, since all plots are so correlated, I don't think we're actually learning anything at all, just accidentally making the final state close to the first one.
+    #     SO WHAT DO WE DO
+    #       …Try visualizing final RNN states as images?…
+    #       …Try reading about unsupervised RL?…
+    #       …Distributional RL?…
+    # (…Maybe we can't learn anything in continuous space because there's now no overlap between intermediate states, so making progress on one task means nothing to other tasks?…)
+    #   (…If this is true, then quantizing intermediate states *might* improve reachability…)
+    # (…Even an accurate future-distance prediction can no longer reduce avg_distance, except for, very slightly………)
     dist_sum = 0
-    for board, state in reversed(boards_states):
+    for i, (board, state) in enumerate(reversed(boards_states)):
         # Predict sum-of-future-distances from prev & target directly, to minimize later.
-        micro_dist = (state - target).abs()
+        micro_dist = (state - target).square().mean(-1, keepdim=True)
         dist_sum = dist_sum + micro_dist
         fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
-        dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).abs().mean(0).sum()
+        dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).square().mean(0).sum()
 
         # Bootstrap. TODO: Only if/when learned-targets can be reached.
         # next_state = next(torch.cat((board, target, state, random), -1))
         # fut_dist_targ = (future_dist(torch.cat((board, next_state, target), -1)) if u<unroll_len-1 else 0) + micro_dist
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().mean(0).sum()
 
-        # Minimize that sum-of-future-distances by actions.
-        for p in future_dist.parameters(): p.requires_grad_(False)
-        dist_min_loss = dist_min_loss + future_dist(torch.cat((board, state, target), -1)).mean(0).sum() # TODO:
-        for p in future_dist.parameters(): p.requires_grad_(True)
+        # Minimize that sum-of-future-distances by actions. # TODO:
+        # for p in future_dist.parameters(): p.requires_grad_(False)
+        # dist_min_loss = dist_min_loss + future_dist(torch.cat((board, state, target), -1)).mean(0).sum()
+        # for p in future_dist.parameters(): p.requires_grad_(True)
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
     #     # (Should, instead of relying on prediction-at-state=0, consider 4 states and display the min.)
