@@ -73,8 +73,8 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 N, batch_size = 4, 100
-state_sz = 64
-overparameterized = 1
+state_sz = 4
+overparameterized = 16
 ev_output_overparameterized = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
 
 unroll_len = N
@@ -121,8 +121,8 @@ loss = CrossCorrelationLoss(
     also_return_l2=True,
 )
 
-target = torch.randn(batch_size, state_sz, device=device).detach()
 for iters in range(50000):
+    target = torch.randn(batch_size, state_sz, device=device).detach()
 
     # TODO: Use `ev`:
     #   TODO: Make results of `ev` the targets.
@@ -152,9 +152,13 @@ for iters in range(50000):
         prev_state = state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        state = next(torch.cat((board, target, prev_state, random), -1))
+        state = next(torch.cat((board, target, prev_state, zeros), -1))
         #   Using `zeros` in place of `random` here is 2× slower to converge.
         sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
+        # Add smoothness to the policy by blurring it stochastically.
+        #   TODO: …Maybe try going back to targets being boards, and see whether this probabilitic-ness can help us train via grad-min instead of action-min?…
+        sx = (sx + torch.randn_like(sx)) * torch.rand_like(sx)
+        sy = (sy + torch.randn_like(sy)) * torch.rand_like(sx)
         state_candidates = [
             state,
             torch.cat((sy, sx, srest), -1),
@@ -192,9 +196,9 @@ for iters in range(50000):
     #   Seems we're able to reach prediction L2 of 4, which actually allows the distance to go down a bit.
     #     …Wait, since all plots are so correlated, I don't think we're actually learning anything at all, just accidentally making the final state close to the first one.
     #     SO WHAT DO WE DO
-    #       …Try visualizing final RNN states as images?…
     #       …Try reading about unsupervised RL?…
     #       …Distributional RL?…
+    #       …Include the board in targets so that we can feel better?…
     # (…Maybe we can't learn anything in continuous space because there's now no overlap between intermediate states, so making progress on one task means nothing to other tasks?…)
     #   (…If this is true, then quantizing intermediate states *might* improve reachability…)
     # (…Even an accurate future-distance prediction can no longer reduce avg_distance, except for, very slightly………)
@@ -212,9 +216,9 @@ for iters in range(50000):
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().mean(0).sum()
 
         # Minimize that sum-of-future-distances by actions. # TODO:
-        # for p in future_dist.parameters(): p.requires_grad_(False)
-        # dist_min_loss = dist_min_loss + future_dist(torch.cat((board, state, target), -1)).mean(0).sum()
-        # for p in future_dist.parameters(): p.requires_grad_(True)
+        for p in future_dist.parameters(): p.requires_grad_(False)
+        dist_min_loss = dist_min_loss + future_dist(torch.cat((board, state, target), -1)).mean(0).sum()
+        for p in future_dist.parameters(): p.requires_grad_(True)
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
     #     # (Should, instead of relying on prediction-at-state=0, consider 4 states and display the min.)
