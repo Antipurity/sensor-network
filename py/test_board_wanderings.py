@@ -121,8 +121,8 @@ loss = CrossCorrelationLoss(
     also_return_l2=True,
 )
 
+target = torch.randn(batch_size, state_sz, device=device).detach()
 for iters in range(50000):
-    target = torch.randn(batch_size, state_sz, device=device).detach()
 
     # TODO: Use `ev`:
     #   TODO: Make results of `ev` the targets.
@@ -188,7 +188,7 @@ for iters in range(50000):
 
     # We now know the distance to the last state, which we retroactively take as the `target` here.
     # distances = [] # For direct future-distance prediction, w/o bootstrapping. # TODO:
-    # target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
+    target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
     #   Seems we're able to reach prediction L2 of 4, which actually allows the distance to go down a bit.
     #     …Wait, since all plots are so correlated, I don't think we're actually learning anything at all, just accidentally making the final state close to the first one.
     #     SO WHAT DO WE DO
@@ -201,7 +201,7 @@ for iters in range(50000):
     dist_sum = 0
     for i, (board, state) in enumerate(reversed(boards_states)):
         # Predict sum-of-future-distances from prev & target directly, to minimize later.
-        micro_dist = (state - target).square().mean(-1, keepdim=True)
+        micro_dist = (state - target).abs().mean(-1, keepdim=True)
         dist_sum = dist_sum + micro_dist
         fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
         dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).square().mean(0).sum()
@@ -231,13 +231,13 @@ for iters in range(50000):
 
     (dist_pred_loss + dist_min_loss + ev_loss).backward()
     opt.step();  opt.zero_grad(True)
+    state = boards_states[-1][1]
     with torch.no_grad():
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
         log(2, False, ev_l2 = to_np(ev_l2))
         log(3, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
-        state = boards_states[-1][1]
         log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
