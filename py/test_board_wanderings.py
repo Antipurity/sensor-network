@@ -73,8 +73,8 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 N, batch_size = 4, 100
-state_sz = 4
-overparameterized = 16
+state_sz = 64
+overparameterized = 1
 ev_output_overparameterized = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
 
 unroll_len = N
@@ -117,7 +117,7 @@ opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.param
 
 loss = CrossCorrelationLoss(
     axis=-1,
-    decorrelation_strength=.001,
+    decorrelation_strength=.01,
     also_return_l2=True,
 )
 
@@ -135,6 +135,10 @@ for iters in range(50000):
     #       TODO: Try deciding a new goal each step (different `random` input to `ev`), bootstrapping all predictions.
     #         (Very-preliminary results: vectors becoming nearly-perfectly predictive between timesteps causes "distance" to go down to near-0, making it kinda useless.)
     #   (Damn, even more phase-transitions to try to survive through.)
+
+    # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `intermediate_target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
+    #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target` predict this future-ordained goal.)
+    #   (*Might* improve stability by moving the responsibility of learning long-term dependencies from `next` to bootstrapping.)
 
 
 
@@ -157,6 +161,7 @@ for iters in range(50000):
         sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
         # Add smoothness to the policy by blurring it stochastically.
         #   TODO: …Maybe try going back to targets being boards, and see whether this probabilitic-ness can help us train via grad-min instead of action-min?…
+        #     I think this would be really nice to know, going forward (if true, will allow us to use grad-min in more places). So, this should be our very next step.
         sx = (sx + torch.randn_like(sx)) * torch.rand_like(sx)
         sy = (sy + torch.randn_like(sy)) * torch.rand_like(sx)
         state_candidates = [
@@ -180,11 +185,8 @@ for iters in range(50000):
 
         boards_states.append((board, state))
 
-        # Compress transitions.
-        #   (Not sure whether `.unsqueeze(-2)` on the input makes this or breaks this.)
-        #     (L2 doesn't go to 0 without that, but with that, it goes to 0 suspiciously quickly.)
-        #       (Though, increasing decorrelated-output-size and reducing decorrelation strength helps the former a lot.)
-        # ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1)) # TODO:
+        # Compress transitions. # TODO:
+        # ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1))
         # ev2 = ev(torch.cat((board, state, zeros), -1))
         # A, B = loss(ev1, ev2)
         # ev_loss = ev_loss + A
@@ -197,8 +199,11 @@ for iters in range(50000):
     #     …Wait, since all plots are so correlated, I don't think we're actually learning anything at all, just accidentally making the final state close to the first one.
     #     SO WHAT DO WE DO
     #       …Try reading about unsupervised RL?…
+    #         Good idea: saw a mention of exactly the kind of thing we're trying to do; should investigate.
     #       …Distributional RL?…
     #       …Include the board in targets so that we can feel better?…
+    #       …Experience replay buffer, as if those could help in this super-tiny environment?…
+    #         (Treating RNN states as actions too.)
     # (…Maybe we can't learn anything in continuous space because there's now no overlap between intermediate states, so making progress on one task means nothing to other tasks?…)
     #   (…If this is true, then quantizing intermediate states *might* improve reachability…)
     # (…Even an accurate future-distance prediction can no longer reduce avg_distance, except for, very slightly………)
@@ -211,6 +216,7 @@ for iters in range(50000):
         dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).square().mean(0).sum()
 
         # Bootstrap. TODO: Only if/when learned-targets can be reached.
+        #   …And maybe, momentum-copy it for training stability?…
         # next_state = next(torch.cat((board, target, state, random), -1))
         # fut_dist_targ = (future_dist(torch.cat((board, next_state, target), -1)) if u<unroll_len-1 else 0) + micro_dist
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().mean(0).sum()
