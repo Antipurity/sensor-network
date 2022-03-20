@@ -139,6 +139,7 @@ for iters in range(50000):
     # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `intermediate_target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
     #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target` predict this future-ordained goal.)
     #   (*Might* improve stability by moving the responsibility of learning long-term dependencies from `next` to bootstrapping.)
+    #   (If we don't actually fix a target, we *might* be able to learn imagined targets, eventually refining them to fixed points. Which makes this worth trying, because auto-goal-extraction from RNN state is what we wanted in the first place, and this method is actually motivated by RL stuff, not other-field vaguely-related stuff.)
 
 
 
@@ -204,6 +205,7 @@ for iters in range(50000):
     #       …Include the board in targets so that we can feel better?…
     #       …Experience replay buffer, as if those could help in this super-tiny environment?…
     #         (Treating RNN states as actions too.)
+    #         …DDPG is an off-policy algorithm anyway, and decoupling pretty much all training from acting seems like not a bad idea, so, maybe?…
     # (…Maybe we can't learn anything in continuous space because there's now no overlap between intermediate states, so making progress on one task means nothing to other tasks?…)
     #   (…If this is true, then quantizing intermediate states *might* improve reachability…)
     # (…Even an accurate future-distance prediction can no longer reduce avg_distance, except for, very slightly………)
