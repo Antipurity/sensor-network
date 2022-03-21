@@ -78,6 +78,9 @@ overparameterized = 1
 ev_output_overparameterized = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
 
 unroll_len = N
+action_min = True # If `True`, we enum the 4 actions to pick the min-future-distance one at each step.
+#   (With our 4 discrete actions, grad-min just doesn't work no matter what tricks we try.)
+#     (Though, [Mixup](https://arxiv.org/abs/1710.09412) wasn't tried.)
 
 
 
@@ -160,30 +163,24 @@ for iters in range(50000):
         #   (Minimizing by gradient descent in this environment is no bueno.)
         state = next(torch.cat((board, target, prev_state, zeros), -1))
         #   Using `zeros` in place of `rand` here is 2× slower to converge.
-        sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
-        # Add smoothness to the policy by blurring it stochastically.
-        #   TODO: …Maybe try going back to targets being boards, and see whether this probabilitic-ness can help us train via grad-min instead of action-min?…
-        #     I think this would be really nice to know, going forward (if true, will allow us to use grad-min in more places). So, this should be our very next step.
-        #     TODO: …Okay, what exactly do we need to change? Dimensionality of NN inputs, assignment of `target`, and…?
-        #       And removing this action-min.
-        # sx = (sx + torch.randn_like(sx)) * torch.rand_like(sx)
-        # sy = (sy + torch.randn_like(sy)) * torch.rand_like(sx)
-        state_candidates = [
-            state,
-            torch.cat((sy, sx, srest), -1),
-            torch.cat((-sx, -sy, srest), -1),
-            torch.cat((-sy, -sx, srest), -1),
-        ]
-        min_state, min_dist = None, None
-        with torch.no_grad():
-            for state in state_candidates:
-                dist = future_dist(torch.cat((board, state, target), -1)).sum(-1, keepdim=True)
-                if min_dist is None: min_state, min_dist = state, dist
-                else:
-                    mask = dist < min_dist
-                    min_state = torch.where(mask, state, min_state)
-                    min_dist = torch.where(mask, dist, min_dist)
-        state = min_state
+        if action_min:
+            sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
+            state_candidates = [
+                torch.cat((sx, sy, srest), -1),
+                torch.cat((sy, sx, srest), -1),
+                torch.cat((-sx, -sy, srest), -1),
+                torch.cat((-sy, -sx, srest), -1),
+            ]
+            min_state, min_dist = None, None
+            with torch.no_grad():
+                for state in state_candidates:
+                    dist = future_dist(torch.cat((board, state, target), -1)).sum(-1, keepdim=True)
+                    if min_dist is None: min_state, min_dist = state, dist
+                    else:
+                        mask = dist < min_dist
+                        min_state = torch.where(mask, state, min_state)
+                        min_dist = torch.where(mask, dist, min_dist)
+            state = min_state
 
         prev_board, board = board, env_step(N, board, state[..., 0:2])
 
@@ -219,6 +216,8 @@ for iters in range(50000):
         dist_sum = dist_sum + micro_dist
         fut_dist_pred = future_dist(torch.cat((prev_board, state, target), -1))
         dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).square().mean(0).sum()
+        # TODO: …Can we implement Mixup here, somehow?… (Because if we do, I think that'll be amazing for grad-min.)
+        #   How would we do that? Do we construct a permuted version of prev_board and state and target, and micro_dist/dist_sum, and blend with it with a random coefficient?…
 
         # Bootstrap. TODO: Only if/when learned-targets can be reached.
         #   …And maybe, momentum-copy it for training stability?…
