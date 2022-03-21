@@ -139,6 +139,8 @@ for iters in range(50000):
     #         (Very-preliminary results: vectors becoming nearly-perfectly predictive between timesteps causes "distance" to go down to near-0, making it kinda useless.)
     #   (Damn, even more phase-transitions to try to survive through.)
 
+    # TODO: Implement a replay buffer.
+    # TODO: Learn everything by bootstrapping, using the replay buffer.
     # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `intermediate_target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
     #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target` predict this future-ordained goal.)
     #   (*Might* improve stability by moving the responsibility of learning long-term dependencies from `next` to bootstrapping.)
