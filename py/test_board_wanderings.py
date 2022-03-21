@@ -80,7 +80,6 @@ ev_output_overparameterized = 16 # TODO: …Wait, with this being 16, it's actua
 unroll_len = N
 action_min = True # If `True`, we enum the 4 actions to pick the min-future-distance one at each step.
 #   (With our 4 discrete actions, grad-min just doesn't work no matter what tricks we try.)
-#     (Though, [Mixup](https://arxiv.org/abs/1710.09412) wasn't tried.)
 
 
 
@@ -212,12 +211,11 @@ for iters in range(50000):
     dist_sum = 0
     for prev_board, state, board in reversed(boards_states):
         # Predict sum-of-future-distances from prev & target directly, to minimize later.
+        input = torch.cat((prev_board, state, target), -1)
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
         dist_sum = dist_sum + micro_dist
-        fut_dist_pred = future_dist(torch.cat((prev_board, state, target), -1))
+        fut_dist_pred = future_dist(input)
         dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).square().mean(0).sum()
-        # TODO: …Can we implement Mixup here, somehow?… (Because if we do, I think that'll be amazing for grad-min.)
-        #   How would we do that? Do we construct a permuted version of prev_board and state and target, and micro_dist/dist_sum, and blend with it with a random coefficient?…
 
         # Bootstrap. TODO: Only if/when learned-targets can be reached.
         #   …And maybe, momentum-copy it for training stability?…
@@ -227,7 +225,7 @@ for iters in range(50000):
 
         # Minimize that sum-of-future-distances by actions. # TODO:
         for p in future_dist.parameters(): p.requires_grad_(False)
-        dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target), -1)).mean(0).sum()
+        dist_min_loss = dist_min_loss + future_dist(input).mean(0).sum()
         for p in future_dist.parameters(): p.requires_grad_(True)
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
