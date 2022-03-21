@@ -83,14 +83,14 @@ unroll_len = N
 
 next = nn.Sequential( # (board, target, state, random) → state
     # (The actions are simply sliced from `output_state`.)
-    nn.Linear(N*N + state_sz + state_sz + state_sz, overparameterized * state_sz),
+    nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
-    nn.Linear(N*N + state_sz + state_sz, overparameterized * state_sz),
+    nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     SkipConnection(
@@ -107,6 +107,7 @@ future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_s
 ).to(device)
 ev = nn.Sequential( # (board, state, random) → compressed
     # (For extracting invariants from env/RNN transitions.)
+    # …Should maybe destroy this, because we want to try to do representation-learning from behavior-learning below, not the other way around like attempting the Barlow twins here would…
     nn.Linear(N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
@@ -122,7 +123,7 @@ loss = CrossCorrelationLoss(
 )
 
 for iters in range(50000):
-    target = torch.randn(batch_size, state_sz, device=device).detach()
+    # target = torch.randn(batch_size, state_sz, device=device).detach() # TODO:
 
     # TODO: Use `ev`:
     #   TODO: Make results of `ev` the targets.
@@ -147,8 +148,8 @@ for iters in range(50000):
     dist_pred_loss, dist_min_loss, ev_loss, ev_l2 = 0, 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
-    # target_board = env_init(N, batch_size=batch_size) # TODO:
-    target = (target - target.mean(-1, keepdim=True)) / (target.std(-1, keepdim=True) + 1e-5) # TODO:
+    target = env_init(N, batch_size=batch_size) # TODO:
+    # target = (target - target.mean(-1, keepdim=True)) / (target.std(-1, keepdim=True) + 1e-5) # TODO:
     boards_states = [] # For changing the `future_dist` prediction target after an unroll.
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
@@ -163,8 +164,12 @@ for iters in range(50000):
         # Add smoothness to the policy by blurring it stochastically.
         #   TODO: …Maybe try going back to targets being boards, and see whether this probabilitic-ness can help us train via grad-min instead of action-min?…
         #     I think this would be really nice to know, going forward (if true, will allow us to use grad-min in more places). So, this should be our very next step.
-        sx = (sx + torch.randn_like(sx)) * torch.rand_like(sx)
-        sy = (sy + torch.randn_like(sy)) * torch.rand_like(sx)
+        #     TODO: …Okay, what exactly do we need to change? Dimensionality of NN inputs, assignment of `target`, and…?
+        #       And removing this action-min.
+        # sx = (sx + torch.randn_like(sx)) * torch.rand_like(sx)
+        # sy = (sy + torch.randn_like(sy)) * torch.rand_like(sx)
+        # TODO: …So: when did we manage to break goal-chasing?… Why do board-targets not work anymore?
+        #   Not the extra grad-min, not the only-1-number future-distance predictions… Okay, something is fundamentally very broken…
         state_candidates = [
             state,
             torch.cat((sy, sx, srest), -1),
@@ -195,7 +200,7 @@ for iters in range(50000):
 
     # We now know the distance to the last state, which we retroactively take as the `target` here.
     # distances = [] # For direct future-distance prediction, w/o bootstrapping. # TODO:
-    target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
+    # target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
     #   Seems we're able to reach prediction L2 of 4, which actually allows the distance to go down a bit.
     #     …Wait, since all plots are so correlated, I don't think we're actually learning anything at all, just accidentally making the final state close to the first one.
     #     SO WHAT DO WE DO
@@ -210,9 +215,9 @@ for iters in range(50000):
     #   (…If this is true, then quantizing intermediate states *might* improve reachability…)
     # (…Even an accurate future-distance prediction can no longer reduce avg_distance, except for, very slightly………)
     dist_sum = 0
-    for i, (board, state) in enumerate(reversed(boards_states)):
+    for board, state in reversed(boards_states):
         # Predict sum-of-future-distances from prev & target directly, to minimize later.
-        micro_dist = (state - target).abs().mean(-1, keepdim=True)
+        micro_dist = (board - target).abs().sum(-1, keepdim=True)
         dist_sum = dist_sum + micro_dist
         fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
         dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).square().mean(0).sum()
