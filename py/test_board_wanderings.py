@@ -154,12 +154,12 @@ for iters in range(50000):
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
         zeros = torch.zeros(batch_size, state_sz, device=device)
-        random = torch.randn(batch_size, state_sz, device=device)
+        rand = torch.randn(batch_size, state_sz, device=device)
         prev_state = state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
         state = next(torch.cat((board, target, prev_state, zeros), -1))
-        #   Using `zeros` in place of `random` here is 2× slower to converge.
+        #   Using `zeros` in place of `rand` here is 2× slower to converge.
         sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
         # Add smoothness to the policy by blurring it stochastically.
         #   TODO: …Maybe try going back to targets being boards, and see whether this probabilitic-ness can help us train via grad-min instead of action-min?…
@@ -168,8 +168,6 @@ for iters in range(50000):
         #       And removing this action-min.
         # sx = (sx + torch.randn_like(sx)) * torch.rand_like(sx)
         # sy = (sy + torch.randn_like(sy)) * torch.rand_like(sx)
-        # TODO: …So: when did we manage to break goal-chasing?… Why do board-targets not work anymore?
-        #   Not the extra grad-min, not the only-1-number future-distance predictions… Okay, something is fundamentally very broken…
         state_candidates = [
             state,
             torch.cat((sy, sx, srest), -1),
@@ -189,7 +187,7 @@ for iters in range(50000):
 
         prev_board, board = board, env_step(N, board, state[..., 0:2])
 
-        boards_states.append((board, state))
+        boards_states.append((prev_board, state, board))
 
         # Compress transitions. # TODO:
         # ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1))
@@ -215,11 +213,11 @@ for iters in range(50000):
     #   (…If this is true, then quantizing intermediate states *might* improve reachability…)
     # (…Even an accurate future-distance prediction can no longer reduce avg_distance, except for, very slightly………)
     dist_sum = 0
-    for board, state in reversed(boards_states):
+    for prev_board, state, board in reversed(boards_states):
         # Predict sum-of-future-distances from prev & target directly, to minimize later.
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
         dist_sum = dist_sum + micro_dist
-        fut_dist_pred = future_dist(torch.cat((board, state, target), -1))
+        fut_dist_pred = future_dist(torch.cat((prev_board, state, target), -1))
         dist_pred_loss = dist_pred_loss + (fut_dist_pred - dist_sum.detach()).square().mean(0).sum()
 
         # Bootstrap. TODO: Only if/when learned-targets can be reached.
@@ -230,7 +228,7 @@ for iters in range(50000):
 
         # Minimize that sum-of-future-distances by actions. # TODO:
         for p in future_dist.parameters(): p.requires_grad_(False)
-        dist_min_loss = dist_min_loss + future_dist(torch.cat((board, state, target), -1)).mean(0).sum()
+        dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target), -1)).mean(0).sum()
         for p in future_dist.parameters(): p.requires_grad_(True)
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
