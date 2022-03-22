@@ -139,7 +139,8 @@ for iters in range(50000):
     #         (Very-preliminary results: vectors becoming nearly-perfectly predictive between timesteps causes "distance" to go down to near-0, making it kinda useless.)
     #   (Damn, even more phase-transitions to try to survive through.)
 
-    # TODO: Implement a replay buffer.
+    # TODO: Implement a replay buffer. 
+    #   (`next` would have no gradient unless we use its result on replay somehow, but we don't actually need to learn `next` in this env.)
     # TODO: Learn everything by bootstrapping, using the replay buffer.
     # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `intermediate_target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
     #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target` predict this future-ordained goal.)
@@ -155,6 +156,7 @@ for iters in range(50000):
     target = env_init(N, batch_size=batch_size) # TODO:
     # target = (target - target.mean(-1, keepdim=True)) / (target.std(-1, keepdim=True) + 1e-5) # TODO:
     boards_states = [] # For changing the `future_dist` prediction target after an unroll.
+    for p in future_dist.parameters(): p.requires_grad_(False)
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
         zeros = torch.zeros(batch_size, state_sz, device=device)
@@ -194,6 +196,12 @@ for iters in range(50000):
         # ev_loss = ev_loss + A
         # ev_l2 = ev_l2 + B.detach()
 
+        # Grad-minimize that sum-of-future-distances by actions.
+        #   (In this env of 4 actions, this is very ineffective; use `action_min` instead.)
+        dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target), -1)).mean(0).sum()
+
+    for p in future_dist.parameters(): p.requires_grad_(True)
+
     # We now know the distance to the last state, which we retroactively take as the `target` here.
     # distances = [] # For direct future-distance prediction, w/o bootstrapping. # TODO:
     # target = boards_states[-1][1].detach() # TODO: This actually allows distances to be learned with more accuracy… So, try making the unrolls' `target`s not just random but randomly sampled from previous RNN states in some way… (Maybe just literally *be* the last RNN states that we've reached.)
@@ -224,11 +232,6 @@ for iters in range(50000):
         # next_state = next(torch.cat((board, target, state, random), -1))
         # fut_dist_targ = (future_dist(torch.cat((board, next_state, target), -1)) if u<unroll_len-1 else 0) + micro_dist
         # dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().mean(0).sum()
-
-        # Minimize that sum-of-future-distances by actions. # TODO:
-        for p in future_dist.parameters(): p.requires_grad_(False)
-        dist_min_loss = dist_min_loss + future_dist(input).mean(0).sum()
-        for p in future_dist.parameters(): p.requires_grad_(True)
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
     #     # (Should, instead of relying on prediction-at-state=0, consider 4 states and display the min.)
