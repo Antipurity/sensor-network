@@ -152,6 +152,9 @@ for iters in range(50000):
     #   (*Might* improve stability by moving the responsibility of learning long-term dependencies from `next` to bootstrapping.)
     #   (If we don't actually fix a target, we *might* be able to learn imagined targets, eventually refining them to fixed points. Which makes this worth trying, because auto-goal-extraction from RNN state is what we wanted in the first place, and this method is actually motivated by RL stuff, not other-field vaguely-related stuff.)
 
+    # TODO: …Wouldn't a variant of [self-imitation learning](https://arxiv.org/pdf/1806.05635.pdf) be able to learn discrete actions better than gradient descent?…
+    #   (If `R` is the computed-during-unroll return, SIL here would probably minimize `(action-next(…))*max(0, R-fut_dist(…)) + (R-fut_dist(…))**2`. …Which actually gives us that good gradient for `next` that we've wanted, huh…)
+
 
 
     # Sample a batch of trajectories (pre-deciding the target-board).
