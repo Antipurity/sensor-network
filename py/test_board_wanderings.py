@@ -24,9 +24,10 @@ We need to consider a trajectory's first transition to its `next` state, and for
 
 Our current impl's scalability problems:
 - Not using grad-based min, only min via considering all 4 actions at each step. The action space is really discontinuous; can only hope that compression (like Barlow twins) can help.
-- Even N=8 seems to be too hard to learn, possibly because `state` contains too much variability for `future_dist` to easily learn (compared to what we would have had with clean one-hot actions and the one-hot step count/number/index).
-- Low batch sizes don't really work, which is a big problem if we want to have only 1 thread of experience.
-- Minor/temporary: no bootstrapping, randomly-selected goals.
+- When varying `N`: convergence speed seems to be roughly cubic; the further away the targets are, the harder it is to learn the proper distance to them.
+- Low batch sizes don't really work, which is a big problem if we want to have only 1 thread of experience. (…Though, a bit irrelevant if using replay buffers.)
+- Have neither randomly-selected nor emergent goals, only predetermined board states.
+- This env is perfect-info; might want to investigate what happens when we only provide the board at the first time step (should still be learnable, but much slower than BPTT).
 """
 
 
@@ -76,7 +77,7 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 4, 100
+N, batch_size = 8, 100
 state_sz = 64
 overparameterized = 1
 
@@ -131,7 +132,7 @@ for iters in range(50000):
     #   (If we don't actually fix a target, we *might* be able to learn imagined targets, eventually refining them to fixed points. Which makes this worth trying, because auto-goal-extraction from RNN state is what we wanted in the first place, and this method is actually motivated by RL stuff, not other-field vaguely-related stuff.)
 
     # TODO: …Wouldn't a variant of [self-imitation learning](https://arxiv.org/pdf/1806.05635.pdf) be able to learn discrete actions better than gradient descent?…
-    #   (If `R` is the computed-during-unroll return, SIL here would probably minimize `(action-next(…))*max(0, R-fut_dist(…)).detach() + (R-fut_dist(…))**2`. …Which actually gives us that good gradient for `next` that we've wanted, huh…)
+    #   (If `R` is the computed-during-unroll return, SIL here would probably minimize `(action-next(…))*max(0, R-fut_dist(…)).detach() + max(0, R-fut_dist(…))**2`. …Which actually gives us that good gradient for `next` that we've wanted, huh…)
     #   (…There's a slight chance that we won't even need grad-min, only best-past-action prediction…)
 
 
