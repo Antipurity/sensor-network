@@ -79,14 +79,13 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 N, batch_size = 4, 100
 state_sz = 64
 overparameterized = 1
-ev_output_overparameterized = 16 # TODO: …Wait, with this being 16, it's actually starting to make `ev_l2` go to 10 or lower… But why does avg distance still keep increasing, and its prediction is too-inaccurate… Is it because of our target selection process?
 
 unroll_len = N
 action_min = True # If `True`, we enum the 4 actions to pick the min-future-distance one at each step.
 #   (With our 4 discrete actions, grad-min just doesn't work no matter what tricks we try.)
 
 replay_buffer = [None] * 1024
-updates_per_unroll = 16
+updates_per_unroll = N
 bootstrap_discount = .95 # Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
 
 
@@ -115,16 +114,7 @@ future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_s
     ),
     nn.Linear(overparameterized * state_sz, 1),
 ).to(device)
-ev = nn.Sequential( # (board, state, random) → compressed
-    # (For extracting invariants from env/RNN transitions.)
-    # …Should maybe destroy this, because we want to try to do representation-learning from behavior-learning below, not the other way around like attempting the Barlow twins here would…
-    nn.Linear(N*N + state_sz + state_sz, overparameterized * state_sz),
-    nn.ReLU(),
-    nn.LayerNorm(overparameterized * state_sz),
-    nn.Linear(overparameterized * state_sz, ev_output_overparameterized * state_sz),
-    nn.LayerNorm(ev_output_overparameterized * state_sz),
-).to(device)
-opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
 loss = CrossCorrelationLoss(
     axis=-1,
@@ -133,32 +123,21 @@ loss = CrossCorrelationLoss(
 )
 
 for iters in range(50000):
-    # target = torch.randn(batch_size, state_sz, device=device).detach() # TODO:
+    # TODO: …Self-decided goals?… Refining an initially locally inconsistent picture into more locally-consistent forms, eventually causing global consistency?… (Naïve Barlow twins kinda failed the last time we tried that.)
 
-    # TODO: Use `ev`:
-    #   TODO: Make results of `ev` the targets.
-    #     (Currently though, the RNN state is the intended target.)
-    #     TODO: Learn to accomplish same-goal rollouts:
-    #       TODO: Try deciding the goal of each rollout randomly (randn).
-    #       TODO: Try having a buffer of like 64*1024 `ev`-results at the end of a rollout, and sample goals from that.
-    #       TODO: Try adding a `random` input to `ev`.
-    #     TODO: If same-goal rollouts are learned successfully:
-    #       TODO: Try deciding a new goal each step (different `random` input to `ev`), bootstrapping all predictions.
-    #         (Very-preliminary results: vectors becoming nearly-perfectly predictive between timesteps causes "distance" to go down to near-0, making it kinda useless.)
-    #   (Damn, even more phase-transitions to try to survive through.)
-
-    # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `intermediate_target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
-    #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target` predict this future-ordained goal.)
+    # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `past_target(board, action, next_target) → target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
+    #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target(board, action) → target` predict this future-ordained goal.)
     #   (*Might* improve stability by moving the responsibility of learning long-term dependencies from `next` to bootstrapping.)
     #   (If we don't actually fix a target, we *might* be able to learn imagined targets, eventually refining them to fixed points. Which makes this worth trying, because auto-goal-extraction from RNN state is what we wanted in the first place, and this method is actually motivated by RL stuff, not other-field vaguely-related stuff.)
 
     # TODO: …Wouldn't a variant of [self-imitation learning](https://arxiv.org/pdf/1806.05635.pdf) be able to learn discrete actions better than gradient descent?…
-    #   (If `R` is the computed-during-unroll return, SIL here would probably minimize `(action-next(…))*max(0, R-fut_dist(…)) + (R-fut_dist(…))**2`. …Which actually gives us that good gradient for `next` that we've wanted, huh…)
+    #   (If `R` is the computed-during-unroll return, SIL here would probably minimize `(action-next(…))*max(0, R-fut_dist(…)).detach() + (R-fut_dist(…))**2`. …Which actually gives us that good gradient for `next` that we've wanted, huh…)
+    #   (…There's a slight chance that we won't even need grad-min, only best-past-action prediction…)
 
 
 
     # Sample a batch of trajectories (pre-deciding the target-board).
-    dist_pred_loss, dist_min_loss, ev_loss, ev_l2 = 0, 0, 0, 0
+    dist_pred_loss, dist_min_loss = 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     target = env_init(N, batch_size=batch_size)
@@ -172,8 +151,8 @@ for iters in range(50000):
         prev_state = state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        state = next(torch.cat((board, target, prev_state, zeros), -1))
-        #   Using `zeros` in place of `rand` here is 2× slower to converge.
+        state = next(torch.cat((board, target, prev_state, rand), -1))
+        #   Using `zeros` in place of `rand` here is 4× slower to converge.
         if action_min:
             sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
             state_candidates = [
@@ -199,13 +178,6 @@ for iters in range(50000):
         index = (iters*unroll_len + u) % len(replay_buffer)
         replay_buffer[index] = (prev_board, state.detach(), target, board)
 
-        # Compress transitions. # TODO:
-        # ev1 = ev(torch.cat((prev_board, prev_state, zeros), -1))
-        # ev2 = ev(torch.cat((board, state, zeros), -1))
-        # A, B = loss(ev1, ev2)
-        # ev_loss = ev_loss + A
-        # ev_l2 = ev_l2 + B.detach()
-
         # Grad-minimize that sum-of-future-distances by actions.
         #   (In this env of 4 actions, this is very ineffective; use `action_min` instead.)
         #     (I suppose our representation-learning game is too weak.)
@@ -213,28 +185,24 @@ for iters in range(50000):
 
     for p in future_dist.parameters(): p.requires_grad_(True)
 
-    #   TODO: Seems we're able to reach prediction L2 of 4, which actually allows the distance to go down a bit.
-    #     …Wait, since all plots are so correlated, I don't think we're actually learning anything at all, just accidentally making the final state close to the first one.
-    #     SO WHAT DO WE DO
-    #       …Distributional RL?…
-    #         …Can't just include this directly, though…
-    #       …Faffing about with learning more and more quantities, forward and backward?…
-    #       …Read VICReg to absorb its ideas, so that prediction is not the *only* tool in our toolbox?
-    # (…Maybe we can't learn anything in continuous space because there's now no overlap between intermediate states, so making progress on one task means nothing to other tasks?…)
-    #   (…If this is true, then quantizing intermediate states *might* improve reachability…)
     for _ in range(updates_per_unroll):
         choice = random.choice(replay_buffer)
         if choice is None: continue
-        prev_board, action, target, board = choice
+        prev_board, prev_action, target, board = choice
 
-        # Predict sum-of-future-distances from prev & target directly, to minimize later. Bootstrap.
+        zeros = torch.zeros(batch_size, state_sz, device=device)
+        rand = torch.randn(batch_size, state_sz, device=device)
+
+        # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
         #   TODO: `target` always being fixed is kinda a problem too, right? Not like it's env-given, we just decided it. Better to learn many targets at once, if we can.
-        fut_dist_pred = future_dist(torch.cat((prev_board, action, target), -1))
-        next_action = next(torch.cat((prev_board, target, action, rand), -1))
+        #    Bootstrapped-targets seem like a reasonable refining-of-local-consistency opportunity.
+        prev_dist = future_dist(torch.cat((prev_board, prev_action, target), -1))
+        action = next(torch.cat((prev_board, target, prev_action, rand), -1))
         #   TODO: A problem: this has no gradient, not even min-distance gradient. (…Would such a gradient be equivalent to removing `.detach()`?…)
-        fut_dist_targ = future_dist(torch.cat((board, next_action, target), -1)) * bootstrap_discount + micro_dist
-        dist_pred_loss = dist_pred_loss + (fut_dist_pred - fut_dist_targ.detach()).square().mean(0).sum()
+        #     …SIL actually seems like a reasonable gradient for `next` (as long as the replay_buffer stores prev_state too, so that `next` can imitate `state`). Reading papers for the win.
+        dist = future_dist(torch.cat((board, action, target), -1)) * bootstrap_discount + micro_dist
+        dist_pred_loss = dist_pred_loss + (prev_dist - dist.detach()).square().mean(0).sum()
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
     #     # (Should, instead of relying on prediction-at-state=0, consider 4 states and display the min.)
@@ -249,15 +217,14 @@ for iters in range(50000):
     #     plt.show()
     if iters == 100: clear()
 
-    (dist_pred_loss + dist_min_loss + ev_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
+    (dist_pred_loss + dist_min_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
-        log(2, False, ev_l2 = to_np(ev_l2))
-        log(3, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
+        log(2, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
-        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(3, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ Learning transitions: from board and action (randomly-generated) to board — EASY.
