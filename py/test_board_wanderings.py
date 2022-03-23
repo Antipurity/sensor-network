@@ -33,7 +33,6 @@ Our current impl's scalability problems:
 
 
 from model.log import log, clear, finish
-from model.loss import CrossCorrelationLoss
 
 
 
@@ -77,7 +76,7 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 8, 100
+N, batch_size = 4, 100 # TODO: N=8
 state_sz = 64
 overparameterized = 1
 
@@ -91,14 +90,13 @@ bootstrap_discount = .95 # Bootstrapping is `f(next) = THIS * f(prev) + local_me
 
 
 
-next = nn.Sequential( # (board, target, state, random) → state
-    # (The actions are simply sliced from `output_state`.)
+next = nn.Sequential( # (prev_board, prev_target, prev_action, random) → action
     nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
-future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_sum
+future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
     nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
     nn.ReLU(),
@@ -115,13 +113,30 @@ future_dist = nn.Sequential( # (prev_board, state, target) → future_distance_s
     ),
     nn.Linear(overparameterized * state_sz, 1),
 ).to(device)
-opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
-
-loss = CrossCorrelationLoss(
-    axis=-1,
-    decorrelation_strength=.01,
-    also_return_l2=True,
-)
+past_target = nn.Sequential( # (prev_board, prev_action, target) → prev_target
+    nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
+    nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
+    SkipConnection(
+        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
+        nn.ReLU(),
+        nn.LayerNorm(overparameterized * state_sz),
+    ),
+    nn.Linear(overparameterized * state_sz, N*N),
+).to(device)
+predict_target = nn.Sequential( # (board, action) → target
+    # TODO: WAIT THIS IS NOT ENOUGH INFO TO INFER THE TARGET, WHAT THE HELL
+    nn.Linear(N*N + state_sz, overparameterized * state_sz),
+    nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
+    SkipConnection(
+        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
+        nn.ReLU(),
+        nn.LayerNorm(overparameterized * state_sz),
+    ),
+    nn.Linear(overparameterized * state_sz, N*N),
+).to(device)
+opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *past_target.parameters(), *predict_target.parameters()], lr=1e-3)
 
 for iters in range(50000):
     # TODO: …Self-decided goals?… Refining an initially locally inconsistent picture into more locally-consistent forms, eventually causing global consistency?… (Naïve Barlow twins kinda failed the last time we tried that.)
@@ -130,6 +145,11 @@ for iters in range(50000):
     #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target(board, action) → target` predict this future-ordained goal.)
     #   (*Might* improve stability by moving the responsibility of learning long-term dependencies from `next` to bootstrapping.)
     #   (If we don't actually fix a target, we *might* be able to learn imagined targets, eventually refining them to fixed points. Which makes this worth trying, because auto-goal-extraction from RNN state is what we wanted in the first place, and this method is actually motivated by RL stuff, not other-field vaguely-related stuff.)
+    #   TODO: …Isn't this targeting business suggesting that we could unite all our neural nets into one, with `(board, action, target)` at both input and output (or maybe 2, one prev→next and the other next→prev), and train by just masking out inputs?…
+    #     1. What's the difference between actions and targets in this formulation?… Can't we merge them, making this bigger neural net pretty pointless…
+    #       (Maybe we could have a prev-action predictor given next-action, though.)
+    #       We do need goals if we goal-condition, on any space that's not action-space. And if we have goals, then we could learn them.
+    #     2. These targets are so indistinct that we won't be able to actually extract any self-decided goals, right?…
 
     # TODO: …Wouldn't a variant of [self-imitation learning](https://arxiv.org/pdf/1806.05635.pdf) be able to learn discrete actions better than gradient descent?…
     #   (If `R` is the computed-during-unroll return, SIL here would probably minimize `(action-next(…))*max(0, R-fut_dist(…)).detach() + max(0, R-fut_dist(…))**2`. …Which actually gives us that good gradient for `next` that we've wanted, huh…)
@@ -138,7 +158,7 @@ for iters in range(50000):
 
 
     # Sample a batch of trajectories (pre-deciding the target-board).
-    dist_pred_loss, dist_min_loss = 0, 0
+    dist_pred_loss, dist_min_loss, sil_loss = 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     target = env_init(N, batch_size=batch_size)
@@ -149,10 +169,11 @@ for iters in range(50000):
         # Do the RNN transition (and an environment step), `unroll_len` times.
         zeros = torch.zeros(batch_size, state_sz, device=device)
         rand = torch.randn(batch_size, state_sz, device=device)
-        prev_state = state
+        prev_board, prev_state = board, state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        state = next(torch.cat((board, target, prev_state, rand), -1))
+        # TODO: …Should use `predict_target(board, state)` to get `target` here…
+        state = next(torch.cat((prev_board, target, prev_state, rand), -1))
         #   Using `zeros` in place of `rand` here is 4× slower to converge.
         if action_min:
             sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
@@ -165,19 +186,22 @@ for iters in range(50000):
             min_state, min_dist = None, None
             with torch.no_grad():
                 for state in state_candidates:
-                    dist = future_dist(torch.cat((board, state, target), -1)).sum(-1, keepdim=True)
+                    dist = future_dist(torch.cat((prev_board, state, target), -1)).sum(-1, keepdim=True)
                     if min_dist is None: min_state, min_dist = state, dist
                     else:
                         mask = dist < min_dist
                         min_state = torch.where(mask, state, min_state)
                         min_dist = torch.where(mask, dist, min_dist)
             state = min_state
+        else:
+            with torch.no_grad():
+                min_dist = future_dist(torch.cat((prev_board, state, target), -1)).sum(-1, keepdim=True)
 
-        prev_board, board = board, env_step(N, board, state[..., 0:2])
+        board = env_step(N, prev_board, state[..., 0:2])
         dist_sum += (board - target).abs().sum(-1, keepdim=True).detach() # Something to log.
 
         index = (iters*unroll_len + u) % len(replay_buffer)
-        replay_buffer[index] = (prev_board, state.detach(), target, board)
+        replay_buffer[index] = (target, prev_board, prev_state.detach(), board, state.detach(), min_dist.detach()) # TODO: `target` should be None if not at the last episode, else `.detach()`ed…
 
         # Grad-minimize that sum-of-future-distances by actions.
         #   (In this env of 4 actions, this is very ineffective; use `action_min` instead.)
@@ -189,7 +213,7 @@ for iters in range(50000):
     for _ in range(updates_per_unroll):
         choice = random.choice(replay_buffer)
         if choice is None: continue
-        prev_board, prev_action, target, board = choice
+        target, prev_board, prev_action, board, action, prev_dist = choice
 
         zeros = torch.zeros(batch_size, state_sz, device=device)
         rand = torch.randn(batch_size, state_sz, device=device)
@@ -197,13 +221,31 @@ for iters in range(50000):
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
         #   TODO: `target` always being fixed is kinda a problem too, right? Not like it's env-given, we just decided it. Better to learn many targets at once, if we can.
-        #    Bootstrapped-targets seem like a reasonable refining-of-local-consistency opportunity.
-        prev_dist = future_dist(torch.cat((prev_board, prev_action, target), -1))
-        action = next(torch.cat((prev_board, target, prev_action, rand), -1))
+        #     Bootstrapped-targets seem like a reasonable refining-of-local-consistency opportunity.
+        #   TODO: …Can we at least use newly-generated `target`s here; possibly even not using the replay buffer's target at all?…
+        prev_dist2 = future_dist(torch.cat((prev_board, action, target), -1))
+        next_action = next(torch.cat((board, target, action, rand), -1))
         #   TODO: A problem: this has no gradient, not even min-distance gradient. (…Would such a gradient be equivalent to removing `.detach()`?…)
         #     …SIL actually seems like a reasonable gradient for `next` (as long as the replay_buffer stores prev_state too, so that `next` can imitate `state`). Reading papers for the win.
-        dist = future_dist(torch.cat((board, action, target), -1)) * bootstrap_discount + micro_dist
-        dist_pred_loss = dist_pred_loss + (prev_dist - dist.detach()).square().mean(0).sum()
+        prev_dist_targ = future_dist(torch.cat((board, next_action, target), -1)) * bootstrap_discount + micro_dist
+        dist_pred_loss = dist_pred_loss + (prev_dist2 - prev_dist_targ.detach()).square().mean(0).sum()
+
+        # TODO: Self-imitation: `(action-action2)**2*max(0, R-fut_dist(…)).detach() + max(0, R-fut_dist(…))**2`
+        #   (It should even make `future_dist` more accurate, because that uses `next_action`.)
+        #   TODO: …Don't we need `R` in the replay buffer, aka the previous future_dist result?…
+        #     prev_dist and prev_dist2 are fine candidates here, right?
+        if iters > 500:
+            prev_dist = prev_dist_targ # TODO:
+            action2 = next(torch.cat((prev_board, target, prev_action, rand), -1))
+            sil_mult = (prev_dist - prev_dist2).max(zeros)
+            sil_loss = sil_loss + 1e-3 * ((action - action2).square().mean(-1) * sil_mult.mean(-1).detach()).sum()
+            sil_loss = sil_loss + 1e-3 * sil_mult.abs().sum()
+        #   TODO: …Why is this so unreasonably high?! …And negative… Okay, maybe we do actually need to take only the positive part.
+        #   TODO: …Wait, distance is supposed to be minimized, not maximized. So, only the negative part?…
+        #   TODO: …Why does adding this break all the stuff so badly… Even activating it after a long time makes things very unstable… CAN'T FIX IT, AA
+        #     DAMN IT
+
+        # TODO: If `target is not None`, should use `predict_target(board, action)` twice, and get prediction-gradient with `past_target(board, action, target) → prev_target`.
 
     # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
     #     # (Should, instead of relying on prediction-at-state=0, consider 4 states and display the min.)
@@ -218,14 +260,15 @@ for iters in range(50000):
     #     plt.show()
     if iters == 100: clear()
 
-    (dist_pred_loss + dist_min_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
+    (dist_pred_loss + dist_min_loss + sil_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
-        log(2, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
+        log(2, False, self_imitation_loss = to_np(sil_loss))
+        log(3, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
-        log(3, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ Learning transitions: from board and action (randomly-generated) to board — EASY.
