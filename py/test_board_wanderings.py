@@ -116,46 +116,23 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
     ),
     nn.Linear(overparameterized * state_sz, bootstrap_discount.shape[0]),
 ).to(device)
-past_target = nn.Sequential( # (prev_board, prev_action, target) → prev_target
-    nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
-    nn.ReLU(),
-    nn.LayerNorm(overparameterized * state_sz),
-    SkipConnection(
-        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
-        nn.ReLU(),
-        nn.LayerNorm(overparameterized * state_sz),
-    ),
-    nn.Linear(overparameterized * state_sz, N*N),
-).to(device)
-predict_target = nn.Sequential( # (board, action) → target
-    # TODO: WAIT THIS IS NOT ENOUGH INFO TO INFER THE TARGET, WHAT THE HELL
-    nn.Linear(N*N + state_sz, overparameterized * state_sz),
-    nn.ReLU(),
-    nn.LayerNorm(overparameterized * state_sz),
-    SkipConnection(
-        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
-        nn.ReLU(),
-        nn.LayerNorm(overparameterized * state_sz),
-    ),
-    nn.Linear(overparameterized * state_sz, N*N),
-).to(device)
-opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *past_target.parameters(), *predict_target.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
 for iters in range(50000):
     # TODO: …Try re-reading Go-Explore more carefully; because making that continuous-ish and neural-net-ish does sound like a very promising approach to making proper maps of environments.
+    #   (After all, future_dist is pretty much a learned metric of the distance between any 2 goal-space states, and by constructing a map, we'd like to minimize this for ALL reachable states.)
+    #     (…If we only take goals from the replay buffer, the reachable space may collapse… Should we learn a generative model of the target-space or something?… And I guess we might want to guide said model into highest-prediction-loss places, since those are most likely to contain unexplored sections…)
+    #       TODO: Actually try this "sample targets from the replay buffer" idea.
 
-    # TODO: …Self-decided goals?… Refining an initially locally inconsistent picture into more locally-consistent forms, eventually causing global consistency?… (Naïve Barlow twins kinda failed the last time we tried that.)
-    #   …But why would our synthetic-targets be able to do that…
+    # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization)… Which is kinda inherently quadratic/constrastive… Any way to speed it up?…)
+    #   (…And, any correspondences to anything non-RL, such as contrastive methods or Barlow twins?…)
 
-    # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `past_target(board, action, next_target) → target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
-    #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target(board, action) → target` predict this future-ordained goal.)
-    #   (*Might* improve stability by moving the responsibility of learning long-term dependencies from `next` to bootstrapping.)
-    #   (If we don't actually fix a target, we *might* be able to learn imagined targets, eventually refining them to fixed points. Which makes this worth trying, because auto-goal-extraction from RNN state is what we wanted in the first place, and this method is actually motivated by RL stuff, not other-field vaguely-related stuff.)
-    #   TODO: …Isn't this targeting business suggesting that we could unite all our neural nets into one, with `(board, action, target)` at both input and output (or maybe 2, one prev→next and the other next→prev), and train by just masking out inputs?…
-    #     1. What's the difference between actions and targets in this formulation?… Can't we merge them, making this bigger neural net pretty pointless…
-    #       (Maybe we could have a prev-action predictor given next-action, though.)
-    #       We do need goals if we goal-condition, on any space that's not action-space. And if we have goals, then we could learn them.
-    #     2. These targets are so indistinct that we won't be able to actually extract any self-decided goals, right?…
+    # …And how would we mesa-encode the exploration model (which is what we really want in the end), for example, in `minienv` which regenerates the whole graph on every reset, would "states" have the same meaning as in a static env such as this 2D board…
+    #   (Would multi-task learning really be enough?)
+
+    # TODO: Try again to make grad-min viable here, smoothing out the transitions:
+    #   TODO: Try having 4 numbers, softmax over which will represent the probability of each action. (Not like it's unrealistic to later make frameworks ask users to not represent actions too crazily.)
+    #   (If it doesn't work, try coming up with some other scheme?)
 
 
 
@@ -163,8 +140,7 @@ for iters in range(50000):
     dist_pred_loss, dist_min_loss = 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
-    target = env_init(N, batch_size=batch_size)
-    # target = (target - target.mean(-1, keepdim=True)) / (target.std(-1, keepdim=True) + 1e-5) # TODO:
+    target = env_init(N, batch_size=batch_size) # TODO: Try sampling this from the replay buffer's states, actually. (Does diversity collapse, which would mean that we need a proper generative model?)
     for p in future_dist.parameters(): p.requires_grad_(False)
     dist_sum = 0
     for u in range(unroll_len):
@@ -174,7 +150,6 @@ for iters in range(50000):
         prev_board, prev_state = board, state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        # TODO: …Should use `predict_target(board, state)` to get `target` here… …Except, that's really not enough info…
         state = next(torch.cat((prev_board, target, prev_state, rand), -1))
         #   Using `zeros` in place of `rand` here is 4× slower to converge.
         if action_min:
@@ -225,26 +200,11 @@ for iters in range(50000):
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
-        #   TODO: `target` always being static is kinda a problem too, right? Not like it's env-given, we just decided it. Better to learn many targets at once, if we can.
-        #     Bootstrapped-targets seem like a reasonable refining-of-local-consistency opportunity.
         prev_dist2 = future_dist(torch.cat((prev_board, action, target), -1))
         next_action = next(torch.cat((board, target, action, rand), -1))
         prev_dist_targ = future_dist(torch.cat((board, next_action, target), -1)) * bootstrap_discount + micro_dist
         dist_pred_loss = dist_pred_loss + (prev_dist2 - prev_dist_targ.detach()).square().mean(0).sum()
 
-        # TODO: If `target is not None`, should use `predict_target(board, action)` twice, and get prediction-gradient with `past_target(board, action, target) → prev_target`.
-
-    # if (iters+1) % 5000 == 0: # For debugging, visualize distances from anywhere to a target.
-    #     # (Should, instead of relying on prediction-at-state=0, consider 4 states and display the min.)
-    #     import matplotlib.pyplot as plt
-    #     src = torch.eye(N*N, device=device)
-    #     state = torch.zeros(N*N, state_sz, device=device)
-    #     dst = torch.eye(1, N*N, device=device).expand(N*N, N*N)
-    #     dist = future_dist(torch.cat((src, state, dst), -1)).sum(-1).reshape(N, N).detach().cpu().numpy()
-    #     plt.clf()
-    #     plt.imshow(dist)
-    #     plt.pause(1)
-    #     plt.show()
     if iters == 100: clear()
 
     (dist_pred_loss + dist_min_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
@@ -256,14 +216,3 @@ for iters in range(50000):
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
         log(3, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
 finish()
-# TODO: Okay, what do we want to learn, building up to URL gradually?
-#   - ✓ Learning transitions: from board and action (randomly-generated) to board — EASY.
-#   - ✓ Learning plans: from board & target-board & extra-state & whole-output (or a random vector initially), to the next action & extra state: `next`. (Limiting the unroll-length, of course.)
-#     - ❌ Average-plan makes no sense because everything is connected to everything, so we need to learn the *distribution* of plans that will lead us to the target, so either:
-#       - ✓ [Good: 40%] DDPM-like but speedy (not about to do thousands of steps per RNN step): make `next` self-denoising: make it accept its output as an input, initially a random vector, then unroll its RNN and make all stages predict the final one (or a variation on that). (Eventually removed the impl here, and all its tricks.)
-#       - ❌ [Bad: 30%, highly unstable] GAN-like: train a discriminator (from board & target-board & extra-state & 'whole-output'-randomness) of whether a trajectory will succeed (known after a whole rollout), and maximize the predicted success-probability by all `next`-steps (but not by the discriminator).
-#     - ✓ [Good: 40% with partial impl] Abandon distributions, pick only their shortest paths; special-case our discrete case to see how viable this is. Very viable: didn't even implement prior-path-conditioning, so all shortest paths interfere, making 40% on 4×4 even more impressive. (Performance deterioration is because there are always many valid paths, so when they collide, predicted action goes toward 0 and causes instability before long.)
-#     - ✓ [Perfect: 95%] Neural pathfinding: explicitly learn the sum of future L1 distances (here, this is twice the number of steps until target), and minimize that. (Grad-min doesn't work, but considering all 4 actions at each step does.)
-#   - ⋯ Also learn targets, don't just decide them randomly…
-#   - ⋯ Figure out how to use grad-min instead of action-min, because a simplification relies on this.
-#   - ⋯ Don't use boards as states & goals directly, instead compress them with `ev` (such as via Barlow twins).
