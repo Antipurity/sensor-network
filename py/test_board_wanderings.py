@@ -151,10 +151,6 @@ for iters in range(50000):
     #       We do need goals if we goal-condition, on any space that's not action-space. And if we have goals, then we could learn them.
     #     2. These targets are so indistinct that we won't be able to actually extract any self-decided goals, right?…
 
-    # TODO: …Wouldn't a variant of [self-imitation learning](https://arxiv.org/pdf/1806.05635.pdf) be able to learn discrete actions better than gradient descent?…
-    #   (If `R` is the computed-during-unroll return, SIL here would probably minimize `(action-next(…))*max(0, R-fut_dist(…)).detach() + max(0, R-fut_dist(…))**2`. …Which actually gives us that good gradient for `next` that we've wanted, huh…)
-    #   (…There's a slight chance that we won't even need grad-min, only best-past-action prediction…)
-
 
 
     # Sample a batch of trajectories (pre-deciding the target-board).
@@ -172,7 +168,7 @@ for iters in range(50000):
         prev_board, prev_state = board, state
         # Minimize the future-distance-sum by considering all 4 possible actions right here.
         #   (Minimizing by gradient descent in this environment is no bueno.)
-        # TODO: …Should use `predict_target(board, state)` to get `target` here…
+        # TODO: …Should use `predict_target(board, state)` to get `target` here… …Except, that's really not enough info…
         state = next(torch.cat((prev_board, target, prev_state, rand), -1))
         #   Using `zeros` in place of `rand` here is 4× slower to converge.
         if action_min:
@@ -193,15 +189,12 @@ for iters in range(50000):
                         min_state = torch.where(mask, state, min_state)
                         min_dist = torch.where(mask, dist, min_dist)
             state = min_state
-        else:
-            with torch.no_grad():
-                min_dist = future_dist(torch.cat((prev_board, state, target), -1)).sum(-1, keepdim=True)
 
         board = env_step(N, prev_board, state[..., 0:2])
         dist_sum += (board - target).abs().sum(-1, keepdim=True).detach() # Something to log.
 
         index = (iters*unroll_len + u) % len(replay_buffer)
-        replay_buffer[index] = (target, prev_board, prev_state.detach(), board, state.detach(), min_dist.detach()) # TODO: `target` should be None if not at the last episode, else `.detach()`ed…
+        replay_buffer[index] = (target, prev_board, prev_state.detach(), board, state.detach()) # TODO: `target` should be None if not at the last episode, else `.detach()`ed…
 
         # Grad-minimize that sum-of-future-distances by actions.
         #   (In this env of 4 actions, this is very ineffective; use `action_min` instead.)
@@ -213,37 +206,20 @@ for iters in range(50000):
     for _ in range(updates_per_unroll):
         choice = random.choice(replay_buffer)
         if choice is None: continue
-        target, prev_board, prev_action, board, action, prev_dist = choice
+        target, prev_board, prev_action, board, action = choice
 
         zeros = torch.zeros(batch_size, state_sz, device=device)
         rand = torch.randn(batch_size, state_sz, device=device)
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
-        #   TODO: `target` always being fixed is kinda a problem too, right? Not like it's env-given, we just decided it. Better to learn many targets at once, if we can.
+        #   TODO: `target` always being static is kinda a problem too, right? Not like it's env-given, we just decided it. Better to learn many targets at once, if we can.
         #     Bootstrapped-targets seem like a reasonable refining-of-local-consistency opportunity.
         #   TODO: …Can we at least use newly-generated `target`s here; possibly even not using the replay buffer's target at all?…
         prev_dist2 = future_dist(torch.cat((prev_board, action, target), -1))
         next_action = next(torch.cat((board, target, action, rand), -1))
-        #   TODO: A problem: this has no gradient, not even min-distance gradient. (…Would such a gradient be equivalent to removing `.detach()`?…)
-        #     …SIL actually seems like a reasonable gradient for `next` (as long as the replay_buffer stores prev_state too, so that `next` can imitate `state`). Reading papers for the win.
         prev_dist_targ = future_dist(torch.cat((board, next_action, target), -1)) * bootstrap_discount + micro_dist
         dist_pred_loss = dist_pred_loss + (prev_dist2 - prev_dist_targ.detach()).square().mean(0).sum()
-
-        # TODO: Self-imitation: `(action-action2)**2*max(0, R-fut_dist(…)).detach() + max(0, R-fut_dist(…))**2`
-        #   (It should even make `future_dist` more accurate, because that uses `next_action`.)
-        #   TODO: …Don't we need `R` in the replay buffer, aka the previous future_dist result?…
-        #     prev_dist and prev_dist2 are fine candidates here, right?
-        if iters > 500:
-            prev_dist = prev_dist_targ # TODO:
-            action2 = next(torch.cat((prev_board, target, prev_action, rand), -1))
-            sil_mult = (prev_dist - prev_dist2).max(zeros)
-            sil_loss = sil_loss + 1e-3 * ((action - action2).square().mean(-1) * sil_mult.mean(-1).detach()).sum()
-            sil_loss = sil_loss + 1e-3 * sil_mult.abs().sum()
-        #   TODO: …Why is this so unreasonably high?! …And negative… Okay, maybe we do actually need to take only the positive part.
-        #   TODO: …Wait, distance is supposed to be minimized, not maximized. So, only the negative part?…
-        #   TODO: …Why does adding this break all the stuff so badly… Even activating it after a long time makes things very unstable… CAN'T FIX IT, AA
-        #     DAMN IT
 
         # TODO: If `target is not None`, should use `predict_target(board, action)` twice, and get prediction-gradient with `past_target(board, action, target) → prev_target`.
 
