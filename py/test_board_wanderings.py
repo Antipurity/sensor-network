@@ -76,7 +76,7 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 4, 100 # TODO: N=8
+N, batch_size = 8, 100
 state_sz = 64
 overparameterized = 1
 
@@ -87,6 +87,7 @@ action_min = True # If `True`, we enum the 4 actions to pick the min-future-dist
 replay_buffer = [None] * 1024
 updates_per_unroll = N
 bootstrap_discount = .95 # Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
+#   TODO: Try making this a PyTorch tensor, with several values.
 
 
 
@@ -139,7 +140,10 @@ predict_target = nn.Sequential( # (board, action) → target
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *past_target.parameters(), *predict_target.parameters()], lr=1e-3)
 
 for iters in range(50000):
+    # TODO: …Try re-reading Go-Explore more carefully; because making that continuous-ish and neural-net-ish does sound like a very promising approach to making proper maps of environments.
+
     # TODO: …Self-decided goals?… Refining an initially locally inconsistent picture into more locally-consistent forms, eventually causing global consistency?… (Naïve Barlow twins kinda failed the last time we tried that.)
+    #   …But why would our synthetic-targets be able to do that…
 
     # …Wait, our reward-formulation is "for all possible goals, minimize the distance over a full goal-conditioned trajectory", right? Why not model "all possible goals" in service to another goal? TODO: Have a neural net `past_target(board, action, next_target) → target` from future to past that learns the min-future-distance auxiliary target to condition `next` on; bootstrap it.
     #   (& to enable both acting and bootstrapping: have the past-dependent neural net `predict_target(board, action) → target` predict this future-ordained goal.)
@@ -194,7 +198,7 @@ for iters in range(50000):
         dist_sum += (board - target).abs().sum(-1, keepdim=True).detach() # Something to log.
 
         index = (iters*unroll_len + u) % len(replay_buffer)
-        replay_buffer[index] = (target, prev_board, prev_state.detach(), board, state.detach()) # TODO: `target` should be None if not at the last episode, else `.detach()`ed…
+        replay_buffer[index] = (prev_board, prev_state.detach(), board, state.detach()) # TODO: `target` should be None if not at the last episode, else `.detach()`ed…
 
         # Grad-minimize that sum-of-future-distances by actions.
         #   (In this env of 4 actions, this is very ineffective; use `action_min` instead.)
@@ -206,7 +210,13 @@ for iters in range(50000):
     for _ in range(updates_per_unroll):
         choice = random.choice(replay_buffer)
         if choice is None: continue
-        target, prev_board, prev_action, board, action = choice
+        prev_board, prev_action, board, action = choice
+
+        if random.randint(1,2) == 1: # This actually seems to improve convergence speed 2×.
+            target = board # (`prev_board` does not.)
+            # (May be just a coincidence.)
+        else:
+            target = env_init(N, batch_size=batch_size)
 
         zeros = torch.zeros(batch_size, state_sz, device=device)
         rand = torch.randn(batch_size, state_sz, device=device)
@@ -215,10 +225,10 @@ for iters in range(50000):
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
         #   TODO: `target` always being static is kinda a problem too, right? Not like it's env-given, we just decided it. Better to learn many targets at once, if we can.
         #     Bootstrapped-targets seem like a reasonable refining-of-local-consistency opportunity.
-        #   TODO: …Can we at least use newly-generated `target`s here; possibly even not using the replay buffer's target at all?…
         prev_dist2 = future_dist(torch.cat((prev_board, action, target), -1))
         next_action = next(torch.cat((board, target, action, rand), -1))
         prev_dist_targ = future_dist(torch.cat((board, next_action, target), -1)) * bootstrap_discount + micro_dist
+        #   TODO: Maybe we should have not just 1 prediction with 1 bootstrap-discount, but sum up many-discount distances (as in distributional RL) to make signals get learned faster (but long-distance still has more importance because higher-multiplier fades slower)?
         dist_pred_loss = dist_pred_loss + (prev_dist2 - prev_dist_targ.detach()).square().mean(0).sum()
 
         # TODO: If `target is not None`, should use `predict_target(board, action)` twice, and get prediction-gradient with `past_target(board, action, target) → prev_target`.
