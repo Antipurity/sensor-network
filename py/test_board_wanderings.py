@@ -86,8 +86,10 @@ action_min = True # If `True`, we enum the 4 actions to pick the min-future-dist
 
 replay_buffer = [None] * 1024
 updates_per_unroll = N
-bootstrap_discount = .95 # Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
-#   TODO: Try making this a PyTorch tensor, with several values.
+bootstrap_discount = torch.tensor([.95], device=device) # Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
+#   TODO: …Would summing actually be helped if we had multipliers that made all horizons equally important?…
+#     What's the formula, though?
+#   (Predicting many discounts at once actually slows down convergence, doesn't help.)
 
 
 
@@ -112,7 +114,7 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
         nn.ReLU(),
         nn.LayerNorm(overparameterized * state_sz),
     ),
-    nn.Linear(overparameterized * state_sz, 1),
+    nn.Linear(overparameterized * state_sz, bootstrap_discount.shape[0]),
 ).to(device)
 past_target = nn.Sequential( # (prev_board, prev_action, target) → prev_target
     nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
@@ -158,7 +160,7 @@ for iters in range(50000):
 
 
     # Sample a batch of trajectories (pre-deciding the target-board).
-    dist_pred_loss, dist_min_loss, sil_loss = 0, 0, 0
+    dist_pred_loss, dist_min_loss = 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     target = env_init(N, batch_size=batch_size)
@@ -198,7 +200,7 @@ for iters in range(50000):
         dist_sum += (board - target).abs().sum(-1, keepdim=True).detach() # Something to log.
 
         index = (iters*unroll_len + u) % len(replay_buffer)
-        replay_buffer[index] = (prev_board, prev_state.detach(), board, state.detach()) # TODO: `target` should be None if not at the last episode, else `.detach()`ed…
+        replay_buffer[index] = (prev_board, prev_state.detach(), board, state.detach())
 
         # Grad-minimize that sum-of-future-distances by actions.
         #   (In this env of 4 actions, this is very ineffective; use `action_min` instead.)
@@ -214,7 +216,7 @@ for iters in range(50000):
 
         if random.randint(1,2) == 1: # This actually seems to improve convergence speed 2×.
             target = board # (`prev_board` does not.)
-            # (May be just a coincidence.)
+            # (May be just a coincidence. Or, could be teaching the net how to stay at the target once reached, which can be done many times in expectation and thus have a disproportionate effect.)
         else:
             target = env_init(N, batch_size=batch_size)
 
@@ -228,7 +230,6 @@ for iters in range(50000):
         prev_dist2 = future_dist(torch.cat((prev_board, action, target), -1))
         next_action = next(torch.cat((board, target, action, rand), -1))
         prev_dist_targ = future_dist(torch.cat((board, next_action, target), -1)) * bootstrap_discount + micro_dist
-        #   TODO: Maybe we should have not just 1 prediction with 1 bootstrap-discount, but sum up many-discount distances (as in distributional RL) to make signals get learned faster (but long-distance still has more importance because higher-multiplier fades slower)?
         dist_pred_loss = dist_pred_loss + (prev_dist2 - prev_dist_targ.detach()).square().mean(0).sum()
 
         # TODO: If `target is not None`, should use `predict_target(board, action)` twice, and get prediction-gradient with `past_target(board, action, target) → prev_target`.
@@ -246,15 +247,14 @@ for iters in range(50000):
     #     plt.show()
     if iters == 100: clear()
 
-    (dist_pred_loss + dist_min_loss + sil_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
+    (dist_pred_loss + dist_min_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
-        log(2, False, self_imitation_loss = to_np(sil_loss))
-        log(3, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
+        log(2, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
-        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(3, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
 finish()
 # TODO: Okay, what do we want to learn, building up to URL gradually?
 #   - ✓ Learning transitions: from board and action (randomly-generated) to board — EASY.
