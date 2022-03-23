@@ -86,10 +86,10 @@ action_min = True # If `True`, we enum the 4 actions to pick the min-future-dist
 
 replay_buffer = [None] * 1024
 updates_per_unroll = N
-bootstrap_discount = torch.tensor([.95], device=device) # Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
-#   TODO: …Would summing actually be helped if we had multipliers that made all horizons equally important?…
-#     What's the formula, though?
-#   (Predicting many discounts at once actually slows down convergence, doesn't help.)
+
+bootstrap_discount = torch.tensor([.95], device=device)
+#   Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
+#   (Predicting many discounts at once doesn't help.)
 
 
 
