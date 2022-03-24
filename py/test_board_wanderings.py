@@ -181,7 +181,7 @@ for iters in range(50000):
             index = (iters*unroll_len + u) % len(replay_buffer)
             replay_buffer[index] = (prev_board, prev_state.detach(), board, state.detach())
 
-    # Replay from the buffer. (Python 3.6+ for convenience.)
+    # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
         prev_board = torch.cat([c[0] for c in choices], 0)
@@ -194,8 +194,7 @@ for iters in range(50000):
             #   (Possibly, by doing this we're teaching the net how to stay at the target once reached, which can be done many times in expectation and thus have a disproportionate effect compared to random targets.)
             torch.rand(board.shape[0], 1, device=device) < .5,
             board,
-            env_init(N, batch_size=board.shape[0]),
-            #   TODO: Can we try picking targets from the replay buffer here too?
+            board[torch.randperm(board.shape[0], device=device)],
         )
 
         zeros = torch.zeros(board.shape[0], state_sz, device=device)
