@@ -121,8 +121,7 @@ opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 for iters in range(50000):
     # TODO: …Try re-reading Go-Explore more carefully; because making that continuous-ish and neural-net-ish does sound like a very promising approach to making proper maps of environments.
     #   (After all, future_dist is pretty much a learned metric of the distance between any 2 goal-space states, and by constructing a map, we'd like to minimize this for ALL reachable states.)
-    #     (…If we only take goals from the replay buffer, the reachable space may collapse… Should we learn a generative model of the target-space or something?… And I guess we might want to guide said model into highest-prediction-loss places, since those are most likely to contain unexplored sections…)
-    #       TODO: Actually try this "sample targets from the replay buffer" idea.
+    #     (…If we only take goals from the replay buffer like we do in this env, the reachable space may collapse… Should we learn a generative model of the target-space or something?… And I guess we might want to guide said model into highest-prediction-loss places, since those are most likely to contain unexplored sections…)
 
     # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization)… Which is kinda inherently quadratic/constrastive… Any way to speed it up?…)
     #   (…And, any correspondences to anything non-RL, such as contrastive methods or Barlow twins?…)
@@ -140,7 +139,8 @@ for iters in range(50000):
     dist_pred_loss, dist_min_loss = 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
-    target = env_init(N, batch_size=batch_size) # TODO: Try sampling this from the replay buffer's states, actually. (Does diversity collapse, which would mean that we need a proper generative model?)
+    target = random.choice(replay_buffer)
+    target = target[2] if target is not None else torch.zeros(batch_size, N*N, device=device)
     for p in future_dist.parameters(): p.requires_grad_(False)
     dist_sum = 0
     for u in range(unroll_len):
