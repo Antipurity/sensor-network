@@ -76,13 +76,14 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 8, 100
+N, batch_size = 4, 100 # TODO: N=8
 state_sz = 64
 overparameterized = 1
 
 unroll_len = N
 action_min = True # If `True`, we enum the 4 actions to pick the min-future-distance one at each step.
-#   (With our 4 discrete actions, grad-min just doesn't work no matter what tricks we try.)
+grad_min = False # With our 4 discrete actions, grad-min just doesn't work no matter what we try.
+#   (What else can we do? Learn a generative model of distinct-outcome actions with low distance, and still do action-min on enumerably-few actions?)
 
 replay_buffer = [None] * 1024
 updates_per_unroll = N
@@ -129,7 +130,7 @@ for iters in range(50000):
     # …And how would we mesa-encode the exploration model (which is what we really want in the end), for example, in `minienv` which regenerates the whole graph on every reset, would "states" have the same meaning as in a static env such as this 2D board…
     #   (Would multi-task learning really be enough?)
 
-    # TODO: Try again to make grad-min viable here, smoothing out the transitions:
+    # TODO: Try again to make grad-min viable here, smoothing out the transitions (because we can't even try to use BPTT without this):
     #   TODO: Try having 4 numbers, softmax over which will represent the probability of each action. (Not like it's unrealistic to later make frameworks ask users to not represent actions too crazily.)
     #   (If it doesn't work, try coming up with some other scheme?)
 
@@ -141,7 +142,6 @@ for iters in range(50000):
     board = env_init(N, batch_size=batch_size)
     target = random.choice(replay_buffer)
     target = target[2] if target is not None else torch.zeros(batch_size, N*N, device=device)
-    for p in future_dist.parameters(): p.requires_grad_(False)
     dist_sum = 0
     for u in range(unroll_len):
         # Do the RNN transition (and an environment step), `unroll_len` times.
@@ -153,12 +153,12 @@ for iters in range(50000):
         state = next(torch.cat((prev_board, target, prev_state, rand), -1))
         #   Using `zeros` in place of `rand` here is 4× slower to converge.
         if action_min:
-            sx, sy, srest = state.split((1, 1, state.shape[-1]-2), -1)
+            s1, s2, srest = state.split((1, 1, state.shape[-1]-2), -1)
             state_candidates = [
-                torch.cat((sx, sy, srest), -1),
-                torch.cat((sy, sx, srest), -1),
-                torch.cat((-sx, -sy, srest), -1),
-                torch.cat((-sy, -sx, srest), -1),
+                torch.cat((s1, s2, srest), -1),
+                torch.cat((s1, s2, srest), -1),
+                torch.cat((-s1, -s2, srest), -1),
+                torch.cat((-s2, -s1, srest), -1),
             ]
             min_state, min_dist = None, None
             with torch.no_grad():
@@ -177,13 +177,6 @@ for iters in range(50000):
         index = (iters*unroll_len + u) % len(replay_buffer)
         replay_buffer[index] = (prev_board, prev_state.detach(), board, state.detach())
 
-        # Grad-minimize that sum-of-future-distances by actions.
-        #   (In this env of 4 actions, this is very ineffective; use `action_min` instead.)
-        #     (I suppose our representation-learning game is too weak.)
-        dist_min_loss = dist_min_loss + future_dist(torch.cat((prev_board, state, target), -1)).mean(0).sum()
-
-    for p in future_dist.parameters(): p.requires_grad_(True)
-
     for _ in range(updates_per_unroll):
         choice = random.choice(replay_buffer)
         if choice is None: continue
@@ -200,12 +193,23 @@ for iters in range(50000):
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
-        prev_dist2 = future_dist(torch.cat((prev_board, action, target), -1))
+        prev_dist = future_dist(torch.cat((prev_board, action, target), -1))
         next_action = next(torch.cat((board, target, action, rand), -1))
-        prev_dist_targ = future_dist(torch.cat((board, next_action, target), -1)) * bootstrap_discount + micro_dist
-        dist_pred_loss = dist_pred_loss + (prev_dist2 - prev_dist_targ.detach()).square().mean(0).sum()
+        for p in future_dist.parameters(): p.requires_grad_(False)
+        dist = future_dist(torch.cat((board, next_action, target), -1))
+        for p in future_dist.parameters(): p.requires_grad_(True)
+        prev_dist_targ = dist * bootstrap_discount + micro_dist
+        dist_pred_loss = dist_pred_loss + (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
-    if iters == 100: clear()
+        # TODO: …Maybe, we can learn a *separate* model of the best-action, which here, predicts the best of `action` and `action2` depending on which prev_dist is better?…
+
+        # Grad-min of actions.
+        if grad_min:
+            dist_min_loss = dist_min_loss + dist.mean(0).sum()
+        else:
+            dist_min_loss = dist_min_loss + dist.mean(0).sum().detach()
+
+    if iters == 500: clear()
 
     (dist_pred_loss + dist_min_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
     opt.step();  opt.zero_grad(True)
