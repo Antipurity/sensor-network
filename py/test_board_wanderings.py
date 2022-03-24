@@ -129,13 +129,19 @@ opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 for iters in range(50000):
     # TODO: …Try re-reading Go-Explore more carefully; because making that continuous-ish and neural-net-ish does sound like a very promising approach to making proper maps of environments.
     #   (After all, future_dist is pretty much a learned metric of the distance between any 2 goal-space states, and by constructing a map, we'd like to minimize this for ALL reachable states.)
-    #     (…If we only take goals from the replay buffer like we do in this env, the reachable space may collapse… Should we learn a generative model of the target-space or something?… And I guess we might want to guide said model into highest-prediction-loss places, since those are most likely to contain unexplored sections…)
 
-    # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization)… Which is kinda inherently quadratic/constrastive… Any way to speed it up?…)
-    #   (…And, any correspondences to anything non-RL, such as contrastive methods or Barlow twins?…)
+    # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization; in discrete-space, this should try to perform coloring, and distances should become path lengths).)
+    #   TODO: So try learning a normalized distance-maximizing mapping `goal_space` here, from board & action (…if doesn't work immediately, could try just `board`) to goal-space, and make `future_dist` accept those mappings. When sampling a `target`, simply recompute the goal-space target from a sample from the replay buffer. (This is finally a kind of representation learning, isn't it.)
 
-    # …And how would we mesa-encode the exploration model (which is what we really want in the end), for example, in `minienv` which regenerates the whole graph on every reset, would "states" have the same meaning as in a static env such as this 2D board…
-    #   (Would multi-task learning really be enough?)
+    # TODO: Elsewhere:
+    #   TODO: Create a truly continuous-control env: in a 1×1 box (a torus), 1 agent whose acceleration can be controlled (small numbers) (with a small friction to not get too out of hand), and whose position is observed; the target is obviously a position.
+    #     TODO: Try to learn a map in it via RL.
+    #     TODO: Try to learn a map in it via BPTT (given an RNN with an input→output skip connection, with a small multiplier on the added branch for discounting; minimize the distance from RNN-goal-space to ), to empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
+    #       TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
+    #       TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
+    #       TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps.
+    #   TODO: Gotta get back, back to the past:
+    #     TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `next`-dist-min and self-imitation) and self-targeting BPTT (with `next`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
 
 
 
@@ -145,6 +151,7 @@ for iters in range(50000):
     board = env_init(N, batch_size=batch_size)
     target = random.choice(replay_buffer)
     target = target[2] if target is not None else torch.zeros(batch_size, N*N, device=device)
+    # TODO: Try to, during an unroll, re-sample the target at each step. (Doesn't make too much sense in general, since one step is never enough to reach the target, but I want to see what happens.)
     dist_sum = 0
     with torch.no_grad():
         for u in range(unroll_len):
