@@ -124,11 +124,13 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
     ),
     nn.Linear(overparameterized * state_sz, bootstrap_discount.shape[0]),
 ).to(device)
+# TODO: goal_space(board, action) → target
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
 for iters in range(50000):
 
     # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization; in discrete-space, this should try to perform coloring, and distances should become path lengths).)
+    #   (…In fact, this objective is similar to *prediction*, though with a (representation of) the other state already given (though it might be adversarial), and not just temporally-adjacent. Convergence of SSL & RL, anyone?)
     #   TODO: So try learning a normalized distance-maximizing mapping `goal_space` here, from board & action (…if doesn't work immediately, could try just `board`) to goal-space, and make `future_dist` accept those mappings. When sampling a `target`, simply recompute the goal-space target from a sample from the replay buffer. (This is finally a kind of representation learning, isn't it.)
 
     # TODO: Elsewhere:
