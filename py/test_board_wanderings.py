@@ -76,10 +76,11 @@ class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
     def forward(self, x): return self.fn(x) + x
 def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
+def cat(*a, dim=-1): return torch.cat(*a, dim)
 
 
 
-N, batch_size = 4, 100 # TODO: N=8
+N, batch_size = 8, 100
 state_sz = 64
 overparameterized = 1
 
@@ -102,7 +103,6 @@ bootstrap_discount = torch.tensor([.95], device=device)
 
 
 next = nn.Sequential( # (prev_board, prev_action, target, random) → action
-    # TODO: Take not `prev_board` and `prev_action` but `prev_target`. (Deferred since this might break performance.)
     nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
@@ -163,20 +163,20 @@ for iters in range(50000):
             # TODO: Rename `state` to `action`, in addition to `prev_state` and `state_sz`.
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            state = next(torch.cat((prev_board, prev_state, target, rand), -1))
+            state = next(cat(prev_board, prev_state, target, rand))
             #   Using `zeros` in place of `rand` here is 4× slower to converge.
             if action_min:
                 s1, s2, srest = state.split((1, 1, state.shape[-1]-2), -1)
                 state_candidates = [
-                    torch.cat((s1, s2, srest), -1),
-                    torch.cat((s1, s2, srest), -1),
-                    torch.cat((-s1, -s2, srest), -1),
-                    torch.cat((-s2, -s1, srest), -1),
+                    cat(s1, s2, srest),
+                    cat(s1, s2, srest),
+                    cat(-s1, -s2, srest),
+                    cat(-s2, -s1, srest),
                 ]
                 min_state, min_dist = None, None
                 with torch.no_grad():
                     for state in state_candidates:
-                        dist = future_dist(torch.cat((prev_board, state, target), -1)).sum(-1, keepdim=True)
+                        dist = future_dist(cat(prev_board, state, target)).sum(-1, keepdim=True)
                         if min_dist is None: min_state, min_dist = state, dist
                         else:
                             mask = dist < min_dist
@@ -186,7 +186,6 @@ for iters in range(50000):
 
             board = env_step(N, prev_board, state[..., 0:2])
 
-            # TODO: Have a separate func for `torch.cat(*a, -1)`, since it's so frequent?
             micro_dist = (board - target).abs().detach()
             dist_mean += micro_dist.mean(0).sum() # Something to log.
 
@@ -214,17 +213,17 @@ for iters in range(50000):
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
-        prev_dist = future_dist(torch.cat((prev_board, action, target.detach()), -1))
-        next_action = next(torch.cat((board, action, target.detach(), rand), -1))
+        prev_dist = future_dist(cat(prev_board, action, target.detach()))
+        next_action = next(cat(board, action, target.detach(), rand))
         for p in future_dist.parameters(): p.requires_grad_(False)
-        dist = future_dist(torch.cat((board, next_action, target.detach()), -1))
+        dist = future_dist(cat(board, next_action, target.detach()))
         for p in future_dist.parameters(): p.requires_grad_(True)
         prev_dist_targ = dist * bootstrap_discount + micro_dist
         dist_pred_loss = dist_pred_loss + (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
         # Min-dist self-imitation, by `next`.
-        action2 = next(torch.cat((prev_board, prev_action, target.detach(), rand), -1))
-        prev_dist2 = future_dist(torch.cat((prev_board, action2, target.detach()), -1))
+        action2 = next(cat(prev_board, prev_action, target.detach(), rand))
+        prev_dist2 = future_dist(cat(prev_board, action2, target.detach()))
         prev_dist, prev_dist2 = prev_dist.sum(-1, keepdim=True), prev_dist2.sum(-1, keepdim=True)
         self_imitation_loss = self_imitation_loss + ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().max(zeros)).sum()
         if not self_imitation: self_imitation_loss = self_imitation_loss.detach()
