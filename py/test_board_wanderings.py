@@ -79,7 +79,7 @@ def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) els
 
 
 
-N, batch_size = 8, 100
+N, batch_size = 4, 100 # TODO: N=8
 state_sz = 64
 overparameterized = 1
 
@@ -101,13 +101,16 @@ bootstrap_discount = torch.tensor([.95], device=device)
 
 
 
-next = nn.Sequential( # (prev_board, prev_target, prev_action, random) → action
+next = nn.Sequential( # (prev_board, prev_action, goal_target, random) → action
+    # TODO: Take not `prev_board` and `prev_action` but `prev_target`. (Deferred since this might break performance.)
     nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
     nn.ReLU(),
     nn.LayerNorm(overparameterized * state_sz),
     nn.Linear(overparameterized * state_sz, state_sz),
 ).to(device)
-future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
+future_dist = nn.Sequential( # (prev_board, action, goal_target) → future_distance_sum
+    # TODO: Replace `prev_board` with `cur_target`.
+    # TODO: Augment all calls to `future_dist` with `target_space` to get `cur_target`.
     # (For picking an action that leads to getting to the target board the fastest.)
     nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
     nn.ReLU(),
@@ -124,14 +127,33 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
     ),
     nn.Linear(overparameterized * state_sz, bootstrap_discount.shape[0]),
 ).to(device)
-# TODO: goal_space(board, action) → target
-opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
+target_space = nn.Sequential( # (board, action) → target
+    # (Converts to the space in which we actually minimize distances to increase any-goal competence.)
+    # TODO: Try with actions; without, we seem to be reaching the optimum "mean_distance=3.9, distance_lower_edge=-.4" at the same time as no-`target_space`-func reaches its optimum. …Fails completely, even after we've ensured that the only difference is that it knows actions too… VERY poor for representation learning!
+    nn.Linear(N*N, overparameterized * state_sz),
+    nn.ReLU(),
+    nn.LayerNorm(overparameterized * state_sz),
+    SkipConnection(
+        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
+        nn.ReLU(),
+        nn.LayerNorm(overparameterized * state_sz),
+    ),
+    nn.Linear(overparameterized * state_sz, N*N),
+    nn.LayerNorm(N*N),
+).to(device)
+opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *target_space.parameters()], lr=1e-3)
+# def target_space(x): return x
+# opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3) # TODO:
 
 for iters in range(50000):
 
     # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization; in discrete-space, this should try to perform coloring, and distances should become path lengths).)
-    #   (…In fact, this objective is similar to *prediction*, though with a (representation of) the other state already given (though it might be adversarial), and not just temporally-adjacent. Convergence of SSL & RL, anyone?)
-    #   TODO: So try learning a normalized distance-maximizing mapping `goal_space` here, from board & action (…if doesn't work immediately, could try just `board`) to goal-space, and make `future_dist` accept those mappings. When sampling a `target`, simply recompute the goal-space target from a sample from the replay buffer. (This is finally a kind of representation learning, isn't it.)
+    #   (…In fact, this objective is similar to *prediction*, where we try to make next-frame prediction and target-frame predictions equal, though with a (representation of) the other state already given (though it might be adversarial), and not just temporally-adjacent. Convergence of SSL & RL, anyone?)
+    #   TODO: So try learning a normalized distance-maximizing mapping `target_space` here, from board & action (…if doesn't work immediately, could try just `board`) to goal-space, and make `future_dist` accept those mappings. When sampling a `target`, simply recompute the goal-space target from a sample from the replay buffer. (This is finally a kind of representation learning, isn't it.)
+    # TODO: …How do we train `target_space`, exactly?…
+    #   …Can't we "maximize the distance" sanely by just saying that it's 0 at the exact state and 1 elsewhere?… (Not for BPTT, though. Nor for smooth goal-spaces, really.)
+    # …I think our 'target-space mapping' idea is completely useless.
+    #   TODO: Remove it!
 
     # TODO: Elsewhere:
     #   TODO: Create a truly continuous-control env: in a 1×1 box (a torus), 1 agent whose acceleration can be controlled (small numbers) (with a small friction to not get too out of hand), and whose position is observed; the target is obviously a position.
@@ -146,23 +168,24 @@ for iters in range(50000):
 
 
     # Sample a batch of trajectories.
-    dist_pred_loss, dist_min_loss, self_imitation_loss = 0, 0, 0
+    dist_pred_loss, dist_min_loss, dist_max_loss, self_imitation_loss = 0, 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
-    # Pick the target to go to.
-    #   (From tests, in this trivial env, performance is the same even if we re-pick the target at each step.)
-    target = random.choice(replay_buffer)
-    target = target[2] if target is not None else torch.zeros(batch_size, N*N, device=device)
-    dist_sum = 0
+    dist_mean, dist_lower_edge = 0, 0
     with torch.no_grad():
+        # First pick the target to go to.
+        #   (From tests, in this trivial env, performance is the same even if we re-pick the target at each step.)
+        goal_target = random.choice(replay_buffer)
+        goal_target = target_space(goal_target[2]) if goal_target is not None else torch.zeros(batch_size, N*N, device=device)
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
             zeros = torch.zeros(batch_size, state_sz, device=device)
             rand = torch.randn(batch_size, state_sz, device=device)
             prev_board, prev_state = board, state
+            # TODO: Rename `state` to `action`, in addition to `prev_state` and `state_sz`.
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            state = next(torch.cat((prev_board, target, prev_state, rand), -1))
+            state = next(torch.cat((prev_board, prev_state, goal_target, rand), -1))
             #   Using `zeros` in place of `rand` here is 4× slower to converge.
             if action_min:
                 s1, s2, srest = state.split((1, 1, state.shape[-1]-2), -1)
@@ -175,7 +198,7 @@ for iters in range(50000):
                 min_state, min_dist = None, None
                 with torch.no_grad():
                     for state in state_candidates:
-                        dist = future_dist(torch.cat((prev_board, state, target), -1)).sum(-1, keepdim=True)
+                        dist = future_dist(torch.cat((prev_board, state, goal_target), -1)).sum(-1, keepdim=True)
                         if min_dist is None: min_state, min_dist = state, dist
                         else:
                             mask = dist < min_dist
@@ -184,7 +207,12 @@ for iters in range(50000):
                 state = min_state
 
             board = env_step(N, prev_board, state[..., 0:2])
-            dist_sum += (board - target).abs().sum(-1, keepdim=True).detach() # Something to log.
+
+            # TODO: …Maybe have a separate func for `torch.cat(*a, -1)`, since it's so frequent?
+            cur_target = target_space(board)
+            micro_dist = (cur_target - goal_target).abs().detach()
+            dist_mean += micro_dist.mean(0).sum() # Something to log.
+            dist_lower_edge += (micro_dist.mean(0) - micro_dist.std(0)).sum() # Something to log.
 
             index = (iters*unroll_len + u) % len(replay_buffer)
             replay_buffer[index] = (prev_board, prev_state.detach(), board, state.detach())
@@ -197,30 +225,38 @@ for iters in range(50000):
         board = torch.cat([c[2] for c in choices], 0)
         action = torch.cat([c[3] for c in choices], 0)
 
-        target = torch.where( # This actually seems to improve convergence speed 2×.
+        goal_target = target_space(board)
+        goal_target = torch.where( # This actually seems to improve convergence speed 2×.
             #   (`prev_board` does not. More/less than 50% of the time, does not.)
-            #   (Possibly, by doing this we're teaching the net how to stay at the target once reached, which can be done many times in expectation and thus have a disproportionate effect compared to random targets.)
+            #   (Possibly, by doing this we're teaching the net how to stay at the goal once reached, which can be done many times in expectation and thus have a disproportionate effect compared to random goals.)
             torch.rand(board.shape[0], 1, device=device) < .5,
-            board,
-            board[torch.randperm(board.shape[0], device=device)],
+            goal_target,
+            goal_target[torch.randperm(board.shape[0], device=device)],
         )
 
         zeros = torch.zeros(board.shape[0], state_sz, device=device)
         rand = torch.randn(board.shape[0], state_sz, device=device)
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
-        micro_dist = (board - target).abs().sum(-1, keepdim=True)
-        prev_dist = future_dist(torch.cat((prev_board, action, target), -1))
-        next_action = next(torch.cat((board, target, action, rand), -1))
+        cur_target = target_space(board).detach()
+        micro_dist = (cur_target - goal_target).abs().sum(-1, keepdim=True)
+        prev_dist = future_dist(torch.cat((prev_board, action, goal_target.detach()), -1))
+        next_action = next(torch.cat((board, action, goal_target.detach(), rand), -1))
         for p in future_dist.parameters(): p.requires_grad_(False)
-        dist = future_dist(torch.cat((board, next_action, target), -1))
+        dist = future_dist(torch.cat((board, next_action, goal_target.detach()), -1))
         for p in future_dist.parameters(): p.requires_grad_(True)
         prev_dist_targ = dist * bootstrap_discount + micro_dist
         dist_pred_loss = dist_pred_loss + (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
+        # TODO: …We also want to maximize the distance by `goal_target`, right? How, exactly?
+        # for p in future_dist.parameters(): p.requires_grad_(False)
+        # dist_to_max = future_dist(torch.cat((board, next_action.detach(), goal_target), -1))
+        # for p in future_dist.parameters(): p.requires_grad_(True)
+        # dist_max_loss = dist_max_loss + dist_to_max.mean(0).sum()
+
         # Min-dist self-imitation, by `next`.
-        action2 = next(torch.cat((prev_board, target, prev_action, rand), -1))
-        prev_dist2 = future_dist(torch.cat((prev_board, action2, target), -1))
+        action2 = next(torch.cat((prev_board, prev_action, goal_target.detach(), rand), -1))
+        prev_dist2 = future_dist(torch.cat((prev_board, action2, goal_target.detach()), -1))
         prev_dist, prev_dist2 = prev_dist.sum(-1, keepdim=True), prev_dist2.sum(-1, keepdim=True)
         self_imitation_loss = self_imitation_loss + ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().max(zeros)).sum()
         if not self_imitation: self_imitation_loss = self_imitation_loss.detach()
@@ -231,13 +267,15 @@ for iters in range(50000):
 
     if iters == 500: clear()
 
-    (dist_pred_loss + dist_min_loss + self_imitation_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
+    (dist_pred_loss + dist_min_loss + dist_max_loss + self_imitation_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
     opt.step();  opt.zero_grad(True)
     with torch.no_grad():
         log(0, False, dist_pred_loss = to_np(dist_pred_loss))
         log(1, False, dist_min_loss = to_np(dist_min_loss))
-        log(2, False, self_imitation_loss = to_np(self_imitation_loss))
-        log(3, False, avg_distance = (dist_sum.sum(-1).mean() + .3) / (2*N))
+        log(2, False, dist_max_loss = to_np(dist_max_loss))
+        log(3, False, self_imitation_loss = to_np(self_imitation_loss))
+        log(4, False, mean_distance = dist_mean / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
-        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(5, False, distance_lower_edge = dist_lower_edge / (2*N))
+        log(6, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
 finish()
