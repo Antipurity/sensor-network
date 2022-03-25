@@ -145,13 +145,14 @@ for iters in range(50000):
 
 
 
-    # Sample a batch of trajectories (pre-deciding the target-board).
+    # Sample a batch of trajectories.
     dist_pred_loss, dist_min_loss, self_imitation_loss = 0, 0, 0
     state = torch.zeros(batch_size, state_sz, device=device)
     board = env_init(N, batch_size=batch_size)
+    # Pick the target to go to.
+    #   (From tests, in this trivial env, performance is the same even if we re-pick the target at each step.)
     target = random.choice(replay_buffer)
     target = target[2] if target is not None else torch.zeros(batch_size, N*N, device=device)
-    # TODO: Try to, during an unroll, re-sample the target at each step. (Doesn't make too much sense in general, since one step is never enough to reach the target, but I want to see what happens.)
     dist_sum = 0
     with torch.no_grad():
         for u in range(unroll_len):
