@@ -127,8 +127,6 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
 for iters in range(50000):
-    # TODO: …Try re-reading Go-Explore more carefully; because making that continuous-ish and neural-net-ish does sound like a very promising approach to making proper maps of environments.
-    #   (After all, future_dist is pretty much a learned metric of the distance between any 2 goal-space states, and by constructing a map, we'd like to minimize this for ALL reachable states.)
 
     # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization; in discrete-space, this should try to perform coloring, and distances should become path lengths).)
     #   TODO: So try learning a normalized distance-maximizing mapping `goal_space` here, from board & action (…if doesn't work immediately, could try just `board`) to goal-space, and make `future_dist` accept those mappings. When sampling a `target`, simply recompute the goal-space target from a sample from the replay buffer. (This is finally a kind of representation learning, isn't it.)
