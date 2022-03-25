@@ -81,7 +81,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 N, batch_size = 8, 100
-state_sz = 64
+action_sz = 64
 overparameterized = 1
 
 unroll_len = N
@@ -103,27 +103,27 @@ bootstrap_discount = torch.tensor([.95], device=device)
 
 
 next = nn.Sequential( # (prev_board, prev_action, target, random) → action
-    nn.Linear(N*N + N*N + state_sz + state_sz, overparameterized * state_sz),
+    nn.Linear(N*N + N*N + action_sz + action_sz, overparameterized * action_sz),
     nn.ReLU(),
-    nn.LayerNorm(overparameterized * state_sz),
-    nn.Linear(overparameterized * state_sz, state_sz),
+    nn.LayerNorm(overparameterized * action_sz),
+    nn.Linear(overparameterized * action_sz, action_sz),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
-    nn.Linear(N*N + state_sz + N*N, overparameterized * state_sz),
+    nn.Linear(N*N + action_sz + N*N, overparameterized * action_sz),
     nn.ReLU(),
-    nn.LayerNorm(overparameterized * state_sz),
+    nn.LayerNorm(overparameterized * action_sz),
     SkipConnection(
-        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
+        nn.Linear(overparameterized * action_sz, overparameterized * action_sz),
         nn.ReLU(),
-        nn.LayerNorm(overparameterized * state_sz),
+        nn.LayerNorm(overparameterized * action_sz),
     ),
     SkipConnection(
-        nn.Linear(overparameterized * state_sz, overparameterized * state_sz),
+        nn.Linear(overparameterized * action_sz, overparameterized * action_sz),
         nn.ReLU(),
-        nn.LayerNorm(overparameterized * state_sz),
+        nn.LayerNorm(overparameterized * action_sz),
     ),
-    nn.Linear(overparameterized * state_sz, bootstrap_discount.shape[0]),
+    nn.Linear(overparameterized * action_sz, bootstrap_discount.shape[0]),
 ).to(device)
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
@@ -147,7 +147,7 @@ for iters in range(50000):
 
     # Sample a batch of trajectories.
     dist_pred_loss, dist_min_loss, self_imitation_loss = 0, 0, 0
-    state = torch.zeros(batch_size, state_sz, device=device)
+    action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     dist_mean = 0
     with torch.no_grad():
@@ -157,40 +157,34 @@ for iters in range(50000):
         target = target[2] if target is not None else torch.zeros(batch_size, N*N, device=device)
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
-            zeros = torch.zeros(batch_size, state_sz, device=device)
-            rand = torch.randn(batch_size, state_sz, device=device)
-            prev_board, prev_state = board, state
-            # TODO: Rename `state` to `action`, in addition to `prev_state` and `state_sz`.
+            zeros = torch.zeros(batch_size, action_sz, device=device)
+            rand = torch.randn(batch_size, action_sz, device=device)
+            prev_board, prev_action = board, action
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            state = next(cat(prev_board, prev_state, target, rand))
+            action = next(cat(prev_board, prev_action, target, rand))
             #   Using `zeros` in place of `rand` here is 4× slower to converge.
             if action_min:
-                s1, s2, srest = state.split((1, 1, state.shape[-1]-2), -1)
-                state_candidates = [
-                    cat(s1, s2, srest),
-                    cat(s1, s2, srest),
-                    cat(-s1, -s2, srest),
-                    cat(-s2, -s1, srest),
-                ]
-                min_state, min_dist = None, None
+                a1, a2, arest = action.split((1, 1, action.shape[-1]-2), -1)
+                action_candidates = [cat(a1, a2, arest), cat(a1, a2, arest), cat(-a1, -a2, arest), cat(-a2, -a1, arest)]
+                min_action, min_dist = None, None
                 with torch.no_grad():
-                    for state in state_candidates:
-                        dist = future_dist(cat(prev_board, state, target)).sum(-1, keepdim=True)
-                        if min_dist is None: min_state, min_dist = state, dist
+                    for action in action_candidates:
+                        dist = future_dist(cat(prev_board, action, target)).sum(-1, keepdim=True)
+                        if min_dist is None: min_action, min_dist = action, dist
                         else:
                             mask = dist < min_dist
-                            min_state = torch.where(mask, state, min_state)
+                            min_action = torch.where(mask, action, min_action)
                             min_dist = torch.where(mask, dist, min_dist)
-                state = min_state
+                action = min_action
 
-            board = env_step(N, prev_board, state[..., 0:2])
+            board = env_step(N, prev_board, action[..., 0:2])
 
             micro_dist = (board - target).abs().detach()
             dist_mean += micro_dist.mean(0).sum() # Something to log.
 
             index = (iters*unroll_len + u) % len(replay_buffer)
-            replay_buffer[index] = (prev_board, prev_state.detach(), board, state.detach())
+            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach())
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -208,8 +202,8 @@ for iters in range(50000):
             board[torch.randperm(board.shape[0], device=device)],
         )
 
-        zeros = torch.zeros(board.shape[0], state_sz, device=device)
-        rand = torch.randn(board.shape[0], state_sz, device=device)
+        zeros = torch.zeros(board.shape[0], action_sz, device=device)
+        rand = torch.randn(board.shape[0], action_sz, device=device)
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         micro_dist = (board - target).abs().sum(-1, keepdim=True)
@@ -242,5 +236,5 @@ for iters in range(50000):
         log(2, False, self_imitation_loss = to_np(self_imitation_loss))
         log(3, False, mean_distance = dist_mean / (2*N))
         #   (Reaching about .66 means that targets are reached about 100% of the time.)
-        log(4, False, state_mean = to_np(state.mean()), state_std = to_np(state.std()))
+        log(4, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
 finish()
