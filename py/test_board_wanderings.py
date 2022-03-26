@@ -36,6 +36,7 @@ Our current impl's scalability problems:
 - We have neither randomly-selected nor emergent goals, only predetermined board states.
 - This env is perfect-info; might want to investigate what happens when we only provide the board at the first time step (should still be learnable, but much slower than BPTT).
 - `future_dist` is only an approximation of the true (part of the) loss to minimize. BPTT would have been a different approximation, at least.
+    - When targets are not just boards but their neural-net mappings: if mapping just a board, we can still learn fine, but when mapping board & action, we can't learn anything. RL here seems very… non-scalable to more degrees of freedom.
 
 Problems & solutions:
 - Grad-based min can't find global action-minima, because the future-distance surface is very non-smooth. Solution? Self-imitation learning: `loss = ((action2 - action).square() * (dist2 - dist).detach().max(zeros))`, where `action` is from the replay buffer and `action2` is from `next`, to make `next` predict its lowest-distance version. However, in optimal conditions, it's not as good as enumerating all actions at unroll-time.
