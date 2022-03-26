@@ -144,21 +144,6 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
 for iters in range(50000):
-
-    # TODO: Elsewhere:
-    #   TODO: Create a truly continuous-control env: in a 1×1 box (a torus), 1 agent whose acceleration can be controlled (small numbers) (with a small friction to not get too out of hand), and whose position is observed; the target is obviously a position.
-    #     TODO: Use `model.rnn.RNN` to predict the next observation.
-    #     TODO: Try to learn a map in it via BPTT (given an RNN with an input→output skip connection, with a small multiplier on the added branch for discounting; minimize the distance from RNN-goal-space to ), to empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
-    #       TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
-    #       TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
-    #       TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps.
-    #       TODO: Also try joint embedding, since prediction blurs frames: ensure that embeddings of consecutive frame-states are the same (but distinct over time) (with an extra NN to signify next-step), and minimize future-distance of embeddings by actions; either use CCL between big vectors everywhere, or BYOL (with a target-conditioned-predictor?).
-    #     TODO: Try to learn a map in it via RL.
-    #   TODO: Gotta get back, back to the past:
-    #     TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `next`-dist-min and self-imitation) and self-targeting BPTT (with `next`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
-
-
-
     # Sample a batch of trajectories.
     dist_pred_loss, dist_min_loss, self_imitation_loss = 0, 0, 0
     action = torch.zeros(batch_size, action_sz, device=device)
