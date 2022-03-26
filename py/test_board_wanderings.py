@@ -145,10 +145,6 @@ opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
 for iters in range(50000):
 
-    # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them".)
-    #   (…In fact, this objective is similar to *prediction*, though not just temporally-adjacent: we try to make next-frame prediction and target-frame predictions equal, where the RNN-step knows the target.)
-    #     (…Can we turn this understanding into a joint-embedding architecture instead of a next-frame-prediction architecture, since the latter often blurs frames?… Maybe if we had a continuous-control env, we could have tested hypotheses here, such as "minimize not only next-frame CC loss but also target-frame CC loss"…)
-
     # TODO: Elsewhere:
     #   TODO: Create a truly continuous-control env: in a 1×1 box (a torus), 1 agent whose acceleration can be controlled (small numbers) (with a small friction to not get too out of hand), and whose position is observed; the target is obviously a position.
     #     TODO: Use `model.rnn.RNN` to predict the next observation.

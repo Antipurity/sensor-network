@@ -16,7 +16,6 @@ import torch.nn as nn
 
 
 if __name__ == '__main__':
-    # TODO: Mixup?
     iterations, batch_size, unroll_length = 10000, 64, 6
     dev = 'cpu' # 'cuda' if torch.cuda.is_available() else 'cpu'
     sz, fut_sz, obs_sz, hidden_sz = 2, 1, 1, 32
