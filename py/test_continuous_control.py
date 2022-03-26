@@ -69,11 +69,12 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 # TODO: Use `model.rnn.RNN` to predict the next observation.
-# TODO: Try to learn a map in it via BPTT (given an RNN with an input→output skip connection, with a small multiplier on the added branch for discounting; minimize the distance from RNN-goal-space to ), to empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
+# TODO: Try to learn a map in it via BPTT (given an RNN with an input→output skip connection, with a small multiplier on the added branch for discounting; minimize the distance from RNN-goal-space to the goal that we condition on), to empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
 #   TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
 #   TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
 #   TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps.
 #   TODO: Also try joint embedding, since prediction blurs frames: ensure that embeddings of consecutive frame-states are the same (but distinct over time) (with an extra NN to signify next-step), and minimize future-distance of embeddings by actions; either use CCL between big vectors everywhere, or BYOL (with a target-conditioned-predictor?).
+#   TODO: Also try learning not only one-goal loss expectation but all-goals loss expectation, from state & action to that, and make each action minimize that. (The more gradient sources the merrier, right?)
 # TODO: Try to learn a map in it via RL.
 
 # TODO: Gotta get back, back to the past:
