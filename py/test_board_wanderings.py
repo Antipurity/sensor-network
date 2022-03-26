@@ -3,34 +3,49 @@ Pretraining for all possible goals is like learning a map of how to get from any
 
 We have a square board here, and 1 agent that can only walk it. If we can't learn a map here, then how can we expect to learn a map in more complex environments?
 
-NO RL machinery! Lessons must be transferrable all the way.
+With as few env-specific tricks as we can manage.
 
 ---
 
-TODO: Re-read and re-check the info. (Already: "NO RL machinery" is not quite in line with our "minimize the distance from anywhere to anywhere" agenda, because that distance can be minimized quite handily with RL machinery.)
-
 Ultimately, to pre-train for all possible goals, we want to learn how to eventually get from anywhere to anywhere in `state`-space.
 
+---
 
 Let's define our transition model as `next: (prev_state, goal) → next_state` (which also includes input/output inside of it for simplicity of our analysis). We'd like to learn good `next_state` — but where could we possibly get a good loss to do that?
 
 There exist many `state→state→…→state→state` trajectories, and we'd like to make sure that they all encounter `goal` as soon as possible. Moreover, we only really need to know one trajectory for each `(state, goal)` pair, the shortest one (which rules out the hard generative-modeling and allows using the easy prediction): if our `state`-space is a faithfully-compressed representation of inputs/outputs, then state-goals won't miss any details and thus won't have to intervene on trajectories to patch up blindspots.
 
-We need to consider a trajectory's first transition to its `next` state, and for each possible action (`next_state`), measure/learn its future's distance to the `goal`, and minimize that (this problem is known as [optimal control](http://www.scholarpedia.org/article/Optimal_control#:~:text=Optimal%20control%20is%20the%20process,to%20minimise%20a%20performance%20index.)). Succeed at this everywhere, and our map is learned.
+We need to consider a trajectory's first transition to its `next` state, and for each possible action (`next_state`), measure/learn its future's distance to the `goal`, and minimize that (this problem is known as [optimal control](http://www.scholarpedia.org/article/Optimal_control)). Succeed at this everywhere, and our map is learned.
 
-1. A neural net that would learn the future-distance: `future_dist: (state, goal) → future_distance`. Should be learned like a GAN: learned without gradient to `state` & `goal` (only its params), and minimized with gradient only to `state` & `goal` (not to its params, to not undo learning).
-2. The actual distance, on a trajectory? Note that our states/goals are continuous, so we can't just count transitions until equality, nor can we explicitly dream up individual trajectories to pick the shortest one (there are infinitely many, so that's either inaccurate or taking too long).
+- What's the actual distance, on a trajectory? Note that our states/goals are continuous, so we can't just count transitions until equality, nor can we explicitly dream up individual trajectories to pick the shortest one (there are infinitely many, so that's either inaccurate or taking too long).
   - The less transitions until we're at `goal`, and the longer we stay there afterward, the better. The future distance being the *sum* of individual `dist`ances fits this quite nicely, and is easy to learn.
     - (With a sum, we don't have to materialize full trajectories to learn distances, we can just bootstrap from single transitions via `future_dist(prev, goal) = (future_dist(next, goal) + dist(prev, goal)).detach()`.)
-  - `dist(x,y)`: for easy optimization, something linear, and summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
+  - `dist(x,y)`: for easy optimization, something linear, and maybe summed-up as late as possible for a richer learning signal. L1 AKA `(x-y).abs().sum()` fits the bill.
+
+---
+
+In summary, our 'loss' to minimize is: "sum over all goals `y`: sum over an unrolled trajectory of `x`s: `(x-y).abs().sum()`".
+
+In practice, on this board-env with 4 actions, gradient descent cannot find the best action. So we use RL, where we learn the inner sum by bootstrapping the neural net `future_dist: (state, goal) → future_distance`, and at each step of an unroll, consider all 4 actions and pick the min-predicted-distance one. This way, we can just pick a step from a replay buffer, pick a random goal-state from the replay buffer, and learn the distance.
+
+We've tried many tricks, but this seems to work best.
+
+---
 
 Our current impl's scalability problems:
 - We have neither randomly-selected nor emergent goals, only predetermined board states.
 - This env is perfect-info; might want to investigate what happens when we only provide the board at the first time step (should still be learnable, but much slower than BPTT).
+- `future_dist` is only an approximation of the true (part of the) loss to minimize. BPTT would have been a different approximation, at least.
 
 Problems & solutions:
 - Grad-based min can't find global action-minima, because the future-distance surface is very non-smooth. Solution? Self-imitation learning: `loss = ((action2 - action).square() * (dist2 - dist).detach().max(zeros))`, where `action` is from the replay buffer and `action2` is from `next`, to make `next` predict its lowest-distance version. However, in optimal conditions, it's not as good as enumerating all actions at unroll-time.
 - Low batch sizes (even 1) make no difference thanks to the replay buffer, as long as its size and `updates_per_unroll` are big enough.
+
+---
+
+Future work:
+- Some env where grad-min can actually work. There, we can try to forego the RL machinery of "approximate the future loss" and try to use BPTT directly. (Our formulated loss has connections to prediction and SSL, but augments it to concern not just adjacent states but all states in a principled manner (the RNN-step knows the target that it will go to) which is useful for env-learning.)
+- `minienv`, where we don't just explore, but have to *learn* to explore. Having the best possible optimization is a must with this requirement.
 """
 
 
@@ -129,17 +144,19 @@ opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters()], lr=1e-3)
 
 for iters in range(50000):
 
-    # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them", and I guess could be extended to "for every mapping of every pair-of-states, learn & minimize the distance between them" (meaning that mappings might try to maximize said distance, probably after normalization; in discrete-space, this should try to perform coloring, and distances should become path lengths).)
+    # (Our minimized-via-tricks loss is essentially: "for every pair of states that we've ever seen, learn & minimize the distance between them".)
     #   (…In fact, this objective is similar to *prediction*, though not just temporally-adjacent: we try to make next-frame prediction and target-frame predictions equal, where the RNN-step knows the target.)
     #     (…Can we turn this understanding into a joint-embedding architecture instead of a next-frame-prediction architecture, since the latter often blurs frames?… Maybe if we had a continuous-control env, we could have tested hypotheses here, such as "minimize not only next-frame CC loss but also target-frame CC loss"…)
 
     # TODO: Elsewhere:
     #   TODO: Create a truly continuous-control env: in a 1×1 box (a torus), 1 agent whose acceleration can be controlled (small numbers) (with a small friction to not get too out of hand), and whose position is observed; the target is obviously a position.
-    #     TODO: Try to learn a map in it via RL.
+    #     TODO: Use `model.rnn.RNN` to predict the next observation.
     #     TODO: Try to learn a map in it via BPTT (given an RNN with an input→output skip connection, with a small multiplier on the added branch for discounting; minimize the distance from RNN-goal-space to ), to empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
     #       TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
     #       TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
     #       TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps.
+    #       TODO: Also try joint embedding, since prediction blurs frames: ensure that embeddings of consecutive frame-states are the same (but distinct over time) (with an extra NN to signify next-step), and minimize future-distance of embeddings by actions; either use CCL between big vectors everywhere, or BYOL (with a target-conditioned-predictor?).
+    #     TODO: Try to learn a map in it via RL.
     #   TODO: Gotta get back, back to the past:
     #     TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `next`-dist-min and self-imitation) and self-targeting BPTT (with `next`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
 
