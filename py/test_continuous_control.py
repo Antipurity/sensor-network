@@ -11,6 +11,7 @@ We implement an RNN that minimizes the distance between goal-conditioned paths a
 
 
 import torch
+import torch.nn as nn
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
@@ -70,23 +71,41 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 
+class SkipConnection(nn.Module):
+    def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
+    def forward(self, x): return self.fn(x)[..., x.shape[-1]] + x
+def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
+def cat(*a, dim=-1): return torch.cat(a, dim)
+
+
+
 batch_size = 100
+input_sz, action_sz = 2, 128
 lr = 1e-3
 
 
 
-# TODO: Have `embed(input, prev_action) → action` and `embed_delayed`.
-#   (By momentum-delaying the future-to-predict's embedding, we *should* turn the RNN into BYOL for consecutive timesteps, so we won't have blurring at future-uncertainty.)
-#     (The main uncertainty here is that unlike in images/BYOL, we take the whole past RNN state into account, not just the previous input.)
+embed = nn.Sequential( # (input, prev_action) → action
+    nn.Linear(input_sz + action_sz, action_sz),
+    *[SkipConnection(
+        nn.ReLU(), nn.LayerNorm(action_sz),
+        nn.Linear(action_sz),
+     ) for _ in range(1)],
+)
+embed_delayed = MomentumCopy(embed, .999)
 # TODO: Have `next(prev_action, target) → action`, post-embedding, which acts as both BYOL's predictor and RNN's transition.
 #   (The target is computed by taking input & action from the replay buffer, and doing `embed_delayed` on them since it's a prediction target.)
-# TODO: And the optimizer for these.
+# TODO: And the RNN for these, which accepts the `input` as an extra input, and embeds & transitions.
+#   (With the loss being the prediction of no-grad embed_delayed of the future.)
+#   …Do we need a separate class for the module that combines these?
 
 # (With so much creativity, I fear that it won't work out, no matter how tight the concepts combine.)
 
 
 
 # TODO: …Implement an RNN that minimizes the distance between goal-conditioned paths and goals…
+#   (By momentum-delaying the future-to-predict's embedding, we *should* turn the RNN into BYOL for consecutive timesteps, so we won't have blurring at future-uncertainty.)
+#     (The main uncertainty here is that unlike in images/BYOL, we take the whole past RNN state into account, not just the previous input.)
 #   TODO: Have a replay buffer already.
 #   TODO: …Come up with some metric of board-coverage by the replay buffer, and try to log that over time.
 
