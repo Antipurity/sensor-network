@@ -19,6 +19,8 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 from model.momentum_copy import MomentumCopy
 from model.rnn import RNN
 
+import random
+
 
 
 def env_init(batch_size): # → state, hidden_state
@@ -111,22 +113,29 @@ class WithInput(nn.Module):
     def forward(self, prev_action, input, goal):
         embed_action = self.embed(cat(prev_action, input))
         return self.next(cat(embed_action, goal))
-rnn = RNN(
+step = RNN(
     transition = WithInput(embed, next),
+    # TODO: loss(prev_action, action, *args)
+    #   TODO: …What does it do, exactly?
+    #   TODO: …How to make `action` predict the no-grad `embed_delayed` version of the next action?… Don't we need to delay by 1 or something?…
+    #     …Oh, maybe, it's `prev_action` that should predict the delayed 'next-embedding'?
+    optimizer = lambda p: torch.optim.Adam(p, lr=lr),
+    backprop_length = lambda: random.randint(1, 32),
 )
 # TODO: And the RNN for these, which accepts the `input` as an extra input, and embeds & transitions.
 #   (With the loss being the prediction of no-grad embed_delayed of the future.)
-#   …Do we need a separate class for the module that combines these?
 
 # (With so much creativity, I fear that it won't work out, no matter how tight the concepts combine.)
 
 
 
-# TODO: …Implement an RNN that minimizes the distance between goal-conditioned paths and goals…
-#   (By momentum-delaying the future-to-predict's embedding, we *should* turn the RNN into BYOL for consecutive timesteps, so we won't have blurring at future-uncertainty.)
-#     (The main uncertainty here is that unlike in images/BYOL, we take the whole past RNN state into account, not just the previous input.)
+# TODO: The main loop: select the `goal`, call `step` to update the action (and push detached tensors to the replay buffer), and do `state, hidden_state = env_step(state, hidden_state, action)` to update the env.
+#   …When would we update `goal`?… Don't we want to be able to make `RNN` not reset its backprops by itself, but only when we tell it to?
+#     TODO: Make `RNN` have `.backprop()` to manually delimit boundaries between backprops, and make `backprop_length` able to be `None`.
+#   …Wait, also, how/when exactly would we call `embed_delayed(cat(prev_action, input))` to get prediction targets?…
 #   TODO: Have a replay buffer already.
 #   TODO: …Come up with some metric of board-coverage by the replay buffer, and try to log that over time.
+#     …Can we come up with anything more clever than "for each pixel, get the min of all distances, then sum that across the board"?…
 
 
 
