@@ -113,13 +113,13 @@ class WithInput(nn.Module):
     def forward(self, prev_action, input, goal):
         embed_action = self.embed(cat(prev_action, input))
         return self.next(cat(embed_action, goal))
+def loss(prev_action, action, input, goal):
+    # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input)`.
+    with torch.no_grad():
+        next_frame = embed_delayed(cat(prev_action, input))
+    return (prev_action - next_frame).square().sum()
 step = RNN( # (prev_action, input, goal) → action
-    transition = WithInput(embed, next),
-    # TODO: loss(prev_action, action, *args)
-    #   TODO: …What does it do, exactly?
-    #   TODO: …How to make `action` predict the no-grad `embed_delayed` version of the next action?… Don't we need to delay by 1 or something?…
-    #     …Oh, maybe, it's `prev_action` that should predict the delayed 'next-embedding'?
-    #       But then, how would training in replay buffers arranged? Do we need 3 consecutive actions, not just 2?…
+    transition = WithInput(embed, next), loss = loss,
     optimizer = lambda p: torch.optim.Adam(p, lr=lr),
     backprop_length = lambda: random.randint(1, 32),
 )
@@ -128,15 +128,12 @@ step = RNN( # (prev_action, input, goal) → action
 
 
 
-# TODO: The main loop: select the `goal`, call `step` to update the action (and push detached tensors to the replay buffer), and do `state, hidden_state = env_step(state, hidden_state, action)` to update the env.
+# TODO: The main loop: select the `goal`, call `step` to update the action (and push detached tensors to the replay buffer, 3 pairs of action+input at a time), and do `state, hidden_state = env_step(state, hidden_state, action)` to update the env. And `embed_delayed.update()`.
 #   …When would we update `goal`?… Don't we want to be able to make `RNN` not reset its backprops by itself, but only when we tell it to?
 #     TODO: Make `RNN` have `.backprop()` to manually delimit boundaries between backprops, and make `backprop_length` able to be `None`.
-#   …Wait, also, how/when exactly would we call `embed_delayed(cat(prev_action, input))` to get prediction targets?…
+#   …Wait, also, how/when exactly would we call `embed_delayed(cat(prev_action, input))` to get prediction targets?… In the loss.
 #   TODO: Have a replay buffer already.
-#   TODO: …Come up with some metric of board-coverage by the replay buffer, and try to log that over time.
-#     …Can we come up with anything more clever than "for each pixel, get the min of all distances, then sum that across the board"?…
-#     …Or maybe we should just log an image/histogram, and make `log` realize when it's given an image (overwriting all prior data and using an image-display func in such a case)?
-#       `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` could be the thing to use here… Perhaps allow funcs for `log` instead?
+#   TODO: Log a histogram of 2D `embed_delayed` goal coverage. `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` or whatever works.
 
 
 
