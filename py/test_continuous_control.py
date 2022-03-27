@@ -18,6 +18,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 from model.momentum_copy import MomentumCopy
 from model.rnn import RNN
+from model.log import log, clear
 
 import random
 
@@ -118,6 +119,7 @@ class WithInput(nn.Module):
         embed_action = self.embed(cat(prev_action, input))
         return self.next(cat(embed_action, goal))
 def loss(prev_action, action, input, goal):
+    global last_losses
     # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input)`.
     with torch.no_grad():
         next_frame = embed_delayed(cat(prev_action, input))
@@ -125,6 +127,7 @@ def loss(prev_action, action, input, goal):
     # Goal (embedding) steering: `prev_action = goal`.
     #   (`goal` should be `embed_delayed(some_prev_action, some_input)`.)
     goal_loss = (prev_action - goal).abs().sum()
+    last_losses = next_frame_loss, goal_loss
     return next_frame_loss + goal_loss
 step = RNN( # (prev_action, input, goal) → action
     transition = WithInput(embed, next), loss = loss,
@@ -138,6 +141,7 @@ step = RNN( # (prev_action, input, goal) → action
 action = torch.randn(batch_size, action_sz, device=device)
 goal = torch.randn(batch_size, action_sz, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
+last_losses = 0, 0
 def reset():
     """Finish a BPTT step, and update the `goal`."""
     global action, goal
@@ -147,6 +151,16 @@ def reset():
         if ch is not None:
             prev_action, prev_state, cur_action, cur_state = ch
             goal = embed_delayed(cat(prev_action, cur_state))
+def pos_histogram(plt):
+    """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
+    x, y = [], []
+    for ch in replay_buffer:
+        if ch is not None:
+            prev_action, prev_state, action, state = ch
+            pos = to_np(state)
+            for i in range(pos.shape[0]):
+                x.append(float(pos[i][0])), y.append(float(pos[i][1]))
+    plt.hist2d(x, y, bins=100, range=((0,1), (0,1)))
 reset()
 for iter in range(50000):
     prev_action, prev_state = action, state
@@ -158,7 +172,9 @@ for iter in range(50000):
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action, prev_state, action, state)
 
-    # TODO: Log a histogram of 2D `embed_delayed` goal coverage. `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` or whatever works.
+    log(0, next_frame_loss = to_np(last_losses[0]))
+    log(1, goal_loss = to_np(last_losses[1]))
+    log(2, pos = pos_histogram)
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is.)
