@@ -47,7 +47,7 @@ def RNN(transition, loss, optimizer, backprop_length=64, checkpoint=True, trace=
     Arguments:
 
     - `transition: fn(state, *args) → state`: the system dynamics.
-        - (If you don't need to train it, you could just call this function function instead of `RNN`.)
+        - (If you don't need to train it, you could just call this function instead of `RNN`.)
     - `loss: fn(prev_state, next_state, *args) → number`: what to minimize via `.backward()`.
         - (If doing something like next-state prediction, delay `RNN` steps by one so that the next-state is always available.)
     - `optimizer: torch.optim.Optimizer`: updates the system. Could be wrapped in `lambda p: torch.optim.SGD(p, lr=1e-2)`, or be `lambda p: lambda: update_weights()`.

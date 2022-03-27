@@ -85,7 +85,7 @@ lr = 1e-3
 
 
 
-embed = SkipConnection( # (prev_action, input) → action
+embed = SkipConnection( # (prev_action, input) → embed_action
     # (Incorporate input into the RNN.)
     # (We 'predict' via joint `embed`ding of both prediction and target, like BYOL, though with not just the previous frame used but with the entire history.)
     nn.Linear(action_sz + input_sz, action_sz),
@@ -96,7 +96,7 @@ embed = SkipConnection( # (prev_action, input) → action
 )
 embed_delayed = MomentumCopy(embed, .999)
 #   (All prediction targets are delayed, so that gradient serves to contrast different inputs.)
-next = SkipConnection( # (prev_action, goal) → action
+next = SkipConnection( # (embed_action, goal) → action
     # (Both RNN's post-`embed` transition, and BYOL's predictor.)
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
     nn.Linear(action_sz + action_sz, action_sz),
@@ -104,6 +104,15 @@ next = SkipConnection( # (prev_action, goal) → action
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz),
      ) for _ in range(1)],
+)
+
+class WithInput(nn.Module):
+    def __init__(self, embed, next): super().__init__();  self.embed, self.next = embed, next
+    def forward(self, prev_action, input, goal):
+        embed_action = self.embed(cat(prev_action, input))
+        return self.next(cat(embed_action, goal))
+rnn = RNN(
+    transition = WithInput(embed, next),
 )
 # TODO: And the RNN for these, which accepts the `input` as an extra input, and embeds & transitions.
 #   (With the loss being the prediction of no-grad embed_delayed of the future.)
