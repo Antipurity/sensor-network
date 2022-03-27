@@ -89,10 +89,10 @@ replay_buffer = [None] * (64*1024)
 
 
 
-embed = SkipConnection( # (prev_action, input) → embed_action
+embed = nn.Sequential( # (prev_action, input) → embed_action
     # (Incorporate input into the RNN.)
     # (We 'predict' via joint `embed`ding of both prediction and target, like BYOL, though with not just the previous frame used but with the entire history.)
-    nn.Linear(action_sz + input_sz, action_sz),
+    SkipConnection(nn.Linear(action_sz + input_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz),
@@ -100,10 +100,10 @@ embed = SkipConnection( # (prev_action, input) → embed_action
 )
 embed_delayed = MomentumCopy(embed, .999)
 #   (All prediction targets are delayed, so that gradient serves to contrast different inputs.)
-next = SkipConnection( # (embed_action, goal) → action
+next = nn.Sequential( # (embed_action, goal) → action
     # (Both RNN's post-`embed` transition, and BYOL's predictor.)
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
-    nn.Linear(action_sz + action_sz, action_sz),
+    SkipConnection(nn.Linear(action_sz + action_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz),
@@ -119,20 +119,39 @@ def loss(prev_action, action, input, goal):
     # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input)`.
     with torch.no_grad():
         next_frame = embed_delayed(cat(prev_action, input))
-    return (prev_action - next_frame).square().sum()
+    next_frame = (prev_action - next_frame).square().sum()
+    # TODO: …Shouldn't we also try to arrive at `goal`?…
+    #   How exactly do we do that, though?
+    #     If we try just having another prediction, then we'd just be pushing embeddings toward the same vector because the action would become the mean of delayed-future-vector and delayed-goal-vector… Hmm. Not exactly sure whether this would happen…
+    #   TODO: …Eh, write down `goal`-arriving in the same manner as next-frame prediction.
+    return next_frame
 step = RNN( # (prev_action, input, goal) → action
     transition = WithInput(embed, next), loss = loss,
     optimizer = lambda p: torch.optim.Adam(p, lr=lr),
-    backprop_length = lambda: random.randint(1, 32),
+    backprop_length = None,
 )
 
 
 
-# TODO: The main loop: select the `goal`, call `step` to update the action (and push detached tensors to the replay buffer, 3 pairs of action+input at a time), and do `state, hidden_state = env_step(state, hidden_state, action)` to update the env. And `embed_delayed.update()`.
-#   …When would we update `goal`?… Don't we want to be able to make `RNN` not reset its backprops by itself, but only when we tell it to?
-#     TODO: Make `RNN` have `.backprop()` to manually delimit boundaries between backprops, and make `backprop_length` able to be `None`.
-#   TODO: Have a replay buffer already.
-#   TODO: Log a histogram of 2D `embed_delayed` goal coverage. `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` or whatever works.
+# The main loop, which steps the environment and trains `step`.
+action = torch.randn(batch_size, action_sz, device=device)
+goal = torch.randn(batch_size, action_sz, device=device)
+state, hidden_state = env_init(batch_size=batch_size)
+def reset():
+    global action, goal
+    action = step.reset(action)
+    with torch.no_grad():
+        pass # TODO: Also change `goal`. …To what, exactly?
+reset()
+for iter in range(50000):
+    prev_action = action
+    state, hidden_state = env_step(state, hidden_state, prev_action)
+    action = step(prev_action, state, goal)
+
+    if random.randint(1, 32) == 1: reset()
+    embed_delayed.update()
+    # TODO: How/what to push to `replay_buffer`, exactly?
+    # TODO: Log a histogram of 2D `embed_delayed` goal coverage. `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` or whatever works.
 
 
 
@@ -144,6 +163,7 @@ step = RNN( # (prev_action, input, goal) → action
 #   TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
 #   TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps.
 #   TODO: Also try joint embedding, since prediction blurs frames: ensure that embeddings of consecutive frame-states are the same (but distinct over time) (with an extra NN to signify next-step), and minimize future-distance of embeddings by actions; either use CCL between big vectors everywhere, or BYOL (with a target-conditioned-predictor?).
+#     …Already going for it, that crazy son of a bitch.
 #   TODO: Also try learning not only one-goal loss expectation but all-goals loss expectation, from state & action to that, and make each action minimize that. (The more gradient sources the merrier, right?)
 # TODO: Try to learn a map in it via RL.
 
