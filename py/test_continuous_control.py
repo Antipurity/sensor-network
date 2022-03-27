@@ -85,6 +85,8 @@ batch_size = 100
 input_sz, action_sz = 2, 128
 lr = 1e-3
 
+replay_buffer = [None] * (64*1024)
+
 
 
 embed = SkipConnection( # (prev_action, input) → embed_action
@@ -124,14 +126,11 @@ step = RNN( # (prev_action, input, goal) → action
     backprop_length = lambda: random.randint(1, 32),
 )
 
-# (With so much creativity, I fear that it won't work out, no matter how tight the concepts combine.)
-
 
 
 # TODO: The main loop: select the `goal`, call `step` to update the action (and push detached tensors to the replay buffer, 3 pairs of action+input at a time), and do `state, hidden_state = env_step(state, hidden_state, action)` to update the env. And `embed_delayed.update()`.
 #   …When would we update `goal`?… Don't we want to be able to make `RNN` not reset its backprops by itself, but only when we tell it to?
 #     TODO: Make `RNN` have `.backprop()` to manually delimit boundaries between backprops, and make `backprop_length` able to be `None`.
-#   …Wait, also, how/when exactly would we call `embed_delayed(cat(prev_action, input))` to get prediction targets?… In the loss.
 #   TODO: Have a replay buffer already.
 #   TODO: Log a histogram of 2D `embed_delayed` goal coverage. `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` or whatever works.
 
@@ -140,6 +139,7 @@ step = RNN( # (prev_action, input, goal) → action
 
 # TODO: Use `model.rnn.RNN` to predict the next observation.
 # TODO: Try to learn a map in it via BPTT (given an RNN with an input→output skip connection, with a small multiplier on the added branch for discounting; minimize the distance from RNN-goal-space to the goal that we condition on), to empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
+#   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the concepts combine.)
 #   TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
 #   TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
 #   TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps.
