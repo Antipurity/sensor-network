@@ -119,12 +119,11 @@ def loss(prev_action, action, input, goal):
     # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input)`.
     with torch.no_grad():
         next_frame = embed_delayed(cat(prev_action, input))
-    next_frame = (prev_action - next_frame).square().sum()
-    # TODO: …Shouldn't we also try to arrive at `goal`?…
-    #   How exactly do we do that, though?
-    #     If we try just having another prediction, then we'd just be pushing embeddings toward the same vector because the action would become the mean of delayed-future-vector and delayed-goal-vector… Hmm. Not exactly sure whether this would happen…
-    #   TODO: …Eh, write down `goal`-arriving in the same manner as next-frame prediction.
-    return next_frame
+    next_frame_loss = (prev_action - next_frame).square().sum()
+    # Goal (embedding) steering: `prev_action = goal`.
+    #   (`goal` should be `embed_delayed(some_prev_action, some_input)`.)
+    goal_loss = (prev_action - goal).abs().sum()
+    return next_frame_loss + goal_loss
 step = RNN( # (prev_action, input, goal) → action
     transition = WithInput(embed, next), loss = loss,
     optimizer = lambda p: torch.optim.Adam(p, lr=lr),
