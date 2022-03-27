@@ -168,6 +168,7 @@ for iter in range(50000):
 
 
 # TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
+#   - TODO: Make `next` (or `embed`) accept a completely random vector I guess, for more action diversity.
 #   - TODO: …Wait, *mathematically*, if the loss minimizes the future-sum that is the output of the prior `step`, and RL is supposed to minimize that by each action, then isn't our 'action' not the whole sum but merely the residual, AKA the difference between 2 steps?
 #   - Tinker with goals:
 #     - TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
