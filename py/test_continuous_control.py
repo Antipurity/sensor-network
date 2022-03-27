@@ -85,7 +85,7 @@ batch_size = 100
 input_sz, action_sz = 2, 128
 lr = 1e-3
 
-replay_buffer = [None] * (64*1024)
+replay_buffer = [None] * (2*1024)
 
 
 
@@ -137,20 +137,29 @@ action = torch.randn(batch_size, action_sz, device=device)
 goal = torch.randn(batch_size, action_sz, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
 def reset():
+    """Finish a BPTT step, and update the `goal`."""
     global action, goal
     action = step.reset(action)
     with torch.no_grad():
-        pass # TODO: Also change `goal`. …To what, exactly?
+        ch = random.choice(replay_buffer)
+        if ch is not None:
+            prev_action, prev_state, cur_action, cur_state = ch
+            goal = embed_delayed(cat(prev_action, cur_state))
 reset()
 for iter in range(50000):
-    prev_action = action
+    prev_action, prev_state = action, state
     state, hidden_state = env_step(state, hidden_state, prev_action)
     action = step(prev_action, state, goal)
 
     if random.randint(1, 32) == 1: reset()
     embed_delayed.update()
-    # TODO: How/what to push to `replay_buffer`, exactly?
+
+    replay_buffer[iter % len(replay_buffer)] = (prev_action, prev_state, action, state)
+
     # TODO: Log a histogram of 2D `embed_delayed` goal coverage. `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` or whatever works.
+
+    # TODO: Run. Ideally, also fix, but this solution is so creative that I don't know if it's even possible.
+    #   TODO: At least find out why it's broken.
 
 
 
