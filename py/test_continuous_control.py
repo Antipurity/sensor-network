@@ -85,16 +85,26 @@ lr = 1e-3
 
 
 
-embed = nn.Sequential( # (input, prev_action) → action
-    nn.Linear(input_sz + action_sz, action_sz),
+embed = SkipConnection( # (prev_action, input) → action
+    # (Incorporate input into the RNN.)
+    # (We 'predict' via joint `embed`ding of both prediction and target, like BYOL, though with not just the previous frame used but with the entire history.)
+    nn.Linear(action_sz + input_sz, action_sz),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz),
      ) for _ in range(1)],
 )
 embed_delayed = MomentumCopy(embed, .999)
-# TODO: Have `next(prev_action, target) → action`, post-embedding, which acts as both BYOL's predictor and RNN's transition.
-#   (The target is computed by taking input & action from the replay buffer, and doing `embed_delayed` on them since it's a prediction target.)
+#   (All prediction targets are delayed, so that gradient serves to contrast different inputs.)
+next = SkipConnection( # (prev_action, goal) → action
+    # (Both RNN's post-`embed` transition, and BYOL's predictor.)
+    # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
+    nn.Linear(action_sz + action_sz, action_sz),
+    *[SkipConnection(
+        nn.ReLU(), nn.LayerNorm(action_sz),
+        nn.Linear(action_sz),
+     ) for _ in range(1)],
+)
 # TODO: And the RNN for these, which accepts the `input` as an extra input, and embeds & transitions.
 #   (With the loss being the prediction of no-grad embed_delayed of the future.)
 #   …Do we need a separate class for the module that combines these?
