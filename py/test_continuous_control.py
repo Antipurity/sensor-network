@@ -113,17 +113,16 @@ class WithInput(nn.Module):
     def forward(self, prev_action, input, goal):
         embed_action = self.embed(cat(prev_action, input))
         return self.next(cat(embed_action, goal))
-step = RNN(
+step = RNN( # (prev_action, input, goal) → action
     transition = WithInput(embed, next),
     # TODO: loss(prev_action, action, *args)
     #   TODO: …What does it do, exactly?
     #   TODO: …How to make `action` predict the no-grad `embed_delayed` version of the next action?… Don't we need to delay by 1 or something?…
     #     …Oh, maybe, it's `prev_action` that should predict the delayed 'next-embedding'?
+    #       But then, how would training in replay buffers arranged? Do we need 3 consecutive actions, not just 2?…
     optimizer = lambda p: torch.optim.Adam(p, lr=lr),
     backprop_length = lambda: random.randint(1, 32),
 )
-# TODO: And the RNN for these, which accepts the `input` as an extra input, and embeds & transitions.
-#   (With the loss being the prediction of no-grad embed_delayed of the future.)
 
 # (With so much creativity, I fear that it won't work out, no matter how tight the concepts combine.)
 
@@ -136,6 +135,8 @@ step = RNN(
 #   TODO: Have a replay buffer already.
 #   TODO: …Come up with some metric of board-coverage by the replay buffer, and try to log that over time.
 #     …Can we come up with anything more clever than "for each pixel, get the min of all distances, then sum that across the board"?…
+#     …Or maybe we should just log an image/histogram, and make `log` realize when it's given an image (overwriting all prior data and using an image-display func in such a case)?
+#       `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` could be the thing to use here… Perhaps allow funcs for `log` instead?
 
 
 
