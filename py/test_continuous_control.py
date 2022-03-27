@@ -2,12 +2,21 @@
 Can RL be done not via approximating the loss (discounted sum of future distances here, AKA return), but via BPTT?
 
 This 2D env has 1 spaceship and a repulsor in the middle; the actions control acceleration. All smooth, so grad-min should be able to find best actions. Effective exploration would be able to cover a lot of the torus.
+
+---
+
+We implement an RNN that minimizes the distance between goal-conditioned paths and goals, sampling goals from the recent past, predicting the next-frame, and minimizing its distance to the goal.
 """
 
 
 
 import torch
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+
+from model.momentum_copy import MomentumCopy
+from model.rnn import RNN
 
 
 
@@ -58,6 +67,22 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     veloc = (veloc + accel) * .99
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
+
+
+
+batch_size = 100
+lr = 1e-3
+
+
+
+# TODO: Have `embed(input, prev_action) → action` and `embed_delayed`.
+#   (By momentum-delaying the future-to-predict's embedding, we *should* turn the RNN into BYOL for consecutive timesteps, so we won't have blurring at future-uncertainty.)
+#     (The main uncertainty here is that unlike in images/BYOL, we take the whole past RNN state into account, not just the previous input.)
+# TODO: Have `next(prev_action, target) → action`, post-embedding, which acts as both BYOL's predictor and RNN's transition.
+#   (The target is computed by taking input & action from the replay buffer, and doing `embed_delayed` on them since it's a prediction target.)
+# TODO: And the optimizer for these.
+
+# (With so much creativity, I fear that it won't work out, no matter how tight the concepts combine.)
 
 
 
