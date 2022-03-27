@@ -1,5 +1,5 @@
 """
-Can RL be done not via approximating the loss (discounted sum of future distances here, AKA return), but via BPTT?
+Can RL be done not via approximating the loss (discounted sum of future distances here, AKA return), but via BPTT? Mathematically, sure, but what are the obstacles to doing it practically?
 
 This 2D env has 1 spaceship and a repulsor in the middle; the actions control acceleration. All smooth, so grad-min should be able to find best actions. Effective exploration would be able to cover a lot of the torus.
 
@@ -75,7 +75,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
-    def forward(self, x): return self.fn(x)[..., x.shape[-1]] + x
+    def forward(self, x): return self.fn(x)[..., x.shape[-1]] * bootstrap_discount + x
 def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
 def cat(*a, dim=-1): return torch.cat(a, dim)
 
@@ -84,6 +84,8 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 batch_size = 100
 input_sz, action_sz = 2, 128
 lr = 1e-3
+
+bootstrap_discount = .99
 
 replay_buffer = [None] * (2*1024)
 
@@ -158,22 +160,24 @@ for iter in range(50000):
 
     # TODO: Log a histogram of 2D `embed_delayed` goal coverage. `plt.histogram2d(x,y, bins=10, range=((0,1), (0,1)))` or whatever works.
 
-    # TODO: Run. Ideally, also fix, but this solution is so creative that I don't know if it's even possible.
+    # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
+    #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is.)
     #   TODO: At least find out why it's broken.
 
 
 
 
-# TODO: Use `model.rnn.RNN` to predict the next observation.
-# TODO: Try to learn a map in it via BPTT (given an RNN with an input→output skip connection, with a small multiplier on the added branch for discounting; minimize the distance from RNN-goal-space to the goal that we condition on), to empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
-#   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the concepts combine.)
-#   TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
-#   TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
-#   TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps.
-#   TODO: Also try joint embedding, since prediction blurs frames: ensure that embeddings of consecutive frame-states are the same (but distinct over time) (with an extra NN to signify next-step), and minimize future-distance of embeddings by actions; either use CCL between big vectors everywhere, or BYOL (with a target-conditioned-predictor?).
-#     …Already going for it, that crazy son of a bitch.
-#   TODO: Also try learning not only one-goal loss expectation but all-goals loss expectation, from state & action to that, and make each action minimize that. (The more gradient sources the merrier, right?)
-# TODO: Try to learn a map in it via RL.
+# TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
+#   - TODO: …Wait, *mathematically*, if the loss minimizes the future-sum that is the output of the prior `step`, and RL is supposed to minimize that by each action, then isn't our 'action' not the whole sum but merely the residual, AKA the difference between 2 steps?
+#   - Tinker with goals:
+#     - TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
+#     - TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
+#     - TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps. (Most conservative.)
+#   - *Learn* the loss to minimize:
+#     - TODO: RL: learn `future_dist` which represents the (discounted) future sum of all L1 distances between RNN-states (actions) and goals. And minimize that by actions.
+#     - TODO: Also try learning not only one-goal loss expectation but all-goals loss expectation, from state & action to that, and make each action minimize that. (The more gradient sources the merrier, right?)
+
+
 
 # TODO: Gotta get back, back to the past:
 #   TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `next`-dist-min and self-imitation) and self-targeting BPTT (with `next`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
