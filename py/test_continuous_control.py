@@ -94,10 +94,10 @@ replay_buffer = [None] * (2*1024)
 
 
 
-embed = nn.Sequential( # (prev_action, input) → embed_action
+embed = nn.Sequential( # (prev_action, input, randn) → embed_action
     # (Incorporate input into the RNN.)
     # (We 'predict' via joint `embed`ding of both prediction and target, like BYOL, though with not just the previous frame used but with the entire history.)
-    SkipConnection(nn.Linear(action_sz + input_sz, action_sz)),
+    SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
@@ -118,18 +118,18 @@ next = nn.Sequential( # (embed_action, goal) → action
 
 class WithInput(nn.Module):
     def __init__(self, embed, next): super().__init__();  self.embed, self.next = embed, next
-    def forward(self, prev_action, input, goal):
-        embed_action = self.embed(cat(prev_action, input))
+    def forward(self, prev_action, input, randn, goal):
+        embed_action = self.embed(cat(prev_action, input, randn))
         return self.next(cat(embed_action, goal))
-def loss(prev_action, action, input, goal):
+def loss(prev_action, action, input, randn, goal):
     global last_losses
-    # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input)`.
+    # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input, randn)`.
     with torch.no_grad():
-        next_frame = embed_delayed(cat(prev_action, input))
-    next_frame_loss = (prev_action - next_frame).square().sum()
-    #   TODO: …Wait, why does even just the next-frame loss cause destination-diversity to collapse entirely?…
+        next_frame = embed_delayed(cat(prev_action, input, randn))
+    next_frame_loss = 0 # (prev_action - next_frame).square().sum()
+    #   TODO: Re-run with actual loss, now that we have the `randn` input.
     # Goal (embedding) steering: `prev_action = goal`.
-    #   (`goal` should be `embed_delayed(some_prev_action, some_input)`.)
+    #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
     goal_loss = 0 # (prev_action - goal).abs().sum() # TODO:
     last_losses = next_frame_loss, goal_loss
     return next_frame_loss + goal_loss
@@ -146,18 +146,19 @@ action = torch.randn(batch_size, action_sz, requires_grad=True, device=device)
 goal = torch.randn(batch_size, action_sz, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
 last_losses = 0, 0
-def reset():
-    """Finish a BPTT step, and update the `goal`."""
-    global action, goal
-    action = step.reset(action)
+def reset_goal():
+    global goal
     with torch.no_grad():
         ch = random.choice(replay_buffer)
         if ch is not None:
             prev_action, prev_state, cur_action, cur_state = ch
-            goal = embed_delayed(cat(prev_action, cur_state))
-            # TODO: …The histogram seems to converge on very few spots over the first couple thousand iterations… Is it because sampling from the replay buffer creates a feedback loop of what's easiest to go to?…
-            #   TODO: …Try making `goal` uniformly-randomly-chosen??
-            #     …Wait, but, it's supposed to be post-embedding, not just a single position…
+            randn = torch.randn(batch_size, action_sz, device=device)
+            goal = embed_delayed(cat(prev_action, cur_state, randn))
+def reset():
+    """Finish a BPTT step, and update the `goal`."""
+    global action
+    action = step.reset(action)
+    reset_goal()
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
     x, y = [], []
@@ -169,10 +170,13 @@ def pos_histogram(plt, label):
                 x.append(float(pos[i][0])), y.append(float(pos[i][1]))
     plt.hist2d(x, y, bins=100, range=((0,1), (0,1)), label=label)
 reset()
-for iter in range(50000):
+for iter in range(500000):
     prev_action, prev_state = action, state
     state, hidden_state = env_step(state, hidden_state, prev_action)
-    action = step(prev_action, state, goal)
+    randn = torch.randn(batch_size, action_sz, device=device)
+    action = step(prev_action, state, randn, goal)
+
+    # reset_goal() # TODO:
 
     if random.randint(1, 32) == 1: reset()
     embed_delayed.update()
