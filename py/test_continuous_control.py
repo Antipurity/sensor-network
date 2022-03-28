@@ -76,7 +76,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
-    def forward(self, x): return self.fn(x)[..., x.shape[-1]] * bootstrap_discount + x
+    def forward(self, x): return self.fn(x)[..., :x.shape[-1]] * bootstrap_discount + x
 def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
 def cat(*a, dim=-1): return torch.cat(a, dim)
 
