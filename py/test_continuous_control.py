@@ -64,7 +64,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     accel = accel.detach()[..., :2]
     accel = accel * 1e-3 / 2
     accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().max(torch.tensor(1., device=device)))
-    force_center = torch.ones(posit.shape[0], 2, device=device) # TODO: …Why does putting it at the non-center seem to break the env?… …Maybe because the other side doesn't have any force, so it's just an accelerator, not an obstacle.
+    force_center = torch.ones(posit.shape[0], 2, device=device)/2 # TODO: …Why does putting it at the non-center seem to break the env?… …Maybe because the other side doesn't have any force, so it's just an accelerator, not an obstacle.
     force_len = (posit - force_center).square() + 1e-5
     force = 3e-5 / force_len
     accel = accel + force * (posit - force_center) / force_len
@@ -131,7 +131,7 @@ def loss(prev_action, action, input, randn, goal):
     #   (…Even if we remove the repulsor in the center, this still happens, but less pronounced…)
     # Goal (embedding) steering: `prev_action = goal`.
     #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
-    goal_loss = (prev_action - goal).abs().sum() # TODO:
+    goal_loss = (prev_action - goal).abs().sum()
     last_losses = next_frame_loss, goal_loss
     return next_frame_loss + goal_loss
 step = RNN( # (prev_action, input, goal) → action
@@ -169,7 +169,7 @@ def pos_histogram(plt, label):
             pos = to_np(state)
             for i in range(pos.shape[0]):
                 x.append(float(pos[i][0])), y.append(float(pos[i][1]))
-    plt.hist2d(x, y, bins=100, range=((0,1), (0,1)), label=label)
+    plt.hist2d(x, y, bins=100, range=((0,1), (0,1)), cmap='rainbow', label=label)
 reset()
 for iter in range(500000):
     prev_action, prev_state = action, state
@@ -179,6 +179,7 @@ for iter in range(500000):
 
     # reset_goal() # TODO:
 
+    if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
     if random.randint(1, 32) == 1: reset()
     embed_delayed.update()
 
@@ -189,23 +190,25 @@ for iter in range(500000):
     log(2, False, pos = pos_histogram)
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
-    #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is.)
+    #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
     #   TODO: At least find out why it's broken.
-    #   TODO: Why does the loss explode currently? And why do we "try to backward through the graph a second time"?
 
 
 
 
 # TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
-#   - TODO: Make `next` (or `embed`) accept a completely random vector I guess, for more action diversity.
-#   - TODO: …Wait, *mathematically*, if the loss minimizes the future-sum that is the output of the prior `step`, and RL is supposed to minimize that by each action, then isn't our 'action' not the whole sum but merely the residual, AKA the difference between 2 steps?
-#   - Tinker with goals:
-#     - TODO: During unrolling, try sampling `next`-goals and distance-minimized goals independently, from the replay buffer. (In expectation, equivalent to distance-minimizing to the mean of all goals, so this couldn't be right.)
-#     - TODO: During unrolling, try sampling per-step `next`'s and distance-minimized goals.
-#     - TODO: During unrolling, try re-sampling the goal ONLY between BPTT steps. (Most conservative.)
+#   - TODO: Just doing what we want didn't work, so find out exactly what we *can* do:
+#     - TODO: Predict the next `state` from RNN state+action, not its embedding.
+#     - TODO: Make targets the torus positions, not RNN-states.
+#       - TODO: Make the goal-reaching loss not adjust this, to remove some of the interference with prediction that we couldn't remove before.
+#     - TODO: Possibly, input not just xy but its `x → 1-2*abs(x)` fractal filling.
+#   - TODO: Tinker with goals: new goal per-step, or only on BPTT resets.
 #   - *Learn* the loss to minimize:
 #     - TODO: RL: learn `future_dist` which represents the (discounted) future sum of all L1 distances between RNN-states (actions) and goals. And minimize that by actions.
-#     - TODO: Also try learning not only one-goal loss expectation but all-goals loss expectation, from state & action to that, and make each action minimize that. (The more gradient sources the merrier, right?)
+#       - (Could be good for us, actually, since our BPTT length is probably far too small to allow most goals to be achieved.)
+#       - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
+#     - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's importance), and compare with RL?
+#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something.
 
 
 
