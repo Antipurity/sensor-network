@@ -101,7 +101,7 @@ embed = nn.Sequential( # (prev_action, input, randn) → embed_action
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
-    ) for _ in range(1)],
+    ) for _ in range(3)],
     nn.LayerNorm(action_sz),
 ).to(device)
 embed_delayed = MomentumCopy(embed, .999)
@@ -109,15 +109,22 @@ embed_delayed = MomentumCopy(embed, .999)
 next = nn.Sequential( # (embed_action, goal) → action
     # (Both RNN's post-`embed` transition, and BYOL's predictor.)
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
-    SkipConnection(nn.Linear(action_sz + action_sz, action_sz)),
+    SkipConnection(nn.Linear(action_sz + input_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
-    ) for _ in range(1)],
+    ) for _ in range(3)],
+).to(device)
+state_predictor = nn.Sequential( # prev_action → state
+    *[SkipConnection(
+        nn.ReLU(), nn.LayerNorm(action_sz),
+        nn.Linear(action_sz, action_sz),
+    ) for _ in range(3)],
+    nn.Linear(action_sz, input_sz),
 ).to(device)
 
 class WithInput(nn.Module):
-    def __init__(self, embed, next): super().__init__();  self.embed, self.next = embed, next
+    def __init__(self, embed, next, state_predictor): super().__init__();  self.embed, self.next, self.state_predictor = embed, next, state_predictor
     def forward(self, prev_action, input, randn, goal):
         embed_action = self.embed(cat(prev_action, input, randn))
         return self.next(cat(embed_action, goal))
@@ -126,16 +133,23 @@ def loss(prev_action, action, input, randn, goal):
     # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input, randn)`.
     with torch.no_grad():
         next_frame = embed_delayed(cat(prev_action, input, randn))
-    next_frame_loss = (prev_action - next_frame).square().sum()
+    next_frame_loss = 0 # (prev_action - next_frame).square().sum() # TODO:
     # TODO: …Why does re-enabling the loss (any loss) collapse diversity?…
     #   (…Even if we remove the repulsor in the center, this still happens, but less pronounced…)
     # Goal (embedding) steering: `prev_action = goal`.
     #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
-    goal_loss = (prev_action - goal).abs().sum()
-    last_losses = next_frame_loss, goal_loss
-    return next_frame_loss + goal_loss
+    pred = step_model.state_predictor
+    for p in pred.parameters(): p.requires_grad_(False)
+    # goal_loss = (prev_action - goal).abs().sum() # TODO: Should depend on the state predictor too.
+    goal_loss = (pred(prev_action) - goal).abs().sum() # TODO: `goal` should be input-sized.
+    for p in pred.parameters(): p.requires_grad_(True)
+    # Predict the next `input`.
+    state_predictor_loss = (pred(prev_action) - input.detach()).square().sum()
+    last_losses = next_frame_loss, goal_loss, state_predictor_loss
+    return next_frame_loss + goal_loss + state_predictor_loss
+step_model = WithInput(embed, next, state_predictor)
 step = RNN( # (prev_action, input, goal) → action
-    transition = WithInput(embed, next), loss = loss,
+    transition = step_model, loss = loss,
     optimizer = lambda p: torch.optim.Adam(p, lr=lr),
     backprop_length = None,
 )
@@ -144,9 +158,9 @@ step = RNN( # (prev_action, input, goal) → action
 
 # The main loop, which steps the environment and trains `step`.
 action = torch.randn(batch_size, action_sz, requires_grad=True, device=device)
-goal = torch.randn(batch_size, action_sz, device=device)
+goal = torch.rand(batch_size, input_sz, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
-last_losses = 0, 0
+last_losses = 0, 0, 0
 def reset_goal():
     global goal
     with torch.no_grad():
@@ -154,7 +168,9 @@ def reset_goal():
         if ch is not None:
             prev_action, prev_state, cur_action, cur_state = ch
             randn = torch.randn(batch_size, action_sz, device=device)
-            goal = embed_delayed(cat(prev_action, cur_state, randn))
+            # goal = embed_delayed(cat(prev_action, cur_state, randn)) # TODO:
+            # goal = cur_state # TODO:
+            goal = torch.rand(batch_size, input_sz, device=device)
 def reset():
     """Finish a BPTT step, and update the `goal`."""
     global action
@@ -187,7 +203,8 @@ for iter in range(500000):
 
     log(0, False, next_frame_loss = to_np(last_losses[0]))
     log(1, False, goal_loss = to_np(last_losses[1]))
-    log(2, False, pos = pos_histogram)
+    log(2, False, state_predictor_loss = to_np(last_losses[2]))
+    log(3, False, pos = pos_histogram)
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
