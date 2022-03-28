@@ -172,8 +172,9 @@ for iter in range(50000):
     if random.randint(1, 32) == 1: reset()
     embed_delayed.update()
 
-    replay_buffer[iter % len(replay_buffer)] = (prev_action, prev_state, action, state)
+    replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
 
+    # TODO: Also `False` to not print to console uselessly.
     log(0, next_frame_loss = to_np(last_losses[0]))
     log(1, goal_loss = to_np(last_losses[1]))
     log(2, pos = pos_histogram)
@@ -181,6 +182,7 @@ for iter in range(50000):
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is.)
     #   TODO: At least find out why it's broken.
+    #   TODO: Why does the loss explode currently? And why do we "try to backward through the graph a second time"?
 
 
 
