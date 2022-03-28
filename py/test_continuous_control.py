@@ -177,10 +177,9 @@ for iter in range(50000):
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
 
-    # TODO: Also `False` to not print to console uselessly.
-    log(0, next_frame_loss = to_np(last_losses[0]))
-    log(1, goal_loss = to_np(last_losses[1]))
-    log(2, pos = pos_histogram)
+    log(0, False, next_frame_loss = to_np(last_losses[0]))
+    log(1, False, goal_loss = to_np(last_losses[1]))
+    log(2, False, pos = pos_histogram)
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is.)
