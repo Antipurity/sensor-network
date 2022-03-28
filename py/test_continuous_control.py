@@ -100,7 +100,7 @@ embed = nn.Sequential( # (prev_action, input) → embed_action
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
      ) for _ in range(1)],
-)
+).to(device)
 embed_delayed = MomentumCopy(embed, .999)
 #   (All prediction targets are delayed, so that gradient serves to contrast different inputs.)
 next = nn.Sequential( # (embed_action, goal) → action
@@ -111,7 +111,7 @@ next = nn.Sequential( # (embed_action, goal) → action
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
      ) for _ in range(1)],
-)
+).to(device)
 
 class WithInput(nn.Module):
     def __init__(self, embed, next): super().__init__();  self.embed, self.next = embed, next
