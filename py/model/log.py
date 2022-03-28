@@ -87,7 +87,6 @@ def clear(max_past_samples = 0):
 
 
 if __name__ == '__main__': # Test.
-    # TODO: Test subplots.
     import random
     log(a=3, b=4)
     log(a=.3, b=.4)
@@ -99,9 +98,4 @@ if __name__ == '__main__': # Test.
         else:
             log(a=random.random(), c=random.random())
             log(1, False, d=random.random()*100, f=random.random()*100)
-    # for iter in range(100): # TODO: Why does intertwining them not work?
-    #     if iter < 30 and random.randint(1,2)==1:
-    #         log(1, False, d=random.random()*100, e=random.random()*100)
-    #     else:
-    #         log(1, False, d=random.random()*100, f=random.random()*100)
     finish()

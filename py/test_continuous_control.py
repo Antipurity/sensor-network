@@ -156,6 +156,7 @@ def reset():
             goal = embed_delayed(cat(prev_action, cur_state))
             # TODO: …The histogram seems to converge on very few spots over the first couple thousand iterations… Is it because sampling from the replay buffer creates a feedback loop of what's easiest to go to?…
             #   TODO: …Try making `goal` uniformly-randomly-chosen??
+            #     …Wait, but, it's supposed to be post-embedding, not just a single position…
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
     x, y = [], []
