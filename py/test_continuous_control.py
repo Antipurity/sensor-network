@@ -101,7 +101,8 @@ embed = nn.Sequential( # (prev_action, input) → embed_action
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
-     ) for _ in range(1)],
+    ) for _ in range(1)],
+    nn.LayerNorm(action_sz),
 ).to(device)
 embed_delayed = MomentumCopy(embed, .999)
 #   (All prediction targets are delayed, so that gradient serves to contrast different inputs.)
@@ -112,7 +113,7 @@ next = nn.Sequential( # (embed_action, goal) → action
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
-     ) for _ in range(1)],
+    ) for _ in range(1)],
 ).to(device)
 
 class WithInput(nn.Module):
@@ -153,7 +154,9 @@ def reset():
         if ch is not None:
             prev_action, prev_state, cur_action, cur_state = ch
             goal = embed_delayed(cat(prev_action, cur_state))
-def pos_histogram(plt):
+            # TODO: …The histogram seems to converge on very few spots over the first couple thousand iterations… Is it because sampling from the replay buffer creates a feedback loop of what's easiest to go to?…
+            #   TODO: …Try making `goal` uniformly-randomly-chosen??
+def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
     x, y = [], []
     for ch in replay_buffer:
@@ -162,14 +165,14 @@ def pos_histogram(plt):
             pos = to_np(state)
             for i in range(pos.shape[0]):
                 x.append(float(pos[i][0])), y.append(float(pos[i][1]))
-    plt.hist2d(x, y, bins=100, range=((0,1), (0,1)))
+    plt.hist2d(x, y, bins=100, range=((0,1), (0,1)), label=label)
 reset()
 for iter in range(50000):
     prev_action, prev_state = action, state
     state, hidden_state = env_step(state, hidden_state, prev_action)
-    action = step(prev_action, state, goal) # TODO: …Are the extra args differentiable for some reason?
+    action = step(prev_action, state, goal)
 
-    if random.randint(1, 16) == 1: reset()
+    if random.randint(1, 32) == 1: reset()
     embed_delayed.update()
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
