@@ -64,7 +64,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     accel = accel.detach()[..., :2]
     accel = accel * 1e-3 / 2
     accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().max(torch.tensor(1., device=device)))
-    force_center = torch.ones(posit.shape[0], 2, device=device)/2
+    force_center = torch.ones(posit.shape[0], 2, device=device) # TODO: …Why does putting it at the non-center seem to break the env?… …Maybe because the other side doesn't have any force, so it's just an accelerator, not an obstacle.
     force_len = (posit - force_center).square() + 1e-5
     force = 3e-5 / force_len
     accel = accel + force * (posit - force_center) / force_len
@@ -90,7 +90,7 @@ lr = 1e-3
 
 bootstrap_discount = .99
 
-replay_buffer = [None] * (2*1024)
+replay_buffer = [None] * (1024)
 
 
 
@@ -126,11 +126,12 @@ def loss(prev_action, action, input, randn, goal):
     # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input, randn)`.
     with torch.no_grad():
         next_frame = embed_delayed(cat(prev_action, input, randn))
-    next_frame_loss = 0 # (prev_action - next_frame).square().sum()
-    #   TODO: Re-run with actual loss, now that we have the `randn` input.
+    next_frame_loss = (prev_action - next_frame).square().sum()
+    # TODO: …Why does re-enabling the loss (any loss) collapse diversity?…
+    #   (…Even if we remove the repulsor in the center, this still happens, but less pronounced…)
     # Goal (embedding) steering: `prev_action = goal`.
     #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
-    goal_loss = 0 # (prev_action - goal).abs().sum() # TODO:
+    goal_loss = (prev_action - goal).abs().sum() # TODO:
     last_losses = next_frame_loss, goal_loss
     return next_frame_loss + goal_loss
 step = RNN( # (prev_action, input, goal) → action
