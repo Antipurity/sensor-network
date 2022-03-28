@@ -215,9 +215,7 @@ for iter in range(500000):
 
 # TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
 #   - TODO: Just doing what we want didn't work, so find out exactly what we *can* do:
-#     - TODO: Predict the next `state` from RNN state+action, not its embedding.
-#     - TODO: Make targets the torus positions, not RNN-states.
-#       - TODO: Make the goal-reaching loss not adjust this, to remove some of the interference with prediction that we couldn't remove before.
+#     - TODO: …Wait, we need new tricks now, old ones aren't cutting it anymore…
 #     - TODO: Possibly, input not just xy but its `x → 1-2*abs(x)` fractal filling.
 #   - TODO: Tinker with goals: new goal per-step, or only on BPTT resets.
 #   - *Learn* the loss to minimize:
