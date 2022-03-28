@@ -61,7 +61,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     }, 50) // 20 FPS
     </script>
     ```"""
-    accel = accel[..., :2]
+    accel = accel.detach()[..., :2]
     accel = accel * 1e-3 / 2
     accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().max(torch.tensor(1., device=device)))
     force_center = torch.ones(posit.shape[0], 2, device=device)/2
@@ -140,7 +140,7 @@ step = RNN( # (prev_action, input, goal) → action
 
 
 # The main loop, which steps the environment and trains `step`.
-action = torch.randn(batch_size, action_sz, device=device)
+action = torch.randn(batch_size, action_sz, requires_grad=True, device=device)
 goal = torch.randn(batch_size, action_sz, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
 last_losses = 0, 0
@@ -167,9 +167,9 @@ reset()
 for iter in range(50000):
     prev_action, prev_state = action, state
     state, hidden_state = env_step(state, hidden_state, prev_action)
-    action = step(prev_action, state, goal)
+    action = step(prev_action, state, goal) # TODO: …Are the extra args differentiable for some reason?
 
-    if random.randint(1, 32) == 1: reset()
+    if random.randint(1, 16) == 1: reset()
     embed_delayed.update()
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
