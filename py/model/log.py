@@ -69,7 +69,7 @@ def finish(final = True):
         for k in ks:
             if not callable(_past[k]): plt.plot(_past[k], label=k)
             else: _past[k](plt, k)
-        plt.legend()
+        if any(not callable(_past[k]) for k in ks): plt.legend()
     plt.pause(.001)
     if final: plt.show()
 

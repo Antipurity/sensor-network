@@ -78,7 +78,7 @@ class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
     def forward(self, x):
         y = self.fn(x)
-        return y * bootstrap_discount + x[..., :y.shape[-1]]
+        return y + x[..., :y.shape[-1]]
 def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
 def cat(*a, dim=-1): return torch.cat(a, dim)
 
@@ -127,9 +127,10 @@ def loss(prev_action, action, input, goal):
     with torch.no_grad():
         next_frame = embed_delayed(cat(prev_action, input))
     next_frame_loss = (prev_action - next_frame).square().sum()
+    #   TODO: …Wait, why does even just the next-frame loss cause destination-diversity to collapse entirely?…
     # Goal (embedding) steering: `prev_action = goal`.
     #   (`goal` should be `embed_delayed(some_prev_action, some_input)`.)
-    goal_loss = (prev_action - goal).abs().sum()
+    goal_loss = 0 # (prev_action - goal).abs().sum() # TODO:
     last_losses = next_frame_loss, goal_loss
     return next_frame_loss + goal_loss
 step = RNN( # (prev_action, input, goal) → action
