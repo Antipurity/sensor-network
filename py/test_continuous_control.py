@@ -94,7 +94,7 @@ replays_per_step = 8
 
 
 
-next = nn.Sequential( # (prev_action, input, goal) → action
+next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `randn` arg.
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
     SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
@@ -158,7 +158,7 @@ def pos_histogram(plt, label):
     x, y = [], []
     for ch in replay_buffer:
         if ch is not None:
-            prev_action, prev_state, action, state = ch
+            prev_action, prev_state, action, state, next_action, next_state = ch
             pos = to_np(state)
             for i in range(pos.shape[0]):
                 x.append(float(pos[i][0])), y.append(float(pos[i][1]))
@@ -171,34 +171,41 @@ def replay():
         prev_state = torch.cat([c[1] for c in choices], 0)
         action = torch.cat([c[2] for c in choices], 0)
         state = torch.cat([c[3] for c in choices], 0)
+        next_action = torch.cat([c[4] for c in choices], 0)
+        next_state = torch.cat([c[5] for c in choices], 0)
 
     goal = state[torch.randperm(state.shape[0], device=device)]
     randn = torch.randn(state.shape[0], action_sz, device=device)
 
     # Predict the next state.
-    action2 = next(cat(prev_action, state, goal))
     state2 = state_predictor(cat(prev_action, prev_state))
     state_pred_loss = (state2 - state).square().sum()
 
-    # Learn `future_advantage` by bootstrapping, comparing to the predicted `state2`.
+    # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
+    action2 = next(cat(prev_action, state, goal))
+    next_action2 = next(cat(action, next_state, goal))
     micro_adv = (state2 - goal).abs() + (state - goal).abs()
     prev_adv = future_advantage(cat(prev_action, goal, action, action2))
+    adv = future_advantage(cat(action, goal, next_action, next_action2))
+    adv_loss = (prev_adv - (micro_adv + adv * bootstrap_discount).detach()).square().sum()
+
     # TODO: Grad-maximize `future_advantage(embed_action, goal, action, action2)` by `action2` (computed by `next` from `prev_action`).
 
     # (…And, might want to learn the gradient of `prev_action` after giving gradient to `action`.)
-    #   (Especially since `state_predictor` now acts like an RNN.)
+    #   (Especially since `state_predictor` now takes RNN-state.)
 
     # Log them.
     log(0, False, pos = pos_histogram)
     log(1, False, state_pred_loss = to_np(state_pred_loss))
-    # log(2, False, goal_loss = to_np(goal_loss))
+    log(2, False, adv_loss = to_np(adv_loss))
     # log(3, False, state_predictor_loss = to_np(state_predictor_loss))
 
-    return state_pred_loss
+    return state_pred_loss + adv_loss
 
 
 
 reset()
+prev_data = None
 for iter in range(500000):
     prev_action, prev_state = action, state
     state, hidden_state = env_step(state, hidden_state, prev_action)
@@ -211,7 +218,9 @@ for iter in range(500000):
     if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
     if random.randint(1, 32) == 1: reset()
 
-    replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
+    if prev_data is not None:
+        replay_buffer[iter % len(replay_buffer)] = (*prev_data, prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
+    prev_data = (prev_action.detach(), prev_state.detach())
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
