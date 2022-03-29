@@ -110,10 +110,9 @@ state_predictor = nn.Sequential( # (prev_action, prev_input) → input
     ) for _ in range(1)],
     nn.Linear(action_sz, input_sz),
 ).to(device)
-future_advantage = nn.Sequential( # (prev_action, goal, action1, action2) → dist2 - dist1
-    # (Returns how much lower the sum-of-future-L1-distances-to-`goal` is for `action1` compared to `action2`; the more the better for `action1`.)
-    # (A lot of distances are very similar which makes optimization difficult, so predicting differences should be easier.)
-    SkipConnection(nn.Linear(action_sz + input_sz + action_sz + action_sz, action_sz)),
+future_dist = nn.Sequential( # (prev_action, goal, action) → dist
+    # (Returns the sum-of-future-L1-distances-to-`goal` for the considered `action`, the less the better.)
+    SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
@@ -130,12 +129,12 @@ action_grad = nn.Sequential( # (action, input, goal) → action_grad
 ).to(device)
 
 class WithInput(nn.Module):
-    def __init__(self, next, state_predictor, future_advantage, action_grad):
+    def __init__(self, next, state_predictor, future_dist, action_grad):
         super().__init__()
-        self.next, self.state_predictor, self.future_advantage, self.action_grad = next, state_predictor, future_advantage, action_grad
+        self.next, self.state_predictor, self.future_dist, self.action_grad = next, state_predictor, future_dist, action_grad
     def forward(self, prev_action, input, randn, goal):
         return self.next(cat(prev_action, input, goal))
-step = WithInput(next, state_predictor, future_advantage, action_grad)
+step = WithInput(next, state_predictor, future_dist, action_grad)
 optim = torch.optim.Adam(step.parameters(), lr=lr)
 
 
@@ -179,52 +178,47 @@ def replay():
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
         # Predict the next state.
+        #   TODO: …Remove this, maybe, since we can't manage to learn it anyway?
         state2 = state_predictor(cat(prev_action, prev_state))
         next_state2 = state_predictor(cat(action, state))
         state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
-        #   TODO: …Wait, why is state prediction *still* not working?… It's very important for advantage-learning!
-        #     …Should we give up on advantage-learning, and just predict the distance?… Just because of the state-prediction…
-        #     (Might be because we're unable to learn the hidden state, meaning that we should forego prediction if we can…)
 
-        # TODO: Remove advantage-learning. Add distance-learning.
+        # Learn `future_dist` by bootstrapping.
+        # action2 = next(cat(prev_action, state, goal))
+        # next_action2 = next(cat(action, next_state, goal))
+        prev_dist = future_dist(cat(prev_action, goal, action))
+        micro_dist = (state - goal).abs() + (next_state - goal).abs() * bootstrap_discount
+        for p in future_dist.parameters(): p.requires_grad_(False)
+        dist = future_dist(cat(action, goal, next_action))
+        for p in future_dist.parameters(): p.requires_grad_(True)
+        dist_loss = (prev_dist - (micro_dist + dist * (bootstrap_discount*bootstrap_discount)).detach()).square().sum()
 
-        # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
-        action2 = next(cat(prev_action, state, goal))
-        next_action2 = next(cat(action, next_state, goal))
-        prev_adv = future_advantage(cat(prev_action, goal, action, action2))
-        micro_adv = (state2 - goal).abs() + (state - goal).abs()
-        micro_adv += ((next_state2 - goal).abs() + (next_state - goal).abs()) * bootstrap_discount
-        for p in future_advantage.parameters(): p.requires_grad_(False)
-        adv = future_advantage(cat(action, goal, next_action, next_action2))
-        for p in future_advantage.parameters(): p.requires_grad_(True)
-        adv_loss = (prev_adv - (micro_adv + adv * bootstrap_discount*bootstrap_discount).detach()).square().sum()
+        # Grad-minimize the replay-sample's distance.
+        dist_min_loss = dist.sum()
 
-        # Grad-minimize the replay-sample's advantage, making our own policy better.
-        goal_loss = adv.sum()
-        # TODO: …Maybe try self-imitation learning too? (Right now, it seems pointless, because state-prediction doesn't work and so neither does advantage-learning.)
+        # TODO: Why isn't even distance-minimization working for us?
+        #   TODO: …Maybe try self-imitation learning too?
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
         # with torch.no_grad():
         #     daction2 = action_grad(cat(action2, state, goal))
         #     dnext_action2 = action_grad(cat(next_action2, next_state, goal))
         synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum()
-        (state_pred_loss + adv_loss + goal_loss + synth_grad_loss).backward()
+        (state_pred_loss + dist_loss + dist_min_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
             dprev_action_target = prev_action.grad * bootstrap_discount
         synth_grad_loss = (dprev_action - dprev_action_target).square().sum()
         synth_grad_loss.backward()
-        # TODO: …While we're kinda succeeding at bringing `goal_loss` down, we're clearly not learning good exploration behaviors, right?… WHY
-        #   …Maybe because we can't even learn the next state, which advantage-learning heavily relies on…
         prev_action.requires_grad_(False)
 
         # Log them.
         N = state.shape[0]
         log(0, False, pos = pos_histogram)
         log(1, False, state_pred_loss = to_np(state_pred_loss / N))
-        log(2, False, adv_loss = to_np(adv_loss / N))
-        log(3, False, goal_loss = to_np(goal_loss / N))
+        log(2, False, dist_loss = to_np(dist_loss / N))
+        log(3, False, dist_min_loss = to_np(dist_min_loss / N))
         log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
         log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
 
@@ -266,13 +260,13 @@ for iter in range(500000):
 #     - TODO: RL: learn `future_dist` which represents the (discounted) future sum of all L1 distances between RNN-states (actions) and goals. And minimize that by actions.
 #       - (Could be good for us, actually, since our BPTT length is probably far too small to allow most goals to be achieved.)
 #       - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
-#       - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its `future_advantage` (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action.
+#       - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action.
 #     - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL?
 #     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.)
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
-#   - TODO: Instead of simple next-frame prediction, embed inputs once again.
+#   - TODO: Instead of simple next-frame prediction, embed inputs once again. (If goals are also in embedded-space, then their unpredictability should also get washed away.)
 
 
 
