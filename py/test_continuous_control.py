@@ -208,7 +208,7 @@ def replay():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
             #   TODO: Limit that norm.
             dprev_action_target = prev_action.grad * bootstrap_discount
-        (dprev_action - dprev_action_target).sum().backward() # TODO: OH NO IT'S ONLY INCREASING, TURN IT OFF TURN IT OFF — …or maybe it's only increasing in magnitude because the actions keep increasing in magnitude… No, can't be: they have layer-norm at the output. Can only be because our discounting is insufficient to counteract growth-per-step, so we'll never reach an asymptote.
+        (dprev_action - dprev_action_target).square().sum().backward() # TODO: OH NO IT'S ONLY INCREASING, TURN IT OFF TURN IT OFF — …or maybe it's only increasing in magnitude because the actions keep increasing in magnitude… No, can't be: they have layer-norm at the output. Can only be because our discounting is insufficient to counteract growth-per-step, so we'll never reach an asymptote.
         # TODO: …While we're kinda succeeding at bringing `goal_loss` down, we're clearly not learning good exploration behaviors, right?… WHY
         prev_action.requires_grad_(False)
 
