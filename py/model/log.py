@@ -24,7 +24,12 @@ _subplots = {} # For plots.
 _widths = {} # For printing.
 _allow_printing_at = 0. # matplotlib is slow, so don't take up more than 5% CPU time.
 def _new_list():
-    return [None] * len(list(_past.values())[0]) if _past else []
+    example = None
+    for values in _past.values():
+        if isinstance(values, list):
+            example = values
+            break
+    return [None] * len(example) if example is not None else []
 def log(subplot=0, do_print=True, **metrics):
     """Prints numeric values of keyword arguments, both in console (if `do_print` is unspecified or `True`) and as plots.
 
