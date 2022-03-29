@@ -166,7 +166,7 @@ def replay():
         next_state = torch.cat([c[5] for c in choices], 0)
         prev_action.requires_grad_(True)
 
-        goal = state[torch.randperm(state.shape[0], device=device)] # TODO: …Try a self-goal again, like in `test_board_wanderings`? There's a chance that it *might* help, after all?
+        goal = state[torch.randperm(state.shape[0], device=device)]
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
         # Learn `future_dist` by bootstrapping.
