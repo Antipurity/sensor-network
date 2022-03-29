@@ -183,7 +183,7 @@ def loss(prev_action, action, input, randn, goal):
     # Predict the next `input`.
     state_predictor_loss = (pred(prev_action) - input.detach()).square().sum()
     # Log them.
-    log(0, False, pos = pos_histogram) # TODO: …Why does this cause an error in logging?
+    log(0, False, pos = pos_histogram)
     log(1, False, next_frame_loss = to_np(next_frame_loss))
     log(2, False, goal_loss = to_np(goal_loss))
     log(3, False, state_predictor_loss = to_np(state_predictor_loss))
@@ -198,7 +198,7 @@ for iter in range(500000):
     total_loss += loss(prev_action, action, state, randn, goal)
     if iter == 1000: clear()
 
-    reset_goal() # TODO:
+    # reset_goal() # TODO:
 
     if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
     if random.randint(1, 32) == 1: reset()

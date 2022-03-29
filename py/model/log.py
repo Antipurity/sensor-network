@@ -86,7 +86,7 @@ def clear(max_past_samples = 0):
             else: _past[k] = _past[k][-max_past_samples:]
     else:
         for k in _past:
-            if callable(): _past[k] = []
+            if callable(_past[k]): _past[k] = []
             else: _past[k].clear()
 
 
