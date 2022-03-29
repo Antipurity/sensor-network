@@ -149,7 +149,7 @@ def reset_goal():
     with torch.no_grad():
         ch = random.choice(replay_buffer)
         if ch is not None:
-            prev_action, prev_state, cur_action, cur_state = ch
+            prev_action, prev_state, action, state, next_action, next_state = ch
             randn = torch.randn(batch_size, action_sz, device=device)
             # goal = cur_state # TODO:
             goal = torch.rand(batch_size, input_sz, device=device)
