@@ -166,7 +166,7 @@ def replay():
         next_state = torch.cat([c[5] for c in choices], 0)
         prev_action.requires_grad_(True)
 
-        goal = state[torch.randperm(state.shape[0], device=device)]
+        goal = state[torch.randperm(state.shape[0], device=device)] # TODO: …Try a self-goal again, like in `test_board_wanderings`? There's a chance that it *might* help, after all?
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
         # Learn `future_dist` by bootstrapping.
@@ -182,14 +182,13 @@ def replay():
         # Grad-minimize the replay-sample's distance.
         dist_min_loss = dist.sum()
 
-        # TODO: Why isn't even distance-minimization working for us?
-        #   TODO: …Maybe try self-imitation learning too?
+        # TODO: Self-imitation learning, our one hope against more involved goal-reaching and past-coalescence methods.
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
         # with torch.no_grad():
         #     daction2 = action_grad(cat(action2, state, goal))
         #     dnext_action2 = action_grad(cat(next_action2, next_state, goal))
-        synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum()
+        synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum() # TODO:
         (dist_loss + dist_min_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
@@ -231,27 +230,32 @@ for iter in range(500000):
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
-    #   TODO: At least find out why it's broken.
+    #   TODO: Find out why even distance-minimization remains broken. (Worst-case, it's because our actions are too easy to undo and too indistinct from each other, so future-dist-prediction can't establish a coherent preference for anything.)
 
 
 
 
 # TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
 #   - TODO: Just doing what we want didn't work, so find out exactly what we *can* do:
-#     - TODO: Don't just randomly re-decide goals, instead (try to?) re-decide goals whenever they're either reached or is unreachable (the accumulated sum-of-L1-differences gets much larger than predicted).
+#     - TODO: Possibly, remove action-stochasticity, and rely only on optimization being able to find better challenges?…
 #     - TODO: Possibly, input not just xy but its `x → 1-2*abs(x)` fractal filling.
-#   - TODO: Tinker with goals: new goal per-step, or only on BPTT resets.
-#   - *Learn* the loss to minimize:
-#     - TODO: RL: learn `future_dist` which represents the (discounted) future sum of all L1 distances between RNN-states (actions) and goals. And minimize that by actions.
-#       - (Could be good for us, actually, since our BPTT length is probably far too small to allow most goals to be achieved.)
-#       - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
-#       - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action.
-#     - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL?
-#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.)
+#   - Tinker with goals:
+#     - TODO: New goal every step.
+#     - TODO: New goal only on BPTT resets.
+#     - TODO: Possibly, don't just randomly re-decide goals, instead (try to?) re-decide goals whenever they're either reached (L1-diff is below threshold) or are unreachable (the accumulated sum-of-L1-diffs gets much larger than predicted). (Seems hacky. Ideally, would be able to *learn* both the ideal moment, and the ideal new goal.)
+#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.) (Goals generate challenges, actions solve them: curriculum learning, ideally…)
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
+#   - Visualization:
+#     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
+
+# - After we've established a more solid base of operations, retry what we did in the past:
+#   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
+#   - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL.
 #   - TODO: Instead of simple next-frame prediction, embed inputs once again. (If goals are also in embedded-space, then their unpredictability should also get washed away.)
+#     - …Actually, shouldn't embedding-prediction be able to wash out different pasts of the same future too?… (Not sure if we need fully bidirectional RNNs for this, or just a reverse `next`, or even just an impl trick; but at least we have a *hint* of how to extend the goal-space past the input-space.)
+#     - (Might want to *learn* the delayed target and not just momentum-update it, so that predictions on branches that we haven't seen lately remain somewhat untouched and not magically-correct.)
 
 
 
@@ -260,6 +264,10 @@ for iter in range(500000):
 # …With embedding-prediction, I'm pretty sure it's the same as prediction, but if some parts are too hard to predict for too long, the model just gives up on them. Interference is also a lot of the problem in learning the shortest path (very many paths are essentially the same); is there any way to combine the two?…
 
 # …We only try to improve the reachability of one goal at a time, which is synonymous with "non-scalable". Is there no way to construct representations of exponentially-many goals, and update many goals at once… Can embedding-prediction make similar goals the same and distinct goals different?…
+
+# …In RL where we min over the expectation of distances, a stochastic policy may actually cause goal-chasing to suffer because we're constantly undoing our own progress… An ideal learning method would straighten out all those redundant pasts as they arise; but how can we arrive at such a method?…
+
+# TODO: …Possibly, set up a real experiment that checks whether embedding-prediction *actually* blots out the unpredictable parts, by predicting a data transformation that has both a predictable (+1 to values) and a completely-random components (-1 plus noise), plotting the loss, and if true, direct-prediction would be stuck at a high loss while embedding-prediction would go to 0?… (Because, I might be starting to see a way to extend input-space goals to whole-past-space goals, but it relies on unpredictability *actually* being blotted out.)
 
 
 
