@@ -113,7 +113,7 @@ state_predictor = nn.Sequential( # (prev_action, prev_input) → input
 future_advantage = nn.Sequential( # (prev_action, goal, action1, action2) → dist2 - dist1
     # (Returns how much lower the sum-of-future-L1-distances-to-`goal` is for `action1` compared to `action2`; the more the better for `action1`.)
     # (A lot of distances are very similar which makes optimization difficult, so predicting differences should be easier.)
-    SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
+    SkipConnection(nn.Linear(action_sz + input_sz + action_sz + action_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
