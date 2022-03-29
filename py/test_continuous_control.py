@@ -90,6 +90,7 @@ lr = 1e-3
 bootstrap_discount = .99
 
 replay_buffer = [None] * (1024)
+replays_per_step = 8
 
 
 
@@ -101,7 +102,7 @@ embed = nn.Sequential( # (prev_action, input, randn) → embed_action
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
-    ) for _ in range(3)],
+    ) for _ in range(1)],
     nn.LayerNorm(action_sz),
 ).to(device)
 embed_delayed = MomentumCopy(embed, .999)
@@ -113,16 +114,25 @@ next = nn.Sequential( # (embed_action, goal) → action
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
-    ) for _ in range(3)],
+    ) for _ in range(1)],
 ).to(device)
 state_predictor = nn.Sequential( # prev_action → state
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
-    ) for _ in range(3)],
+    ) for _ in range(1)],
     nn.Linear(action_sz, input_sz),
 ).to(device)
-# TODO: Have `future_dist(embed_action, action, goal) → d`, and learn by sampling from the replay buffer: learn `future_dist` & make `next` minimize that. (Give in to RL, finally.)
+future_advantage = nn.Sequential( # (embed_action, goal, action1, action2) → dist2 - dist1
+    # (Returns how much lower the sum-of-future-L1-distances-to-`goal` is for `action1` compared to `action2`; the more the better for `action1`.)
+    # (A lot of distances are very similar which makes optimization difficult, so predicting differences should be easier.)
+    SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
+    *[SkipConnection(
+        nn.ReLU(), nn.LayerNorm(action_sz),
+        nn.Linear(action_sz, action_sz),
+    ) for _ in range(1)],
+    nn.Linear(action_sz, input_sz),
+).to(device)
 
 class WithInput(nn.Module):
     def __init__(self, embed, next, state_predictor): super().__init__();  self.embed, self.next, self.state_predictor = embed, next, state_predictor
@@ -186,6 +196,42 @@ def loss(prev_action, action, input, randn, goal):
     log(2, False, goal_loss = to_np(goal_loss))
     log(3, False, state_predictor_loss = to_np(state_predictor_loss))
     return next_frame_loss + goal_loss + state_predictor_loss
+def replay():
+    # Replay from the buffer. (Needs Python 3.6+ for convenience.)
+    choices = [c for c in random.choices(replay_buffer, k=replays_per_step) if c is not None]
+    if len(choices):
+        prev_state = torch.cat([c[0] for c in choices], 0)
+        prev_action = torch.cat([c[1] for c in choices], 0)
+        state = torch.cat([c[2] for c in choices], 0)
+        action = torch.cat([c[3] for c in choices], 0)
+
+    goal = state[torch.randperm(state.shape[0], device=device)]
+    rand = torch.randn(state.shape[0], action_sz, device=device)
+
+    # TODO: …Maybe learn the state-predictor given prev_state and prev_action?
+
+    micro_dist = (state - goal).abs()
+    # dist2-dist1 = adv(a1, a2)
+    # dist1-dist2 = adv(a2, a1)
+    # adv(a1, a2) = sum(gamma**i * micro(a2, i)) - sum(gamma**i * micro(a1, i)) = dist2 - dist1
+    # dist1 = dist2 + adv(a2, a1) = dist2 - adv(a1, a2)
+    # dist2 = dist1 + adv(a1, a2) = dist1 - adv(a2, a1)
+    # adv(a1, a2) = dist2 - dist2 + adv(a1, a2) --- FUCK: can't extract a learning equation…
+    # …What if we had a third action to compare both with?
+    # dist1 = dist0 + adv(a0, a1)
+    # dist2 = dist0 + adv(a0, a2)
+    # adv(a1, a2) = dist2 - dist1 = adv(a0, a2) - adv(a0, a1) --- FUCK: this is cyclical too, so we won't be able to learn `a0`…
+    # TODO: Learn `future_advantage` by bootstrapping. TODO: …But to know the micro-dist, we need to know the next-state for the predicted action, right?…
+    #   FUCK
+    #   …Or maybe we can just not adjust the other branch's prediction, using it directly?…
+    #   …Even so: what's the bootstrapping formula, exactly? …Is it even possible to infer it…
+    #   …Do we seriously need the state-predictor just to learn the advantage…
+    # TODO: Grad-maximize `future_advantage(embed_action, goal, action, action2)` by `action2` (computed by `next` from `prev_action`).
+
+    # (…And, might want to learn the gradient of `prev_action`.)
+
+
+
 reset()
 for iter in range(500000):
     prev_action, prev_state = action, state
@@ -196,14 +242,17 @@ for iter in range(500000):
     total_loss += loss(prev_action, action, state, randn, goal)
     if iter == 1000: clear()
 
+    # TODO: replay()
+
     # reset_goal() # TODO:
 
     if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
-    if random.randint(1, 32) == 1: reset()
+    if random.randint(1, 256) == 1: reset()
     embed_delayed.update()
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
     #   TODO: Should also maintain the `(prev_prev_action, prev_prev_state)` tuple, so that the replay buffer can also contain the next action.
+    #     …Or we can just learn the gradient?
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
@@ -220,7 +269,7 @@ for iter in range(500000):
 #     - TODO: RL: learn `future_dist` which represents the (discounted) future sum of all L1 distances between RNN-states (actions) and goals. And minimize that by actions.
 #       - (Could be good for us, actually, since our BPTT length is probably far too small to allow most goals to be achieved.)
 #       - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
-#       - TODO: Possibly, for more accuracy (it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action.
+#       - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its `future_advantage` (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action.
 #     - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL?
 #     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something.
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
@@ -232,6 +281,8 @@ for iter in range(500000):
 # …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement — but not exactly to full-RNN-state invariance/prediction…
 
 # …With embedding-prediction, I'm pretty sure it's the same as prediction, but if some parts are too hard to predict for too long, the model just gives up on them. Interference is also a lot of the problem in learning the shortest path (very many paths are essentially the same); is there any way to combine the two?…
+
+# …We only try to improve the reachability of one goal at a time, which is synonymous with "non-scalable". Is there no way to construct representations of exponentially-many goals, and update many goals at once… Can embedding-prediction make similar goals the same and distinct goals different?…
 
 
 
