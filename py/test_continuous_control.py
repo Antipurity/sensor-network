@@ -179,28 +179,35 @@ def replay():
 
     # Predict the next state.
     state2 = state_predictor(cat(prev_action, prev_state))
-    state_pred_loss = (state2 - state).square().sum()
+    next_state2 = state_predictor(cat(prev_action, prev_state))
+    state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
 
     # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
     action2 = next(cat(prev_action, state, goal))
     next_action2 = next(cat(action, next_state, goal))
-    micro_adv = (state2 - goal).abs() + (state - goal).abs()
     prev_adv = future_advantage(cat(prev_action, goal, action, action2))
+    micro_adv = (state2 - goal).abs() + (state - goal).abs()
+    for p in future_advantage.parameters(): p.requires_grad_(False)
     adv = future_advantage(cat(action, goal, next_action, next_action2))
+    for p in future_advantage.parameters(): p.requires_grad_(True)
     adv_loss = (prev_adv - (micro_adv + adv * bootstrap_discount).detach()).square().sum()
 
-    # TODO: Grad-maximize `future_advantage(embed_action, goal, action, action2)` by `action2` (computed by `next` from `prev_action`).
+    # Grad-minimize the replay-sample's advantage, making our own policy better.
+    goal_loss = adv.sum()
 
     # (…And, might want to learn the gradient of `prev_action` after giving gradient to `action`.)
     #   (Especially since `state_predictor` now takes RNN-state.)
+    #   TODO: …Yes: *do* learn & use the synthetic gradient: multiply `action` by its detached & predicted gradient, and sum that into 1 number to get the loss.
+    #     (For prediction, first try just a multiplicative discount, and if that fails, limit the gradient's norm.)
+    #     (I don't think that it's even possible to do joint-embedding with the gradient and have it still be at all useful.)
 
     # Log them.
     log(0, False, pos = pos_histogram)
     log(1, False, state_pred_loss = to_np(state_pred_loss))
     log(2, False, adv_loss = to_np(adv_loss))
-    # log(3, False, state_predictor_loss = to_np(state_predictor_loss))
+    log(3, False, goal_loss = to_np(goal_loss))
 
-    return state_pred_loss + adv_loss
+    return state_pred_loss + adv_loss + goal_loss
 
 
 
