@@ -151,7 +151,7 @@ def reset_goal():
         if ch is not None:
             prev_action, prev_state, action, state, next_action, next_state = ch
             randn = torch.randn(batch_size, action_sz, device=device)
-            # goal = cur_state # TODO:
+            # goal = state # TODO:
             goal = torch.rand(batch_size, input_sz, device=device)
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
@@ -193,14 +193,15 @@ def replay():
         next_action2 = next(cat(action, next_state, goal))
         prev_adv = future_advantage(cat(prev_action, goal, action, action2))
         micro_adv = (state2 - goal).abs() + (state - goal).abs()
+        micro_adv += ((next_state2 - goal).abs() + (next_state - goal).abs()) * bootstrap_discount
         for p in future_advantage.parameters(): p.requires_grad_(False)
         adv = future_advantage(cat(action, goal, next_action, next_action2))
         for p in future_advantage.parameters(): p.requires_grad_(True)
-        adv_loss = (prev_adv - (micro_adv + adv * bootstrap_discount).detach()).square().sum()
+        adv_loss = (prev_adv - (micro_adv + adv * bootstrap_discount*bootstrap_discount).detach()).square().sum()
 
         # Grad-minimize the replay-sample's advantage, making our own policy better.
         goal_loss = adv.sum()
-        # TODO: …Maybe try self-imitation learning too?… (Right now, it seems pointless, because state-prediction doesn't work and so neither does advantage-learning.)
+        # TODO: …Maybe try self-imitation learning too? (Right now, it seems pointless, because state-prediction doesn't work and so neither does advantage-learning.)
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
         # with torch.no_grad():
@@ -222,10 +223,10 @@ def replay():
         N = state.shape[0]
         log(0, False, pos = pos_histogram)
         log(1, False, state_pred_loss = to_np(state_pred_loss / N))
-        # log(2, False, adv_loss = to_np(adv_loss / N))
-        # log(3, False, goal_loss = to_np(goal_loss / N))
-        # log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
-        # log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
+        log(2, False, adv_loss = to_np(adv_loss / N))
+        log(3, False, goal_loss = to_np(goal_loss / N))
+        log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
+        log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
 
         optim.step();  optim.zero_grad(True)
 
