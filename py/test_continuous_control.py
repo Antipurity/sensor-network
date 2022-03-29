@@ -102,14 +102,6 @@ next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `
     ) for _ in range(1)],
     nn.LayerNorm(action_sz),
 ).to(device)
-state_predictor = nn.Sequential( # (prev_action, prev_input) → input
-    SkipConnection(nn.Linear(action_sz + input_sz, action_sz)),
-    *[SkipConnection(
-        nn.ReLU(), nn.LayerNorm(action_sz),
-        nn.Linear(action_sz, action_sz),
-    ) for _ in range(1)],
-    nn.Linear(action_sz, input_sz),
-).to(device)
 future_dist = nn.Sequential( # (prev_action, goal, action) → dist
     # (Returns the sum-of-future-L1-distances-to-`goal` for the considered `action`, the less the better.)
     SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
@@ -129,12 +121,12 @@ action_grad = nn.Sequential( # (action, input, goal) → action_grad
 ).to(device)
 
 class WithInput(nn.Module):
-    def __init__(self, next, state_predictor, future_dist, action_grad):
+    def __init__(self, next, future_dist, action_grad):
         super().__init__()
-        self.next, self.state_predictor, self.future_dist, self.action_grad = next, state_predictor, future_dist, action_grad
+        self.next, self.future_dist, self.action_grad = next, future_dist, action_grad
     def forward(self, prev_action, input, randn, goal):
         return self.next(cat(prev_action, input, goal))
-step = WithInput(next, state_predictor, future_dist, action_grad)
+step = WithInput(next, future_dist, action_grad)
 optim = torch.optim.Adam(step.parameters(), lr=lr)
 
 
@@ -177,12 +169,6 @@ def replay():
         goal = state[torch.randperm(state.shape[0], device=device)]
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
-        # Predict the next state.
-        #   TODO: …Remove this, maybe, since we can't manage to learn it anyway?
-        state2 = state_predictor(cat(prev_action, prev_state))
-        next_state2 = state_predictor(cat(action, state))
-        state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
-
         # Learn `future_dist` by bootstrapping.
         # action2 = next(cat(prev_action, state, goal))
         # next_action2 = next(cat(action, next_state, goal))
@@ -204,7 +190,7 @@ def replay():
         #     daction2 = action_grad(cat(action2, state, goal))
         #     dnext_action2 = action_grad(cat(next_action2, next_state, goal))
         synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum()
-        (state_pred_loss + dist_loss + dist_min_loss + synth_grad_loss).backward()
+        (dist_loss + dist_min_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
@@ -216,11 +202,10 @@ def replay():
         # Log them.
         N = state.shape[0]
         log(0, False, pos = pos_histogram)
-        log(1, False, state_pred_loss = to_np(state_pred_loss / N))
-        log(2, False, dist_loss = to_np(dist_loss / N))
-        log(3, False, dist_min_loss = to_np(dist_min_loss / N))
-        log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
-        log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
+        log(1, False, dist_loss = to_np(dist_loss / N))
+        log(2, False, dist_min_loss = to_np(dist_min_loss / N))
+        log(3, False, synth_grad_loss = to_np(synth_grad_loss / N))
+        log(4, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
 
         optim.step();  optim.zero_grad(True)
 
