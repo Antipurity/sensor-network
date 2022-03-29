@@ -102,7 +102,7 @@ next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `
     ) for _ in range(1)],
     nn.LayerNorm(action_sz),
 ).to(device)
-state_predictor = nn.Sequential( # (prev_action, prev_state) → input
+state_predictor = nn.Sequential( # (prev_action, prev_input) → input
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
@@ -119,7 +119,7 @@ future_advantage = nn.Sequential( # (prev_action, goal, action1, action2) → di
     ) for _ in range(1)],
     nn.Linear(action_sz, input_sz),
 ).to(device)
-action_grad = nn.Sequential( # (action, state, goal) → action_grad
+action_grad = nn.Sequential( # (action, input, goal) → action_grad
     # (Learning from the replay buffer cuts off gradient, so with this synthetic gradient, we could treat actions as RNN states.)
     SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
@@ -172,50 +172,50 @@ def replay():
         state = torch.cat([c[3] for c in choices], 0)
         next_action = torch.cat([c[4] for c in choices], 0)
         next_state = torch.cat([c[5] for c in choices], 0)
-    prev_action.requires_grad_(True)
+        prev_action.requires_grad_(True)
 
-    goal = state[torch.randperm(state.shape[0], device=device)]
-    randn = torch.randn(state.shape[0], action_sz, device=device)
+        goal = state[torch.randperm(state.shape[0], device=device)]
+        randn = torch.randn(state.shape[0], action_sz, device=device)
 
-    # Predict the next state.
-    state2 = state_predictor(cat(prev_action, prev_state))
-    next_state2 = state_predictor(cat(prev_action, prev_state))
-    state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
+        # Predict the next state.
+        state2 = state_predictor(cat(prev_action, prev_state))
+        next_state2 = state_predictor(cat(prev_action, prev_state))
+        state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
 
-    # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
-    action2 = next(cat(prev_action, state, goal))
-    next_action2 = next(cat(action, next_state, goal))
-    prev_adv = future_advantage(cat(prev_action, goal, action, action2))
-    micro_adv = (state2 - goal).abs() + (state - goal).abs()
-    for p in future_advantage.parameters(): p.requires_grad_(False)
-    adv = future_advantage(cat(action, goal, next_action, next_action2))
-    for p in future_advantage.parameters(): p.requires_grad_(True)
-    adv_loss = (prev_adv - (micro_adv + adv * bootstrap_discount).detach()).square().sum()
+        # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
+        action2 = next(cat(prev_action, state, goal))
+        next_action2 = next(cat(action, next_state, goal))
+        prev_adv = future_advantage(cat(prev_action, goal, action, action2))
+        micro_adv = (state2 - goal).abs() + (state - goal).abs()
+        for p in future_advantage.parameters(): p.requires_grad_(False)
+        adv = future_advantage(cat(action, goal, next_action, next_action2))
+        for p in future_advantage.parameters(): p.requires_grad_(True)
+        adv_loss = (prev_adv - (micro_adv + adv * bootstrap_discount).detach()).square().sum()
 
-    # Grad-minimize the replay-sample's advantage, making our own policy better.
-    goal_loss = adv.sum()
+        # Grad-minimize the replay-sample's advantage, making our own policy better.
+        goal_loss = adv.sum()
 
-    # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
-    with torch.no_grad():
-        daction = action_grad(cat(action, state, goal))
-        dnext_action = action_grad(cat(next_action, next_state, goal))
-    synth_grad_loss = (action * daction).sum() + (next_action * dnext_action).sum()
-    (state_pred_loss + adv_loss + goal_loss + synth_grad_loss).backward()
-    dprev_action = action_grad(cat(prev_action, prev_state, goal))
-    with torch.no_grad():
-        # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
-        dprev_action_target = prev_action.grad * bootstrap_discount
-    (dprev_action - dprev_action_target).sum().backward()
-    prev_action.requires_grad_(False)
+        # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
+        with torch.no_grad():
+            daction = action_grad(cat(action, state, goal))
+            dnext_action = action_grad(cat(next_action, next_state, goal))
+        synth_grad_loss = (action * daction).sum() + (next_action * dnext_action).sum()
+        (state_pred_loss + adv_loss + goal_loss + synth_grad_loss).backward()
+        dprev_action = action_grad(cat(prev_action, prev_state, goal))
+        with torch.no_grad():
+            # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
+            dprev_action_target = prev_action.grad * bootstrap_discount
+        (dprev_action - dprev_action_target).sum().backward()
+        prev_action.requires_grad_(False)
 
-    # Log them.
-    log(0, False, pos = pos_histogram)
-    log(1, False, state_pred_loss = to_np(state_pred_loss))
-    log(2, False, adv_loss = to_np(adv_loss))
-    log(3, False, goal_loss = to_np(goal_loss))
-    log(4, False, synth_grad_loss = to_np(synth_grad_loss))
+        # Log them.
+        log(0, False, pos = pos_histogram)
+        log(1, False, state_pred_loss = to_np(state_pred_loss))
+        log(2, False, adv_loss = to_np(adv_loss))
+        log(3, False, goal_loss = to_np(goal_loss))
+        log(4, False, synth_grad_loss = to_np(synth_grad_loss))
 
-    optim.step();  optim.zero_grad(True)
+        optim.step();  optim.zero_grad(True)
 
 
 
