@@ -94,7 +94,7 @@ replay_buffer = [None] * (1024)
 
 
 embed = nn.Sequential( # (prev_action, input, randn) → embed_action
-    #   TODO: …Maybe, `embed` shouldn't take `prev_action` but only `input`, and `next` should take `prev_action`? (This would make the prediction task much saner, at least.)
+    #   TODO: …Maybe, `embed` shouldn't take `prev_action` but only `input`, and `next` should take `prev_action`? (This would make the prediction task much saner, at least.) (Though, this is only relevant if we stop next-frame-prediction and start joint-embedding again.)
     # (Incorporate input into the RNN.)
     # (We 'predict' via joint `embed`ding of both prediction and target, like BYOL, though with not just the previous frame used but with the entire history.)
     SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
@@ -122,6 +122,7 @@ state_predictor = nn.Sequential( # prev_action → state
     ) for _ in range(3)],
     nn.Linear(action_sz, input_sz),
 ).to(device)
+# TODO: Have `future_dist(embed_action, action, goal) → d`, and learn by sampling from the replay buffer: learn `future_dist` & make `next` minimize that. (Give in to RL, finally.)
 
 class WithInput(nn.Module):
     def __init__(self, embed, next, state_predictor): super().__init__();  self.embed, self.next, self.state_predictor = embed, next, state_predictor
@@ -145,7 +146,6 @@ def reset_goal():
         if ch is not None:
             prev_action, prev_state, cur_action, cur_state = ch
             randn = torch.randn(batch_size, action_sz, device=device)
-            # goal = embed_delayed(cat(prev_action, cur_state, randn)) # TODO:
             # goal = cur_state # TODO:
             goal = torch.rand(batch_size, input_sz, device=device)
 def reset():
@@ -171,8 +171,6 @@ def loss(prev_action, action, input, randn, goal):
     with torch.no_grad():
         next_frame = embed_delayed(cat(prev_action, input, randn))
     next_frame_loss = 0 # (prev_action - next_frame).square().sum() # TODO:
-    # TODO: …Why does re-enabling the loss (any loss) collapse diversity?…
-    #   (…Even if we remove the repulsor in the center, this still happens, but less pronounced…)
     # Goal (embedding) steering: `prev_action = goal`.
     #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
     pred = step.state_predictor
