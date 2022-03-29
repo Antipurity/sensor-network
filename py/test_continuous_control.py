@@ -16,7 +16,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 
-from model.momentum_copy import MomentumCopy
 from model.log import log, clear
 
 import random
@@ -94,13 +93,14 @@ replays_per_step = 8
 
 
 
-next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `randn` arg.
+next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `randn` arg (since we don't have `embed` anymore).
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
     SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
     ) for _ in range(1)],
+    nn.LayerNorm(action_sz),
 ).to(device)
 state_predictor = nn.Sequential( # (prev_action, prev_state) → input
     *[SkipConnection(
@@ -119,14 +119,22 @@ future_advantage = nn.Sequential( # (prev_action, goal, action1, action2) → di
     ) for _ in range(1)],
     nn.Linear(action_sz, input_sz),
 ).to(device)
+action_grad = nn.Sequential( # (action, state, goal) → action_grad
+    # (Learning from the replay buffer cuts off gradient, so with this synthetic gradient, we could treat actions as RNN states.)
+    SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
+    *[SkipConnection(
+        nn.ReLU(), nn.LayerNorm(action_sz),
+        nn.Linear(action_sz, action_sz),
+    ) for _ in range(1)],
+).to(device)
 
 class WithInput(nn.Module):
-    def __init__(self, next, state_predictor, future_advantage):
+    def __init__(self, next, state_predictor, future_advantage, action_grad):
         super().__init__()
-        self.next, self.state_predictor, self.future_advantage = next, state_predictor, future_advantage
+        self.next, self.state_predictor, self.future_advantage, self.action_grad = next, state_predictor, future_advantage, action_grad
     def forward(self, prev_action, input, randn, goal):
         return self.next(cat(prev_action, input, goal))
-step = WithInput(next, state_predictor, future_advantage)
+step = WithInput(next, state_predictor, future_advantage, action_grad)
 optim = torch.optim.Adam(step.parameters(), lr=lr)
 
 
@@ -173,6 +181,7 @@ def replay():
         state = torch.cat([c[3] for c in choices], 0)
         next_action = torch.cat([c[4] for c in choices], 0)
         next_state = torch.cat([c[5] for c in choices], 0)
+    prev_action.requires_grad_(True)
 
     goal = state[torch.randperm(state.shape[0], device=device)]
     randn = torch.randn(state.shape[0], action_sz, device=device)
@@ -195,11 +204,13 @@ def replay():
     # Grad-minimize the replay-sample's advantage, making our own policy better.
     goal_loss = adv.sum()
 
-    # (…And, might want to learn the gradient of `prev_action` after giving gradient to `action`.)
-    #   (Especially since `state_predictor` now takes RNN-state.)
-    #   TODO: …Yes: *do* learn & use the synthetic gradient: multiply `action` by its detached & predicted gradient, and sum that into 1 number to get the loss.
-    #     (For prediction, first try just a multiplicative discount, and if that fails, limit the gradient's norm.)
-    #     (I don't think that it's even possible to do joint-embedding with the gradient and have it still be at all useful.)
+    # Synthetic gradient of actions.
+    # TODO: …Wait, how would we know `prev_action`'s gradient if only `.backward()` fills in the gradient, which is *not here*?…
+    #   Should we take control of the optimizer too?…
+    #   (For prediction, first try just a multiplicative discount, and if that fails, limit the gradient's norm.)
+    # TODO: Give `action_grad(cat(action, state, goal))` to both `action` and `next_action`: multiply that by its detached predicted gradient, and sum that to get the loss.
+    synth_grad_loss = 0
+    prev_action.requires_grad_(False)
 
     # Log them.
     log(0, False, pos = pos_histogram)
