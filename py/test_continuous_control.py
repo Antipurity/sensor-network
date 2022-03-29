@@ -94,36 +94,22 @@ replays_per_step = 8
 
 
 
-embed = nn.Sequential( # (prev_action, input, randn) → embed_action
-    #   TODO: …Maybe, `embed` shouldn't take `prev_action` but only `input`, and `next` should take `prev_action`? (This would make the prediction task much saner, at least.) (Though, this is only relevant if we stop next-frame-prediction and start joint-embedding again.)
-    # (Incorporate input into the RNN.)
-    # (We 'predict' via joint `embed`ding of both prediction and target, like BYOL, though with not just the previous frame used but with the entire history.)
-    SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
-    *[SkipConnection(
-        nn.ReLU(), nn.LayerNorm(action_sz),
-        nn.Linear(action_sz, action_sz),
-    ) for _ in range(1)],
-    nn.LayerNorm(action_sz),
-).to(device)
-embed_delayed = MomentumCopy(embed, .999)
-#   (All prediction targets are delayed, so that gradient serves to contrast different inputs.)
-next = nn.Sequential( # (embed_action, goal) → action
-    # (Both RNN's post-`embed` transition, and BYOL's predictor.)
+next = nn.Sequential( # (prev_action, input, goal) → action
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
-    SkipConnection(nn.Linear(action_sz + input_sz, action_sz)),
+    SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
     ) for _ in range(1)],
 ).to(device)
-state_predictor = nn.Sequential( # prev_action → state
+state_predictor = nn.Sequential( # (prev_action, prev_state) → input
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
     ) for _ in range(1)],
     nn.Linear(action_sz, input_sz),
 ).to(device)
-future_advantage = nn.Sequential( # (embed_action, goal, action1, action2) → dist2 - dist1
+future_advantage = nn.Sequential( # (prev_action, goal, action1, action2) → dist2 - dist1
     # (Returns how much lower the sum-of-future-L1-distances-to-`goal` is for `action1` compared to `action2`; the more the better for `action1`.)
     # (A lot of distances are very similar which makes optimization difficult, so predicting differences should be easier.)
     SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
@@ -135,11 +121,12 @@ future_advantage = nn.Sequential( # (embed_action, goal, action1, action2) → d
 ).to(device)
 
 class WithInput(nn.Module):
-    def __init__(self, embed, next, state_predictor): super().__init__();  self.embed, self.next, self.state_predictor = embed, next, state_predictor
+    def __init__(self, next, state_predictor, future_advantage):
+        super().__init__()
+        self.next, self.state_predictor, self.future_advantage = next, state_predictor, future_advantage
     def forward(self, prev_action, input, randn, goal):
-        embed_action = self.embed(cat(prev_action, input, randn))
-        return self.next(cat(embed_action, goal))
-step = WithInput(embed, next, state_predictor)
+        return self.next(cat(prev_action, input, goal))
+step = WithInput(next, state_predictor, future_advantage)
 optim = torch.optim.Adam(step.parameters(), lr=lr)
 
 
@@ -176,59 +163,38 @@ def pos_histogram(plt, label):
             for i in range(pos.shape[0]):
                 x.append(float(pos[i][0])), y.append(float(pos[i][1]))
     plt.hist2d(x, y, bins=100, range=((0,1), (0,1)), cmap='rainbow', label=label)
-def loss(prev_action, action, input, randn, goal):
-    # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input, randn)`.
-    with torch.no_grad():
-        next_frame = embed_delayed(cat(prev_action, input, randn))
-    next_frame_loss = 0 # (prev_action - next_frame).square().sum() # TODO:
-    # Goal (embedding) steering: `prev_action = goal`.
-    #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
-    pred = step.state_predictor
-    for p in pred.parameters(): p.requires_grad_(False)
-    # goal_loss = (prev_action - goal).abs().sum() # TODO: Should depend on the state predictor too. Be the below.
-    goal_loss = (pred(prev_action) - goal).abs().sum() # TODO:
-    for p in pred.parameters(): p.requires_grad_(True)
-    # Predict the next `input`.
-    state_predictor_loss = (pred(prev_action) - input.detach()).square().sum()
-    # Log them.
-    log(0, False, pos = pos_histogram)
-    log(1, False, next_frame_loss = to_np(next_frame_loss))
-    log(2, False, goal_loss = to_np(goal_loss))
-    log(3, False, state_predictor_loss = to_np(state_predictor_loss))
-    return next_frame_loss + goal_loss + state_predictor_loss
 def replay():
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=replays_per_step) if c is not None]
     if len(choices):
-        prev_state = torch.cat([c[0] for c in choices], 0)
-        prev_action = torch.cat([c[1] for c in choices], 0)
-        state = torch.cat([c[2] for c in choices], 0)
-        action = torch.cat([c[3] for c in choices], 0)
+        prev_action = torch.cat([c[0] for c in choices], 0)
+        prev_state = torch.cat([c[1] for c in choices], 0)
+        action = torch.cat([c[2] for c in choices], 0)
+        state = torch.cat([c[3] for c in choices], 0)
 
     goal = state[torch.randperm(state.shape[0], device=device)]
-    rand = torch.randn(state.shape[0], action_sz, device=device)
+    randn = torch.randn(state.shape[0], action_sz, device=device)
 
-    # TODO: …Maybe learn the state-predictor given prev_state and prev_action?
+    # Predict the next state.
+    action2 = next(cat(prev_action, state, goal))
+    state2 = state_predictor(cat(prev_action, prev_state))
+    state_pred_loss = (state2 - state).square().sum()
 
-    micro_dist = (state - goal).abs()
-    # dist2-dist1 = adv(a1, a2)
-    # dist1-dist2 = adv(a2, a1)
-    # adv(a1, a2) = sum(gamma**i * micro(a2, i)) - sum(gamma**i * micro(a1, i)) = dist2 - dist1
-    # dist1 = dist2 + adv(a2, a1) = dist2 - adv(a1, a2)
-    # dist2 = dist1 + adv(a1, a2) = dist1 - adv(a2, a1)
-    # adv(a1, a2) = dist2 - dist2 + adv(a1, a2) --- FUCK: can't extract a learning equation…
-    # …What if we had a third action to compare both with?
-    # dist1 = dist0 + adv(a0, a1)
-    # dist2 = dist0 + adv(a0, a2)
-    # adv(a1, a2) = dist2 - dist1 = adv(a0, a2) - adv(a0, a1) --- FUCK: this is cyclical too, so we won't be able to learn `a0`…
-    # TODO: Learn `future_advantage` by bootstrapping. TODO: …But to know the micro-dist, we need to know the next-state for the predicted action, right?…
-    #   FUCK
-    #   …Or maybe we can just not adjust the other branch's prediction, using it directly?…
-    #   …Even so: what's the bootstrapping formula, exactly? …Is it even possible to infer it…
-    #   …Do we seriously need the state-predictor just to learn the advantage…
+    # Learn `future_advantage` by bootstrapping, comparing to the predicted `state2`.
+    micro_adv = (state2 - goal).abs() + (state - goal).abs()
+    prev_adv = future_advantage(cat(prev_action, goal, action, action2))
     # TODO: Grad-maximize `future_advantage(embed_action, goal, action, action2)` by `action2` (computed by `next` from `prev_action`).
 
-    # (…And, might want to learn the gradient of `prev_action`.)
+    # (…And, might want to learn the gradient of `prev_action` after giving gradient to `action`.)
+    #   (Especially since `state_predictor` now acts like an RNN.)
+
+    # Log them.
+    log(0, False, pos = pos_histogram)
+    log(1, False, state_pred_loss = to_np(state_pred_loss))
+    # log(2, False, goal_loss = to_np(goal_loss))
+    # log(3, False, state_predictor_loss = to_np(state_predictor_loss))
+
+    return state_pred_loss
 
 
 
@@ -239,20 +205,13 @@ for iter in range(500000):
     randn = torch.randn(batch_size, action_sz, device=device)
     action = step(prev_action, state, randn, goal)
 
-    total_loss += loss(prev_action, action, state, randn, goal)
+    total_loss += replay()
     if iter == 1000: clear()
 
-    # TODO: replay()
-
-    # reset_goal() # TODO:
-
     if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
-    if random.randint(1, 256) == 1: reset()
-    embed_delayed.update()
+    if random.randint(1, 32) == 1: reset()
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
-    #   TODO: Should also maintain the `(prev_prev_action, prev_prev_state)` tuple, so that the replay buffer can also contain the next action.
-    #     …Or we can just learn the gradient?
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
@@ -275,6 +234,7 @@ for iter in range(500000):
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
+#   - TODO: Instead of simple next-frame prediction, embed inputs once again.
 
 
 
