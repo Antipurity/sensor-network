@@ -140,10 +140,9 @@ optim = torch.optim.Adam(step.parameters(), lr=lr)
 
 
 # The main loop, which steps the environment and trains `step`.
-action = torch.randn(batch_size, action_sz, requires_grad=True, device=device)
+action = torch.randn(batch_size, action_sz, device=device)
 goal = torch.rand(batch_size, input_sz, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
-total_loss = 0
 def reset_goal():
     global goal
     with torch.no_grad():
@@ -153,14 +152,6 @@ def reset_goal():
             randn = torch.randn(batch_size, action_sz, device=device)
             # goal = cur_state # TODO:
             goal = torch.rand(batch_size, input_sz, device=device)
-def reset():
-    """Finish a BPTT step, and update the `goal`."""
-    global action, total_loss
-    if isinstance(total_loss, torch.Tensor) and total_loss.requires_grad: total_loss.backward()
-    total_loss = 0
-    optim.step();  optim.zero_grad(True)
-    action = action.detach().requires_grad_(True)
-    reset_goal()
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
     x, y = [], []
@@ -204,12 +195,17 @@ def replay():
     # Grad-minimize the replay-sample's advantage, making our own policy better.
     goal_loss = adv.sum()
 
-    # Synthetic gradient of actions.
-    # TODO: …Wait, how would we know `prev_action`'s gradient if only `.backward()` fills in the gradient, which is *not here*?…
-    #   Should we take control of the optimizer too?…
-    #   (For prediction, first try just a multiplicative discount, and if that fails, limit the gradient's norm.)
-    # TODO: Give `action_grad(cat(action, state, goal))` to both `action` and `next_action`: multiply that by its detached predicted gradient, and sum that to get the loss.
-    synth_grad_loss = 0
+    # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
+    with torch.no_grad():
+        daction = action_grad(cat(action, state, goal))
+        dnext_action = action_grad(cat(next_action, next_state, goal))
+    synth_grad_loss = (action * daction).sum() + (next_action * dnext_action).sum()
+    (state_pred_loss + adv_loss + goal_loss + synth_grad_loss).backward()
+    dprev_action = action_grad(cat(prev_action, prev_state, goal))
+    with torch.no_grad():
+        # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
+        dprev_action_target = prev_action.grad * bootstrap_discount
+    (dprev_action - dprev_action_target).sum().backward()
     prev_action.requires_grad_(False)
 
     # Log them.
@@ -217,24 +213,25 @@ def replay():
     log(1, False, state_pred_loss = to_np(state_pred_loss))
     log(2, False, adv_loss = to_np(adv_loss))
     log(3, False, goal_loss = to_np(goal_loss))
+    log(4, False, synth_grad_loss = to_np(synth_grad_loss))
 
-    return state_pred_loss + adv_loss + goal_loss
+    optim.step();  optim.zero_grad(True)
 
 
 
-reset()
 prev_data = None
 for iter in range(500000):
     prev_action, prev_state = action, state
-    state, hidden_state = env_step(state, hidden_state, prev_action)
-    randn = torch.randn(batch_size, action_sz, device=device)
-    action = step(prev_action, state, randn, goal)
+    with torch.no_grad():
+        state, hidden_state = env_step(state, hidden_state, prev_action)
+        randn = torch.randn(batch_size, action_sz, device=device)
+        action = step(prev_action, state, randn, goal)
 
-    total_loss += replay()
+    replay()
     if iter == 1000: clear()
 
     if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
-    if random.randint(1, 32) == 1: reset()
+    if random.randint(1, 32) == 1: reset_goal()
 
     if prev_data is not None:
         replay_buffer[iter % len(replay_buffer)] = (*prev_data, prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
