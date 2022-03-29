@@ -183,6 +183,10 @@ def replay():
         next_state2 = state_predictor(cat(action, state))
         state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
         #   TODO: …Wait, why is state prediction *still* not working?… It's very important for advantage-learning!
+        #     …Should we give up on advantage-learning, and just predict the distance?… Just because of the state-prediction…
+        #     (Might be because we're unable to learn the hidden state, meaning that we should forego prediction if we can…)
+
+        # TODO: Remove advantage-learning. Add distance-learning.
 
         # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
         action2 = next(cat(prev_action, state, goal))
@@ -196,30 +200,32 @@ def replay():
 
         # Grad-minimize the replay-sample's advantage, making our own policy better.
         goal_loss = adv.sum()
+        # TODO: …Maybe try self-imitation learning too?… (Right now, it seems pointless, because state-prediction doesn't work and so neither does advantage-learning.)
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
-        with torch.no_grad():
-            daction2 = action_grad(cat(action2, state, goal))
-            dnext_action2 = action_grad(cat(next_action2, next_state, goal))
-        synth_grad_loss = (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum() # TODO:
+        # with torch.no_grad():
+        #     daction2 = action_grad(cat(action2, state, goal))
+        #     dnext_action2 = action_grad(cat(next_action2, next_state, goal))
+        synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum()
         (state_pred_loss + adv_loss + goal_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
-            #   TODO: Limit that norm.
             dprev_action_target = prev_action.grad * bootstrap_discount
-        (dprev_action - dprev_action_target).square().sum().backward() # TODO: OH NO IT'S ONLY INCREASING, TURN IT OFF TURN IT OFF — …or maybe it's only increasing in magnitude because the actions keep increasing in magnitude… No, can't be: they have layer-norm at the output. Can only be because our discounting is insufficient to counteract growth-per-step, so we'll never reach an asymptote.
+        synth_grad_loss = (dprev_action - dprev_action_target).square().sum()
+        synth_grad_loss.backward()
         # TODO: …While we're kinda succeeding at bringing `goal_loss` down, we're clearly not learning good exploration behaviors, right?… WHY
+        #   …Maybe because we can't even learn the next state, which advantage-learning heavily relies on…
         prev_action.requires_grad_(False)
 
         # Log them.
+        N = state.shape[0]
         log(0, False, pos = pos_histogram)
-        # log(1, False, state_pred_loss = to_np(state_pred_loss))
-        log(1, False, state_pred_loss = to_np((state2 - state).abs().mean(0).sum())) # TODO:
-        log(2, False, adv_loss = to_np(adv_loss))
-        log(3, False, goal_loss = to_np(goal_loss))
-        log(4, False, synth_grad_loss = to_np(synth_grad_loss))
-        log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
+        log(1, False, state_pred_loss = to_np(state_pred_loss / N))
+        # log(2, False, adv_loss = to_np(adv_loss / N))
+        # log(3, False, goal_loss = to_np(goal_loss / N))
+        # log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
+        # log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
 
         optim.step();  optim.zero_grad(True)
 
