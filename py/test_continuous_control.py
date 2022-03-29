@@ -17,7 +17,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 from model.momentum_copy import MomentumCopy
-from model.rnn import RNN
 from model.log import log, clear
 
 import random
@@ -95,6 +94,7 @@ replay_buffer = [None] * (1024)
 
 
 embed = nn.Sequential( # (prev_action, input, randn) → embed_action
+    #   TODO: …Maybe, `embed` shouldn't take `prev_action` but only `input`, and `next` should take `prev_action`? (This would make the prediction task much saner, at least.)
     # (Incorporate input into the RNN.)
     # (We 'predict' via joint `embed`ding of both prediction and target, like BYOL, though with not just the previous frame used but with the entire history.)
     SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
@@ -128,31 +128,8 @@ class WithInput(nn.Module):
     def forward(self, prev_action, input, randn, goal):
         embed_action = self.embed(cat(prev_action, input, randn))
         return self.next(cat(embed_action, goal))
-def loss(prev_action, action, input, randn, goal):
-    global last_losses
-    # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input, randn)`.
-    with torch.no_grad():
-        next_frame = embed_delayed(cat(prev_action, input, randn))
-    next_frame_loss = 0 # (prev_action - next_frame).square().sum() # TODO:
-    # TODO: …Why does re-enabling the loss (any loss) collapse diversity?…
-    #   (…Even if we remove the repulsor in the center, this still happens, but less pronounced…)
-    # Goal (embedding) steering: `prev_action = goal`.
-    #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
-    pred = step_model.state_predictor
-    for p in pred.parameters(): p.requires_grad_(False)
-    # goal_loss = (prev_action - goal).abs().sum() # TODO: Should depend on the state predictor too.
-    goal_loss = (pred(prev_action) - goal).abs().sum() # TODO: `goal` should be input-sized.
-    for p in pred.parameters(): p.requires_grad_(True)
-    # Predict the next `input`.
-    state_predictor_loss = (pred(prev_action) - input.detach()).square().sum()
-    last_losses = next_frame_loss, goal_loss, state_predictor_loss
-    return next_frame_loss + goal_loss + state_predictor_loss
-step_model = WithInput(embed, next, state_predictor)
-step = RNN( # (prev_action, input, goal) → action
-    transition = step_model, loss = loss,
-    optimizer = lambda p: torch.optim.Adam(p, lr=lr),
-    backprop_length = None,
-)
+step = WithInput(embed, next, state_predictor)
+optim = torch.optim.Adam(step.parameters(), lr=lr)
 
 
 
@@ -160,7 +137,7 @@ step = RNN( # (prev_action, input, goal) → action
 action = torch.randn(batch_size, action_sz, requires_grad=True, device=device)
 goal = torch.rand(batch_size, input_sz, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
-last_losses = 0, 0, 0
+total_loss = 0
 def reset_goal():
     global goal
     with torch.no_grad():
@@ -173,8 +150,11 @@ def reset_goal():
             goal = torch.rand(batch_size, input_sz, device=device)
 def reset():
     """Finish a BPTT step, and update the `goal`."""
-    global action
-    action = step.reset(action)
+    global action, total_loss
+    if isinstance(total_loss, torch.Tensor) and total_loss.requires_grad: total_loss.backward()
+    total_loss = 0
+    optim.step();  optim.zero_grad(True)
+    action = action.detach().requires_grad_(True)
     reset_goal()
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
@@ -186,6 +166,28 @@ def pos_histogram(plt, label):
             for i in range(pos.shape[0]):
                 x.append(float(pos[i][0])), y.append(float(pos[i][1]))
     plt.hist2d(x, y, bins=100, range=((0,1), (0,1)), cmap='rainbow', label=label)
+def loss(prev_action, action, input, randn, goal):
+    # Next-frame (embedding) prediction: `prev_action = embed_delayed(prev_action, input, randn)`.
+    with torch.no_grad():
+        next_frame = embed_delayed(cat(prev_action, input, randn))
+    next_frame_loss = 0 # (prev_action - next_frame).square().sum() # TODO:
+    # TODO: …Why does re-enabling the loss (any loss) collapse diversity?…
+    #   (…Even if we remove the repulsor in the center, this still happens, but less pronounced…)
+    # Goal (embedding) steering: `prev_action = goal`.
+    #   (`goal` should be `embed_delayed(some_prev_action, some_input, some_randn)`.)
+    pred = step.state_predictor
+    for p in pred.parameters(): p.requires_grad_(False)
+    # goal_loss = (prev_action - goal).abs().sum() # TODO: Should depend on the state predictor too. Be the below.
+    goal_loss = (pred(prev_action) - goal).abs().sum() # TODO:
+    for p in pred.parameters(): p.requires_grad_(True)
+    # Predict the next `input`.
+    state_predictor_loss = (pred(prev_action) - input.detach()).square().sum()
+    # Log them.
+    log(0, False, pos = pos_histogram) # TODO: …Why does this cause an error in logging?
+    log(1, False, next_frame_loss = to_np(next_frame_loss))
+    log(2, False, goal_loss = to_np(goal_loss))
+    log(3, False, state_predictor_loss = to_np(state_predictor_loss))
+    return next_frame_loss + goal_loss + state_predictor_loss
 reset()
 for iter in range(500000):
     prev_action, prev_state = action, state
@@ -193,18 +195,17 @@ for iter in range(500000):
     randn = torch.randn(batch_size, action_sz, device=device)
     action = step(prev_action, state, randn, goal)
 
-    # reset_goal() # TODO:
+    total_loss += loss(prev_action, action, state, randn, goal)
+    if iter == 1000: clear()
+
+    reset_goal() # TODO:
 
     if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
     if random.randint(1, 32) == 1: reset()
     embed_delayed.update()
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
-
-    log(0, False, next_frame_loss = to_np(last_losses[0]))
-    log(1, False, goal_loss = to_np(last_losses[1]))
-    log(2, False, state_predictor_loss = to_np(last_losses[2]))
-    log(3, False, pos = pos_histogram)
+    #   TODO: Should also maintain the `(prev_prev_action, prev_prev_state)` tuple, so that the replay buffer can also contain the next action.
 
     # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
     #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
@@ -215,15 +216,24 @@ for iter in range(500000):
 
 # TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
 #   - TODO: Just doing what we want didn't work, so find out exactly what we *can* do:
-#     - TODO: …Wait, we need new tricks now, old ones aren't cutting it anymore…
 #     - TODO: Possibly, input not just xy but its `x → 1-2*abs(x)` fractal filling.
 #   - TODO: Tinker with goals: new goal per-step, or only on BPTT resets.
 #   - *Learn* the loss to minimize:
 #     - TODO: RL: learn `future_dist` which represents the (discounted) future sum of all L1 distances between RNN-states (actions) and goals. And minimize that by actions.
 #       - (Could be good for us, actually, since our BPTT length is probably far too small to allow most goals to be achieved.)
 #       - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
-#     - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's importance), and compare with RL?
+#       - TODO: Possibly, for more accuracy (it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action.
+#     - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL?
 #     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something.
+#   - Retain non-differentiably-reachable minima, via self-imitation learning:
+#     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
+#     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
+
+
+
+# …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement — but not exactly to full-RNN-state invariance/prediction…
+
+# …With embedding-prediction, I'm pretty sure it's the same as prediction, but if some parts are too hard to predict for too long, the model just gives up on them. Interference is also a lot of the problem in learning the shortest path (very many paths are essentially the same); is there any way to combine the two?…
 
 
 
