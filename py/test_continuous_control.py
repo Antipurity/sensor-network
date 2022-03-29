@@ -103,6 +103,7 @@ next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `
     nn.LayerNorm(action_sz),
 ).to(device)
 state_predictor = nn.Sequential( # (prev_action, prev_input) → input
+    SkipConnection(nn.Linear(action_sz + input_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
