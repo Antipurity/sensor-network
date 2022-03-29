@@ -182,6 +182,7 @@ def replay():
         state2 = state_predictor(cat(prev_action, prev_state))
         next_state2 = state_predictor(cat(action, state))
         state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
+        #   TODO: …Wait, why is state prediction *still* not working?… It's very important for advantage-learning!
 
         # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
         action2 = next(cat(prev_action, state, goal))
@@ -198,21 +199,23 @@ def replay():
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
         with torch.no_grad():
-            daction = action_grad(cat(action, state, goal))
-            dnext_action = action_grad(cat(next_action, next_state, goal))
-        synth_grad_loss = 0 # (action * daction).sum() + (next_action * dnext_action).sum() # TODO:
+            daction2 = action_grad(cat(action2, state, goal))
+            dnext_action2 = action_grad(cat(next_action2, next_state, goal))
+        synth_grad_loss = (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum() # TODO:
         (state_pred_loss + adv_loss + goal_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
             #   TODO: Limit that norm.
-            dprev_action_target = prev_action.grad * bootstrap_discount * 0 # TODO: …Wait, what: even with this, it keeps rising! It was supposed to go down to 0!
+            dprev_action_target = prev_action.grad * bootstrap_discount
         (dprev_action - dprev_action_target).sum().backward() # TODO: OH NO IT'S ONLY INCREASING, TURN IT OFF TURN IT OFF — …or maybe it's only increasing in magnitude because the actions keep increasing in magnitude… No, can't be: they have layer-norm at the output. Can only be because our discounting is insufficient to counteract growth-per-step, so we'll never reach an asymptote.
+        # TODO: …While we're kinda succeeding at bringing `goal_loss` down, we're clearly not learning good exploration behaviors, right?… WHY
         prev_action.requires_grad_(False)
 
         # Log them.
         log(0, False, pos = pos_histogram)
-        log(1, False, state_pred_loss = to_np(state_pred_loss))
+        # log(1, False, state_pred_loss = to_np(state_pred_loss))
+        log(1, False, state_pred_loss = to_np((state2 - state).abs().mean(0).sum())) # TODO:
         log(2, False, adv_loss = to_np(adv_loss))
         log(3, False, goal_loss = to_np(goal_loss))
         log(4, False, synth_grad_loss = to_np(synth_grad_loss))
@@ -249,6 +252,7 @@ for iter in range(500000):
 
 # TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
 #   - TODO: Just doing what we want didn't work, so find out exactly what we *can* do:
+#     - TODO: Don't just randomly re-decide goals, instead (try to?) re-decide goals whenever they're either reached or is unreachable (the accumulated sum-of-L1-differences gets much larger than predicted).
 #     - TODO: Possibly, input not just xy but its `x → 1-2*abs(x)` fractal filling.
 #   - TODO: Tinker with goals: new goal per-step, or only on BPTT resets.
 #   - *Learn* the loss to minimize:
