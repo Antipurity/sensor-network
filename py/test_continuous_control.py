@@ -180,7 +180,7 @@ def replay():
 
         # Predict the next state.
         state2 = state_predictor(cat(prev_action, prev_state))
-        next_state2 = state_predictor(cat(prev_action, prev_state))
+        next_state2 = state_predictor(cat(action, state))
         state_pred_loss = (state2 - state).square().sum() + (next_state2 - next_state).square().sum()
 
         # Learn `future_advantage` by bootstrapping, comparing replay_buffer's policy to our own.
@@ -200,13 +200,14 @@ def replay():
         with torch.no_grad():
             daction = action_grad(cat(action, state, goal))
             dnext_action = action_grad(cat(next_action, next_state, goal))
-        synth_grad_loss = (action * daction).sum() + (next_action * dnext_action).sum()
+        synth_grad_loss = 0 # (action * daction).sum() + (next_action * dnext_action).sum() # TODO:
         (state_pred_loss + adv_loss + goal_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
-            dprev_action_target = prev_action.grad * bootstrap_discount
-        (dprev_action - dprev_action_target).sum().backward()
+            #   TODO: Limit that norm.
+            dprev_action_target = prev_action.grad * bootstrap_discount * 0 # TODO: …Wait, what: even with this, it keeps rising! It was supposed to go down to 0!
+        (dprev_action - dprev_action_target).sum().backward() # TODO: OH NO IT'S ONLY INCREASING, TURN IT OFF TURN IT OFF — …or maybe it's only increasing in magnitude because the actions keep increasing in magnitude… No, can't be: they have layer-norm at the output. Can only be because our discounting is insufficient to counteract growth-per-step, so we'll never reach an asymptote.
         prev_action.requires_grad_(False)
 
         # Log them.
@@ -215,6 +216,7 @@ def replay():
         log(2, False, adv_loss = to_np(adv_loss))
         log(3, False, goal_loss = to_np(goal_loss))
         log(4, False, synth_grad_loss = to_np(synth_grad_loss))
+        log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
 
         optim.step();  optim.zero_grad(True)
 
