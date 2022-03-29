@@ -268,7 +268,7 @@ for iter in range(500000):
 #       - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
 #       - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its `future_advantage` (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action.
 #     - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL?
-#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something.
+#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.)
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
