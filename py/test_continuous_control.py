@@ -228,22 +228,20 @@ for iter in range(500000):
         replay_buffer[iter % len(replay_buffer)] = (*prev_data, prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
     prev_data = (prev_action.detach(), prev_state.detach())
 
-    # TODO: Run. Ideally, also fix, but this solution is so ambitious that I don't know if it can possibly work.
-    #   (Ended up merging RNNs with BYOL in the design, because it seemed so natural. With so much creativity, I fear that it won't work out, no matter how tight the fit is. …Pretty sure that it didn't work out, at least in the initial attempt.)
-    #   TODO: Find out why even distance-minimization remains broken. (Worst-case, it's because our actions are too easy to undo and too indistinct from each other, so future-dist-prediction can't establish a coherent preference for anything.)
+    # TODO: Find out why even distance-minimization remains broken. (Worst-case, it's because our actions are too easy to undo and too indistinct from each other, so future-dist-prediction can't establish a coherent preference for anything.)
 
 
 
 
 # TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
 #   - TODO: Just doing what we want didn't work, so find out exactly what we *can* do:
-#     - TODO: Possibly, remove action-stochasticity, and rely only on optimization being able to find better challenges?…
 #     - TODO: Possibly, input not just xy but its `x → 1-2*abs(x)` fractal filling.
 #   - Tinker with goals:
 #     - TODO: New goal every step.
 #     - TODO: New goal only on BPTT resets.
 #     - TODO: Possibly, don't just randomly re-decide goals, instead (try to?) re-decide goals whenever they're either reached (L1-diff is below threshold) or are unreachable (the accumulated sum-of-L1-diffs gets much larger than predicted). (Seems hacky. Ideally, would be able to *learn* both the ideal moment, and the ideal new goal.)
-#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.) (Goals generate challenges, actions solve them: curriculum learning, ideally…)
+#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.) (Goals generate challenges, actions solve them: curriculum learning, ideally… Not too easy, not too hard…)
+#       - TODO: Possibly, have a separate objective/metric for a reachable goal's difficulty which we can learn and seek out… How to measure the difficulty of a goal — sum of distance-prediction losses?… But what if it's either too hard or inherently unpredictable…
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
