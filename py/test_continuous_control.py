@@ -102,9 +102,9 @@ next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `
     ) for _ in range(1)],
     nn.LayerNorm(action_sz),
 ).to(device)
-future_dist = nn.Sequential( # (prev_action, goal, action) → dist
+future_dist = nn.Sequential( # (prev_action, prev_state, goal, action) → dist
     # (Returns the sum-of-future-L1-distances-to-`goal` for the considered `action`, the less the better.)
-    SkipConnection(nn.Linear(action_sz + input_sz + action_sz, action_sz)),
+    SkipConnection(nn.Linear(action_sz + input_sz + input_sz + action_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
@@ -172,12 +172,12 @@ def replay():
         # Learn `future_dist` by bootstrapping.
         # action2 = next(cat(prev_action, state, goal))
         # next_action2 = next(cat(action, next_state, goal))
-        prev_dist = future_dist(cat(prev_action, goal, action))
-        micro_dist = (state - goal).abs() + (next_state - goal).abs() * bootstrap_discount
+        prev_dist = future_dist(cat(prev_action, prev_state, goal, action))
+        micro_dist = (state - goal).abs()
         for p in future_dist.parameters(): p.requires_grad_(False)
-        dist = future_dist(cat(action, goal, next_action))
+        dist = future_dist(cat(action, state, goal, next_action))
         for p in future_dist.parameters(): p.requires_grad_(True)
-        dist_loss = (prev_dist - (micro_dist + dist * (bootstrap_discount*bootstrap_discount)).detach()).square().sum()
+        dist_loss = (prev_dist - (micro_dist + dist * bootstrap_discount).detach()).square().sum()
 
         # Grad-minimize the replay-sample's distance.
         dist_min_loss = dist.sum()
