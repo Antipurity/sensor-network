@@ -265,7 +265,7 @@ for iter in range(500000):
 
 # …In RL where we min over the expectation of distances, a stochastic policy may actually cause goal-chasing to suffer because we're constantly undoing our own progress… An ideal learning method would straighten out all those redundant pasts as they arise; but how can we arrive at such a method?…
 
-# TODO: …Possibly, set up a real experiment that checks whether embedding-prediction *actually* blots out the unpredictable parts, by predicting a data transformation that has both a predictable (+1 to values) and a completely-random components (-1 plus noise), plotting the loss, and if true, direct-prediction would be stuck at a high loss while embedding-prediction would go to 0?… (Because, I might be starting to see a way to extend input-space goals to whole-past-space goals, but it relies on unpredictability *actually* being blotted out.)
+# …According to tests, embedding-prediction (BYOL, there) *does* actually blot out unpredictability, so it's *possible* that learning to reach goals in embedded-space is what we want…
 
 
 
