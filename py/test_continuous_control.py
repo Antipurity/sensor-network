@@ -62,7 +62,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     accel = accel.detach()[..., :2]
     accel = accel * 1e-3 / 2
     accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().max(torch.tensor(1., device=device)))
-    force_center = torch.ones(posit.shape[0], 2, device=device)/2 # TODO: …Why does putting it at the non-center seem to break the env?… …Maybe because the other side doesn't have any force, so it's just an accelerator, not an obstacle.
+    force_center = torch.ones(posit.shape[0], 2, device=device)/2
     force_len = (posit - force_center).square() + 1e-5
     force = 3e-5 / force_len
     accel = accel + force * (posit - force_center) / force_len
@@ -170,7 +170,7 @@ def replay():
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
         # Learn `future_dist` by bootstrapping.
-        # action2 = next(cat(prev_action, state, goal))
+        action2 = next(cat(prev_action, state, goal))
         # next_action2 = next(cat(action, next_state, goal))
         prev_dist = future_dist(cat(prev_action, prev_state, goal, action))
         micro_dist = (state - goal).abs()
@@ -182,14 +182,18 @@ def replay():
         # Grad-minimize the replay-sample's distance.
         dist_min_loss = dist.sum()
 
-        # TODO: Self-imitation learning, our one hope against more involved goal-reaching and past-coalescence methods.
+        # Self-imitation learning, our one hope against more involved goal-reaching and past-coalescence methods (a hope which didn't pan out).
+        #   (Whenever predicted-action's distance is higher than past-action's, output the past-action instead.)
+        with torch.no_grad():
+            prev_dist2 = future_dist(cat(prev_action, prev_state, goal, action2))
+        self_imitation_loss = ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().sum(-1, keepdim=True).max(torch.zeros(state.shape[0], 1, device=device))).sum()
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
         # with torch.no_grad():
         #     daction2 = action_grad(cat(action2, state, goal))
         #     dnext_action2 = action_grad(cat(next_action2, next_state, goal))
         synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum() # TODO:
-        (dist_loss + dist_min_loss + synth_grad_loss).backward()
+        (dist_loss + dist_min_loss + self_imitation_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
@@ -203,8 +207,9 @@ def replay():
         log(0, False, pos = pos_histogram)
         log(1, False, dist_loss = to_np(dist_loss / N))
         log(2, False, dist_min_loss = to_np(dist_min_loss / N))
-        log(3, False, synth_grad_loss = to_np(synth_grad_loss / N))
-        log(4, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
+        log(3, False, self_imitation_loss = to_np(self_imitation_loss / N))
+        log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
+        log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
 
         optim.step();  optim.zero_grad(True)
 
@@ -228,7 +233,7 @@ for iter in range(500000):
         replay_buffer[iter % len(replay_buffer)] = (*prev_data, prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
     prev_data = (prev_action.detach(), prev_state.detach())
 
-    # TODO: Find out why even distance-minimization remains broken. (Worst-case, it's because our actions are too easy to undo and too indistinct from each other, so future-dist-prediction can't establish a coherent preference for anything.)
+    # TODO: Find out why even distance-minimization remains broken. (Worst-case, it's because our actions are too easy to undo and too indistinct from each other, so future-dist-prediction can't establish a coherent preference for anything. …I think we might be living in the worst timeline.)
 
 
 
@@ -242,15 +247,15 @@ for iter in range(500000):
 #     - TODO: Possibly, don't just randomly re-decide goals, instead (try to?) re-decide goals whenever they're either reached (L1-diff is below threshold) or are unreachable (the accumulated sum-of-L1-diffs gets much larger than predicted). (Seems hacky. Ideally, would be able to *learn* both the ideal moment, and the ideal new goal.)
 #     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.) (Goals generate challenges, actions solve them: curriculum learning, ideally… Not too easy, not too hard…)
 #       - TODO: Possibly, have a separate objective/metric for a reachable goal's difficulty which we can learn and seek out… How to measure the difficulty of a goal — sum of distance-prediction losses?… But what if it's either too hard or inherently unpredictable…
-#   - Retain non-differentiably-reachable minima, via self-imitation learning:
-#     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
-#     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
 #   - Visualization:
 #     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
 
 # - After we've established a more solid base of operations, retry what we did in the past:
 #   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
 #   - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL.
+#   - Retain non-differentiably-reachable minima, via self-imitation learning:
+#     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
+#     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
 #   - TODO: Instead of simple next-frame prediction, embed inputs once again. (If goals are also in embedded-space, then their unpredictability should also get washed away.)
 #     - …Actually, shouldn't embedding-prediction be able to wash out different pasts of the same future too?… (Not sure if we need fully bidirectional RNNs for this, or just a reverse `next`, or even just an impl trick; but at least we have a *hint* of how to extend the goal-space past the input-space.)
 #     - (Might want to *learn* the delayed target and not just momentum-update it, so that predictions on branches that we haven't seen lately remain somewhat untouched and not magically-correct.)
