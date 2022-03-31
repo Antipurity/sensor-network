@@ -88,7 +88,7 @@ ev = nn.Sequential( # (board, action, target) → future
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
-)
+).to(device)
 ev_delayed = MomentumCopy(ev, .99)
 ev_next = nn.Sequential( # prev_future → future
     # (For BYOL of `ev`.)
@@ -96,7 +96,7 @@ ev_next = nn.Sequential( # prev_future → future
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
-)
+).to(device)
 opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters(), *ev_next.parameters()], lr=1e-3)
 
 for iters in range(50000):
