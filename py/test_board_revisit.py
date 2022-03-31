@@ -81,9 +81,10 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, bootstrap_discount.shape[0]),
 ).to(device)
-ev = nn.Sequential( # (board, action, target) → future
+ev = nn.Sequential( # (board, target) → future
+    # TODO: Also accept the target (which is not necessary in this full-info env).
     # (The `ev`entual future of a cell. …Though this name doesn't seem to match with what it's used for…)
-    nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+    nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
@@ -115,7 +116,7 @@ for iters in range(50000):
             prev_board, prev_action = board, action
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            future = ev(cat(prev_board, prev_action, target))
+            future = ev(cat(prev_board, target))
             #   Using `zeros` in place of `rand` here is 4× slower to converge. TODO: …Might want to make `ev` take `rand` just like `next` used to, huh…
             action = next(future)
             if action_min:
@@ -163,18 +164,18 @@ for iters in range(50000):
         # TODO: Run, and see what happens.
         #   (Ideally, would see distance going down quickly because good actions get learned instantly, but…)
         #   TODO: Why isn't it working? Why does `trajectory_end_loss` go down to 3, but distance doesn't decrease even a little?…
-        #     …Is it because `ev` accepts the action…
         #     …Is it because `ev` has no `randn` arg…
+        #     …Is it because our loss is wrong………
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
-        trajectory_end_loss = (next(ev(cat(prev_board, prev_action, board))) - action).square().sum()
+        trajectory_end_loss = (next(ev(cat(prev_board, board))) - action).square().sum()
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
-        prev_future = ev(cat(prev_board, prev_action, target))
+        prev_future = ev(cat(prev_board, target))
         trajectory_continuation_loss = (next(prev_future) - action).square().sum()
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         with torch.no_grad():
             future = ev_delayed(cat(action, board, target))
-        trajectory_ev_loss = (ev_next(ev(cat(prev_board, prev_action, target))) - future).square().sum()
+        trajectory_ev_loss = (ev_next(ev(cat(prev_board, target))) - future).square().sum()
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         # micro_dist = (board - target).abs().sum(-1, keepdim=True)
