@@ -73,7 +73,7 @@ bootstrap_discount = torch.tensor([.99], device=device)
 
 next = nn.Sequential( # future → action
     nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
-    nn.Linear(action_sz, action_sz),
+    nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
@@ -81,15 +81,15 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, bootstrap_discount.shape[0]),
 ).to(device)
-ev = nn.Sequential( # (board, target) → future
-    # TODO: Also accept the target (which is not necessary in this full-info env).
+ev = nn.Sequential( # (board, target, randn) → future
+    # TODO: Also accept the action (which is not necessary in this full-info env).
     # (The `ev`entual future of a cell. …Though this name doesn't seem to match with what it's used for…)
-    nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+    nn.Linear(N*N + N*N + action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
-ev_delayed = MomentumCopy(ev, .99)
+ev_delayed = MomentumCopy(ev, .999)
 ev_next = nn.Sequential( # prev_future → future
     # (For BYOL of `ev`.)
     nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
@@ -112,12 +112,11 @@ for iters in range(50000):
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
             zeros = torch.zeros(batch_size, action_sz, device=device)
-            rand = torch.randn(batch_size, action_sz, device=device)
+            randn = torch.randn(batch_size, action_sz, device=device)
             prev_board, prev_action = board, action
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            future = ev(cat(prev_board, target))
-            #   Using `zeros` in place of `rand` here is 4× slower to converge. TODO: …Might want to make `ev` take `rand` just like `next` used to, huh…
+            future = ev(cat(prev_board, target, randn))
             action = next(future)
             if action_min:
                 a1, a2, arest = action.split((1, 1, action.shape[-1]-2), -1)
@@ -141,6 +140,9 @@ for iters in range(50000):
             index = (iters*unroll_len + u) % len(replay_buffer)
             replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach())
 
+    # TODO: Plot steps-until-target for a fixed target and for each source.
+    #   (If only immediate actions are learned, we should see 4 neighbors.)
+
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
@@ -159,23 +161,22 @@ for iters in range(50000):
         target = board[torch.randperm(board.shape[0], device=device)]
 
         zeros = torch.zeros(board.shape[0], action_sz, device=device)
-        rand = torch.randn(board.shape[0], action_sz, device=device)
+        randn = torch.randn(board.shape[0], action_sz, device=device)
 
         # TODO: Run, and see what happens.
         #   (Ideally, would see distance going down quickly because good actions get learned instantly, but…)
         #   TODO: Why isn't it working? Why does `trajectory_end_loss` go down to 3, but distance doesn't decrease even a little?…
-        #     …Is it because `ev` has no `randn` arg…
         #     …Is it because our loss is wrong………
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
-        trajectory_end_loss = (next(ev(cat(prev_board, board))) - action).square().sum()
+        trajectory_end_loss = (next(ev(cat(prev_board, board, randn))) - action).square().sum()
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
-        prev_future = ev(cat(prev_board, target))
+        prev_future = ev(cat(prev_board, target, randn))
         trajectory_continuation_loss = (next(prev_future) - action).square().sum()
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         with torch.no_grad():
             future = ev_delayed(cat(action, board, target))
-        trajectory_ev_loss = (ev_next(ev(cat(prev_board, target))) - future).square().sum()
+        trajectory_ev_loss = (ev_next(ev(cat(prev_board, target, randn))) - future).square().sum()
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         # micro_dist = (board - target).abs().sum(-1, keepdim=True)
