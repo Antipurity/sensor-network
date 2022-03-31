@@ -71,9 +71,8 @@ bootstrap_discount = torch.tensor([.99], device=device)
 
 
 
-next = nn.Sequential( # (prev_board, prev_action, target, random) → action
-    # TODO: Only take a `future`.
-    nn.Linear(N*N + N*N + action_sz + action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+next = nn.Sequential( # future → action
+    nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     nn.Linear(action_sz, action_sz),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
