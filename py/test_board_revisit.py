@@ -140,7 +140,7 @@ for iters in range(50000):
             dist_mean += micro_dist.mean(0).sum() # Something to log.
 
             index = (iters*unroll_len + u) % len(replay_buffer)
-            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach())
+            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach(), randn)
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -149,6 +149,7 @@ for iters in range(50000):
         prev_action = torch.cat([c[1] for c in choices], 0)
         board = torch.cat([c[2] for c in choices], 0)
         action = torch.cat([c[3] for c in choices], 0)
+        randn = torch.cat([c[4] for c in choices], 0)
 
         # target = torch.where( # This actually seems to improve convergence speed 2×.
         #     #   (`prev_board` does not. More/less than 50% of the time, does not.)
@@ -160,17 +161,18 @@ for iters in range(50000):
         target = board[torch.randperm(board.shape[0], device=device)]
 
         zeros = torch.zeros(board.shape[0], action_sz, device=device)
-        randn = torch.randn(board.shape[0], action_sz, device=device)
 
         # TODO: Run, and see what happens.
         #   (Ideally, would see distance going down quickly because good actions get learned instantly, but…)
         #   TODO: Why isn't it working? Why does `trajectory_end_loss` go down to 1, but distance doesn't decrease even a little?…
         #     …Is it because our loss is wrong………
+        #     …Is it because `next` doesn't know board & goal?…
+        #       TODO: Try to not rely on `ev` for anything, only learn the correct `next`?…
 
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
-        trajectory_end_loss = (next(ev(cat(prev_board, board, randn))) - action).square().sum()
-        #   TODO: …Why does THIS loss not help us?! It *should*, at least a little, right? Something is very wrong!
+        trajectory_end_loss = (next(ev(cat(prev_board, board, randn)).detach()) - action).square().sum()
+        #   TODO: …Why does THIS loss not help us?! It *should* bring us to 100% for N=2 if we analyze the cases (can either finish immediately, or do any action then finish), right? Something is very wrong!
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
         prev_future = ev(cat(prev_board, target, randn))
         trajectory_continuation_loss = 0 # (next(prev_future) - action).square().sum()
