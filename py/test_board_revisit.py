@@ -50,7 +50,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 4, 100
+N, batch_size = 2, 100 # TODO: This N is ridiculously low, and we still can't even reproduce immediately-successful actions properly…
 action_sz = 64
 
 unroll_len = N
@@ -89,7 +89,7 @@ ev = nn.Sequential( # (board, target, randn) → future
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
-ev_delayed = MomentumCopy(ev, .999)
+ev_delayed = MomentumCopy(ev, .99)
 ev_next = nn.Sequential( # prev_future → future
     # (For BYOL of `ev`.)
     nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
@@ -104,6 +104,7 @@ for iters in range(50000):
     action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     dist_mean = 0
+    reached = torch.full((batch_size, 1), False, device=device)
     with torch.no_grad():
         # First pick the target to go to.
         #   (From tests, in this trivial env, performance is the same even if we re-pick the target at each step.)
@@ -134,15 +135,12 @@ for iters in range(50000):
 
             board = env_step(N, prev_board, action[..., 0:2])
 
+            reached |= (board == target).all(-1, keepdim=True)
             micro_dist = (board - target).abs().detach()
             dist_mean += micro_dist.mean(0).sum() # Something to log.
 
             index = (iters*unroll_len + u) % len(replay_buffer)
             replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach())
-
-    # TODO: Plot steps-until-target for a fixed target and for each source.
-    #   (If only immediate actions are learned, we should see 4 neighbors.)
-    #     (But the distance is exactly the same even with all losses commented out…)
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -166,18 +164,20 @@ for iters in range(50000):
 
         # TODO: Run, and see what happens.
         #   (Ideally, would see distance going down quickly because good actions get learned instantly, but…)
-        #   TODO: Why isn't it working? Why does `trajectory_end_loss` go down to 3, but distance doesn't decrease even a little?…
+        #   TODO: Why isn't it working? Why does `trajectory_end_loss` go down to 1, but distance doesn't decrease even a little?…
         #     …Is it because our loss is wrong………
+
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
         trajectory_end_loss = (next(ev(cat(prev_board, board, randn))) - action).square().sum()
+        #   TODO: …Why does THIS loss not help us?! It *should*, at least a little, right? Something is very wrong!
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
         prev_future = ev(cat(prev_board, target, randn))
-        trajectory_continuation_loss = (next(prev_future) - action).square().sum()
+        trajectory_continuation_loss = 0 # (next(prev_future) - action).square().sum()
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         with torch.no_grad():
             future = ev_delayed(cat(board, target, randn)).detach()
-        trajectory_ev_loss = (ev_next(ev(cat(prev_board, target, randn))) - future).square().sum()
+        trajectory_ev_loss = 0 # (ev_next(ev(cat(prev_board, target, randn))) - future).square().sum()
         # TODO: …Maybe we need that `ev(goal=state) = state`?…
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
@@ -214,6 +214,10 @@ for iters in range(50000):
             log(1, False, trajectory_continuation_loss = to_np(trajectory_continuation_loss))
             log(2, False, trajectory_ev_loss = to_np(trajectory_ev_loss))
             log(3, False, mean_distance = dist_mean / (2*N))
+            log(4, False, reached = to_np(reached.float().mean()))
             #   (Reaching about .66 means that targets are reached about 100% of the time.)
-            log(4, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
+            log(5, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
+            # TODO: Plot steps-until-target for a fixed target and for each source.
+            #   (If only immediate actions are learned, we should see 4 neighbors.)
+            #     (But the distance is exactly the same even with all losses commented out… Not useful right now…)
 finish()
