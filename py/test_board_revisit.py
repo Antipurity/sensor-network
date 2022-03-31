@@ -142,6 +142,7 @@ for iters in range(50000):
 
     # TODO: Plot steps-until-target for a fixed target and for each source.
     #   (If only immediate actions are learned, we should see 4 neighbors.)
+    #     (But the distance is exactly the same even with all losses commented out…)
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -175,8 +176,9 @@ for iters in range(50000):
         trajectory_continuation_loss = (next(prev_future) - action).square().sum()
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         with torch.no_grad():
-            future = ev_delayed(cat(action, board, target))
+            future = ev_delayed(cat(board, target, randn)).detach()
         trajectory_ev_loss = (ev_next(ev(cat(prev_board, target, randn))) - future).square().sum()
+        # TODO: …Maybe we need that `ev(goal=state) = state`?…
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         # micro_dist = (board - target).abs().sum(-1, keepdim=True)
