@@ -100,7 +100,6 @@ opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.param
 
 for iters in range(50000):
     # Sample a batch of trajectories.
-    dist_pred_loss, dist_min_loss, self_imitation_loss = 0, 0, 0
     action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     dist_mean = 0
@@ -181,31 +180,31 @@ for iters in range(50000):
         dist = future_dist(cat(board, next_action, target.detach()))
         for p in future_dist.parameters(): p.requires_grad_(True)
         prev_dist_targ = dist * bootstrap_discount + micro_dist
-        dist_pred_loss = dist_pred_loss + (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
+        dist_pred_loss = (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
         # Min-dist self-imitation, by `next`.
         action2 = next(prev_future)
         prev_dist2 = future_dist(cat(prev_board, action2, target.detach()))
         prev_dist, prev_dist2 = prev_dist.sum(-1, keepdim=True), prev_dist2.sum(-1, keepdim=True)
-        self_imitation_loss = self_imitation_loss + ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().max(zeros)).sum()
+        self_imitation_loss = ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().max(zeros)).sum()
         if not self_imitation: self_imitation_loss = self_imitation_loss.detach()
 
         # Grad-min of actions.
-        dist_min_loss = dist_min_loss + dist.mean(0).sum()
+        dist_min_loss = dist.mean(0).sum()
         if not grad_min: dist_min_loss = dist_min_loss.detach()
 
-    if iters == 500: clear()
+        if iters == 500: clear()
 
-    (dist_pred_loss + dist_min_loss + self_imitation_loss + trajectory_end_loss + trajectory_continuation_loss + trajectory_ev_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
-    opt.step();  opt.zero_grad(True);  ev_delayed.update()
-    with torch.no_grad():
-        log(0, False, dist_pred_loss = to_np(dist_pred_loss))
-        log(1, False, dist_min_loss = to_np(dist_min_loss))
-        log(2, False, self_imitation_loss = to_np(self_imitation_loss))
-        log(3, False, trajectory_end_loss = to_np(trajectory_end_loss))
-        log(4, False, trajectory_continuation_loss = to_np(trajectory_continuation_loss))
-        log(5, False, trajectory_ev_loss = to_np(trajectory_ev_loss))
-        log(6, False, mean_distance = dist_mean / (2*N))
-        #   (Reaching about .66 means that targets are reached about 100% of the time.)
-        log(7, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
+        (dist_pred_loss + dist_min_loss + self_imitation_loss + trajectory_end_loss + trajectory_continuation_loss + trajectory_ev_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
+        opt.step();  opt.zero_grad(True);  ev_delayed.update()
+        with torch.no_grad():
+            log(0, False, dist_pred_loss = to_np(dist_pred_loss))
+            log(1, False, dist_min_loss = to_np(dist_min_loss))
+            log(2, False, self_imitation_loss = to_np(self_imitation_loss))
+            log(3, False, trajectory_end_loss = to_np(trajectory_end_loss))
+            log(4, False, trajectory_continuation_loss = to_np(trajectory_continuation_loss))
+            log(5, False, trajectory_ev_loss = to_np(trajectory_ev_loss))
+            log(6, False, mean_distance = dist_mean / (2*N))
+            #   (Reaching about .66 means that targets are reached about 100% of the time.)
+            log(7, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
 finish()
