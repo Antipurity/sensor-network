@@ -167,14 +167,14 @@ for iters in range(50000):
         #     …Is it because `ev` has no `randn` arg…
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
-        trajectory_end_loss = (next(ev(cat(prev_action, prev_board, board))) - action).square().sum()
+        trajectory_end_loss = (next(ev(cat(prev_board, prev_action, board))) - action).square().sum()
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
-        prev_future = ev(cat(prev_action, prev_board, target))
+        prev_future = ev(cat(prev_board, prev_action, target))
         trajectory_continuation_loss = (next(prev_future) - action).square().sum()
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         with torch.no_grad():
             future = ev_delayed(cat(action, board, target))
-        trajectory_ev_loss = (ev_next(ev(cat(prev_action, prev_board, target))) - future).square().sum()
+        trajectory_ev_loss = (ev_next(ev(cat(prev_board, prev_action, target))) - future).square().sum()
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         # micro_dist = (board - target).abs().sum(-1, keepdim=True)
