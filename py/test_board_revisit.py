@@ -26,20 +26,21 @@ def env_init(N, batch_size=1): # → board
     # Collisions are technically possible, but unlikely.
     return board
 def env_step(N, board, action): # → board
-    """Given a one-hot board encoding and a 4-number action, returns a new board state, cyclically-shifted in the correct direction. Batchable.
+    """Given a one-hot board encoding and a 1-number action, returns a new board state, cyclically-shifted in the correct direction. Batchable.
 
-    (The 2-number scheme that relied on the max-magnitude direction was abandoned, because it played porrly with action averaging.)"""
+    (The action number represents one of 4 actions: -∞…-.5 for +x, -.5…0 for -x, 0….5 for +y, .5…+∞ for -y.)
+
+    (The 2-number scheme that relied on the max-magnitude direction was abandoned, because it played poorly with action averaging.)"""
     board = board.reshape(*board.shape[:-1], N, N)
     sh = [*board.shape[:-2], N*N]
     board_px = torch.cat((board[..., :, -1:], board[..., :, :-1]), -1).reshape(sh)
     board_py = torch.cat((board[..., -1:, :], board[..., :-1, :]), -2).reshape(sh)
     board_mx = torch.cat((board[..., :, 1:], board[..., :, :1], ), -1).reshape(sh)
     board_my = torch.cat((board[..., 1:, :], board[..., :1, :], ), -2).reshape(sh)
-    max = action.argmax(-1, keepdim=True)
     return torch.where(
-        max < 2,
-        torch.where(max == 0, board_px, board_mx),
-        torch.where(max == 2, board_py, board_my),
+        action < 0.,
+        torch.where(action < -.5, board_px, board_mx),
+        torch.where(action < .5, board_py, board_my),
     )
 
 
@@ -52,7 +53,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 2, 100 # TODO: This N is ridiculously low, and we still can't even reproduce immediately-successful actions properly…
+N, batch_size = 2, 100 # TODO: This N is ridiculously low…
 action_sz = 64
 
 unroll_len = N
@@ -126,9 +127,10 @@ for iters in range(50000):
             prev_board, prev_action = board, action
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            action = next2(cat(prev_board, target, randn)) # TODO:
+            action = next2(cat(prev_board, target, zeros)) # TODO:
             # future = ev(cat(prev_board, target, randn))
             # action = next(future)
+            # if iters < 2000: action = torch.randn(batch_size, action_sz, device=device)
             if action_min:
                 a1, a2, arest = action.split((1, 1, action.shape[-1]-2), -1)
                 action_candidates = [cat(a1, a2, arest), cat(a1, a2, arest), cat(-a1, -a2, arest), cat(-a2, -a1, arest)]
@@ -143,7 +145,7 @@ for iters in range(50000):
                             min_dist = torch.where(mask, dist, min_dist)
                 action = min_action
 
-            board = env_step(N, prev_board, action[..., 0:4])
+            board = env_step(N, prev_board, action[..., 0:1]) # TODO: 0:4
             # print(target[0].cpu().numpy(), ':', prev_board[0].cpu().numpy(), '→', board[0].cpu().numpy(), ':', action[0, :2].cpu().numpy()) # TODO:
 
             reached |= (board == target).all(-1, keepdim=True)
@@ -173,7 +175,8 @@ for iters in range(50000):
 
         zeros = torch.zeros(board.shape[0], action_sz, device=device)
         # randn = torch.randn(board.shape[0], action_sz, device=device) # TODO:
-        #   (With this, actions collapse too early.)
+        #   (With this, actions collapse too early. TODO: But without this and without artificial sharpening, we can't extract meaningful info from actions… The hell?…)
+        #     (With this, if we pre-act according to a completely-random policy, then it's pretty much fine, though it slowly destabilizes once we act according to the trained policy…)
 
         # TODO: Run, and see what happens.
         #   (Ideally, would see distance going down quickly because good actions get learned instantly, but…)
@@ -183,16 +186,32 @@ for iters in range(50000):
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
         action2 = next2(cat(prev_board, board, randn))
+        action3 = next2(cat(prev_board, board, zeros)) # TODO:
         #   TODO: Why are we unable to learn from the completely-random part of our trajectory?… This is the real problem, isn't it…
         #   next2(1,0)=↔   next2(2,0)=↕
         #   next2(0,1)=↔   next2(3,1)=↕
         #   next2(3,2)=↔   next2(0,2)=↕
         #   next2(2,3)=↔   next2(1,3)=↕
         #   WHY IS THIS SUCH A HARD PROBLEM
-        targ = (action[..., :4] == action[..., :4].max(-1, keepdim=True)[0]).float().detach()
-        trajectory_end_loss = (action2[..., :4] - targ).square().sum() # TODO:
-        #   TODO: …Can we still succeed at action-remembrance with a whole-action loss?…
-        print(prev_board[0].detach().cpu().numpy(), '→', board[0].detach().cpu().numpy(), '+', action2.detach()[0, :4].cpu().numpy(), '=', targ[0].cpu().numpy()) # TODO: …This seems quite detached from reality…
+        #   WHAT IN THE ABSOLUTE FUCK
+        #   …Wait, did removing `randn` fix our problems somehow?
+        #     Maybe it's because we removed randomness… Yeah, think so.
+        # trajectory_end_loss = (action2 - action).square().sum() # TODO:
+        # trajectory_end_loss = (action3[...,0] - action[...,0]).square().sum() # TODO: Convergence is much much faster, but it's not as general.
+        trajectory_end_loss = (action3 - action).square().sum() # TODO:
+        #   TODO: …Can we still succeed at action-remembrance with a whole-action loss?… GAH
+        # same = (action2[..., :4].argmax(-1) == action[..., :4].argmax(-1)).float().mean()
+        # counts = (action[..., :4].detach().argmax(-1, keepdim=True) == torch.arange(0, 4, device=device)).float().sum(0)
+        # counts2 = (action2[..., :4].detach().argmax(-1, keepdim=True) == torch.arange(0, 4, device=device)).float().sum(0)
+        # print(counts2.cpu().numpy(), '=', counts.cpu().numpy(), ':', same.cpu().numpy()) # TODO: …Why does `same` BEGIN at 80%?…
+        def which(a):
+            return torch.where(
+                a[..., 0] < 0.,
+                torch.where(a[..., 0] < -.5, 0, 1),
+                torch.where(a[..., 0] < .5, 2, 3),
+            )
+        print(torch.stack((action[...,0]<-.5, (action[...,0]>=-.5) & (action[...,0]<0.), (action[...,0]>=0.) & (action[...,0]<.5), action[...,0]>=.5), 0).float().sum(-1).cpu().numpy(), (which(action2) == which(action)).float().mean().cpu().numpy(), (which(action3) == which(action)).float().mean().cpu().numpy())
+        #   action2's alignment quickly goes up to 90%, sure, but action3's alignment floats at 25%, even though with proper learning it should have been 50%…
         # trajectory_end_loss = (next(ev(cat(prev_board, board, randn))) - action).square().sum()
         #   TODO: …Why does THIS loss not help us?! It *should* bring us to 100% for N=2 if we analyze the cases (can either finish immediately, or do any action then finish), right? Something is very wrong!
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
