@@ -170,9 +170,8 @@ for iters in range(50000):
 
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
-        action2 = next(ev(cat(prev_board, prev_action, board)))
-        trajectory_end_loss = (action2[...,0] - action[...,0]).square().sum()
-        # trajectory_end_loss = (action2 - action).square().sum() # TODO:
+        action2 = next(ev(cat(prev_board, prev_action, board)).detach()) # Detaching doesn't hurt performance at all.
+        trajectory_end_loss = (action2 - action).square().sum()
         # Debug.
         # def which(a):
         #     return torch.where(
@@ -201,6 +200,7 @@ for iters in range(50000):
         #       …Should we try only learning the rest after 3k/5k iterations are reached?…
         #       …Should `next` accept not only the future but also all its args (*possibly* without the goal), to make futures kind of optional?…
         #         …Should we make `ev`s of destinations the same known quantities, such as all-0s?…
+        #           (This one might be a very good idea, because with our current `ev` loss, it just varies like it's nothing. In fact, `ev_next` will probably end up counting transitions AKA distance to the end, and if 2 paths merge, their representations would have pressure to become the same… which might or might not prioritize shorter paths somehow, maybe if they have more neighbors and thus more pressure…)
 
         # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached (and ensuring that once we reach such a state, we're in "exploratory mode" where we stay in that mode and do actions randomly)…
 
