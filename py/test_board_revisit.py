@@ -189,7 +189,9 @@ for iters in range(50000):
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         # with torch.no_grad():
         #     future = ev_delayed(cat(board, action, target)).detach()
-        trajectory_ev_loss = 0 # (ev_next(ev(cat(prev_board, prev_action, target))) - future).square().sum()
+        trajectory_ev_loss = 0 # (next(ev(cat(prev_board, prev_action, target))) - future).square().sum()
+        #   TODO: …Those random actions, though good for exploration, make this part of the loss useless, right?… What do we do now?
+        #   TODO: COME UP WITH SOMETHING
 
         # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached…
 
