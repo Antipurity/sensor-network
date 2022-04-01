@@ -91,7 +91,7 @@ ev = nn.Sequential( # (board, action, target) → future
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
-ev_delayed = MomentumCopy(ev, .99)
+ev_delayed = MomentumCopy(ev, .999)
 ev_next = nn.Sequential( # prev_future → future
     # (For BYOL of `ev`.)
     nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
@@ -121,7 +121,7 @@ for iters in range(50000):
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
             action = next(ev(cat(prev_board, prev_action, target)))
-            if iters % 100 < 20: action = torch.randn(batch_size, action_sz, device=device)
+            if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device)
             #   (Having this is very much not ideal, but it does actually ensure that the RNN explores a lot.)
             if action_min:
                 a1, a2, arest = action.split((1, 1, action.shape[-1]-2), -1)
@@ -171,7 +171,8 @@ for iters in range(50000):
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
         action2 = next(ev(cat(prev_board, prev_action, board)))
-        trajectory_end_loss = (action2 - action).square().sum()
+        trajectory_end_loss = (action2[...,0] - action[...,0]).square().sum()
+        # trajectory_end_loss = (action2 - action).square().sum() # TODO:
         # Debug.
         # def which(a):
         #     return torch.where(
@@ -183,17 +184,27 @@ for iters in range(50000):
         # B = torch.stack((action2[...,0]<-.5, (action2[...,0]>=-.5) & (action2[...,0]<0.), (action2[...,0]>=0.) & (action2[...,0]<.5), action2[...,0]>=.5), 0)
         # print(A.float().sum(-1).cpu().numpy(), ((A == B) & (A | B)).float().mean(-1).cpu().numpy()) # TODO: …Why is the actual action matched 100% of the time, but actual reachability is like 55%?…
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
-        # prev_future = ev(cat(prev_board, prev_action, target)) # TODO: …But `target` is random, so this part of the loss is completely useless.
-        #   …So this is a 2-part loss after all, then?…
+        prev_future = ev(cat(prev_board, prev_action, target))
         trajectory_continuation_loss = 0 # (next(prev_future) - action).square().sum()
+        #   TODO: This loss is exactly the same as `action2` but with a random `target`, which will ABSOLUTELY average over `target` and make it completely meaningless…
+        #   …Should we use `next_future` here *maybe*?… But past/future meanings don't match up then…
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         # with torch.no_grad():
-        #     future = ev_delayed(cat(board, action, target)).detach()
-        trajectory_ev_loss = 0 # (next(ev(cat(prev_board, prev_action, target))) - future).square().sum()
+        #     future = ev(cat(board, action, target)).detach()
+        trajectory_ev_loss = 0 # (ev_next(prev_future) - future).square().sum()
+        #   (Can't help but notice that this loss-component alone removes 20% of reachability.)
         #   TODO: …Those random actions, though good for exploration, make this part of the loss useless, right?… What do we do now?
         #   TODO: COME UP WITH SOMETHING
+        #     …We need a trajectory-description, and to make the prev-trajectory the same as (or transforms-into) the next-trajectory…
+        #     …But we also need to make sure that same-trajectory-description actions are still followed…
+        #       …Should we preserve the trajectory-destination in the replay-buffer, and train same-trajectory `next` with `action`?…
+        #       …Should we try only learning the rest after 3k/5k iterations are reached?…
+        #       …Should `next` accept not only the future but also all its args (*possibly* without the goal), to make futures kind of optional?…
+        #         …Should we make `ev`s of destinations the same known quantities, such as all-0s?…
 
-        # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached…
+        # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached (and ensuring that once we reach such a state, we're in "exploratory mode" where we stay in that mode and do actions randomly)…
+
+        # …A novelty-reward for proposing goals could be the misprediction of next-future by prev-future, very similarly to Random Network Distillation, so that we automatically prioritize areas that we're not proficient in…
 
 
 
