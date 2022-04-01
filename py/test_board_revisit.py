@@ -53,7 +53,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 2, 100 # TODO: This N is ridiculously low…
+N, batch_size = 4, 100 # TODO: Even like this, 60% is quite reachable. But can we reach 100%, by extending whole trajectories back?…
 action_sz = 64
 
 unroll_len = N
