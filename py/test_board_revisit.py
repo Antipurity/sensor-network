@@ -79,24 +79,15 @@ next = nn.Sequential( # future → action
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
-next2 = nn.Sequential( # (board, action, target) → action
-    # TODO: Remove.
-    nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
-).to(device)
 future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
     nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, bootstrap_discount.shape[0]),
 ).to(device)
-ev = nn.Sequential( # (board, target, randn) → future
-    # TODO: Also accept the action (which is not necessary in this full-info env).
-    # TODO: Don't accept `randn`, since it's apparently evil.
+ev = nn.Sequential( # (board, action, target) → future
     # (The `ev`entual future of a cell. …Though this name doesn't seem to match with what it's used for…)
-    nn.Linear(N*N + N*N + action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+    nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
@@ -108,7 +99,7 @@ ev_next = nn.Sequential( # prev_future → future
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
-opt = torch.optim.Adam([*next.parameters(), *next2.parameters(), *future_dist.parameters(), *ev.parameters(), *ev_next.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters(), *ev_next.parameters()], lr=1e-3)
 
 for iters in range(50000):
     # Sample a batch of trajectories.
@@ -129,9 +120,7 @@ for iters in range(50000):
             prev_board, prev_action = board, action
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            action = next2(cat(prev_board, prev_action, target)) # TODO: Use `ev` instead.
-            # future = ev(cat(prev_board, target, randn))
-            # action = next(future)
+            action = next(ev(cat(prev_board, prev_action, target)))
             if iters % 100 < 20: action = torch.randn(batch_size, action_sz, device=device)
             #   (Having this is very much not ideal, but it does actually ensure that the RNN explores a lot.)
             if action_min:
@@ -181,9 +170,8 @@ for iters in range(50000):
 
 
         # Remember ends of trajectories: `next(ev(goal=board)) = action`.
-        action2 = next2(cat(prev_board, prev_action, board)) # TODO: The FULL loss.
-        trajectory_end_loss = (action2 - action).square().sum() # TODO:
-        #   TODO: Use `ev`, which we should learn so that trajectories end up at targets.
+        action2 = next(ev(cat(prev_board, prev_action, board)))
+        trajectory_end_loss = (action2 - action).square().sum()
         # Debug.
         # def which(a):
         #     return torch.where(
@@ -195,13 +183,17 @@ for iters in range(50000):
         # B = torch.stack((action2[...,0]<-.5, (action2[...,0]>=-.5) & (action2[...,0]<0.), (action2[...,0]>=0.) & (action2[...,0]<.5), action2[...,0]>=.5), 0)
         # print(A.float().sum(-1).cpu().numpy(), ((A == B) & (A | B)).float().mean(-1).cpu().numpy()) # TODO: …Why is the actual action matched 100% of the time, but actual reachability is like 55%?…
         # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
-        # prev_future = ev(cat(prev_board, target, randn)) # TODO: …But `target` is random, so this part of the loss is completely useless.
+        # prev_future = ev(cat(prev_board, prev_action, target)) # TODO: …But `target` is random, so this part of the loss is completely useless.
         #   …So this is a 2-part loss after all, then?…
         trajectory_continuation_loss = 0 # (next(prev_future) - action).square().sum()
         # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
         # with torch.no_grad():
-        #     future = ev_delayed(cat(board, target, randn)).detach()
-        trajectory_ev_loss = 0 # (ev_next(ev(cat(prev_board, target, randn))) - future).square().sum()
+        #     future = ev_delayed(cat(board, action, target)).detach()
+        trajectory_ev_loss = 0 # (ev_next(ev(cat(prev_board, prev_action, target))) - future).square().sum()
+
+        # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached…
+
+
 
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         # micro_dist = (board - target).abs().sum(-1, keepdim=True)
