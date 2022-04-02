@@ -169,7 +169,10 @@ def replay():
         goal = state[torch.randperm(state.shape[0], device=device)]
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
+        # TODO: A loss for `future_dist(prev_action, prev_state, state, action) = 0`.
+
         # Learn `future_dist` by bootstrapping.
+        #   TODO: Don't rely on L1 distance, instead always assume it to be exactly 1 per step. (No binary encoding right now.)
         action2 = next(cat(prev_action, state, goal))
         # next_action2 = next(cat(action, next_state, goal))
         prev_dist = future_dist(cat(prev_action, prev_state, goal, action))
@@ -180,13 +183,14 @@ def replay():
         dist_loss = (prev_dist - (micro_dist + dist * bootstrap_discount).detach()).square().sum()
 
         # Grad-minimize the replay-sample's distance.
-        dist_min_loss = dist.sum()
+        dist_min_loss = dist.sum() # TODO: Self-imitation should be enough.
 
         # Self-imitation learning, our one hope against more involved goal-reaching and past-coalescence methods (a hope which didn't pan out).
         #   (Whenever predicted-action's distance is higher than past-action's, output the past-action instead.)
         with torch.no_grad():
             prev_dist2 = future_dist(cat(prev_action, prev_state, goal, action2))
         self_imitation_loss = ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().sum(-1, keepdim=True).max(torch.zeros(state.shape[0], 1, device=device))).sum()
+        #   TODO: Don't multiply by distance-difference, but instead predict only if `action`-dist is lower-than-or-equal-to `action2`-dist.
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
         # with torch.no_grad():
@@ -255,7 +259,8 @@ for iter in range(500000):
 #     - TODO: …First try this on a 2D grid world, since we'd actually be able to easily notice success, and we have more presence there anyway…
 #   - Visualization:
 #     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
-#   - If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
+#   - TODO: If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
+#   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `next`, and remember its momentum-delayed result.
 
 # TODO: …Is it possible to invert the distance function, it now being (the equivalent of) steps-since-start? Can we use it to learn actions, not start-first (uhh this assessment seems questionable, since at the end the distance-differences should be much higher with distance-to-goal), but end-first, like "whichever prior RNN-state has the shortest distance, is the one to come-from"?… Do we need backward neural-nets for this…
 
@@ -265,9 +270,7 @@ for iter in range(500000):
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
-#   - TODO: Instead of simple next-frame prediction, embed inputs once again. (If goals are also in embedded-space, then their unpredictability should also get washed away.)
-#     - …Actually, shouldn't embedding-prediction be able to wash out different pasts of the same future too?… (Not sure if we need fully bidirectional RNNs for this, or just a reverse `next`, or even just an impl trick; but at least we have a *hint* of how to extend the goal-space past the input-space.)
-#     - (Might want to *learn* the delayed target and not just momentum-update it, so that predictions on branches that we haven't seen lately remain somewhat untouched and not magically-correct.)
+#   - TODO: Instead of simple next-frame prediction, embed inputs once again. (If goals are also in embedded-space, then their unpredictability should also get washed away.) …Though, self-imitation's action-prediction is pretty much BYOL, isn't it?
 
 
 
