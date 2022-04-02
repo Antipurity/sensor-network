@@ -93,7 +93,7 @@ replays_per_step = 8
 
 
 
-next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `randn` arg (since we don't have `embed` anymore).
+act = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `randn` arg (since we don't have `embed` anymore).
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
     SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
@@ -121,12 +121,12 @@ action_grad = nn.Sequential( # (action, input, goal) → action_grad
 ).to(device)
 
 class WithInput(nn.Module):
-    def __init__(self, next, future_dist, action_grad):
+    def __init__(self, act, future_dist, action_grad):
         super().__init__()
-        self.next, self.future_dist, self.action_grad = next, future_dist, action_grad
+        self.act, self.future_dist, self.action_grad = act, future_dist, action_grad
     def forward(self, prev_action, input, randn, goal):
-        return self.next(cat(prev_action, input, goal))
-step = WithInput(next, future_dist, action_grad)
+        return self.act(cat(prev_action, input, goal))
+step = WithInput(act, future_dist, action_grad)
 optim = torch.optim.Adam(step.parameters(), lr=lr)
 
 
@@ -169,10 +169,11 @@ def replay():
 
         # If you wanted to go to `state`, well, success.
         zero_dist_loss = future_dist(cat(prev_action, prev_state, state)).square().sum()
+        # TODO: …Do bad things happen because this loss interferes with the loss right below?…
+        #   But how would we not?
 
         # If you wanted to go somewhere else, well, that's 1 more step, assuming that we do go there.
-        # TODO: Rename `next` to `act`.
-        action2 = next(cat(prev_action, state, goal))
+        action2 = act(cat(prev_action, state, goal))
         prev_dist = future_dist(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             dist = future_dist(cat(action, state, goal))
@@ -181,7 +182,7 @@ def replay():
             #   (We don't predict `state2` from `action2` here, so this is not perfect.)
             #     TODO: IMPERFECTION; how could we solve it?
             #       …Make `future_dist` take not the current but the previous state?… But isn't its input-action intended as a state-descriptor?…
-            #       …Remove the `state` arg entirely, and rely on gradient to make `next` predictive of the next state?…
+            #       …Remove the `state` arg entirely, and rely on gradient to make `act` predictive of the next state?…
             #       …Can't see another option here…
             target_dist = 1. + dist * bootstrap_discount
         dist_loss = (prev_dist - target_dist).square().sum()
@@ -251,25 +252,25 @@ for iter in range(500000):
 #     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.) (Goals generate challenges, actions solve them: curriculum learning, ideally… Not too easy, not too hard…)
 #       - TODO: Possibly, have a separate objective/metric for a reachable goal's difficulty which we can learn and seek out… How to measure the difficulty of a goal — sum of distance-prediction losses?… But what if it's either too hard or inherently unpredictable…
 #       - TODO: …Also, isn't it possible to learn that, when the goal is literally right next to us (like, *is* the next state in the replay buffer, and we know the action), we should do the action that led to it? Why can't we spread *this* knowledge backward somehow (learn a immediate-goal net: from state and goal, return the immediate goal that the action will go to?? how is that different from just an action…), not the unreliable uncertain distance-to-goal? What do we need to learn, assuming that all neighbors already lead to the goal, so that we too lead to the goal, to construct the whole path, correct by induction?… Do we want some "if we do this action, will we end up at this goal" net, which we can train to be preserved throughout a trajectory (…but with what eventual goal?)?…
-#         - …Should intermediate goals transform in such a way that they become the real goal by the end of the trajectory (possibly through joint-embedding and making next(embed(prev))=embed_delayed(cur))?… How would we learn this from a replay buffer; do we preserve intermediate goals too?… (Like the old `ev` but grounded in actually-reached goals…)
-#   - TODO: Implement & test 2-part loss for shortest-path-learning: `next(prev_action=ev(prev_action, prev_state, goal=state), prev_state, goal=state) = action` (ground in what we actually achieve) and `next(prev_action=ev(prev_action, prev_state, goal), prev_state, goal) = ev_delayed(action, state, goal)` (propagate how-to-achieve to the past) (`ev` is what-to-achieve-right-now, `action`-sized). Though, how to see whether we've actually achieved anything is unclear…
+#         - …Should intermediate goals transform in such a way that they become the real goal by the end of the trajectory (possibly through joint-embedding and making act(embed(prev))=embed_delayed(cur))?… How would we learn this from a replay buffer; do we preserve intermediate goals too?… (Like the old `ev` but grounded in actually-reached goals…)
+#   - TODO: Implement & test 2-part loss for shortest-path-learning: `act(prev_action=ev(prev_action, prev_state, goal=state), prev_state, goal=state) = action` (ground in what we actually achieve) and `act(prev_action=ev(prev_action, prev_state, goal), prev_state, goal) = ev_delayed(action, state, goal)` (propagate how-to-achieve to the past) (`ev` is what-to-achieve-right-now, `action`-sized). Though, how to see whether we've actually achieved anything is unclear…
 #     - (This form seems to be unstable.)
-#     - TODO: Or, make action-propagation predict `action`, not some func of it (which is sure to cause drift, making all non-final actions unable to be learned): `next(ev(prev_action, prev_state, goal=state)) = action` (copy ends of trajectories) and `next(ev(prev_action, prev_state, goal)) = action` (copy actions of non-terminal trajectories) and `ev_next(ev(prev_action, prev_state, goal)) = ev_delayed(action, state, goal)` (ensure that trajectories are actually followed, and we don't just switch between them).
+#     - TODO: Or, make action-propagation predict `action`, not some func of it (which is sure to cause drift, making all non-final actions unable to be learned): `act(ev(prev_action, prev_state, goal=state)) = action` (copy ends of trajectories) and `act(ev(prev_action, prev_state, goal)) = action` (copy actions of non-terminal trajectories) and `ev_act(ev(prev_action, prev_state, goal)) = ev_delayed(action, state, goal)` (ensure that trajectories are actually followed, and we don't just switch between them).
 #     - TODO: …First try this on a 2D grid world, since we'd actually be able to easily notice success, and we have more presence there anyway…
 #   - Visualization:
 #     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
 #   - TODO: If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
-#   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `next`, and remember its momentum-delayed result.
+#   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `act`, and remember its momentum-delayed result.
 
 # TODO: …Is it possible to invert the distance function, it now being (the equivalent of) steps-since-start? Can we use it to learn actions, not start-first (uhh this assessment seems questionable, since at the end the distance-differences should be much higher with distance-to-goal), but end-first, like "whichever prior RNN-state has the shortest distance, is the one to come-from"?… Do we need backward neural-nets for this…
 
 # - After we've established a more solid base of operations, retry what we did in the past:
 #   - TODO: Gradient descent again.
-#   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
+#   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `act`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
 #   - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL.
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
-#     - TODO: An extra loss on `next` of `prev_action`: `(next(prev_action) - action) * (dist(next(prev_action)) - dist(action)).detach()`.
-#     - TODO: Make that best-past-action a `.detach()`ed input to `next` instead (`best_next: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
+#     - TODO: An extra loss on `act` of `prev_action`: `(act(prev_action) - action) * (dist(act(prev_action)) - dist(action)).detach()`.
+#     - TODO: Make that best-past-action a `.detach()`ed input to `act` instead (`best_act: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
 #   - TODO: Instead of simple next-frame prediction, embed inputs once again. (If goals are also in embedded-space, then their unpredictability should also get washed away.) …Though, self-imitation's action-prediction is pretty much BYOL, isn't it?
 
 
@@ -287,4 +288,4 @@ for iter in range(500000):
 
 
 # TODO: Gotta get back, back to the past:
-#   TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `next`-dist-min and self-imitation) and self-targeting BPTT (with `next`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
+#   TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `act`-dist-min and self-imitation) and self-targeting BPTT (with `act`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
