@@ -53,7 +53,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 4, 100 # TODO: Even like this, 60% is quite reachable. But can we reach 100%, by extending whole trajectories back?…
+N, batch_size = 4, 100 # TODO: Even like this, 70% is quite reachable. But can we reach 100%, by extending whole trajectories back?
 action_sz = 64
 
 unroll_len = N
@@ -61,7 +61,7 @@ action_min = False # If `True`, we enum the 4 actions to pick the min-future-dis
 grad_min = False # With our 4 discrete actions, grad-min just doesn't work no matter what we try.
 #   (Grad-min assumes a smooth landscape. Consequences of actions don't sound like a smooth function.)
 #   (What else can we do? Learn a generative model of distinct-outcome actions with low distance, and still do action-min on enumerably-few actions?)
-self_imitation = False # Makes `next` predict its min-dist version.
+self_imitation = False # Makes `act` predict its min-dist version.
 #   (Like [SIL](https://arxiv.org/abs/1806.05635) but without probabilities and with learned R.)
 #   (Much better than `grad_min`, much worse than `action_min`.)
 
@@ -74,8 +74,9 @@ bootstrap_discount = torch.tensor([.99], device=device)
 
 
 
-next = nn.Sequential( # future → action
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+act = nn.Sequential( # (prev_board, future) → action
+    # (TODO: …Also, wouldn't `act` want to know not which ring it's in, but which ring it's going to? And, always go to the closer-to-the-goal ring, which a loss should ensure…)
+    nn.Linear(N*N + action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
@@ -85,21 +86,21 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, bootstrap_discount.shape[0]),
 ).to(device)
-ev = nn.Sequential( # (board, action, target) → future
+ev = nn.Sequential( # (board, target) → future
     # (The `ev`entual future of a cell. …Though this name doesn't seem to match with what it's used for…)
-    nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+    nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
 ev_delayed = MomentumCopy(ev, .999)
-ev_next = nn.Sequential( # prev_future → future
+ev_act = nn.Sequential( # (prev_board, prev_future, action) → future
     # (For BYOL of `ev`.)
-    nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+    nn.Linear(N*N + action_sz + action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
-opt = torch.optim.Adam([*next.parameters(), *future_dist.parameters(), *ev.parameters(), *ev_next.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*act.parameters(), *future_dist.parameters(), *ev.parameters(), *ev_act.parameters()], lr=1e-3)
 
 for iters in range(50000):
     # Sample a batch of trajectories.
@@ -120,7 +121,7 @@ for iters in range(50000):
             prev_board, prev_action = board, action
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            action = next(ev(cat(prev_board, prev_action, target)))
+            action = act(cat(prev_board, ev(cat(prev_board, target))))
             if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device)
             #   (Having this is very much not ideal, but it does actually ensure that the RNN explores a lot.)
             if action_min:
@@ -169,8 +170,8 @@ for iters in range(50000):
         # TODO: Why isn't it working?
 
 
-        # Remember ends of trajectories: `next(ev(goal=board)) = action`.
-        action2 = next(ev(cat(prev_board, prev_action, board)).detach()) # Detaching doesn't hurt performance at all.
+        # Remember ends of trajectories: `act(ev(goal=board)) = action`.
+        action2 = act(cat(prev_board, ev(cat(prev_board, board))).detach()) # Detaching doesn't hurt performance at all.
         trajectory_end_loss = (action2 - action).square().sum()
         # Debug.
         # def which(a):
@@ -182,25 +183,32 @@ for iters in range(50000):
         # A = torch.stack((action[...,0]<-.5, (action[...,0]>=-.5) & (action[...,0]<0.), (action[...,0]>=0.) & (action[...,0]<.5), action[...,0]>=.5), 0)
         # B = torch.stack((action2[...,0]<-.5, (action2[...,0]>=-.5) & (action2[...,0]<0.), (action2[...,0]>=0.) & (action2[...,0]<.5), action2[...,0]>=.5), 0)
         # print(A.float().sum(-1).cpu().numpy(), ((A == B) & (A | B)).float().mean(-1).cpu().numpy()) # TODO: …Why is the actual action matched 100% of the time, but actual reachability is like 55%?…
-        # Remember non-terminal actions of trajectories: `next(ev(goal)) = action`.
-        prev_future = ev(cat(prev_board, prev_action, target))
-        trajectory_continuation_loss = 0 # (next(prev_future) - action).square().sum()
+        # Remember non-terminal actions of trajectories: `act(ev(goal)) = action`.
+        prev_future = ev(cat(prev_board, target))
+        trajectory_continuation_loss = 0 # (act(cat(prev_board, prev_future)) - action).square().sum()
         #   TODO: This loss is exactly the same as `action2` but with a random `target`, which will ABSOLUTELY average over `target` and make it completely meaningless…
         #   …Should we use `next_future` here *maybe*?… But past/future meanings don't match up then…
-        # Crystallize trajectories, to not switch between them at runtime: `ev_next(ev(prev)) = ev(next)`.
+        # Crystallize trajectories, to not switch between them at runtime: `ev_act(ev(prev)) = ev(next)`.
         # with torch.no_grad():
-        #     future = ev(cat(board, action, target)).detach()
-        trajectory_ev_loss = 0 # (ev_next(prev_future) - future).square().sum()
+        #     future = ev(cat(board, target)).detach()
+        trajectory_ev_loss = 0 # (ev_act(cat(prev_board, prev_future, action)) - future).square().sum()
         #   (Can't help but notice that this loss-component alone removes 20% of reachability.)
         #   TODO: …Those random actions, though good for exploration, make this part of the loss useless, right?… What do we do now?
         #   TODO: COME UP WITH SOMETHING
         #     …We need a trajectory-description, and to make the prev-trajectory the same as (or transforms-into) the next-trajectory…
         #     …But we also need to make sure that same-trajectory-description actions are still followed…
-        #       …Should we preserve the trajectory-destination in the replay-buffer, and train same-trajectory `next` with `action`?…
+        #       …Should we preserve the trajectory-destination in the replay-buffer, and train same-trajectory `act` with `action`?…
         #       …Should we try only learning the rest after 3k/5k iterations are reached?…
-        #       …Should `next` accept not only the future but also all its args (*possibly* without the goal), to make futures kind of optional?…
+        #       TODO: …Should `act` accept not only the future but also all its args (*possibly* without the goal), to make futures kind of optional?…
         #         …Should we make `ev`s of destinations the same known quantities, such as all-0s?…
-        #           (This one might be a very good idea, because with our current `ev` loss, it just varies like it's nothing. In fact, `ev_next` will probably end up counting transitions AKA distance to the end, and if 2 paths merge, their representations would have pressure to become the same… which might or might not prioritize shorter paths somehow, maybe if they have more neighbors and thus more pressure…)
+        #           (This one might be a very good idea, because with our current `ev` loss, it just varies like it's nothing. In fact, `ev_act` will probably end up counting transitions AKA distance to the end, and if 2 paths merge, their representations would have pressure to become the same… which might or might not prioritize shorter paths somehow, maybe if they have more neighbors and thus more pressure…)
+        #             (This should create equal-embedding rings around targets. Meaning that `act` won't have enough information to decide on the action. …Would it really create rings? The farther thing will become the average of closer things that it can reach with an action, but the closer things would get momentum-updated, without any averaging done…)
+        #               …Should we try replacing momentum-updating with separate `ev_prev` and `ev`?…
+        #                 But how to ensure that the next step's ev_prev is the prev step's ev without momentum-updating? Just `ev_prev(board, action) = ev(prev_board)`, possibly with *another* neural net to go in reverse to `ev_act`?
+        #                   `ev_act(cat(prev_board, ev_prev(prev_board), action)) = ev(board).detach();  ev(board) = ev_prev(next_board)`…
+        #                 (Can we use `ev_act` anywhere?…)
+        #               …Should we log an image of the first three numbers (colors) of same-goal `ev` futures, so that we can try creating those circles?…
+        #     TODO: …Intermediate-action-prediction is actually good to have (can't really act otherwise), but we're stifled by the target being averaged… Is there really no way to remember which action goes exactly to the next `ev`-future?…
 
         # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached (and ensuring that once we reach such a state, we're in "exploratory mode" where we stay in that mode and do actions randomly)…
 
@@ -211,15 +219,15 @@ for iters in range(50000):
         # Bootstrapping: `future_dist(prev) = future_dist(next)*p + micro_dist(next)`
         # micro_dist = (board - target).abs().sum(-1, keepdim=True)
         # prev_dist = future_dist(cat(prev_board, action, target.detach()))
-        # next_action = next(future)
+        # next_action = act(cat(board, future))
         # for p in future_dist.parameters(): p.requires_grad_(False)
         # dist = future_dist(cat(board, next_action, target.detach()))
         # for p in future_dist.parameters(): p.requires_grad_(True)
         # prev_dist_targ = dist * bootstrap_discount + micro_dist
         # dist_pred_loss = (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
-        # Min-dist self-imitation, by `next`.
-        # action2 = next(prev_future)
+        # Min-dist self-imitation, by `act`.
+        # action2 = act(cat(prev_board, prev_future))
         # prev_dist2 = future_dist(cat(prev_board, action2, target.detach()))
         # prev_dist, prev_dist2 = prev_dist.sum(-1, keepdim=True), prev_dist2.sum(-1, keepdim=True)
         # self_imitation_loss = ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().max(zeros)).sum()
