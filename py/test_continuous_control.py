@@ -183,9 +183,9 @@ def replay():
         # Self-imitation learning: if the past was better than us, copy the past.
         #   (Gradient descent on `dist` by `action2` doesn't seem to be good enough for optimization on trajectories, especially since consecutive steps can easily belong to different-goal trajectories.)
         with torch.no_grad():
-            prev_dist2 = future_dist(cat(prev_action, prev_state, goal))
-            target = torch.where(prev_dist < prev_dist2, action, action2) # Min distance.
-            # TODO: …Prev distances are not good enough (especially if we remove `action` from `future_dist`), we need to consider future distances.
+            dist2 = future_dist(cat(action2, state, goal))
+            #   (We don't predict `state2` from `action2` here, so this is not perfect.)
+            target = torch.where(dist < dist2, action, action2) # Min distance.
         self_imitation_loss = (action2 - target).square().sum()
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
@@ -261,6 +261,7 @@ for iter in range(500000):
 # TODO: …Is it possible to invert the distance function, it now being (the equivalent of) steps-since-start? Can we use it to learn actions, not start-first (uhh this assessment seems questionable, since at the end the distance-differences should be much higher with distance-to-goal), but end-first, like "whichever prior RNN-state has the shortest distance, is the one to come-from"?… Do we need backward neural-nets for this…
 
 # - After we've established a more solid base of operations, retry what we did in the past:
+#   - TODO: Gradient descent again.
 #   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `next`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
 #   - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL.
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
