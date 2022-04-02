@@ -102,9 +102,9 @@ next = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `
     ) for _ in range(1)],
     nn.LayerNorm(action_sz),
 ).to(device)
-future_dist = nn.Sequential( # (prev_action, prev_state, goal, action) → dist
+future_dist = nn.Sequential( # (prev_action, prev_state, goal) → dist
     # (Returns the sum-of-future-L1-distances-to-`goal` for the considered `action`, the less the better.)
-    SkipConnection(nn.Linear(action_sz + input_sz + input_sz + action_sz, action_sz)),
+    SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
@@ -170,21 +170,20 @@ def replay():
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
         # If you wanted to go to `state`, well, success.
-        zero_dist_loss = future_dist(cat(prev_action, prev_state, state, action)).square().sum()
+        zero_dist_loss = future_dist(cat(prev_action, prev_state, state)).square().sum()
 
         # If you wanted to go somewhere else, well, that's 1 more step.
         action2 = next(cat(prev_action, state, goal))
         # next_action2 = next(cat(action, next_state, goal))
-        prev_dist = future_dist(cat(prev_action, prev_state, goal, action)) # TODO: `future_dist` should be independent of `action` so that we could average distances per-state, and in doing so re-evaluate which action has less distance and thus is worth repeating.
+        prev_dist = future_dist(cat(prev_action, prev_state, goal))
         with torch.no_grad():
-            dist = future_dist(cat(action, state, goal, next_action))
+            dist = future_dist(cat(action, state, goal))
         dist_loss = (prev_dist - (1 + dist * bootstrap_discount).detach()).square().sum()
 
         # Self-imitation learning: if the past was better than us, copy the past.
-        #   (Gradient descent on `dist` by `action` doesn't seem to be good enough for optimization on trajectories, especially since consecutive steps can easily belong to different-goal trajectories.)
-        #     TODO: …Of course we couldn't optimize anything: `dist` uses 
+        #   (Gradient descent on `dist` by `action2` doesn't seem to be good enough for optimization on trajectories, especially since consecutive steps can easily belong to different-goal trajectories.)
         with torch.no_grad():
-            prev_dist2 = future_dist(cat(prev_action, prev_state, goal, action2))
+            prev_dist2 = future_dist(cat(prev_action, prev_state, goal))
             target = torch.where(prev_dist < prev_dist2, action, action2) # Min distance.
             # TODO: …Prev distances are not good enough (especially if we remove `action` from `future_dist`), we need to consider future distances.
         self_imitation_loss = (action2 - target).square().sum()
