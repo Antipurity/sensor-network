@@ -255,6 +255,7 @@ for iter in range(500000):
 #     - TODO: …First try this on a 2D grid world, since we'd actually be able to easily notice success, and we have more presence there anyway…
 #   - Visualization:
 #     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
+#   - If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
 
 # TODO: …Is it possible to invert the distance function, it now being (the equivalent of) steps-since-start? Can we use it to learn actions, not start-first (uhh this assessment seems questionable, since at the end the distance-differences should be much higher with distance-to-goal), but end-first, like "whichever prior RNN-state has the shortest distance, is the one to come-from"?… Do we need backward neural-nets for this…
 

@@ -53,7 +53,8 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 4, 100 # TODO: Even like this, 70% is quite reachable. But can we reach 100%, by extending whole trajectories back?
+N, batch_size = 8, 100 # TODO: Even like this, 70% is quite reachable. But can we reach 100%, by extending whole trajectories back?
+#   TODO: N=4
 action_sz = 64
 
 unroll_len = N
@@ -108,7 +109,7 @@ def show_ev(plt, key):
         target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
         future = ev(cat(board, target))
         v = future[..., :3].reshape(N, N, 3)
-        colors = (v - v.min(-1, keepdim=True)[0]) / (v.max(-1, keepdim=True)[0] - v.min(-1, keepdim=True)[0])
+        colors = (v - v.min()) / (v.max() - v.min())
         plt.imshow(colors.cpu().numpy(), label=key)
 
 for iters in range(50000):
@@ -154,7 +155,7 @@ for iters in range(50000):
             dist_mean += micro_dist.mean(0).sum() # Something to log.
 
             index = (iters*unroll_len + u) % len(replay_buffer)
-            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach(), randn)
+            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach(), randn, target)
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -164,6 +165,7 @@ for iters in range(50000):
         board = torch.cat([c[2] for c in choices], 0)
         action = torch.cat([c[3] for c in choices], 0)
         randn = torch.cat([c[4] for c in choices], 0)
+        target = torch.cat([c[5] for c in choices], 0)
 
         # target = torch.where( # This actually seems to improve convergence speed 2×.
         #     #   (`prev_board` does not. More/less than 50% of the time, does not.)
@@ -172,7 +174,7 @@ for iters in range(50000):
         #     board,
         #     board[torch.randperm(board.shape[0], device=device)],
         # )
-        target = board[torch.randperm(board.shape[0], device=device)]
+        # target = board[torch.randperm(board.shape[0], device=device)]
 
         zeros = torch.zeros(board.shape[0], action_sz, device=device)
 
@@ -180,7 +182,8 @@ for iters in range(50000):
 
 
         # Remember ends of trajectories: `act(ev(goal=board)) = action`.
-        action2 = act(cat(prev_board, ev(cat(prev_board, board))).detach()) # Detaching doesn't hurt performance at all.
+        future_here = ev(cat(prev_board, board))
+        action2 = act(cat(prev_board, future_here).detach()) # Detaching doesn't hurt performance at all.
         trajectory_end_loss = (action2 - action).square().sum()
         # Debug.
         # def which(a):
@@ -214,13 +217,41 @@ for iters in range(50000):
         #             (This should create equal-embedding rings around targets. Meaning that `act` won't have enough information to decide on the action. …Would it really create rings? The farther thing will become the average of closer things that it can reach with an action, but the closer things would get momentum-updated, without any averaging done… …Starting to think that since `ev_act` depends on the action, there would be no rings, and we'd need to explicitly learn the distance… But if that's the case, then why do we need `ev` at all, we can just pin down zero-distance at ends and increment it by 1 elsewhere…)
         #               …Should we try replacing momentum-updating with separate `ev_prev` and `ev`?…
         #                 But how to ensure that the next step's ev_prev is the prev step's ev without momentum-updating? Just `ev_prev(board, action) = ev(prev_board)`, possibly with *another* neural net to go in reverse to `ev_act`?
-        #                   `ev_act(cat(prev_board, ev_prev(prev_board), action)) = ev(board).detach();  ev(prev_board) = ev_prev(board)`…
+        #                   `ev_act(cat(prev_board, ev_prev(prev_board), action)) = ev(board).detach();  ev(prev_board) = ev_prev(board).detach()`…
         #                 (Can we use `ev_act` anywhere?…)
         #     TODO: …Intermediate-action-prediction is actually good to have (can't really act otherwise), but we're stifled by the target being averaged… Is there really no way to remember which action goes exactly to the next `ev`-future?…
+        #       …And, how would we know which action is *best* and which are just superfluous… Don't we really need that distance?… Is distance the devil, or just a natural side-effect of finding the shortest path, like in Dijkstra's algo (in which case, well, it can be easily slotted into the bigger framework)?
+
+        # Pin down the result of `ev` at trajectory ends.
+        # with torch.no_grad():
+        #     last_future = torch.eye(1, action_sz, device=device).expand(board.shape[0], action_sz)
+        #     last_future = (last_future - last_future.mean(-1, keepdim=True)) / (last_future.std(-1, keepdim=True) + 1e-5)
+        # trajectory_ev_loss = (future_here - last_future).square().sum()
+        # TODO: Just having this results in all `ev`s becoming exactly the same… How to extend the trajectory? …Actually, even with extension, results are nearly-indistinguishable…
+        # Preserve the `ev` trajectory.
+        with torch.no_grad():
+            future = ev_delayed(cat(board, target)).detach()
+        trajectory_continuation_loss = (ev_act(cat(prev_board, ev(cat(prev_board, target)), action)) - future).square().sum()
+        # trajectory_continuation_loss = (ev(cat(prev_board, target)) - future).square().sum()
+        # Remember actions that lead to the same result (…probably).
+        #   …But we have no way of ensuring that actions actually go to the goal, only that they continue where they were going…
+        #   …If only we had a way to ensure that next_action ended up at the same place due to our action or something…
+        future = ev(cat(prev_board, target)) # …Oh no, this averages over `target`s, and so it cannot be done.
+        action3 = act(cat(prev_board, future).detach())
+        trajectory_ev_loss = (action3 - action).square().sum()
+        #   2 1 2
+        # 2 1 0 1 2
+        #   2 1 2
+        #     2
+        # Ensuring this with loss requires that the past predicts the future (so that the future becomes smudged into one color), if we think of actions as always pointing to 0… However, if we also have actions that point away from 0, then such a loss would jumble everything into a constant.
+        #   Trajectory-preservation is just good for nothing.
+        #   …If we did preserve the original target, would things be different? (It *is* too bad to be used, but just want to see what happens. …Doesn't even look different, can't even remember its own trajectories.)
+
 
         # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached (and ensuring that once we reach such a state, we're in "exploratory mode" where we stay in that mode and do actions randomly)…
 
         # …A novelty-reward for proposing goals could be the misprediction of next-future by prev-future, very similarly to Random Network Distillation, so that we automatically prioritize areas that we're not proficient in…
+        #   (If nothing else, this gives an incentive to construct a world model beyond distance-prediction. …Unless distance-misprediction can also be the novelty-reward, maybe even given as an input.)
 
 
 
