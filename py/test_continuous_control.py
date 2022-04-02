@@ -86,7 +86,7 @@ batch_size = 100
 input_sz, action_sz = 2, 128
 lr = 1e-3
 
-bootstrap_discount = .99
+bootstrap_discount = .99 # `future_dist` will have to predict numbers from 0 to 1/(1-this).
 
 replay_buffer = [None] * (1024)
 replays_per_step = 8
@@ -109,7 +109,7 @@ future_dist = nn.Sequential( # (prev_action, prev_state, goal, action) → dist
         nn.ReLU(), nn.LayerNorm(action_sz),
         nn.Linear(action_sz, action_sz),
     ) for _ in range(1)],
-    nn.Linear(action_sz, input_sz),
+    nn.Linear(action_sz, 1),
 ).to(device)
 action_grad = nn.Sequential( # (action, input, goal) → action_grad
     # (Learning from the replay buffer cuts off gradient, so with this synthetic gradient, we could treat actions as RNN states.)
@@ -169,35 +169,32 @@ def replay():
         goal = state[torch.randperm(state.shape[0], device=device)]
         randn = torch.randn(state.shape[0], action_sz, device=device)
 
-        # TODO: A loss for `future_dist(prev_action, prev_state, state, action) = 0`.
+        # If you wanted to go to `state`, well, success.
+        zero_dist_loss = future_dist(cat(prev_action, prev_state, state, action)).square().sum()
 
-        # Learn `future_dist` by bootstrapping.
-        #   TODO: Don't rely on L1 distance, instead always assume it to be exactly 1 per step. (No binary encoding right now.)
+        # If you wanted to go somewhere else, well, that's 1 more step.
         action2 = next(cat(prev_action, state, goal))
         # next_action2 = next(cat(action, next_state, goal))
-        prev_dist = future_dist(cat(prev_action, prev_state, goal, action))
-        micro_dist = (state - goal).abs()
-        for p in future_dist.parameters(): p.requires_grad_(False)
-        dist = future_dist(cat(action, state, goal, next_action))
-        for p in future_dist.parameters(): p.requires_grad_(True)
-        dist_loss = (prev_dist - (micro_dist + dist * bootstrap_discount).detach()).square().sum()
+        prev_dist = future_dist(cat(prev_action, prev_state, goal, action)) # TODO: `future_dist` should be independent of `action` so that we could average distances per-state, and in doing so re-evaluate which action has less distance and thus is worth repeating.
+        with torch.no_grad():
+            dist = future_dist(cat(action, state, goal, next_action))
+        dist_loss = (prev_dist - (1 + dist * bootstrap_discount).detach()).square().sum()
 
-        # Grad-minimize the replay-sample's distance.
-        dist_min_loss = dist.sum() # TODO: Self-imitation should be enough.
-
-        # Self-imitation learning, our one hope against more involved goal-reaching and past-coalescence methods (a hope which didn't pan out).
-        #   (Whenever predicted-action's distance is higher than past-action's, output the past-action instead.)
+        # Self-imitation learning: if the past was better than us, copy the past.
+        #   (Gradient descent on `dist` by `action` doesn't seem to be good enough for optimization on trajectories, especially since consecutive steps can easily belong to different-goal trajectories.)
+        #     TODO: …Of course we couldn't optimize anything: `dist` uses 
         with torch.no_grad():
             prev_dist2 = future_dist(cat(prev_action, prev_state, goal, action2))
-        self_imitation_loss = ((action2 - action.detach()).square() * (prev_dist2 - prev_dist).detach().sum(-1, keepdim=True).max(torch.zeros(state.shape[0], 1, device=device))).sum()
-        #   TODO: Don't multiply by distance-difference, but instead predict only if `action`-dist is lower-than-or-equal-to `action2`-dist.
+            target = torch.where(prev_dist < prev_dist2, action, action2) # Min distance.
+            # TODO: …Prev distances are not good enough (especially if we remove `action` from `future_dist`), we need to consider future distances.
+        self_imitation_loss = (action2 - target).square().sum()
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
         # with torch.no_grad():
         #     daction2 = action_grad(cat(action2, state, goal))
         #     dnext_action2 = action_grad(cat(next_action2, next_state, goal))
         synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum() # TODO:
-        (dist_loss + dist_min_loss + self_imitation_loss + synth_grad_loss).backward()
+        (zero_dist_loss + dist_loss + self_imitation_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
             # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
@@ -209,8 +206,8 @@ def replay():
         # Log them.
         N = state.shape[0]
         log(0, False, pos = pos_histogram)
-        log(1, False, dist_loss = to_np(dist_loss / N))
-        log(2, False, dist_min_loss = to_np(dist_min_loss / N))
+        log(1, False, zero_dist_loss = to_np(zero_dist_loss / N))
+        log(2, False, dist_loss = to_np(dist_loss / N))
         log(3, False, self_imitation_loss = to_np(self_imitation_loss / N))
         log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
         log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
