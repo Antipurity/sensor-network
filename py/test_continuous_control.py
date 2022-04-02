@@ -140,7 +140,7 @@ def reset_goal():
     with torch.no_grad():
         ch = random.choice(replay_buffer)
         if ch is not None:
-            prev_action, prev_state, action, state, next_action, next_state = ch
+            prev_action, prev_state, action, state = ch
             randn = torch.randn(batch_size, action_sz, device=device)
             # goal = state # TODO:
             goal = torch.rand(batch_size, input_sz, device=device)
@@ -149,7 +149,7 @@ def pos_histogram(plt, label):
     x, y = [], []
     for ch in replay_buffer:
         if ch is not None:
-            prev_action, prev_state, action, state, next_action, next_state = ch
+            prev_action, prev_state, action, state = ch
             pos = to_np(state)
             for i in range(pos.shape[0]):
                 x.append(float(pos[i][0])), y.append(float(pos[i][1]))
@@ -162,8 +162,6 @@ def replay():
         prev_state = torch.cat([c[1] for c in choices], 0)
         action = torch.cat([c[2] for c in choices], 0)
         state = torch.cat([c[3] for c in choices], 0)
-        next_action = torch.cat([c[4] for c in choices], 0)
-        next_state = torch.cat([c[5] for c in choices], 0) # TODO: No double-step info. Only simplicity.
         prev_action.requires_grad_(True)
 
         goal = state[torch.randperm(state.shape[0], device=device)]
@@ -195,11 +193,9 @@ def replay():
         self_imitation_loss = (action2 - target_action).square().sum()
 
         # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
-        # next_action2 = next(cat(action, next_state, goal))
         # with torch.no_grad():
         #     daction2 = action_grad(cat(action2, state, goal))
-        #     dnext_action2 = action_grad(cat(next_action2, next_state, goal))
-        synth_grad_loss = 0 # (action2 * daction2.detach()).sum() + (next_action2 * dnext_action2.detach()).sum() # TODO:
+        synth_grad_loss = 0 # (action2 * daction2.detach()).sum() # TODO:
         (zero_dist_loss + dist_loss + self_imitation_loss + synth_grad_loss).backward()
         dprev_action = action_grad(cat(prev_action, prev_state, goal))
         with torch.no_grad():
@@ -223,7 +219,6 @@ def replay():
 
 
 
-prev_data = None
 for iter in range(500000):
     prev_action, prev_state = action, state
     with torch.no_grad():
@@ -239,9 +234,7 @@ for iter in range(500000):
     if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
     if random.randint(1, 32) == 1: reset_goal()
 
-    if prev_data is not None:
-        replay_buffer[iter % len(replay_buffer)] = (*prev_data, prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
-    prev_data = (prev_action.detach(), prev_state.detach())
+    replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
 
     # TODO: Find out why even distance-minimization remains broken. (Worst-case, it's because our actions are too easy to undo and too indistinct from each other, so future-dist-prediction can't establish a coherent preference for anything. …I think we might be living in the worst timeline.)
 
