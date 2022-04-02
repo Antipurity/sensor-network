@@ -178,6 +178,7 @@ for iters in range(50000):
 
         zeros = torch.zeros(board.shape[0], action_sz, device=device)
 
+        # TODO: …Continuous control doesn't work, so implement grounded-distance-transitions here.
         # TODO: Why isn't it working?
 
 
