@@ -102,6 +102,15 @@ ev_act = nn.Sequential( # (prev_board, prev_future, action) → future
 ).to(device)
 opt = torch.optim.Adam([*act.parameters(), *future_dist.parameters(), *ev.parameters(), *ev_act.parameters()], lr=1e-3)
 
+def show_ev(plt, key):
+    with torch.no_grad():
+        board = torch.eye(N*N, N*N, device=device)
+        target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
+        future = ev(cat(board, target))
+        v = future[..., :3].reshape(N, N, 3)
+        colors = (v - v.min(-1, keepdim=True)[0]) / (v.max(-1, keepdim=True)[0] - v.min(-1, keepdim=True)[0])
+        plt.imshow(colors.cpu().numpy(), label=key)
+
 for iters in range(50000):
     # Sample a batch of trajectories.
     action = torch.zeros(batch_size, action_sz, device=device)
@@ -202,12 +211,11 @@ for iters in range(50000):
         #       TODO: …Should `act` accept not only the future but also all its args (*possibly* without the goal), to make futures kind of optional?…
         #         …Should we make `ev`s of destinations the same known quantities, such as all-0s?…
         #           (This one might be a very good idea, because with our current `ev` loss, it just varies like it's nothing. In fact, `ev_act` will probably end up counting transitions AKA distance to the end, and if 2 paths merge, their representations would have pressure to become the same… which might or might not prioritize shorter paths somehow, maybe if they have more neighbors and thus more pressure…)
-        #             (This should create equal-embedding rings around targets. Meaning that `act` won't have enough information to decide on the action. …Would it really create rings? The farther thing will become the average of closer things that it can reach with an action, but the closer things would get momentum-updated, without any averaging done…)
+        #             (This should create equal-embedding rings around targets. Meaning that `act` won't have enough information to decide on the action. …Would it really create rings? The farther thing will become the average of closer things that it can reach with an action, but the closer things would get momentum-updated, without any averaging done… …Starting to think that since `ev_act` depends on the action, there would be no rings, and we'd need to explicitly learn the distance… But if that's the case, then why do we need `ev` at all, we can just pin down zero-distance at ends and increment it by 1 elsewhere…)
         #               …Should we try replacing momentum-updating with separate `ev_prev` and `ev`?…
         #                 But how to ensure that the next step's ev_prev is the prev step's ev without momentum-updating? Just `ev_prev(board, action) = ev(prev_board)`, possibly with *another* neural net to go in reverse to `ev_act`?
-        #                   `ev_act(cat(prev_board, ev_prev(prev_board), action)) = ev(board).detach();  ev(board) = ev_prev(next_board)`…
+        #                   `ev_act(cat(prev_board, ev_prev(prev_board), action)) = ev(board).detach();  ev(prev_board) = ev_prev(board)`…
         #                 (Can we use `ev_act` anywhere?…)
-        #               …Should we log an image of the first three numbers (colors) of same-goal `ev` futures, so that we can try creating those circles?…
         #     TODO: …Intermediate-action-prediction is actually good to have (can't really act otherwise), but we're stifled by the target being averaged… Is there really no way to remember which action goes exactly to the next `ev`-future?…
 
         # …We can also kinda turn this loss into Go-Explore by making `ev` output a particular state once the target is actually reached (and ensuring that once we reach such a state, we're in "exploratory mode" where we stay in that mode and do actions randomly)…
@@ -246,14 +254,12 @@ for iters in range(50000):
             # log(0, False, dist_pred_loss = to_np(dist_pred_loss))
             # log(1, False, dist_min_loss = to_np(dist_min_loss))
             # log(2, False, self_imitation_loss = to_np(self_imitation_loss))
-            log(0, False, trajectory_end_loss = to_np(trajectory_end_loss))
-            log(1, False, trajectory_continuation_loss = to_np(trajectory_continuation_loss))
-            log(2, False, trajectory_ev_loss = to_np(trajectory_ev_loss))
-            log(3, False, mean_distance = dist_mean / (2*N))
-            log(4, False, reached = to_np(reached.float().mean()))
+            log(0, False, ev = show_ev)
+            log(1, False, trajectory_end_loss = to_np(trajectory_end_loss))
+            log(2, False, trajectory_continuation_loss = to_np(trajectory_continuation_loss))
+            log(3, False, trajectory_ev_loss = to_np(trajectory_ev_loss))
+            log(4, False, mean_distance = dist_mean / (2*N))
+            log(5, False, reached = to_np(reached.float().mean()))
             #   (Reaching about .66 means that targets are reached about 100% of the time.)
-            log(5, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
-            # TODO: Plot steps-until-target for a fixed target and for each source.
-            #   (If only immediate actions are learned, we should see 4 neighbors.)
-            #     (But the distance is exactly the same even with all losses commented out… Not useful right now…)
+            log(6, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
 finish()
