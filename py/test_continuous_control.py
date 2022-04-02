@@ -260,7 +260,8 @@ for iter in range(500000):
 #   - Visualization:
 #     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
 #   - TODO: If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
-#   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `act`, and remember its momentum-delayed result.
+#   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `act`, and remember its momentum-delayed result. (Possibly, even try pretraining an agent by exposing it to image-aug sequences on CIFAR10, then training a classification model on embeddings. Would be funny.)
+#   - TODO: Since our distance-estimation is now picky about what to estimate, and won't be brokeb by a higher distance, we can store very-long trajectory fragments in the replay buffer and calc much more accurate distance-targets from those, overcoming a lot of the quadratic-difficulty of propagating distance back. So, do that.
 
 # TODO: …Is it possible to invert the distance function, it now being (the equivalent of) steps-since-start? Can we use it to learn actions, not start-first (uhh this assessment seems questionable, since at the end the distance-differences should be much higher with distance-to-goal), but end-first, like "whichever prior RNN-state has the shortest distance, is the one to come-from"?… Do we need backward neural-nets for this…
 
