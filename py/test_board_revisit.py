@@ -114,7 +114,9 @@ for iters in range(50000):
             reached |= (board == target).all(-1, keepdim=True)
 
             index = (iters*unroll_len + u) % len(replay_buffer)
-            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach(), randn, target)
+            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach())
+            #   TODO: No `prev_board` and `prev_action`, instead have arrays, into which we push at the beginning of each step.
+            #   TODO: Don't interleave board & action, instead have 2 arrays.
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -123,8 +125,6 @@ for iters in range(50000):
         prev_action = torch.cat([c[1] for c in choices], 0)
         board = torch.cat([c[2] for c in choices], 0)
         action = torch.cat([c[3] for c in choices], 0)
-        randn = torch.cat([c[4] for c in choices], 0)
-        target = torch.cat([c[5] for c in choices], 0)
 
         target = torch.where( # This improves convergence speed 5×. It's the key.
             torch.rand(board.shape[0], 1, device=device) < .5,
@@ -140,13 +140,17 @@ for iters in range(50000):
         # TODO: …Would adding `S`-step returns (making the predicted-distance the min of single-step-dist and distant-dist, for each step in a trajectory, starting with the second-last one) help with convergence speed? It should make it `S` times more efficient, especially initially, right?
         #   (A synergy is with `future_dist`: its target-estimation would be more accurate initially with a non-predicted action.)
         #   (…Wouldn't it be biased due to relying on the predicted-distance of predicted-actions? Which is initially near-0, by the way, meaning that most multi-step returns would get discarded. Overoptimism is slow to correct, only new paths are quicker to propagate.)
-        #   (Is pretty much tree-backup, pretty sure.)
+        #   (Is pretty much tree-backup with a greedy policy, pretty sure. Which is [non-convergent](https://arxiv.org/abs/1705.09322) but [good enough](https://arxiv.org/pdf/2007.06700v1.pdf).)
         #   …All we can do is try it. TODO: Try it.
         #   TODO: …How do we implement this, exactly?
 
         # TODO: …If we gate the distance, is it possible to make the too-high-dist branch's prediction not exact but like "a bit more than the taken-branch distance"?…
         #   (No need to over-learn the learned loss in places where we don't use it.)
         #   (In the one-step limit, this means `prev_dist_targ = torch.where(prev_dist < prev_dist2, prev_dist_targ, prev_dist)`. Which takes forever to converge.)
+
+        # TODO: …If we have gating-info, then we can do BPTT wherever the old trajectory is preferred: unroll `act` and give `action`'s gradient to `action2` via `action + action2 - action2.detach()`… Try that… (Won't help with directly minimizing the quadratically-full `micro_dist` sum, though.)
+        #   (After all, without gradient descent, we'll suffer from the curse of dimensionality.)
+        #   (…If we did input-embedding and BYOL-on-RNN, the non-learned distance would have been optimized too…)
 
 
 
