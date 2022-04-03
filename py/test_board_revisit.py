@@ -69,7 +69,7 @@ bootstrap_discount = torch.tensor([.99], device=device)
 
 
 act = nn.Sequential( # (prev_board, target) → action
-    nn.Linear(N*N + action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+    nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
