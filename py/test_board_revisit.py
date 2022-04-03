@@ -53,6 +53,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 N, batch_size = 4, 100 # TODO: Even like this, 70% is quite reachable. But can we reach 100%, by extending whole trajectories back?
+#   TODO: N=4… Wait, is increasing THIS the reason why we can't learn?…
 action_sz = 64
 
 unroll_len = N
@@ -80,6 +81,14 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
     nn.Linear(action_sz, 1),
 ).to(device)
 opt = torch.optim.Adam([*act.parameters(), *future_dist.parameters()], lr=1e-3)
+
+def show_dist(plt, key):
+    with torch.no_grad():
+        board = torch.eye(N*N, N*N, device=device)
+        target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
+        action = act(cat(board, target))
+        dist = future_dist(cat(board, action, target)).reshape(N, N)
+        plt.imshow(dist.cpu().numpy(), label=key)
 
 for iters in range(50000):
     # Sample a batch of trajectories.
@@ -133,6 +142,12 @@ for iters in range(50000):
 
         # TODO: Run this.
         # TODO: Why isn't it working?
+        #   TODO: Why does N=4 need 5k epochs to start making any progress and 10k epochs to get to 90%? It used to be much better.
+        #   TODO: Why is N=8 unfeasibly slow?
+
+        # TODO: …Should we try removing `action` from `future_dist`, to see whether this was fundamental?
+
+        # TODO: …Would adding `S`-step returns (making the predicted-distance the min of single-step-dist and distant-dist, for each step in a trajectory, starting with the second-last one) help with convergence speed? It should make it `S` times more efficient, especially initially, right?
 
 
 
@@ -140,12 +155,15 @@ for iters in range(50000):
         ends_here_loss = future_dist(cat(prev_board, action, board)).square().mean(0).sum()
 
         # Bootstrapping: `future_dist(prev) = 1 + future_dist(next)*p`
+        # TODO: Can we only do this if target!=board, for faster convergence?
         prev_dist = future_dist(cat(prev_board, action, target.detach()))
         next_action = act(cat(board, target))
         for p in future_dist.parameters(): p.requires_grad_(False)
-        dist = future_dist(cat(board, next_action, target.detach()))
+        dist = future_dist(cat(board, next_action, target.detach())) # TODO: …What if the target was differentiable too?… No reason not to, since the distance is tethered at 0 at final states, right?
         for p in future_dist.parameters(): p.requires_grad_(True)
         prev_dist_targ = 1 + dist * bootstrap_discount
+        prev_dist_targ = torch.where((target != board).any(-1, keepdim=True), prev_dist_targ, prev_dist)
+        #   TODO: …This line makes no difference to convergence speed.
         dist_pred_loss = (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
         # Min-dist self-imitation, by `act`.
@@ -154,7 +172,9 @@ for iters in range(50000):
         prev_dist2 = future_dist(cat(prev_board, action2, target))
         with torch.no_grad():
             # Gate by min-distance.
-            target_action = torch.where(prev_dist <= prev_dist2, action, action2)
+            target_action = torch.where(prev_dist < prev_dist2, action, action2) # TODO: +.5 maybe?…
+            #   TODO: Is self-imitation interfering with itself, since there are always at least 2 same-distance actions to take?
+            #     Why is the distance plot so non-smooth until late in convergence (10k epochs)?
         self_imitation_loss = (action2 - target_action).square().sum()
 
         # Grad-min of actions.
@@ -166,10 +186,11 @@ for iters in range(50000):
         (ends_here_loss + dist_pred_loss + self_imitation_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad():
-            log(0, False, ends_here_loss = to_np(ends_here_loss))
-            log(1, False, dist_pred_loss = to_np(dist_pred_loss))
-            log(2, False, self_imitation_loss = to_np(self_imitation_loss))
-            log(3, False, reached = to_np(reached.float().mean()))
+            log(0, False, dist = show_dist)
+            log(1, False, ends_here_loss = to_np(ends_here_loss))
+            log(2, False, dist_pred_loss = to_np(dist_pred_loss))
+            log(3, False, self_imitation_loss = to_np(self_imitation_loss))
+            log(4, False, reached = to_np(reached.float().mean()))
             #   (Reaching about .66 means that targets are reached about 100% of the time.)
-            log(4, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
+            log(5, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
 finish()

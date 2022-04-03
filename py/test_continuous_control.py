@@ -268,6 +268,7 @@ for iter in range(500000):
 
 # - After we've established a more solid base of operations, retry what we did in the past:
 #   - TODO: Gradient descent again.
+#   - TODO: Re-enable (a-b).abs().sum() for distances, instead of just 1. (1 is chaotic, and thus may be impossible to learn.)
 #   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `act`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
 #   - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL.
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
