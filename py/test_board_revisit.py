@@ -52,13 +52,13 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 16, 100
+N, batch_size = 4, 100 # TODO: N=16
 action_sz = 64
 
 unroll_len = N
 
 replay_buffer = [None] * 1024
-updates_per_unroll = N
+updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long and of width `batch_size`.
 
 bootstrap_discount = torch.tensor([.99], device=device)
 #   Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
@@ -101,7 +101,6 @@ for iters in range(50000):
         target = env_init(N, batch_size=batch_size)
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
-            zeros = torch.zeros(batch_size, action_sz, device=device)
             randn = torch.randn(batch_size, action_sz, device=device)
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
@@ -115,23 +114,50 @@ for iters in range(50000):
 
             boards.append(board);  actions.append(action.detach())
 
-        replay_buffer[iters % len(replay_buffer)] = (boards, actions)
+        replay_buffer[iters % len(replay_buffer)] = (torch.stack(boards, 0), torch.stack(actions, 0))
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
-        prev_board = torch.cat([c[0][0] for c in choices], 0)
-        prev_action = torch.cat([c[1][0] for c in choices], 0)
-        board = torch.cat([c[0][1] for c in choices], 0)
-        action = torch.cat([c[1][1] for c in choices], 0)
-
-        target = torch.where( # This improves convergence speed 5×. It's the key.
-            torch.rand(board.shape[0], 1, device=device) < .5,
-            board,
-            board[torch.randperm(board.shape[0], device=device)],
+        boards = torch.cat([c[0] for c in choices], -2) # unroll_len+1 × B × N*N
+        actions = torch.cat([c[1] for c in choices], -2) # unroll_len+1 × B × action_sz
+        B = boards.shape[1]
+        boards, actions = boards[-2:], actions[-2:] # TODO: …Why does adding this make all distances huge… It should behave EXACTLY the same as our old code, no excuses! What's happening?
+        # targets = torch.where( # This improves convergence speed 5×. It's the key. # TODO: This version is for multi-step-returns ONLY.
+        #     # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
+        #     torch.rand(B, 1, device=device) < .5,
+        #     boards[-1],
+        #     boards[-1][torch.randperm(B, device=device)],
+        # ).unsqueeze(0).expand(boards.shape[0], B, N*N)
+        targets = torch.where( # This improves convergence speed 5×. It's the key.
+            # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
+            torch.rand(boards.shape[0], B, 1, device=device) < .5,
+            torch.cat((boards[1:], boards[-1:]), 0),
+            torch.cat((boards[1:], boards[-1:]), 0)[:, torch.randperm(B, device=device)],
         )
 
-        zeros = torch.zeros(board.shape[0], action_sz, device=device)
+        next_actions2 = act(cat(boards, targets))
+        next_actions = torch.cat((actions[1:], next_actions2[-1:]), 0).detach()
+        dists2 = future_dist(cat(boards, next_actions2, targets))
+        dists = future_dist(cat(boards, next_actions, targets))
+
+        # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
+        #   Though if next==target, make the distance 0. (Which happens often due to our `targets`-sampling here.)
+        with torch.no_grad():
+            micro_dists = (boards[1:] - targets[1:]).abs().sum(-1, keepdim=True) / 2
+            dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
+            dists_are = torch.where(micro_dists < 1e-5, torch.tensor(0., device=device), dists_are)
+        # TODO: …How to compute multi-step returns?…
+        dist_pred_loss = (dists[1:] - dists_are.detach()).square().sum(-1).mean()
+        # TODO: …What did we do wrong?…
+        #   Should we literally compare values? …Why are they exactly the same, yet we behave very differently anyway…
+        #   …Maybe, the selection of `targets` is only good for the last thing. Elsewhere, it's in high-bias regime… …Did we screw up fixing it, or is the problem not in there?…
+        # Self-imitation gated by min-dist, by `act`.
+        #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
+        #   (Actions can interfere if there are many equally-good paths, but it's not too much of a problem.)
+        with torch.no_grad():
+            next_actions_are2 = torch.where(dists < dists2, next_actions, next_actions2)
+        self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
 
         # TODO: Our scalability here is atrocious. Get N=16 not up to 15% but up to ≈100%, THEN we can do cont-control.
         #   (It's probably that quadratic-difficulty of propagating distances back, isn't it… And the need to remember distances for *all* actions, not just min-distance actions…)
@@ -142,6 +168,7 @@ for iters in range(50000):
         #   (Is pretty much tree-backup with a greedy policy, pretty sure. Which is [non-convergent](https://arxiv.org/abs/1705.09322) but [good enough](https://arxiv.org/pdf/2007.06700v1.pdf).)
         #   …All we can do is try it. TODO: Try it.
         #   TODO: …How do we implement this, exactly?
+        #     TODO: Maybe, first write down at least the Python-side algorithm?
 
         # TODO: …If we gate the distance, is it possible to make the too-high-dist branch's prediction not exact but like "a bit more than the taken-branch distance"?…
         #   (No need to over-learn the learned loss in places where we don't use it.)
@@ -153,18 +180,27 @@ for iters in range(50000):
 
 
 
+        prev_board = torch.cat([c[0][-2] for c in choices], 0) # TODO: Remove.
+        prev_action = torch.cat([c[1][-2] for c in choices], 0) # TODO: Remove.
+        board = torch.cat([c[0][-1] for c in choices], 0) # TODO: Remove.
+        action = torch.cat([c[1][-1] for c in choices], 0) # TODO: Remove.
+
+        target = targets[0]
+
         # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
         #   Though if next==target, make the distance 0.
         #     (Which happens often due to our `target`-sampling here.)
         prev_dist = future_dist(cat(prev_board, action, target))
         action2 = act(cat(prev_board, target))
         prev_dist2 = future_dist(cat(prev_board, action2, target))
+        print(0, (prev_dist2 - dists2[-2]).abs().sum()) # TODO: …Same…
         with torch.no_grad():
             next_action2 = act(cat(board, target))
             dist2 = future_dist(cat(board, next_action2, target))
             micro_dist = (board - target).abs().sum(-1, keepdim=True) / 2
             prev_dist_targ = micro_dist + dist2 * bootstrap_discount
             prev_dist_targ = torch.where(micro_dist < 1e-5, torch.tensor(0., device=device), prev_dist_targ)
+        print(1, (prev_dist_targ - dists_are[-1]).abs().sum()) # TODO: Compare prev_dist_targ. …They're the same… …Wait, why do they differ *now*? What changed? Anyway, FOUND THE BUG
         dist_pred_loss = (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
         # Self-imitation gated by min-dist, by `act`.

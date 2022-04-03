@@ -262,7 +262,8 @@ for iter in range(500000):
 #     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
 #   - TODO: If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
 #   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `act`, and remember its momentum-delayed result. (Possibly, even try pretraining an agent by exposing it to image-aug sequences on CIFAR10, then training a classification model on embeddings. Would be funny.)
-#   - TODO: Similarly to self-imitation, we can gate multi-step returns by whoever has the lowest distance at each step (path-distance or our-action predicted distance), and thus reduce the quadratic-difficulty of propagating distance back, without bias. So, should store long trajectory segments in the replay buffer, and do this. (Particularly good for the `goal`-is-here loss, which we can't seem to pin down by random goal sampling, and this should increase the net a lot.)
+#     - (If `ev_act` is next-action-dependent just like `future_dist` should be, this could shield us against action-stochasticity, and allow us to do proper BPTT on as-non-learned-as-possible target-reaching loss during a multistep unroll. …If we implement a separate BYOL, that is.)
+#   - TODO: Tree-backup: similarly to self-imitation, we can gate multi-step returns by whoever has the lowest distance at each step (path-distance or our-action predicted distance), and thus reduce the quadratic-difficulty of propagating distance back, without bias. So, should store long trajectory segments in the replay buffer, and do this. (Particularly good for the `goal`-is-here loss, which we can't seem to pin down by random goal sampling, and this should increase the net a lot.)
 
 # TODO: Make (min-dist) self-imitation with where-we-ended-up-is-our-`goal` with dist-is-+1 work. (Really seems like there shouldn't be a reason it doesn't work.)
 
@@ -271,6 +272,7 @@ for iter in range(500000):
 #   - TODO: Re-enable (a-b).abs().sum() for distances, instead of just 1. (1 is chaotic, and thus may be impossible to learn.)
 #   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `act`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
 #   - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL.
+#     - (A way to achieve the same effect could be to have a 'correction' net, which adjusts the action, and use that everywhere during an unroll.)
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `act` of `prev_action`: `(act(prev_action) - action) * (dist(act(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `act` instead (`best_act: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
