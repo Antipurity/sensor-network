@@ -103,6 +103,7 @@ act = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `r
     nn.LayerNorm(action_sz),
 ).to(device)
 future_dist = nn.Sequential( # (action, state, goal) → dist
+    # TODO: In the grad-min formulation, this absolutely needs the next action, doesn't it?
     # (Returns the sum-of-future-L1-distances-to-`goal` for the considered `action`, the less the better.)
     SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
@@ -237,7 +238,7 @@ for iter in range(500000):
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
 
-    # TODO: Find out why even distance-minimization remains broken. (Worst-case, it's because our actions are too easy to undo and too indistinct from each other, so future-dist-prediction can't establish a coherent preference for anything. …I think we might be living in the worst timeline.)
+    # TODO: Find out why even distance-minimization remains broken.
 
 
 
@@ -261,9 +262,9 @@ for iter in range(500000):
 #     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
 #   - TODO: If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
 #   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `act`, and remember its momentum-delayed result. (Possibly, even try pretraining an agent by exposing it to image-aug sequences on CIFAR10, then training a classification model on embeddings. Would be funny.)
-#   - TODO: Since our distance-estimation is now picky about what to estimate, and won't be brokeb by a higher distance, we can store very-long trajectory fragments in the replay buffer and calc much more accurate distance-targets from those, overcoming a lot of the quadratic-difficulty of propagating distance back. So, do that.
+#   - TODO: Since our distance-estimation is now picky about what to estimate, and won't be broken by a higher distance, we can store very-long trajectory fragments in the replay buffer and calc much more accurate distance-targets from those, overcoming a lot of the quadratic-difficulty of propagating distance back. So, do that. (Particularly good for the `goal`-is-here loss, which we can't seem to pin down by random goal sampling.)
 
-# TODO: …Is it possible to invert the distance function, it now being (the equivalent of) steps-since-start? Can we use it to learn actions, not start-first (uhh this assessment seems questionable, since at the end the distance-differences should be much higher with distance-to-goal), but end-first, like "whichever prior RNN-state has the shortest distance, is the one to come-from"?… Do we need backward neural-nets for this…
+# TODO: Make (min-dist) self-imitation with where-we-ended-up-is-our-`goal` with dist-is-+1 work. (Really seems like there shouldn't be a reason it doesn't work.)
 
 # - After we've established a more solid base of operations, retry what we did in the past:
 #   - TODO: Gradient descent again.
@@ -272,19 +273,15 @@ for iter in range(500000):
 #   - Retain non-differentiably-reachable minima, via self-imitation learning:
 #     - TODO: An extra loss on `act` of `prev_action`: `(act(prev_action) - action) * (dist(act(prev_action)) - dist(action)).detach()`.
 #     - TODO: Make that best-past-action a `.detach()`ed input to `act` instead (`best_act: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
-#   - TODO: Instead of simple next-frame prediction, embed inputs once again. (If goals are also in embedded-space, then their unpredictability should also get washed away.) …Though, self-imitation's action-prediction is pretty much BYOL, isn't it?
+#   - TODO: Instead of simple next-frame prediction, embed inputs once again. Self-imitation's action-prediction may become very similar to BYOL. (If goals are also in embedded-space, then their unpredictability should also gets washed away.)
 
 
 
-# …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement — but not exactly to full-RNN-state invariance/prediction…
-
-# …With embedding-prediction, I'm pretty sure it's the same as prediction, but if some parts are too hard to predict for too long, the model just gives up on them. Interference is also a lot of the problem in learning the shortest path (very many paths are essentially the same); is there any way to combine the two?…
+# …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement — though not exactly to full-RNN-state invariance/prediction…
 
 # …We only try to improve the reachability of one goal at a time, which is synonymous with "non-scalable". Is there no way to construct representations of exponentially-many goals, and update many goals at once… Can embedding-prediction make similar goals the same and distinct goals different?…
 
-# …In RL where we min over the expectation of distances, a stochastic policy may actually cause goal-chasing to suffer because we're constantly undoing our own progress… An ideal learning method would straighten out all those redundant pasts as they arise; but how can we arrive at such a method?…
-
-# …According to tests, embedding-prediction (BYOL, there) *does* actually blot out unpredictability, so it's *possible* that learning to reach goals in embedded-space is what we want…
+# …Also, similarly to Random Network Distillation, the hypothetical teacher (`goal`-proposer) could maximize misprediction (available even at unroll-time): of the distance (should be -1), or with joint-embedding, of the next-state embedding…
 
 
 
