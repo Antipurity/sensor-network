@@ -52,7 +52,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 4, 100 # TODO: N=16
+N, batch_size = 8, 100 # TODO: N=16
 action_sz = 64
 
 unroll_len = N
@@ -121,17 +121,11 @@ for iters in range(50000):
     if len(choices):
         boards = torch.cat([c[0] for c in choices], -2) # unroll_len+1 × B × N*N
         actions = torch.cat([c[1] for c in choices], -2) # unroll_len+1 × B × action_sz
-        B = boards.shape[1]
-        # targets = torch.where( # This improves convergence speed 5×. It's the key. # TODO: This version is for multi-step-returns ONLY.
-        #     # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
-        #     torch.rand(B, 1, device=device) < .5,
-        #     boards[-1],
-        #     boards[-1][torch.randperm(B, device=device)],
-        # ).unsqueeze(0).expand(boards.shape[0], B, N*N)
+        K, B = boards.shape[0], boards.shape[1]
         targets = torch.where( # This improves convergence speed 5×. It's the key.
             # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
             torch.rand(1, B, 1, device=device) < .5,
-            torch.cat((boards[1:], boards[-1:]), 0),
+            torch.cat((boards[1:], boards[-1:]), 0), # This is somehow better than `boards[-1:]`.
             torch.cat((boards[1:], boards[-1:]), 0)[:, torch.randperm(B, device=device)],
         )
 
@@ -143,10 +137,17 @@ for iters in range(50000):
         # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
         #   Though if next==target, make the distance 0. (Which happens often due to our `targets`-sampling here.)
         with torch.no_grad():
+            # Compute (K-1)-step returns in Python, no care about efficiency.
             micro_dists = (boards[1:] - targets[1:]).abs().sum(-1, keepdim=True) / 2
-            dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
-            dists_are = torch.where(micro_dists < 1e-5, torch.tensor(0., device=device), dists_are)
-        # TODO: …How to compute multi-step returns?…
+            # dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
+            # dists_are = torch.where(micro_dists < 1e-5, torch.tensor(0., device=device), dists_are)
+            dists_are, dist_so_far = [], dists2[-1]
+            for k in reversed(range(K-1)):
+                dist_so_far = dist_so_far.min(dists2[k+1]) # Don't follow the old trajectory if we have a better option.
+                dist_so_far = micro_dists[k] + dist_so_far * bootstrap_discount
+                dist_so_far = torch.where(micro_dists[k] < 1e-5, torch.tensor(0., device=device), dist_so_far) # Ground `target`-reaching steps to have 0 distance.
+                dists_are.append(dist_so_far)
+            dists_are = torch.stack(list(reversed(dists_are)), 0)
         dist_pred_loss = (dists[:-1] - dists_are.detach()).square().sum(-1).mean()
         # Self-imitation gated by min-dist, by `act`.
         #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
@@ -156,23 +157,9 @@ for iters in range(50000):
         self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
 
         # TODO: Our scalability here is atrocious. Get N=16 not up to 15% but up to ≈100%, THEN we can do cont-control.
-        #   (It's probably that quadratic-difficulty of propagating distances back, isn't it… And the need to remember distances for *all* actions, not just min-distance actions…)
-
-        # TODO: …Would adding `S`-step returns (making the predicted-distance the min of single-step-dist and distant-dist, for each step in a trajectory, starting with the second-last one) help with convergence speed? It should make it `S` times more efficient, especially initially, right?
-        #   (A synergy is with `future_dist`: its target-estimation would be more accurate initially with a non-predicted action.)
-        #   (…Wouldn't it be biased due to relying on the predicted-distance of predicted-actions? Which is initially near-0, by the way, meaning that most multi-step returns would get discarded. Overoptimism is slow to correct, only new paths are quicker to propagate.)
-        #   (Is pretty much tree-backup with a greedy policy, pretty sure. Which is [non-convergent](https://arxiv.org/abs/1705.09322) but [good enough](https://arxiv.org/pdf/2007.06700v1.pdf).)
-        #   …All we can do is try it. TODO: Try it.
-        #   TODO: …How do we implement this, exactly?
-        #     TODO: Maybe, first write down at least the Python-side algorithm?
-
-        # TODO: …If we gate the distance, is it possible to make the too-high-dist branch's prediction not exact but like "a bit more than the taken-branch distance"?…
-        #   (No need to over-learn the learned loss in places where we don't use it.)
-        #   (In the one-step limit, this means `prev_dist_targ = torch.where(prev_dist < prev_dist2, prev_dist_targ, prev_dist)`. Which takes forever to converge.)
-
-        # TODO: …If we have gating-info, then we can do BPTT wherever the old trajectory is preferred: unroll `act` and give `action`'s gradient to `action2` via `action + action2 - action2.detach()`… Try that… (Won't help with directly minimizing the quadratically-full `micro_dist` sum, though.)
-        #   (After all, without gradient descent, we'll suffer from the curse of dimensionality.)
-        #   (…If we did input-embedding and BYOL-on-RNN, the non-learned distance would have been optimized too…)
+        #   …Mission failed…
+        #   …Is distance too hard to learn after all?…
+        #   …Is our only remaining option REALLY to re-examine BYOL for clustering trajectories, where `act` is the input embedding…
 
 
         if iters == 1000: clear()
