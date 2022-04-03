@@ -122,7 +122,6 @@ for iters in range(50000):
         boards = torch.cat([c[0] for c in choices], -2) # unroll_len+1 × B × N*N
         actions = torch.cat([c[1] for c in choices], -2) # unroll_len+1 × B × action_sz
         B = boards.shape[1]
-        boards, actions = boards[-2:], actions[-2:] # TODO: …Why does adding this make all distances huge… It should behave EXACTLY the same as our old code, no excuses! What's happening?
         # targets = torch.where( # This improves convergence speed 5×. It's the key. # TODO: This version is for multi-step-returns ONLY.
         #     # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
         #     torch.rand(B, 1, device=device) < .5,
@@ -131,7 +130,7 @@ for iters in range(50000):
         # ).unsqueeze(0).expand(boards.shape[0], B, N*N)
         targets = torch.where( # This improves convergence speed 5×. It's the key.
             # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
-            torch.rand(boards.shape[0], B, 1, device=device) < .5,
+            torch.rand(1, B, 1, device=device) < .5,
             torch.cat((boards[1:], boards[-1:]), 0),
             torch.cat((boards[1:], boards[-1:]), 0)[:, torch.randperm(B, device=device)],
         )
@@ -148,10 +147,7 @@ for iters in range(50000):
             dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
             dists_are = torch.where(micro_dists < 1e-5, torch.tensor(0., device=device), dists_are)
         # TODO: …How to compute multi-step returns?…
-        dist_pred_loss = (dists[1:] - dists_are.detach()).square().sum(-1).mean()
-        # TODO: …What did we do wrong?…
-        #   Should we literally compare values? …Why are they exactly the same, yet we behave very differently anyway…
-        #   …Maybe, the selection of `targets` is only good for the last thing. Elsewhere, it's in high-bias regime… …Did we screw up fixing it, or is the problem not in there?…
+        dist_pred_loss = (dists[:-1] - dists_are.detach()).square().sum(-1).mean()
         # Self-imitation gated by min-dist, by `act`.
         #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
         #   (Actions can interfere if there are many equally-good paths, but it's not too much of a problem.)
@@ -178,37 +174,6 @@ for iters in range(50000):
         #   (After all, without gradient descent, we'll suffer from the curse of dimensionality.)
         #   (…If we did input-embedding and BYOL-on-RNN, the non-learned distance would have been optimized too…)
 
-
-
-        prev_board = torch.cat([c[0][-2] for c in choices], 0) # TODO: Remove.
-        prev_action = torch.cat([c[1][-2] for c in choices], 0) # TODO: Remove.
-        board = torch.cat([c[0][-1] for c in choices], 0) # TODO: Remove.
-        action = torch.cat([c[1][-1] for c in choices], 0) # TODO: Remove.
-
-        target = targets[0]
-
-        # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
-        #   Though if next==target, make the distance 0.
-        #     (Which happens often due to our `target`-sampling here.)
-        prev_dist = future_dist(cat(prev_board, action, target))
-        action2 = act(cat(prev_board, target))
-        prev_dist2 = future_dist(cat(prev_board, action2, target))
-        print(0, (prev_dist2 - dists2[-2]).abs().sum()) # TODO: …Same…
-        with torch.no_grad():
-            next_action2 = act(cat(board, target))
-            dist2 = future_dist(cat(board, next_action2, target))
-            micro_dist = (board - target).abs().sum(-1, keepdim=True) / 2
-            prev_dist_targ = micro_dist + dist2 * bootstrap_discount
-            prev_dist_targ = torch.where(micro_dist < 1e-5, torch.tensor(0., device=device), prev_dist_targ)
-        print(1, (prev_dist_targ - dists_are[-1]).abs().sum()) # TODO: Compare prev_dist_targ. …They're the same… …Wait, why do they differ *now*? What changed? Anyway, FOUND THE BUG
-        dist_pred_loss = (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
-
-        # Self-imitation gated by min-dist, by `act`.
-        #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
-        #   (Actions can interfere if there are many equally-good paths, but it's not too much of a problem.)
-        with torch.no_grad():
-            target_action = torch.where(prev_dist < prev_dist2, action, action2)
-        self_imitation_loss = (action2 - target_action).square().mean(0).sum()
 
         if iters == 1000: clear()
 
