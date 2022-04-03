@@ -70,7 +70,7 @@ act = nn.Sequential( # (prev_board, target) → action
     nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
+    nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
@@ -94,6 +94,7 @@ for iters in range(50000):
     action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     reached = torch.full((batch_size, 1), False, device=device)
+    boards, actions = [board], [action.detach()]
     with torch.no_grad():
         # First pick the target to go to.
         #   (From tests, in this trivial env, performance is the same even if we re-pick the target at each step.)
@@ -102,29 +103,27 @@ for iters in range(50000):
             # Do the RNN transition (and an environment step), `unroll_len` times.
             zeros = torch.zeros(batch_size, action_sz, device=device)
             randn = torch.randn(batch_size, action_sz, device=device)
-            prev_board, prev_action = board, action
             # Minimize the future-distance-sum by considering all 4 possible actions right here.
             #   (Minimizing by gradient descent in this environment is no bueno.)
-            action = act(cat(prev_board, target))
+            action = act(cat(board, target))
             if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device)
             #   (Having this is very much not ideal, but it does actually ensure that the RNN explores a lot.)
 
-            board = env_step(N, prev_board, action[..., 0:1])
+            board = env_step(N, board, action[..., 0:1])
 
             reached |= (board == target).all(-1, keepdim=True)
 
-            index = (iters*unroll_len + u) % len(replay_buffer)
-            replay_buffer[index] = (prev_board, prev_action.detach(), board, action.detach())
-            #   TODO: No `prev_board` and `prev_action`, instead have arrays, into which we push at the beginning of each step.
-            #   TODO: Don't interleave board & action, instead have 2 arrays.
+            boards.append(board);  actions.append(action.detach())
+
+        replay_buffer[iters % len(replay_buffer)] = (boards, actions)
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
-        prev_board = torch.cat([c[0] for c in choices], 0)
-        prev_action = torch.cat([c[1] for c in choices], 0)
-        board = torch.cat([c[2] for c in choices], 0)
-        action = torch.cat([c[3] for c in choices], 0)
+        prev_board = torch.cat([c[0][0] for c in choices], 0)
+        prev_action = torch.cat([c[1][0] for c in choices], 0)
+        board = torch.cat([c[0][1] for c in choices], 0)
+        action = torch.cat([c[1][1] for c in choices], 0)
 
         target = torch.where( # This improves convergence speed 5×. It's the key.
             torch.rand(board.shape[0], 1, device=device) < .5,
