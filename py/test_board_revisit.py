@@ -70,13 +70,11 @@ act = nn.Sequential( # (prev_board, target) → action
     nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
     nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, 1),
@@ -140,9 +138,15 @@ for iters in range(50000):
         #   (It's probably that quadratic-difficulty of propagating distances back, isn't it… And the need to remember distances for *all* actions, not just min-distance actions…)
 
         # TODO: …Would adding `S`-step returns (making the predicted-distance the min of single-step-dist and distant-dist, for each step in a trajectory, starting with the second-last one) help with convergence speed? It should make it `S` times more efficient, especially initially, right?
+        #   (A synergy is with `future_dist`: its target-estimation would be more accurate initially with a non-predicted action.)
+        #   (…Wouldn't it be biased due to relying on the predicted-distance of predicted-actions? Which is initially near-0, by the way, meaning that most multi-step returns would get discarded. Overoptimism is slow to correct, only new paths are quicker to propagate.)
+        #   (Is pretty much tree-backup, pretty sure.)
         #   …All we can do is try it. TODO: Try it.
+        #   TODO: …How do we implement this, exactly?
 
         # TODO: …If we gate the distance, is it possible to make the too-high-dist branch's prediction not exact but like "a bit more than the taken-branch distance"?…
+        #   (No need to over-learn the learned loss in places where we don't use it.)
+        #   (In the one-step limit, this means `prev_dist_targ = torch.where(prev_dist < prev_dist2, prev_dist_targ, prev_dist)`. Which takes forever to converge.)
 
 
 
@@ -150,19 +154,19 @@ for iters in range(50000):
         #   Though if next==target, make the distance 0.
         #     (Which happens often due to our `target`-sampling here.)
         prev_dist = future_dist(cat(prev_board, action, target))
+        action2 = act(cat(prev_board, target))
+        prev_dist2 = future_dist(cat(prev_board, action2, target))
         with torch.no_grad():
-            next_action = act(cat(board, target))
-            dist = future_dist(cat(board, next_action, target))
-            micro_dist = (board - target).abs().sum(-1, keepdim=True)/2
-            prev_dist_targ = micro_dist + dist * bootstrap_discount
+            next_action2 = act(cat(board, target))
+            dist2 = future_dist(cat(board, next_action2, target))
+            micro_dist = (board - target).abs().sum(-1, keepdim=True) / 2
+            prev_dist_targ = micro_dist + dist2 * bootstrap_discount
             prev_dist_targ = torch.where(micro_dist < 1e-5, torch.tensor(0., device=device), prev_dist_targ)
         dist_pred_loss = (prev_dist - prev_dist_targ.detach()).square().mean(0).sum()
 
         # Self-imitation gated by min-dist, by `act`.
         #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
         #   (Actions can interfere if there are many equally-good paths, but it's not too much of a problem.)
-        action2 = act(cat(prev_board, target))
-        prev_dist2 = future_dist(cat(prev_board, action2, target))
         with torch.no_grad():
             target_action = torch.where(prev_dist < prev_dist2, action, action2)
         self_imitation_loss = (action2 - target_action).square().mean(0).sum()
