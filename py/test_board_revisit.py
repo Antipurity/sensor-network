@@ -193,10 +193,13 @@ for iters in range(50000):
         #           …To worry about overwriting, we do need to add a construction on either side of the equation. But which side, and which construction?…
         #           …`ev` with only the action has failed either way… Can we fix it by also conditioning it on state and/or goal (thereby reducing how many equations are produced)?…
         #           …Is this equation fundamentally about combining goals, like `act(prev, goal) = act(prev, next) + act(next, goal)`?… But how to write this down as a real equation?… Do we maybe want `ev` to act as the `+` here — but then, how to make prev-action be the same as current-action iff next goes to goal?…
+        #             TODO: …Try writing down the actual, non-simplified equation, first in terms of distances (…how to do even that if we don't have state?), then hierarchy levels?…
 
 
         #   TODO: Try that 'algorithm' above (where "apply a loss" means "write down an equation"); see whether it can possibly converge (meaning that solving the equations gives us a superset of the real solution, but non-equal things are still non-equal (didn't collapse)). If not, think of the difference in how we've assigned optimal actions manually and automatically, and make a new algorithm more like our manual thinking.
         #       (…Oh, neither `ev act(prev,·)=act(next,·)` nor `act(prev,·)=ev act(next,·)` allow changing goals, so they fundamentally can't construct the map that we want…)
+        #         …Can we allow that switching, with nothing but formal constructs, *not* distances?… GAH, HOW
+
         #       ==============================================================
         #       act(A,A) = ???, act(A,B) = ???, act(A,C) = ???, act(A,D) = A→D
         #       act(B,A) = B→A, act(B,B) = ???, act(B,C) = B→C, act(B,D) = ???
@@ -204,25 +207,25 @@ for iters in range(50000):
         #       ==============================================================
         #       A→D, B→A, B→C, C→B, C→D
         #         (Applying `ev(act(prev, ·)) = act(next, ·)` for all actions `prev→next`:)
-        #       act(D,·) = ev(act(A,·)), act(A,·) = ev(act(B,·)), act(C,·) = ev(act(B,·)), act(B,·) = ev(act(C,·)), act(D,·) = ev(act(C,·))
-        #       ev(act(A,·)) = ev(act(C,·)) = ev(ev(act(B,·))) = ev(ev(ev(act(C,·))))
-        #       act(A,·) = act(C,·) = ev(act(B,·)) = ev(ev(act(C,·)))
-        #         (Definitely not enough to infer correct paths by itself.)
-        #         (…Also, what is this first equality? Our reference algo couldn't infer any of `A`'s actions… Something's rotten…)
-        #         (Applying knowledge of initial actions:)
-        #       act(B,B) = ev(act(C,B)) = ev(C→B)   —    …un-inferrable…
-        #       act(B,D) = ev(act(C,D)) = ev(C→D)   —    …un-inferrable…
-        #       act(C,A) = ev(act(B,A)) = ev(B→A)   —    …un-inferrable…
-        #       act(C,C) = ev(act(B,C)) = ev(B→C)   —    …un-inferrable…
-        #       act(A,A) = ev(B→A), act(A,B) = C→B, act(A,C) = ev(B→C)
-        #         (Completely unintelligible, unlike the final solution.)
-        #         ( N O )
-        #       TODO: The fact that we're kinda adjusting the next action in a trajectory rubs me the wrong way now, given how we did the algorithm… Maybe, try `act(prev, ·) = ev act(next, ·)` now?
+        #       act(A,·) = ev(act(B,·))
+        #       act(B,·) = ev(act(C,·))
+        #       act(C,·) = ev(act(B,·))
+        #       act(D,·) = ev(act(A,·)) = ev(act(C,·))
+        #         (Definitely not enough to infer any paths by itself. Really need some separate way to ensure that actions transform in the right way…)
+        #       …Inconclusive, though definitely not enough by itself…
+        #       …The fact that we're kinda adjusting the next action in a trajectory rubs me the wrong way now, given how we did the algorithm… Maybe, try `act(prev, ·) = ev act(next, ·)` now?
         #       A→D, B→A, B→C, C→B, C→D
-        #       act(A,·) = ev act(D,·), act(B,·) = ev act(C,·) = ev act(B,·), act(C,·) = ev act(B,·) = ev act(D,·)
-        #       act(C,·) = act(B,·) = act(D,·), apparently?
-        #       WRONG
-        #       BACK TO THE REFERENCE ALGORITHM
+        #       act(A,·) = ev act(D,·)
+        #       act(B,·) = ev act(C,·) = ev act(B,·)
+        #       act(C,·) = ev act(B,·) = ev act(D,·)
+        #       …Inconclusive…
+
+
+
+        # (…An intuitively-appealing idea is: given an RNN that reaches fixed-points at (prev, goal=next), and for which each prev→next transition does one more step toward the fixed-point for any goal (RNN(ev(prev,·))=ev(next,·), probably), find the actions (`ev` here? Does it need to know the action, or is its result the action? Or, is the action inferred from the result such that the goal here is minimized…) that get the RNN closer to the fixed-point, somehow…)
+        # (…Also, if we do end up learning distance YET AGAIN, maybe we could try ensuring linear combinations instead of one-step summation: `dist(prev, next) = |prev-next|` and `dist(a,c) = min(dist(a,c), dist(a,b) + dist(b,c))`? With this, we'll be able to compose sequences much more quickly, though we do need to pick `b` intelligently. …And, to reduce how much we need to learn, don't condition the distance on the min-dist action, instead find that min-dist already — though, if the policy is optimal anyway, it shouldn't matter…)
+        #   (Dijkstra's has a set of soon-to-be-visited nodes, sampled in a min-dist order. In ML, this means a generative model. Very much like open-ended algorithms such as AMIGo and POET: always suggest tasks that are neither too hard nor too easy.)
+        #   (What we kinda want is Prim's algorithm but for ML… Though Prim's algo uses distances, connecting the action with the min distance…)
 
 
 
