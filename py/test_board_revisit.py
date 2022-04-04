@@ -194,6 +194,12 @@ for iters in range(50000):
         #           …`ev` with only the action has failed either way… Can we fix it by also conditioning it on state and/or goal (thereby reducing how many equations are produced)?…
         #           …Is this equation fundamentally about combining goals, like `act(prev, goal) = act(prev, next) + act(next, goal)`?… But how to write this down as a real equation?… Do we maybe want `ev` to act as the `+` here — but then, how to make prev-action be the same as current-action iff next goes to goal?…
         #             TODO: …Try writing down the actual, non-simplified equation, first in terms of distances (…how to do even that if we don't have state?), then hierarchy levels?…
+        #               dist(prev, next) = 1
+        #               × dist(a,c) = min(b, dist(a,b) + dist(b,c))   (NOT CONSTRUCTIVE)
+        #               × dist(a,c) = min(dist(a,c), dist(a,b) + dist(b,c))   (Bootstrap; numerically problematic.)   (NOT CONSTRUCTIVE)
+        #               dist(a, c, a→b) = 1 + dist(b, c, act(b,c))   (The only constructive solution)
+        #               act(a,c) if a→b and dist(a,c,a→b) < dist(a,c,act(a,c)) = a→b (Construct the min spanning tree) (NON CONSTRUCTIVE)
+        #               …I really don't see how we'd come up with a scheme that can actually do that search without writing "search pls"…
 
 
         #   TODO: Try that 'algorithm' above (where "apply a loss" means "write down an equation"); see whether it can possibly converge (meaning that solving the equations gives us a superset of the real solution, but non-equal things are still non-equal (didn't collapse)). If not, think of the difference in how we've assigned optimal actions manually and automatically, and make a new algorithm more like our manual thinking.
@@ -226,6 +232,9 @@ for iters in range(50000):
         # (…Also, if we do end up learning distance YET AGAIN, maybe we could try ensuring linear combinations instead of one-step summation: `dist(prev, next) = |prev-next|` and `dist(a,c) = min(dist(a,c), dist(a,b) + dist(b,c))`? With this, we'll be able to compose sequences much more quickly, though we do need to pick `b` intelligently. …And, to reduce how much we need to learn, don't condition the distance on the min-dist action, instead find that min-dist already — though, if the policy is optimal anyway, it shouldn't matter…)
         #   (Dijkstra's has a set of soon-to-be-visited nodes, sampled in a min-dist order. In ML, this means a generative model. Very much like open-ended algorithms such as AMIGo and POET: always suggest tasks that are neither too hard nor too easy.)
         #   (What we kinda want is Prim's algorithm but for ML… Though Prim's algo uses distances, connecting the action with the min distance…)
+        # (…If we switch from sum-of-distances to min-distance (and forego min-path-finding), then we could train a discriminator of whether an action would reach the goal (by copying the next action's future-probability, or making it 100% if we're at goal), and train actions to maximize reachability… The discrimination would collapse to 100% eventually, though…)
+        # (…I think classical pathfinding algorithms are already well-used in ML… Have to understand hierarchy contractions to have even a chance…)
+
 
 
 
