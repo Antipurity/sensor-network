@@ -162,6 +162,78 @@ for iters in range(50000):
         #   …Is our only remaining option REALLY to re-examine BYOL for clustering trajectories, where `act` is the input embedding…
 
 
+
+
+
+
+
+
+        # TODO: Already assume that this will fail, and gain an understanding of why:
+        #   1. TODO: Ensure that trajectories with the same future do end up there: `ev(act(prev, goal)) = act(next, goal)`
+        #   2. TODO: Ensure that the final-future is as the replay buffer says: `act(prev, next) = action`
+
+
+        # TODO: On a graph A|B|C|D  |  A→D, B→A, B→C, C→B, C→D.
+        #   TODO: What are the optimal conditions for `act(prev, goal)` to end up pointing to goals? (No distances.)
+        #     First, the near-goal conditions:
+        #       INIT
+        #       act(A,A) = ???, act(A,B) = ???, act(A,C) = ???, act(A,D) = A→D
+        #       act(B,A) = B→A, act(B,B) = ???, act(B,C) = B→C, act(B,D) = ???
+        #       act(C,A) = ???, act(C,B) = C→B, act(C,C) = ???, act(C,D) = C→D
+        #     Second, spread them back, depth-first: given `(prev, action, next, goal)`, if `act(prev, goal) == ???` (don't overwrite) but `act(next, goal) != ???` (spread backwards), do `act(prev, goal) = action` (for each next & goal, find an action that ends in next with a non-taken prev):
+        #       TRUE
+        #       act(A,A) = ···, act(A,B) = ···, act(A,C) = ···, act(A,D) = A→D
+        #       act(B,A) = B→A, act(B,B) = B→C, act(B,C) = B→C, act(B,D) = B→A
+        #       act(C,A) = C→B, act(C,B) = C→B, act(C,C) = C→B, act(C,D) = C→D
+        #       (…"Find a `prev` with the same action as `next` & `goal` (the actual next action is irrelevant)" or "given `prev` and `goal`, find an `action: prev→next` with a filled `next`" *could* mean "make all such actions' embeddings the same"…)
+        #       (…"Don't overwrite" *could* mean "use `ev` somewhere here"…)
+        #       TODO: …Try writing down the exact equation-producing equations that we could use to solve this, using `ev action` and `act(prev,goal)`…
+        #         …Didn't we try essentially both configurations like this, and found that neither works?…
+        #         …If we didn't have to worry about overwriting, we could have just done `prev→next:  act(prev, goal) = prev→next = act(prev, next)`… What equation would possibly imply this one?…
+        #           …To worry about overwriting, we do need to add a construction on either side of the equation. But which side, and which construction?…
+        #           …`ev` with only the action has failed either way… Can we fix it by also conditioning it on state and/or goal (thereby reducing how many equations are produced)?…
+        #           …Is this equation fundamentally about combining goals, like `act(prev, goal) = act(prev, next) + act(next, goal)`?… But how to write this down as a real equation?… Do we maybe want `ev` to act as the `+` here — but then, how to make prev-action be the same as current-action iff next goes to goal?…
+
+
+        #   TODO: Try that 'algorithm' above (where "apply a loss" means "write down an equation"); see whether it can possibly converge (meaning that solving the equations gives us a superset of the real solution, but non-equal things are still non-equal (didn't collapse)). If not, think of the difference in how we've assigned optimal actions manually and automatically, and make a new algorithm more like our manual thinking.
+        #       (…Oh, neither `ev act(prev,·)=act(next,·)` nor `act(prev,·)=ev act(next,·)` allow changing goals, so they fundamentally can't construct the map that we want…)
+        #       ==============================================================
+        #       act(A,A) = ???, act(A,B) = ???, act(A,C) = ???, act(A,D) = A→D
+        #       act(B,A) = B→A, act(B,B) = ???, act(B,C) = B→C, act(B,D) = ???
+        #       act(C,A) = ???, act(C,B) = C→B, act(C,C) = ???, act(C,D) = C→D
+        #       ==============================================================
+        #       A→D, B→A, B→C, C→B, C→D
+        #         (Applying `ev(act(prev, ·)) = act(next, ·)` for all actions `prev→next`:)
+        #       act(D,·) = ev(act(A,·)), act(A,·) = ev(act(B,·)), act(C,·) = ev(act(B,·)), act(B,·) = ev(act(C,·)), act(D,·) = ev(act(C,·))
+        #       ev(act(A,·)) = ev(act(C,·)) = ev(ev(act(B,·))) = ev(ev(ev(act(C,·))))
+        #       act(A,·) = act(C,·) = ev(act(B,·)) = ev(ev(act(C,·)))
+        #         (Definitely not enough to infer correct paths by itself.)
+        #         (…Also, what is this first equality? Our reference algo couldn't infer any of `A`'s actions… Something's rotten…)
+        #         (Applying knowledge of initial actions:)
+        #       act(B,B) = ev(act(C,B)) = ev(C→B)   —    …un-inferrable…
+        #       act(B,D) = ev(act(C,D)) = ev(C→D)   —    …un-inferrable…
+        #       act(C,A) = ev(act(B,A)) = ev(B→A)   —    …un-inferrable…
+        #       act(C,C) = ev(act(B,C)) = ev(B→C)   —    …un-inferrable…
+        #       act(A,A) = ev(B→A), act(A,B) = C→B, act(A,C) = ev(B→C)
+        #         (Completely unintelligible, unlike the final solution.)
+        #         ( N O )
+        #       TODO: The fact that we're kinda adjusting the next action in a trajectory rubs me the wrong way now, given how we did the algorithm… Maybe, try `act(prev, ·) = ev act(next, ·)` now?
+        #       A→D, B→A, B→C, C→B, C→D
+        #       act(A,·) = ev act(D,·), act(B,·) = ev act(C,·) = ev act(B,·), act(C,·) = ev act(B,·) = ev act(D,·)
+        #       act(C,·) = act(B,·) = act(D,·), apparently?
+        #       WRONG
+        #       BACK TO THE REFERENCE ALGORITHM
+
+
+
+
+
+
+
+
+
+
+
         if iters == 1000: clear()
 
         (dist_pred_loss + self_imitation_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
