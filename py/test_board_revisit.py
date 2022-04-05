@@ -9,13 +9,19 @@ This time:
 
 - For grounding, remembered to ensure that `act(prev, goal=next) = action` for all transitions, by setting distance to 0 in these cases.
 
-- Self-imitation *gates* by old-distance-is-better, doesn't multiply by the distance-differential.
+- Self-imitation now *gates* by old-distance-is-better, doesn't multiply by the distance-differential.
 
-- Have tree-backup (multi-step returns), though the implementation's correctness is currently questionable. TODO:
+- Now have tree-backup (basically multi-step returns so that dist-sum bootstrapping has more accurate targets), which does improve dist-learning speed, though due to implementation details, .
 
 Unimplemented, due to the lack of need:
 
-- Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET.
+- Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET or [iterative deepening](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search). Goals are just randomly selected.
+    - (For state-visiting, could initialize the GAN to always output the state as the goal, and to update, make the neighbor generate its goal-suggestion, and make the original-state discriminator judge that as real and make `act` with the generated goal predict the action that's in the picked replay-buffer step; like a GAN, its own generated goals should be judged as fake (*possibly* only if the action-learning loss is sufficiently low). Doesn't even learn the distance, instead just tries to crystallize closest-actions first.)
+        - (…Actually sounds unexpectedly simple and plausible…)
+        - TODO: …Try it then, in this board env?
+
+- Unknown joint-embedding schemes, with which we might be able to *not* learn the distance. Ideally, would learn contraction hierarchies, but *how* is unknown.
+    - We need to either try to come up with some, or revisit continuous-control with task-horizons.
 """
 
 
@@ -67,7 +73,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 16, 100 # TODO: N=16
+N, batch_size = 8, 100 # TODO: N=16
 action_sz = 64
 
 unroll_len = N
@@ -79,7 +85,6 @@ bootstrap_discount = torch.tensor([.99], device=device)
 #   Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
 #   (Predicting many discounts at once doesn't help.)
 #   (N=8: 40% at 5k, 53% at 10k, 53% at 20k. BIAS)
-#   TODO: Inspect this impl for bugs, because N=8 is clearly shown to be solvable, just below. Are one-step returns still faulty?
 
 perfect_distance_targets = False # Replaces dist-bootstrapping with `distance` calls.
 #   (N=4: 90% at 5k, 99% at 10k.)
@@ -186,6 +191,7 @@ for iters in range(50000):
 
         # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
         #   Though if next==target, make the distance 0. (Which happens often due to our `targets`-sampling here.)
+        #   (Random actions contain a lot of noise, so distance for them may not transfer to distance for `act`'s actions.)
         with torch.no_grad():
             if not perfect_distance_targets:
                 # Compute (K-1)-step returns in Python, no care about efficiency.
@@ -204,18 +210,12 @@ for iters in range(50000):
         dist_pred_loss = (dists[:-1] - dists_are.detach()).square().sum(-1).mean()
         # Self-imitation gated by min-dist, by `act`.
         #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
-        #   (Actions can interfere if there are many equally-good paths, but it's not too much of a problem.)
         with torch.no_grad():
             if not perfect_distance:
                 cond = dists < dists2
             else:
                 next_boards = torch.cat((boards[1:], boards[-1:]), 0).detach()
                 cond = distance(next_boards, targets) < distance(boards, targets) # TODO: Is this correct?…
-                # TODO: If `perfect_distance`, then what's the criterion? Maybe, compare next-cell and current-cell?
-                #   We want to imitate the replay buffer only when its suggested action leads to a lower distance; and its suggested action is `next_boards`.
-                # TODO: Why doesn't it work? …Wait, after 14k epochs, it does work now.
-                #   …Only up to 40% for N=8 at 5k, damn (45% at 10k).
-                # TODO: Try removing action-norm. …Didn't help…
             next_actions_are2 = torch.where(cond, next_actions, next_actions2)
         self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
 
