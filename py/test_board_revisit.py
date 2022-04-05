@@ -64,6 +64,12 @@ bootstrap_discount = torch.tensor([.99], device=device)
 #   Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
 #   (Predicting many discounts at once doesn't help.)
 
+perfect_distance = True # Replaces dist-bootstrapping with `distance` calls.
+#   (Shows that bad dist-bootstrapping is not the reason for our poor performance.)
+#   (N=4 is still 85% at 10k, N=8 is still 40% at 10k.)
+#   (Our poor performance can be caused either by action-averaging, or `future_dist` being unable to represent all distances, even in this super-simple 2D environment.)
+#   TODO: Also try not just *learning* from the perfect distance, but actually using the perfect-distance for evaluating which action we want to learn.
+
 
 
 act = nn.Sequential( # (prev_board, target) → action
@@ -82,13 +88,30 @@ future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_
 opt = torch.optim.Adam([*act.parameters(), *future_dist.parameters()], lr=1e-3)
 
 def show_dist(plt, key):
+    """An image of the *learned* distance."""
     with torch.no_grad():
         board = torch.eye(N*N, N*N, device=device)
         target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
         action = act(cat(board, target))
         dist = future_dist(cat(board, action, target)).reshape(N, N)
         plt.imshow(dist.cpu().numpy(), label=key)
+def distance(b1, b2):
+    """Analytic distance between boards. Used for seeing what the theoretical max performance is."""
+    def xy(board):
+        ind = board.argmax(-1, keepdim=True)
+        x = torch.div(ind, N, rounding_mode='floor')
+        return x, ind - x*N
+    (x1, y1), (x2, y2) = xy(b1), xy(b2)
+    d = (x1-x2).abs() + (y1-y2).abs()
+    for ox in range(-1, 2):
+        for oy in range(-1, 2):
+            (x3, y3) = (x1+ox*N, y1+oy*N)
+            d = d.min((x3-x2).abs() + (y3-y2).abs())
+    return d
 
+
+
+# The main unrolling + training loop.
 for iters in range(50000):
     # Sample a batch of trajectories.
     action = torch.zeros(batch_size, action_sz, device=device)
@@ -137,17 +160,20 @@ for iters in range(50000):
         # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
         #   Though if next==target, make the distance 0. (Which happens often due to our `targets`-sampling here.)
         with torch.no_grad():
-            # Compute (K-1)-step returns in Python, no care about efficiency.
-            micro_dists = (boards[1:] - targets[1:]).abs().sum(-1, keepdim=True) / 2
-            # dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
-            # dists_are = torch.where(micro_dists < 1e-5, torch.tensor(0., device=device), dists_are)
-            dists_are, dist_so_far = [], dists2[-1]
-            for k in reversed(range(K-1)):
-                dist_so_far = dist_so_far.min(dists2[k+1]) # Don't follow the old trajectory if we have a better option.
-                dist_so_far = micro_dists[k] + dist_so_far * bootstrap_discount
-                dist_so_far = torch.where(micro_dists[k] < 1e-5, torch.tensor(0., device=device), dist_so_far) # Ground `target`-reaching steps to have 0 distance.
-                dists_are.append(dist_so_far)
-            dists_are = torch.stack(list(reversed(dists_are)), 0)
+            if not perfect_distance:
+                # Compute (K-1)-step returns in Python, no care about efficiency.
+                micro_dists = (boards[1:] - targets[1:]).abs().sum(-1, keepdim=True) / 2
+                # dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
+                # dists_are = torch.where(micro_dists < 1e-5, torch.tensor(0., device=device), dists_are)
+                dists_are, dist_so_far = [], dists2[-1]
+                for k in reversed(range(K-1)):
+                    dist_so_far = dist_so_far.min(dists2[k+1]) # Don't follow the old trajectory if we have a better option.
+                    dist_so_far = micro_dists[k] + dist_so_far * bootstrap_discount
+                    dist_so_far = torch.where(micro_dists[k] < 1e-5, torch.tensor(0., device=device), dist_so_far) # Ground `target`-reaching steps to have 0 distance.
+                    dists_are.append(dist_so_far)
+                dists_are = torch.stack(list(reversed(dists_are)), 0)
+            else:
+                dists_are = distance(boards[1:], targets[1:])
         dist_pred_loss = (dists[:-1] - dists_are.detach()).square().sum(-1).mean()
         # Self-imitation gated by min-dist, by `act`.
         #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
