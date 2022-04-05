@@ -51,7 +51,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 16, 100 # TODO: N=16
+N, batch_size = 8, 100 # TODO: N=16
 action_sz = 64
 
 unroll_len = N
@@ -69,10 +69,11 @@ perfect_distance_targets = True # Replaces dist-bootstrapping with `distance` ca
 #   TODO: Re-evaluate with the new env.
 #   (Shows that bad dist-bootstrapping is not the reason for our poor performance.)
 #   (Our poor performance can be caused either by action-averaging, or `future_dist` being unable to represent all distances, even in this super-simple 2D environment. …The latter is not the reason, because perfect-distance doesn't particularly help either.)
-perfect_distance = True # Makes self-imitation use perfect distance, not bootstrapped.
+perfect_distance = False # Makes self-imitation use perfect distance, not bootstrapped.
 #   (N=4: 99% at 5k.)
 #   (N=8: 65% at 10k, 90% at 20k, 95% at 25k.)
 #   (N=16: 10% at 5k, 15% at 20k.)
+#   (Adding more layers to `act` doesn't help. Neither does more hidden-layer-size.)
 #   (Shows that `act` can't even represent actions properly.)
 
 
@@ -81,12 +82,6 @@ act = nn.Sequential( # (prev_board, target) → action
     nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)), # TODO: Does having 6 extra layers help with N=16? …A little bit?
     nn.Linear(action_sz, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
