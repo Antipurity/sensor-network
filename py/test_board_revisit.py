@@ -1,5 +1,21 @@
 """
-TODO: No more RL. We've *seen* where we've been, so it should be very trivial to learn how to get anywhere, right? (Though, might need RL to pick shortest paths anyway, but it shouldn't be the deciding factor.)
+Here, we revisit the 2D board env, since continuous-control failed.
+
+Open-ended algorithms, to prepare for any goal, learn min-distance paths between *all* source and goal states. In theory, we've *seen* where we've been, so it should be trivial to revisit them, right? In practice, we haven't been able to break away from learning dist-sums, so far, which is probably non-scalable to real-world environments, because it needs to learn quadratically-many numbers — not to mention, not very biologically plausible due to magnitude & precision.
+
+This time:
+
+- To remove prediction-interference: the env's action needs 4 numbers, and is decided by which is higher.
+
+- For grounding, remembered to ensure that `act(prev, goal=next) = action` for all transitions, by setting distance to 0 in these cases.
+
+- Self-imitation *gates* by old-distance-is-better, doesn't multiply by the distance-differential.
+
+- Have tree-backup (multi-step returns), though the implementation's correctness is currently questionable. TODO:
+
+Unimplemented, due to the lack of need:
+
+- Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET.
 """
 
 
@@ -51,7 +67,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 8, 100 # TODO: N=16
+N, batch_size = 16, 100 # TODO: N=16
 action_sz = 64
 
 unroll_len = N
@@ -62,19 +78,23 @@ updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long a
 bootstrap_discount = torch.tensor([.99], device=device)
 #   Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
 #   (Predicting many discounts at once doesn't help.)
-#   TODO: Data, N=8, with the new env.
+#   (N=8: 40% at 5k, 53% at 10k, 53% at 20k. BIAS)
+#   TODO: Inspect this impl for bugs, because N=8 is clearly shown to be solvable, just below. Are one-step returns still faulty?
 
-perfect_distance_targets = True # Replaces dist-bootstrapping with `distance` calls.
-#   (N=8 is still 40% at 10k.)
-#   TODO: Re-evaluate with the new env.
-#   (Shows that bad dist-bootstrapping is not the reason for our poor performance.)
-#   (Our poor performance can be caused either by action-averaging, or `future_dist` being unable to represent all distances, even in this super-simple 2D environment. …The latter is not the reason, because perfect-distance doesn't particularly help either.)
+perfect_distance_targets = False # Replaces dist-bootstrapping with `distance` calls.
+#   (N=4: 90% at 5k, 99% at 10k.)
+#   (N=8: 55% at 5k, 90% at 10k.)
+#   (N=16: 25% at 10k, 80% at 20k, 95% at 30k.)
+#   (Actually pretty good behavior. Though we do use ridiculously-large batch sizes.)
+#   (Shows that bad dist-bootstrapping is the reason for our poor performance.)
 perfect_distance = False # Makes self-imitation use perfect distance, not bootstrapped.
 #   (N=4: 99% at 5k.)
 #   (N=8: 65% at 10k, 90% at 20k, 95% at 25k.)
 #   (N=16: 10% at 5k, 15% at 20k.)
 #   (Adding more layers to `act` doesn't help. Neither does more hidden-layer-size.)
-#   (Shows that `act` can't even represent actions properly.)
+#   (Worse than imperfect-distance, somehow.)
+#   (Shows that `act` can't even represent actions properly.) # TODO: …NO: imperfect-distance actions are actually solving the problem quite well, so what's going on here?!
+#   TODO: INSPECT THIS AGAIN
 
 
 
@@ -214,6 +234,7 @@ for iters in range(50000):
         # TODO: Already assume that this will fail, and gain an understanding of why:
         #   1. TODO: Ensure that trajectories with the same future do end up there: `ev(act(prev, goal)) = act(next, goal)`
         #   2. TODO: Ensure that the final-future is as the replay buffer says: `act(prev, next) = action`
+        #   …What's our understanding then?
 
 
         # TODO: (…So we do already give up on the math-y approach below?)
