@@ -22,6 +22,8 @@ Unimplemented:
         - (…Possibly, use not only goal-of-neighbor with a replayed action (which doesn't have to play nice with our goals), but also goal-of-goal with the same action (which kinda increases our reach, exponentially quickly in fact).)
         - TODO: …Try it then, in this board env?
             - TODO: What are the impl details of our first potentially-plausible algorithm here?
+                - TODO: At least map the goal-states through a neural net, right? (So that GANs can feasibly output them.)
+                - TODO: . . .
 
 - Unknown joint-embedding schemes, with which we might be able to *not* learn the distance. Ideally, would learn contraction hierarchies, but *how* is unknown.
     - We need to either try to come up with some, or revisit continuous-control with task-horizons.
@@ -292,6 +294,19 @@ for iters in range(50000):
         #   (For the second time, we seem to have encountered some "distance VS number of func calls" duality… Can THAT be the answer to foregoing distance: make each step incur an RNN call?)
         #     (With an RNN, we can actually tell the successor relationship between A & B, AKA compare lengths or distances: either just compare the distances to B&A of 1-step RNN application to A&B, or learn a neural net that discriminates which is deeper.)
         #     TODO: Try to apply this more-polished "distance = RNN call count" idea to some previous idea like "to reach goals, ensure that RNNs of actions transform into the final goal-reaching actions (or an RNN of action-embeddings, to not cause weird effects)" (the depth discriminator would allow us to actually do self-imitation).
+        #       …Or at least write this RNN-distance-comparator idea down concisely?
+
+
+
+        # …For each goal, we'd like to induce a vortex that leads to it… For each a→b action, we need to ensure that this action from a leads to the same goal-pursuing future as b: leads_to(future(a, goal), a, a→b) = future(b, goal). And, future(goal, goal) = OK.
+        #   To actually act, we need act(a, future), which should end up pointing to the shortest path. We really need a func-call-count-comparator for the `leads_to` RNN.
+
+        # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
+        #   `traj(lvl,a,act1,act2)→meta`, `act1(lvl,a,meta)→act1`, `act2(lvl,a,meta)→act2`: products.
+        #   `meta(lvl, a, goal)→meta`: actions. …Makes `act1` a little redundant tho.
+        #   …If we can detect situations where a→b→c leads to the same outcome as a→c and replace a→b→c with a→c… And do this in layers of 2**n-length options (action-sequences)… Isn't this the essence of node contraction? Isn't this why we have the meta-layer?
+        #     …What's the loss that 'detects' this?
+        #     …Not quite ready to write this down, huh… Do we need to combine this with `future`, and condition action-getting on the `future` in order to actually detect complex trajectories, and make all meta-actions reside in the same space (so that we can replace the actions) by not conditioning `meta` on the level but making it always return the action?…
 
 
 
