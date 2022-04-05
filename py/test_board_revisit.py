@@ -13,12 +13,15 @@ This time:
 
 - Now have tree-backup (basically multi-step returns so that dist-sum bootstrapping has more accurate targets), which does improve dist-learning speed, though due to implementation details, .
 
-Unimplemented, due to the lack of need:
+Unimplemented:
 
 - Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET or [iterative deepening](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search). Goals are just randomly selected.
     - (For state-visiting, could initialize the GAN to always output the state as the goal, and to update, make the neighbor generate its goal-suggestion, and make the original-state discriminator judge that as real and make `act` with the generated goal predict the action that's in the picked replay-buffer step; like a GAN, its own generated goals should be judged as fake (*possibly* only if the action-learning loss is sufficiently low). Doesn't even learn the distance, instead just tries to crystallize closest-actions first.)
         - (…Actually sounds unexpectedly simple and plausible…)
+        - (…Possibly, to revisit less, learn another GAN of what we've generated, and only allow a goal-suggestion if it's judged as secondhand-fake. Or even reuse the original GAN's discriminator to gate suggestions, but with a momentum-delayed copy.)
+        - (…Possibly, use not only goal-of-neighbor with a replayed action (which doesn't have to play nice with our goals), but also goal-of-goal with the same action (which kinda increases our reach, exponentially quickly in fact).)
         - TODO: …Try it then, in this board env?
+            - TODO: What are the impl details of our first potentially-plausible algorithm here?
 
 - Unknown joint-embedding schemes, with which we might be able to *not* learn the distance. Ideally, would learn contraction hierarchies, but *how* is unknown.
     - We need to either try to come up with some, or revisit continuous-control with task-horizons.
@@ -73,7 +76,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 8, 100 # TODO: N=16
+N, batch_size = 8, 100
 action_sz = 64
 
 unroll_len = N
@@ -86,20 +89,18 @@ bootstrap_discount = torch.tensor([.99], device=device)
 #   (Predicting many discounts at once doesn't help.)
 #   (N=8: 40% at 5k, 53% at 10k, 53% at 20k. BIAS)
 
-perfect_distance_targets = False # Replaces dist-bootstrapping with `distance` calls.
+perfect_distance_targets = True # Replaces dist-bootstrapping with `distance` calls.
 #   (N=4: 90% at 5k, 99% at 10k.)
 #   (N=8: 55% at 5k, 90% at 10k.)
 #   (N=16: 25% at 10k, 80% at 20k, 95% at 30k.)
 #   (Actually pretty good behavior. Though we do use ridiculously-large batch sizes.)
 #   (Shows that bad dist-bootstrapping is the reason for our poor performance.)
-perfect_distance = False # Makes self-imitation use perfect distance, not bootstrapped.
+perfect_distance = True # Makes self-imitation use perfect distance, not bootstrapped.
 #   (N=4: 99% at 5k.)
 #   (N=8: 65% at 10k, 90% at 20k, 95% at 25k.)
 #   (N=16: 10% at 5k, 15% at 20k.)
 #   (Adding more layers to `act` doesn't help. Neither does more hidden-layer-size.)
 #   (Worse than imperfect-distance, somehow.)
-#   (Shows that `act` can't even represent actions properly.) # TODO: …NO: imperfect-distance actions are actually solving the problem quite well, so what's going on here?!
-#   TODO: INSPECT THIS AGAIN
 
 
 
@@ -215,7 +216,7 @@ for iters in range(50000):
                 cond = dists < dists2
             else:
                 next_boards = torch.cat((boards[1:], boards[-1:]), 0).detach()
-                cond = distance(next_boards, targets) < distance(boards, targets) # TODO: Is this correct?…
+                cond = distance(next_boards, targets) < distance(boards, targets)
             next_actions_are2 = torch.where(cond, next_actions, next_actions2)
         self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
 
