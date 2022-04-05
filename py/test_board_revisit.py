@@ -25,9 +25,7 @@ def env_init(N, batch_size=1): # → board
     # Collisions are technically possible, but unlikely.
     return board
 def env_step(N, board, action): # → board
-    """Given a one-hot board encoding and a 1-number action, returns a new board state, cyclically-shifted in the correct direction. Batchable.
-
-    (The action number represents one of 4 actions: -∞…-.5 for +x, -.5…0 for -x, 0….5 for +y, .5…+∞ for -y.)
+    """Given a one-hot board encoding and a 4-number action (the max value wins), returns a new board state, cyclically-shifted in the correct direction. Batchable.
 
     (The 2-number scheme that relied on the max-magnitude direction was abandoned, because it played poorly with action averaging.)"""
     board = board.reshape(*board.shape[:-1], N, N)
@@ -36,10 +34,11 @@ def env_step(N, board, action): # → board
     board_py = torch.cat((board[..., -1:, :], board[..., :-1, :]), -2).reshape(sh)
     board_mx = torch.cat((board[..., :, 1:], board[..., :, :1], ), -1).reshape(sh)
     board_my = torch.cat((board[..., 1:, :], board[..., :1, :], ), -2).reshape(sh)
+    action = action.argmax(-1, keepdim=True)
     return torch.where(
-        action < 0.,
-        torch.where(action < -.5, board_px, board_mx),
-        torch.where(action < .5, board_py, board_my),
+        action < 2,
+        torch.where(action == 0, board_px, board_mx),
+        torch.where(action == 2, board_py, board_my),
     )
 
 
@@ -52,7 +51,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 8, 100 # TODO: N=16
+N, batch_size = 16, 100 # TODO: N=16
 action_sz = 64
 
 unroll_len = N
@@ -63,12 +62,18 @@ updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long a
 bootstrap_discount = torch.tensor([.99], device=device)
 #   Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
 #   (Predicting many discounts at once doesn't help.)
+#   TODO: Data, N=8, with the new env.
 
-perfect_distance = True # Replaces dist-bootstrapping with `distance` calls.
+perfect_distance_targets = True # Replaces dist-bootstrapping with `distance` calls.
+#   (N=8 is still 40% at 10k.)
+#   TODO: Re-evaluate with the new env.
 #   (Shows that bad dist-bootstrapping is not the reason for our poor performance.)
-#   (N=4 is still 85% at 10k, N=8 is still 40% at 10k.)
-#   (Our poor performance can be caused either by action-averaging, or `future_dist` being unable to represent all distances, even in this super-simple 2D environment.)
-#   TODO: Also try not just *learning* from the perfect distance, but actually using the perfect-distance for evaluating which action we want to learn.
+#   (Our poor performance can be caused either by action-averaging, or `future_dist` being unable to represent all distances, even in this super-simple 2D environment. …The latter is not the reason, because perfect-distance doesn't particularly help either.)
+perfect_distance = True # Makes self-imitation use perfect distance, not bootstrapped.
+#   (N=4: 99% at 5k.)
+#   (N=8: 65% at 10k, 90% at 20k, 95% at 25k.)
+#   (N=16: 10% at 5k, 15% at 20k.)
+#   (Shows that `act` can't even represent actions properly.)
 
 
 
@@ -76,7 +81,14 @@ act = nn.Sequential( # (prev_board, target) → action
     nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    nn.Linear(action_sz, action_sz), nn.LayerNorm(action_sz, elementwise_affine=False),
+    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)), # TODO: Does having 6 extra layers help with N=16? …A little bit?
+    nn.Linear(action_sz, action_sz),
+    nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
 future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
@@ -131,7 +143,7 @@ for iters in range(50000):
             if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device)
             #   (Having this is very much not ideal, but it does actually ensure that the RNN explores a lot.)
 
-            board = env_step(N, board, action[..., 0:1])
+            board = env_step(N, board, action[..., 0:4])
 
             reached |= (board == target).all(-1, keepdim=True)
 
@@ -160,7 +172,7 @@ for iters in range(50000):
         # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
         #   Though if next==target, make the distance 0. (Which happens often due to our `targets`-sampling here.)
         with torch.no_grad():
-            if not perfect_distance:
+            if not perfect_distance_targets:
                 # Compute (K-1)-step returns in Python, no care about efficiency.
                 micro_dists = (boards[1:] - targets[1:]).abs().sum(-1, keepdim=True) / 2
                 # dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
@@ -179,7 +191,17 @@ for iters in range(50000):
         #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
         #   (Actions can interfere if there are many equally-good paths, but it's not too much of a problem.)
         with torch.no_grad():
-            next_actions_are2 = torch.where(dists < dists2, next_actions, next_actions2)
+            if not perfect_distance:
+                cond = dists < dists2
+            else:
+                next_boards = torch.cat((boards[1:], boards[-1:]), 0).detach()
+                cond = distance(next_boards, targets) < distance(boards, targets) # TODO: Is this correct?…
+                # TODO: If `perfect_distance`, then what's the criterion? Maybe, compare next-cell and current-cell?
+                #   We want to imitate the replay buffer only when its suggested action leads to a lower distance; and its suggested action is `next_boards`.
+                # TODO: Why doesn't it work? …Wait, after 14k epochs, it does work now.
+                #   …Only up to 40% for N=8 at 5k, damn (45% at 10k).
+                # TODO: Try removing action-norm. …Didn't help…
+            next_actions_are2 = torch.where(cond, next_actions, next_actions2)
         self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
 
         # TODO: Our scalability here is atrocious. Get N=16 not up to 15% but up to ≈100%, THEN we can do cont-control.
