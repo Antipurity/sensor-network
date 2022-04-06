@@ -300,6 +300,8 @@ for iters in range(50000):
 
         # …For each goal, we'd like to induce a vortex that leads to it… For each a→b action, we need to ensure that this action from a leads to the same goal-pursuing future as b: leads_to(future(a, goal), a, a→b) = future(b, goal). And, future(goal, goal) = OK.
         #   To actually act, we need act(a, future), which should end up pointing to the shortest path. We really need a func-call-count-comparator for the `leads_to` RNN.
+        #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably), then we could have always determined which action's futures are closer to the goal's future, right?… With n-step futures, we could do self-imitation. (It all fits with contraction.)
+        #     TODO: …But how to learn those n-step futures, knowing that `leads_to` takes the action and not just the future?… (If all we had was the 'next-future' RNN, then we could have learned a hierarchy of `up(next(lvl, next(lvl, x))) = next(lvl+1, up(x))`; but we need some "meta-action" representation, right?…)
 
         # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
         #   `traj(lvl,a,act1,act2)→meta`, `act1(lvl,a,meta)→act1`, `act2(lvl,a,meta)→act2`: products.
