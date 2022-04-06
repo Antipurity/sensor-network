@@ -16,7 +16,7 @@ This time:
 Unimplemented:
 
 - Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET or [iterative deepening](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search). Goals are just randomly selected.
-    - (For state-visiting, could initialize the GAN to always output the state as the goal, and to update, make the neighbor generate its goal-suggestion, and make the original-state discriminator judge that as real and make `act` with the generated goal predict the action that's in the picked replay-buffer step; like a GAN, its own generated goals should be judged as fake (*possibly* only if the action-learning loss is sufficiently low). Doesn't even learn the distance, instead just tries to crystallize closest-actions first.)
+    - (For state-visiting, apply "neighbor's goal can be our own goal too" via an src→goal GAN and an (src,goal)→action net: could initialize the GAN to always output the state as the goal, and to update, make the neighbor generate its goal-suggestion, and make the original-state discriminator judge that as real and make `act` with the generated goal predict the action that's in the picked replay-buffer step; like a GAN, its own generated goals should be judged as fake (*possibly* only if the action-learning loss is sufficiently low). Doesn't even learn the distance, instead just tries to crystallize closest-actions first.)
         - (…Actually sounds unexpectedly simple and plausible…)
         - (…Possibly, to revisit less, learn another GAN of what we've generated, and only allow a goal-suggestion if it's judged as secondhand-fake. Or even reuse the original GAN's discriminator to gate suggestions, but with a momentum-delayed copy.)
         - (…Possibly, use not only goal-of-neighbor with a replayed action (which doesn't have to play nice with our goals), but also goal-of-goal with the same action (which kinda increases our reach, exponentially quickly in fact).)
@@ -24,9 +24,11 @@ Unimplemented:
             - TODO: What are the impl details of our first potentially-plausible algorithm here?
                 - TODO: At least map the goal-states through a neural net, right? (So that GANs can feasibly output them.)
                 - TODO: . . .
+        - TODO: …Can we do this not via GANs but via joint-embedding? Isn't the "dst's dst is our dst too" idea related to node contraction's "remove a graph node and join the path; at query-time, only go up the query-hierarchy (probably measuring embedding similarity)"?
 
 - Unknown joint-embedding schemes, with which we might be able to *not* learn the distance. Ideally, would learn contraction hierarchies, but *how* is unknown.
     - We need to either try to come up with some, or revisit continuous-control with task-horizons.
+    - (Joint-embedding is probably the only real option to scale up to realistic environments, because the neural nets will no longer have to learn every single quadratically-numerous dist & action, and very slowly update them when they discover unexpected paths; many implicit datapoints can be updated at once if we use joint-embedding.)
 """
 
 
@@ -222,10 +224,6 @@ for iters in range(50000):
             next_actions_are2 = torch.where(cond, next_actions, next_actions2)
         self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
 
-        # TODO: Our scalability here is atrocious. Get N=16 not up to 15% but up to ≈100%, THEN we can do cont-control.
-        #   …Mission failed…
-        #   …Is distance too hard to learn after all?…
-        #   …Is our only remaining option REALLY to re-examine BYOL for clustering trajectories, where `act` is the input embedding…
 
 
 
@@ -234,46 +232,11 @@ for iters in range(50000):
 
 
 
-        # TODO: Already assume that this will fail, and gain an understanding of why:
-        #   1. TODO: Ensure that trajectories with the same future do end up there: `ev(act(prev, goal)) = act(next, goal)`
-        #   2. TODO: Ensure that the final-future is as the replay buffer says: `act(prev, next) = action`
-        #   …What's our understanding then?
 
+        # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything).
 
-        # TODO: (…So we do already give up on the math-y approach below?)
-        # TODO: On a graph A|B|C|D  |  A→D, B→A, B→C, C→B, C→D.
-        #   TODO: What are the optimal conditions for `act(prev, goal)` to end up pointing to goals? (No distances.)
-        #     First, the near-goal conditions:
-        #       INIT
-        #       act(A,A) = ???, act(A,B) = ???, act(A,C) = ???, act(A,D) = A→D
-        #       act(B,A) = B→A, act(B,B) = ???, act(B,C) = B→C, act(B,D) = ???
-        #       act(C,A) = ???, act(C,B) = C→B, act(C,C) = ???, act(C,D) = C→D
-        #     Second, spread them back, depth-first: given `(prev, action, next, goal)`, if `act(prev, goal) == ???` (don't overwrite) but `act(next, goal) != ???` (spread backwards), do `act(prev, goal) = action` (for each next & goal, find an action that ends in next with a non-taken prev):
-        #       TRUE
-        #       act(A,A) = ···, act(A,B) = ···, act(A,C) = ···, act(A,D) = A→D
-        #       act(B,A) = B→A, act(B,B) = B→C, act(B,C) = B→C, act(B,D) = B→A
-        #       act(C,A) = C→B, act(C,B) = C→B, act(C,C) = C→B, act(C,D) = C→D
-        #       (…"Find a `prev` with the same action as `next` & `goal` (the actual next action is irrelevant)" or "given `prev` and `goal`, find an `action: prev→next` with a filled `next`" *could* mean "make all such actions' embeddings the same"…)
-        #       (…"Don't overwrite" *could* mean "use `ev` somewhere here"…)
-        #       TODO: …Try writing down the exact equation-producing equations that we could use to solve this, using `ev action` and `act(prev,goal)`…
-        #         …Didn't we try essentially both configurations like this, and found that neither works?…
-        #         …If we didn't have to worry about overwriting, we could have just done `prev→next:  act(prev, goal) = prev→next = act(prev, next)`… What equation would possibly imply this one?…
-        #           …To worry about overwriting, we do need to add a construction on either side of the equation. But which side, and which construction?…
-        #           …`ev` with only the action has failed either way… Can we fix it by also conditioning it on state and/or goal (thereby reducing how many equations are produced)?…
-        #           …Is this equation fundamentally about combining goals, like `act(prev, goal) = act(prev, next) + act(next, goal)`?… But how to write this down as a real equation?… Do we maybe want `ev` to act as the `+` here — but then, how to make prev-action be the same as current-action iff next goes to goal?…
-        #             TODO: …Try writing down the actual, non-simplified equation, first in terms of distances (…how to do even that if we don't have state?), then hierarchy levels?…
-        #               dist(prev, next) = 1
-        #               × dist(a,c) = min(b, dist(a,b) + dist(b,c))   (NOT CONSTRUCTIVE)
-        #               × dist(a,c) = min(dist(a,c), dist(a,b) + dist(b,c))   (Bootstrap; numerically problematic.)   (NOT CONSTRUCTIVE)
-        #               dist(a, c, a→b) = 1 + dist(b, c, act(b,c))   (The only constructive solution)
-        #               act(a,c) if a→b and dist(a,c,a→b) < dist(a,c,act(a,c)) = a→b (Construct the min spanning tree) (NON CONSTRUCTIVE)
-        #               …I really don't see how we'd come up with a scheme that can actually do that search without writing "search pls"…
-
-
-        # Unprovably-necessary, but definitely insufficient losses (seen by treating the loss as an equation, and writing out the consequences):
-        #   `ev act(prev,·) = act(next,·)`
-        #   `act(prev,·) = ev act(next,·)`
-        #   A→D, B→A, B→C, C→B, C→D
+        # …Unprovably-necessary, but definitely insufficient losses (seen by treating the loss as an equation, and writing out the consequences):
+        #   `ev act(prev,·) = act(next,·)`   `act(prev,·) = ev act(next,·)`
 
 
 
@@ -302,6 +265,9 @@ for iters in range(50000):
         #   To actually act, we need act(a, future), which should end up pointing to the shortest path. We really need a func-call-count-comparator for the `leads_to` RNN.
         #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably), then we could have always determined which action's futures are closer to the goal's future, right?… With n-step futures, we could do self-imitation. (It all fits with contraction.)
         #     TODO: …But how to learn those n-step futures, knowing that `leads_to` takes the action and not just the future?… (If all we had was the 'next-future' RNN, then we could have learned a hierarchy of `up(next(lvl, next(lvl, x))) = next(lvl+1, up(x))`; but we need some "meta-action" representation, right?…)
+        #     …And, do we need a reverse-`leads_to`, so that we can more tightly check similarity-to-goal, by checking back-stepped futures?
+        #     …With contraction, trajectory & a same-destination action should become the same… HOW
+        #     …Should the future be goal-independent, and the only goal-dependency being path-finding (the min across actions)? Or is it better to know the goal too, so that the repr-landscape is simpler?
 
         # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
         #   `traj(lvl,a,act1,act2)→meta`, `act1(lvl,a,meta)→act1`, `act2(lvl,a,meta)→act2`: products.
