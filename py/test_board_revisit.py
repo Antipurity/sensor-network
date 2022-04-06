@@ -263,11 +263,11 @@ for iters in range(50000):
 
         # …For each goal, we'd like to induce a vortex that leads to it… For each a→b action, we need to ensure that this action from a leads to the same goal-pursuing future as b: leads_to(future(a, goal), a, a→b) = future(b, goal). And, future(goal, goal) = OK.
         #   To actually act, we need act(a, future), which should end up pointing to the shortest path. We really need a func-call-count-comparator for the `leads_to` RNN.
-        #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably), then we could have always determined which action's futures are closer to the goal's future, right?… With n-step futures, we could do self-imitation. (It all fits with contraction.)
-        #     TODO: …But how to learn those n-step futures, knowing that `leads_to` takes the action and not just the future?… (If all we had was the 'next-future' RNN, then we could have learned a hierarchy of `up(next(lvl, next(lvl, x))) = next(lvl+1, up(x))`; but we need some "meta-action" representation, right?…)
+        #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably) (goal-conditioned, probably), then we could have always determined which action's futures are closer to the goal's future, right? With n-step futures, we could do self-imitation. (It all fits with contraction.)
+        #     …Could learn those n-step futures by `up(leads_to(lvl, leads_to(lvl, x))) = leads_to(lvl+1, up(x))`; need meta-actions for `next` here, by making `act` aware of `lvl`.
+        #     TODO: How to actually do that self-imitation?
         #     …And, do we need a reverse-`leads_to`, so that we can more tightly check similarity-to-goal, by checking back-stepped futures?
         #     …With contraction, trajectory & a same-destination action should become the same… HOW
-        #     …Should the future be goal-independent, and the only goal-dependency being path-finding (the min across actions)? Or is it better to know the goal too, so that the repr-landscape is simpler?
 
         # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
         #   `traj(lvl,a,act1,act2)→meta`, `act1(lvl,a,meta)→act1`, `act2(lvl,a,meta)→act2`: products.
@@ -275,6 +275,8 @@ for iters in range(50000):
         #   …If we can detect situations where a→b→c leads to the same outcome as a→c and replace a→b→c with a→c… And do this in layers of 2**n-length options (action-sequences)… Isn't this the essence of node contraction? Isn't this why we have the meta-layer?
         #     …What's the loss that 'detects' this?
         #     …Not quite ready to write this down, huh… Do we need to combine this with `future`, and condition action-getting on the `future` in order to actually detect complex trajectories, and make all meta-actions reside in the same space (so that we can replace the actions) by not conditioning `meta` on the level but making it always return the action?…
+
+        # TODO: Can we write down a simplified loss that will *always* replace 2-step same-dst paths with 1-step paths? Which we can test out, at least on a simple graph? (Which we can scale up to whole hierarchies easily.)
 
 
 
