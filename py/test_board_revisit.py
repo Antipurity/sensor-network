@@ -266,7 +266,7 @@ for iters in range(50000):
         #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably) (goal-conditioned, probably), then we could have always determined which action's futures are closer to the goal's future, right? With n-step futures, we could do self-imitation. (It all fits with contraction.)
         #     …Could learn those n-step futures by `up(leads_to(lvl, leads_to(lvl, x))) = leads_to(lvl+1, up(x))`; need meta-actions for `next` here, by making `act` aware of `lvl`.
         #     TODO: How to actually do that self-imitation?
-        #     …And, do we need a reverse-`leads_to`, so that we can more tightly check similarity-to-goal, by checking back-stepped futures?
+        #     …And, do we need a reverse-`leads_to`, so that we can more tightly check similarity-to-goal, by checking back-stepped futures? Or would adding `up(leads_to(lvl, x)) = leads_to(lvl+1, up(x))` (meta-futures represent not just "exactly 2**lvl steps" but "up to 2**lvl steps") be enough?
         #     …With contraction, trajectory & a same-destination action should become the same… HOW
 
         # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
