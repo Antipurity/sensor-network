@@ -15,7 +15,7 @@ This time:
 
 Unimplemented:
 
-- Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET or [iterative deepening](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search). Goals are just randomly selected.
+- Classical pathfinding but for ML: Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET or [iterative deepening](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search). Goals are just randomly selected.
     - (For state-visiting, apply "neighbor's goal can be our own goal too" via an src→goal GAN and an (src,goal)→action net: could initialize the GAN to always output the state as the goal, and to update, make the neighbor generate its goal-suggestion, and make the original-state discriminator judge that as real and make `act` with the generated goal predict the action that's in the picked replay-buffer step; like a GAN, its own generated goals should be judged as fake (*possibly* only if the action-learning loss is sufficiently low). Doesn't even learn the distance, instead just tries to crystallize closest-actions first.)
         - (…Actually sounds unexpectedly simple and plausible…)
         - (…Possibly, to revisit less, learn another GAN of what we've generated, and only allow a goal-suggestion if it's judged as secondhand-fake. Or even reuse the original GAN's discriminator to gate suggestions, but with a momentum-delayed copy.)
@@ -24,10 +24,11 @@ Unimplemented:
             - TODO: What are the impl details of our first potentially-plausible algorithm here?
                 - TODO: At least map the goal-states through a neural net, right? (So that GANs can feasibly output them.)
                 - TODO: . . .
-        - TODO: …Can we do this not via GANs but via joint-embedding? Isn't the "dst's dst is our dst too" idea related to node contraction's "remove a graph node and join the path; at query-time, only go up the query-hierarchy (probably measuring embedding similarity)"?
+            - …Or should we think about joint embeddings more…
 
-- Unknown joint-embedding schemes, with which we might be able to *not* learn the distance. Ideally, would learn contraction hierarchies, but *how* is unknown.
+- Contraction hierarchies but for ML: unknown joint-embedding schemes, with which we might be able to *not* learn the distance. Ideally, would learn contraction hierarchies, but *how* is unknown.
     - We need to either try to come up with some, or revisit continuous-control with task-horizons.
+    - (Isn't the "dst's dst is our dst too" idea related to node contraction's "remove a graph node and join the path; at query-time, only go up the query-hierarchy (probably measuring embedding similarity)"?)
     - (Joint-embedding is probably the only real option to scale up to realistic environments, because the neural nets will no longer have to learn every single quadratically-numerous dist & action, and very slowly update them when they discover unexpected paths; many implicit datapoints can be updated at once if we use joint-embedding.)
 """
 
@@ -235,25 +236,26 @@ for iters in range(50000):
 
         # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything).
 
-        # …Unprovably-necessary, but definitely insufficient losses (seen by treating the loss as an equation, and writing out the consequences):
-        #   `ev act(prev,·) = act(next,·)`   `act(prev,·) = ev act(next,·)`
+
+        # TODO: Organize the possible ideas on how contraction hierarchies could be done.
+
+        # Contraction hierarchies:
+        #   - Classically: first preprocess using node contraction: in the order of node importance (always a heuristic, but important to query-time performance), create a new hierarchy level: remove a node/state, and add all its incoming+outcoming edges/actions as shortcuts. And at query-time, meet at the least-abstract level: always go up a node-importance level, go from both ends, and pick the min-dist-sum meeting node.
+
+
+        # …Unprovably-necessary, but definitely insufficient losses (seen by treating the loss as an equation, and writing out the consequences): `next_act act(prev,·) = act(next,·)`   `act(prev,·) = prev_act act(next,·)`
+        #   TODO: …Is this outdated by now? It is, isn't it: actions are not futures, right? So, delete it, right?
 
 
 
-        # (…An intuitively-appealing idea is: given an RNN that reaches fixed-points at (prev, goal=next), and for which each prev→next transition does one more step toward the fixed-point for any goal (RNN(ev(prev,·))=ev(next,·), probably), find the actions (`ev` here? Does it need to know the action, or is its result the action? Or, is the action inferred from the result such that the goal here is minimized…) that get the RNN closer to the fixed-point, somehow…)
-        # (…Also, if we do end up learning distance YET AGAIN, maybe we could try ensuring linear combinations instead of one-step summation: `dist(prev, next) = |prev-next|` and `dist(a,c) = min(dist(a,c), dist(a,b) + dist(b,c))`? With this, we'll be able to compose sequences much more quickly, though we do need to pick `b` intelligently. …And, to reduce how much we need to learn, don't condition the distance on the min-dist action, instead find that min-dist already — though, if the policy is optimal anyway, it shouldn't matter…) TODO: Is this remark useless? Re-read.
-        #   (Dijkstra's has a set of soon-to-be-visited nodes, sampled in a min-dist order. In ML, this means a generative model. Very much like open-ended algorithms such as AMIGo and POET: always suggest tasks that are neither too hard nor too easy.)
-        #   (What we kinda want is Prim's algorithm but for ML… Though Prim's algo uses distances, connecting the action with the min distance…)
-        # (…If we switch from sum-of-distances to min-distance (and forego min-path-finding), then we could train a discriminator of whether an action would reach the goal (by copying the next action's future-probability, or making it 100% if we're at goal), and train actions to maximize reachability… The discrimination would collapse to 100% eventually, though…) TODO: Is this remark useless? Re-consider.
-        # (…I think classical pathfinding algorithms are already well-used in ML… Have to understand hierarchy contractions to have even a chance…)
-
-        # …In hierarchy contraction, we preprocess using node contraction: remove a node/state, and add all its incoming+outcoming edges/actions as shortcuts (need plan-conditioning and not just action-conditioning), in the order of node-importance. And at query-time, always go up a node-importance level, and go from both ends.
-        #   …Can "going to the next hierarchy level" be represented as an action→plan neural net?…
+        # …In contraction hierarchies, [Classically]
+        #   …Can "going to the next hierarchy level" be represented as an action→plan neural net, like an RNN?…
         #     But how to learn the actual actions of that plan?… Need at least some way to compare which plan is closer to the goal, and combine those distances…
-        #     (Like some RNN…)
+        #       …Or, a way to make the contracted-path's action the same as its first action's. Which we were thinking about, most recently.
         #   …Can "continuous contraction" be achieved, mathematically, by finding a close-to-src/goal state, and going from/there? (Meaning, a neural net from src & goal & max-contraction-dist to altered-src: if it's neural, we have no need to alter the goal too, since the second half of the problem is already solved everywhere. Trained with the help of an altered-src's dist discriminator, possibly even `future_dist` with the current policy. Unrolled by always contracting the current state to like half the predicted-dist, and using that as the goal.)
         #     (Should allow distances to be less globally-accurate to be useful; meaning, faster training.)
         #     (But, how much benefit this could give is unclear.)
+        #     TODO: Is this continuous-contraction better than explicit hierarchy levels? It IS distinct, right? Should we make a repository of possible paths forward?
         #   (For the second time, we seem to have encountered some "distance VS number of func calls" duality… Can THAT be the answer to foregoing distance: make each step incur an RNN call?)
         #     (With an RNN, we can actually tell the successor relationship between A & B, AKA compare lengths or distances: either just compare the distances to B&A of 1-step RNN application to A&B, or learn a neural net that discriminates which is deeper.)
         #     TODO: Try to apply this more-polished "distance = RNN call count" idea to some previous idea like "to reach goals, ensure that RNNs of actions transform into the final goal-reaching actions (or an RNN of action-embeddings, to not cause weird effects)" (the depth discriminator would allow us to actually do self-imitation).
@@ -263,8 +265,9 @@ for iters in range(50000):
 
         # …For each goal, we'd like to induce a vortex that leads to it… For each a→b action, we need to ensure that this action from a leads to the same goal-pursuing future as b: leads_to(future(a, goal), a, a→b) = future(b, goal). And, future(goal, goal) = OK.
         #   To actually act, we need act(a, future), which should end up pointing to the shortest path. We really need a func-call-count-comparator for the `leads_to` RNN.
-        #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably) (goal-conditioned, probably), then we could have always determined which action's futures are closer to the goal's future, right? With n-step futures, we could do self-imitation. (It all fits with contraction.)
+        #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably) (NOT goal-conditioned, probably; only `leads_to` should know the goal), then we could have always determined which action's futures are closer to the goal's future, right? With n-step futures, we could do self-imitation. (It all fits with contraction.)
         #     …Could learn those n-step futures by `up(leads_to(lvl, leads_to(lvl, x))) = leads_to(lvl+1, up(x))`; need meta-actions for `next` here, by making `act` aware of `lvl`.
+        #       …Another way: don't have `lvl`, just have RNNs; trust the nets to learn to distinguish stuff.
         #     TODO: How to actually do that self-imitation?
         #     …And, do we need a reverse-`leads_to`, so that we can more tightly check similarity-to-goal, by checking back-stepped futures? Or would adding `up(leads_to(lvl, x)) = leads_to(lvl+1, up(x))` (meta-futures represent not just "exactly 2**lvl steps" but "up to 2**lvl steps") be enough?
         #     …With contraction, trajectory & a same-destination action should become the same… HOW
@@ -277,6 +280,7 @@ for iters in range(50000):
         #     …Not quite ready to write this down, huh… Do we need to combine this with `future`, and condition action-getting on the `future` in order to actually detect complex trajectories, and make all meta-actions reside in the same space (so that we can replace the actions) by not conditioning `meta` on the level but making it always return the action?…
 
         # TODO: Can we write down a simplified loss that will *always* replace 2-step same-dst paths with 1-step paths? Which we can test out, at least on a simple graph? (Which we can scale up to whole hierarchies easily.)
+        #   …We have to infer the 0-lvl action from *exactly the same* meta/future (possibly, `meta=up(future)`; one of the meta/future has to be synthetic, not inferred from concrete actions), and make the higher level action predict the lower level action… And maybe `act` accepts not src & goal directly but their futures… How to write this down, exactly?…
 
 
 
