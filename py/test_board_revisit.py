@@ -243,8 +243,13 @@ for iters in range(50000):
         #   - Classically: first preprocess using node contraction: in the order of node importance (always a heuristic, but important to query-time performance), create a new hierarchy level: remove a node/state, and add all its incoming+outcoming edges/actions as shortcuts. And at query-time, meet at the least-abstract level: always go up a node-importance level, go from both ends, and pick the min-dist-sum meeting node.
 
 
-        # …Unprovably-necessary, but definitely insufficient losses (seen by treating the loss as an equation, and writing out the consequences): `next_act act(prev,·) = act(next,·)`   `act(prev,·) = prev_act act(next,·)`
-        #   TODO: …Is this outdated by now? It is, isn't it: actions are not futures, right? So, delete it, right?
+
+        # For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', by notation here):
+        #   - Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
+        #   - Learn a goal-dependent embedding `ev` for which `ev(prev,g) = prev_ev(ev(next,g))` and `ev(g,g) = OK` (make it smoothly transform into goals), and compare func-call-depths when needed:
+        #     - Learn the actual distance given `ev`.
+        #     - Learn a comparator of 2 `ev`s, `cmp(fut1, fut2)→-1…0…1`: `cmp(RNN(f),f)=-1`, `cmp(f,f)=0`, `cmp(f,RNN(f))=1`, `cmp(RNN(f), RNN(g)) = cmp(f,g)`, `cmp(RNN(f),g) where cmp(f,g)<0 = -1`, `cmp(f,RNN(g)) where cmp(f,g)>0 = 1`.
+        #     - (…Though, learning a goal-dependent vortex is exactly as info-heavy as learning all pairwise distances, so it's just as bad as that.)
 
 
 
@@ -256,14 +261,10 @@ for iters in range(50000):
         #     (Should allow distances to be less globally-accurate to be useful; meaning, faster training.)
         #     (But, how much benefit this could give is unclear.)
         #     TODO: Is this continuous-contraction better than explicit hierarchy levels? It IS distinct, right? Should we make a repository of possible paths forward?
-        #   (For the second time, we seem to have encountered some "distance VS number of func calls" duality… Can THAT be the answer to foregoing distance: make each step incur an RNN call?)
-        #     (With an RNN, we can actually tell the successor relationship between A & B, AKA compare lengths or distances: either just compare the distances to B&A of 1-step RNN application to A&B, or learn a neural net that discriminates which is deeper.)
-        #     TODO: Try to apply this more-polished "distance = RNN call count" idea to some previous idea like "to reach goals, ensure that RNNs of actions transform into the final goal-reaching actions (or an RNN of action-embeddings, to not cause weird effects)" (the depth discriminator would allow us to actually do self-imitation).
-        #       …Or at least write this RNN-distance-comparator idea down concisely?
 
 
 
-        # …For each goal, we'd like to induce a vortex that leads to it… For each a→b action, we need to ensure that this action from a leads to the same goal-pursuing future as b: leads_to(future(a, goal), a, a→b) = future(b, goal). And, future(goal, goal) = OK.
+        # …For each goal, we'd like to induce a vortex that leads to it (TODO: But futures should be goal-invariant, right? Only actions should be goal-aware)… For each a→b action, we need to ensure that this action from a leads to the same goal-pursuing future as b: leads_to(future(a, goal), a, a→b) = future(b, goal). And, future(goal, goal) = OK.
         #   To actually act, we need act(a, future), which should end up pointing to the shortest path. We really need a func-call-count-comparator for the `leads_to` RNN.
         #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably) (NOT goal-conditioned, probably; only `leads_to` should know the goal), then we could have always determined which action's futures are closer to the goal's future, right? With n-step futures, we could do self-imitation. (It all fits with contraction.)
         #     …Could learn those n-step futures by `up(leads_to(lvl, leads_to(lvl, x))) = leads_to(lvl+1, up(x))`; need meta-actions for `next` here, by making `act` aware of `lvl`.
