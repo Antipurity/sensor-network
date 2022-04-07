@@ -253,6 +253,7 @@ for iters in range(50000):
 
 
 
+        # TODO: Write down continuous-contraction concisely.
         # …In contraction hierarchies, [Classically]
         #   …Can "going to the next hierarchy level" be represented as an action→plan neural net, like an RNN?…
         #     But how to learn the actual actions of that plan?… Need at least some way to compare which plan is closer to the goal, and combine those distances…
@@ -264,14 +265,20 @@ for iters in range(50000):
 
 
 
-        # …For each goal, we'd like to induce a vortex that leads to it (TODO: But futures should be goal-invariant, right? Only actions should be goal-aware)… For each a→b action, we need to ensure that this action from a leads to the same goal-pursuing future as b: leads_to(future(a, goal), a, a→b) = future(b, goal). And, future(goal, goal) = OK.
-        #   To actually act, we need act(a, future), which should end up pointing to the shortest path. We really need a func-call-count-comparator for the `leads_to` RNN.
-        #   …These are 1-step futures… If we knew n-step futures (the power-of-2 being a one-hot input to `future`, probably) (NOT goal-conditioned, probably; only `leads_to` should know the goal), then we could have always determined which action's futures are closer to the goal's future, right? With n-step futures, we could do self-imitation. (It all fits with contraction.)
-        #     …Could learn those n-step futures by `up(leads_to(lvl, leads_to(lvl, x))) = leads_to(lvl+1, up(x))`; need meta-actions for `next` here, by making `act` aware of `lvl`.
-        #       …Another way: don't have `lvl`, just have RNNs; trust the nets to learn to distinguish stuff.
-        #     TODO: How to actually do that self-imitation?
-        #     …And, do we need a reverse-`leads_to`, so that we can more tightly check similarity-to-goal, by checking back-stepped futures? Or would adding `up(leads_to(lvl, x)) = leads_to(lvl+1, up(x))` (meta-futures represent not just "exactly 2**lvl steps" but "up to 2**lvl steps") be enough?
-        #     …With contraction, trajectory & a same-destination action should become the same… HOW
+        # - 1-step futures:
+        #   - We'd like to know where each action takes us, and form a coherent picture, so: for each a→b action, we need to ensure that this action from a leads to the same future as b: `leads_to(future(a), a→b) = sg future(b)` (BYOL) where `act(future(a), future(goal)) = a→b` (which has to learn the *shortest-path* action, otherwise everything is interconnected anyway).
+        # - n-step futures:
+        #   - Possibly: the `lvl` arg to `future` and `leads_to` and `act` and `up` and `down`: a one-hot embedding of the `n` in `2**n`-len steps.
+        #   - `up(future)→metafuture`, `down(metafuture)→future`.
+        #     - (Possibly, identity functions.)
+        #   - Loss, "each higher level encompasses 2 options of its lower level": `leads_to(up(x)) = sg up(leads_to(leads_to(x))) x:future(a)` (with appropriate-level `act`ions in `leads_to`).
+        #     - Possibly, loss, "either 2 or 1 options on higher levels": `leads_to(up(x)) = sg up(leads_to(x))` (with *lower-level* `act`ions in `leads_to`).
+        #   - Loss, "autoencoder": `down(up(x)) = up(down(x)) = sg x x:future(a)`.
+        #   - Loss, "higher actions copy lower actions": `act(up(a), up(goal)) = sg act(a, goal)`. (If `up` is the identity function, we get this for free.)
+        #   - Loss, "shorter (lower) paths take precedence over longer (higher) paths": `act(f, goal) = sg act(down(f), goal) f:leads_to(up(a))` (with higher-level `act`ions).
+        #   - A basic loss: `act(prev, next) = action`.
+        #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
+        #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
 
         # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
         #   `traj(lvl,a,act1,act2)→meta`, `act1(lvl,a,meta)→act1`, `act2(lvl,a,meta)→act2`: products.
@@ -279,6 +286,8 @@ for iters in range(50000):
         #   …If we can detect situations where a→b→c leads to the same outcome as a→c and replace a→b→c with a→c… And do this in layers of 2**n-length options (action-sequences)… Isn't this the essence of node contraction? Isn't this why we have the meta-layer?
         #     …What's the loss that 'detects' this?
         #     …Not quite ready to write this down, huh… Do we need to combine this with `future`, and condition action-getting on the `future` in order to actually detect complex trajectories, and make all meta-actions reside in the same space (so that we can replace the actions) by not conditioning `meta` on the level but making it always return the action?…
+
+        # TODO: …What about the semi-classical idea of contraction hierarchies, where we actually search which future-level is the same for src & dst, then go from src to it and from it to dst? What's our justification for not doing it — or if none, then what's deficient about our simpler method?…
 
         # TODO: Can we write down a simplified loss that will *always* replace 2-step same-dst paths with 1-step paths? Which we can test out, at least on a simple graph? (Which we can scale up to whole hierarchies easily.)
         #   …We have to infer the 0-lvl action from *exactly the same* meta/future (possibly, `meta=up(future)`; one of the meta/future has to be synthetic, not inferred from concrete actions), and make the higher level action predict the lower level action… And maybe `act` accepts not src & goal directly but their futures… How to write this down, exactly?…
