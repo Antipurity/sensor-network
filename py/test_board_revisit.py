@@ -246,22 +246,16 @@ for iters in range(50000):
 
         # For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', by notation here):
         #   - Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
+        #     - (But compared to any of the options below, it's amazing.)
         #   - Learn a goal-dependent embedding `ev` for which `ev(prev,g) = prev_ev(ev(next,g))` and `ev(g,g) = OK` (make it smoothly transform into goals), and compare func-call-depths when needed:
         #     - Learn the actual distance given `ev`.
         #     - Learn a comparator of 2 `ev`s, `cmp(fut1, fut2)→-1…0…1`: `cmp(RNN(f),f)=-1`, `cmp(f,f)=0`, `cmp(f,RNN(f))=1`, `cmp(RNN(f), RNN(g)) = cmp(f,g)`, `cmp(RNN(f),g) where cmp(f,g)<0 = -1`, `cmp(f,RNN(g)) where cmp(f,g)>0 = 1`.
-        #     - (…Though, learning a goal-dependent vortex is exactly as info-heavy as learning all pairwise distances, so it's just as bad as that.)
-
-
-
-        # TODO: Write down continuous-contraction concisely.
-        # …In contraction hierarchies, [Classically]
-        #   …Can "going to the next hierarchy level" be represented as an action→plan neural net, like an RNN?…
-        #     But how to learn the actual actions of that plan?… Need at least some way to compare which plan is closer to the goal, and combine those distances…
-        #       …Or, a way to make the contracted-path's action the same as its first action's. Which we were thinking about, most recently.
-        #   …Can "continuous contraction" be achieved, mathematically, by finding a close-to-src/goal state, and going from/there? (Meaning, a neural net from src & goal & max-contraction-dist to altered-src: if it's neural, we have no need to alter the goal too, since the second half of the problem is already solved everywhere. Trained with the help of an altered-src's dist discriminator, possibly even `future_dist` with the current policy. Unrolled by always contracting the current state to like half the predicted-dist, and using that as the goal.)
-        #     (Should allow distances to be less globally-accurate to be useful; meaning, faster training.)
-        #     (But, how much benefit this could give is unclear.)
-        #     TODO: Is this continuous-contraction better than explicit hierarchy levels? It IS distinct, right? Should we make a repository of possible paths forward?
+        #     - (…Though, learning a goal-dependent vortex is as info-heavy as learning all pairwise distances if not more, so it's just as bad as that.)
+        #   - Continuous contraction: given src & dst & max-dist, alter src within those confines to get closer to dst. Then, we can decompose all problems at unroll-time: go halfway, then the rest of the way.
+        #     - Have a GAN `alter(src, dst, max_dist)→src` & `alter_dist`, where the 'discriminator' is the distance from output to dst. Losses:
+        #       - `alter_dist(prev, next, |prev-next| or more) = |prev-next|`
+        #       - `alter_dist(prev, goal, max_dist) = min(max_dist, |prev-next| + .99 * alter_dist(next, goal, dist - |prev-next|))`
+        #       - (…Wow, this is even worse than all-to-all distance learning.)
 
 
 
