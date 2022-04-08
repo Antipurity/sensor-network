@@ -233,17 +233,6 @@ for iters in range(50000):
 
 
 
-
-        # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything).
-
-
-        # TODO: Organize the possible ideas on how contraction hierarchies could be done.
-
-        # Contraction hierarchies:
-        #   - Classically: first preprocess using node contraction: in the order of node importance (always a heuristic, but important to query-time performance), create a new hierarchy level: remove a node/state, and add all its incoming+outcoming edges/actions as shortcuts. And at query-time, meet at the least-abstract level: always go up a node-importance level, go from both ends, and pick the min-dist-sum meeting node.
-
-
-
         # For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', by notation here):
         #   - Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
         #     - (But compared to any of the options below, it's amazing.)
@@ -258,34 +247,32 @@ for iters in range(50000):
         #       - (…Wow, this is even worse than all-to-all distance learning.)
 
 
+        # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything).
+
+
+        # TODO: Organize the possible ideas on how contraction hierarchies could be done.
+
+        # Contraction hierarchies:
+        #   - Classically: first preprocess using node contraction: in the order of node importance (always a heuristic, but important to query-time performance), create a new hierarchy level: remove a node/state, and add all its incoming+outcoming edges/actions as shortcuts. And at query-time, meet at the least-abstract level: always go up a node-importance level, go from both ends, and pick the min-dist-sum meeting node.
+        #   - ML, where to-search means having-learned:
+
+
 
         # - 1-step futures:
-        #   - We'd like to know where each action takes us, and form a coherent picture, so: for each a→b action, we need to ensure that this action from a leads to the same future as b: `leads_to(future(a), a→b) = sg future(b)` (BYOL) where `act(future(a), future(goal)) = a→b` (which has to learn the *shortest-path* action, otherwise everything is interconnected anyway).
-        #     - Loss, grounding: `act(future a, future b) = action` if a→b
-        #     - Loss, BYOL: `leads_to(future(a), act(future a, future b)) = sg future(b)` if a→b
+        #   - We'd like to know where each action takes us, and form a coherent picture, so: for each a→b action, we need to ensure that this action from a leads to the same future as b: `leads_to(future(a), a→b) = sg future(b)` (BYOL) where `plan(future(a), future(goal)) = a→b` (which has to learn the *shortest-path* action, otherwise everything is interconnected anyway).
+        #     - Loss, grounding: `plan(future a, future b) = action` if a→b
+        #     - Loss, BYOL: `leads_to(future(a), plan(future a, future b)) = sg future(b)` if a→b
         # - n-step futures (a→b→c + a→c = a→c):
-        #   - Possibly: the `lvl` arg to `future` and `leads_to` and `act` and `up`: a one-hot embedding of the `n` in `2**n`-len steps.
-        #   - `up(future)→metafuture`.
-        #     - (Possibly, an identity function.)
+        #   - Possibly: the `lvl` arg to `future` and `leads_to` and `plan` and `act` and `up`: a one-hot embedding of the `n` in `2**n`-len steps.
+        #     - Have `plan(src_fut, dst_fut, lvl)→plan`  and `act(plan, lvl)→action`.
+        #   - `up(future)→metafuture`. (Possibly, an identity function.)
         #   - All losses in 1-step futures.
         #   - Loss, "each higher level encompasses 2 options of its lower level": `leads_to(up(x)) = sg up(leads_to(leads_to(x))) x:future(a)` (with appropriate-level `act`ions in `leads_to`).
         #     - Possibly, loss, "either 2 or 1 options on higher levels": `leads_to(up(x)) = sg up(leads_to(x))` (with *lower-level* `act`ions in `leads_to`).
-        #   - Loss, "higher (longer) paths copy lower (shorter) actions": `act(up(a), up(goal)) = sg act(a, goal)`. (If `up` is the identity function, we get this for free.)
+        #   - Loss, "higher (longer) paths copy lower (shorter) actions": `act(plan(up(a), up(goal), lvl+1), lvl+1) = sg act(plan(a, goal, lvl), lvl)`. (If `up` is the identity function, we get this for free.)
         #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
         #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
-        #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(2,A,C) = A→C` and not the longer path?
-        #   - TODO: …OH YEAH: if higher-order futures depend on their first first-order actions, then the futures will end up very smudged at best and constant-vector at worst. We MUST have meta-actions too, representing whole plans! TODO: Integrate meta-actions into these futures.
-
-        # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
-        #   `traj(lvl,a,act1,act2)→meta`, `act1(lvl,a,meta)→act1`, `act2(lvl,a,meta)→act2`: products.
-        #   `meta(lvl, a, goal)→meta`: actions. …Makes `act1` a little redundant tho.
-        #   …If we can detect situations where a→b→c leads to the same outcome as a→c and replace a→b→c with a→c… And do this in layers of 2**n-length options (action-sequences)… Isn't this the essence of node contraction? Isn't this why we have the meta-layer?
-        #     …What's the loss that 'detects' this?
-        #     …Not quite ready to write this down, huh… Do we need to combine this with `future`, and condition action-getting on the `future` in order to actually detect complex trajectories, and make all meta-actions reside in the same space (so that we can replace the actions) by not conditioning `meta` on the level but making it always return the action?…
-        #       …Didn't we write down everything except for meta-actions, though?
-
-        # TODO: …What about the semi-classical idea of contraction hierarchies, where we actually search which future-level is the same for src & dst, then go from src to it and from it to dst? What's our justification for not doing it — or if none, then what's deficient about our simpler method?…
-        #   "Searching on the higher level after exhausting the lower level" is the same as "learning the higher level to reflect the lower level's info", right? So is our thing the same?
+        #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(plan(2,A,C)) = A→C` and not the longer path?
 
 
 
