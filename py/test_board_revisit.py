@@ -273,6 +273,8 @@ for iters in range(50000):
         #   - A basic loss: `act(prev, next) = action`.
         #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
         #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
+        #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(2,A,C) = A→C` and not the longer path?
+        #   - TODO: …OH YEAH: if higher-order futures depend on their first first-order actions, then the futures will end up very smudged at best and constant-vector at worst. We MUST have meta-actions too, representing whole plans! TODO: Integrate meta-actions into these futures.
 
         # …For contraction, we need to consider a→b→c trajectories, where traj(a, act1, act2)→meta adds consecutive actions to produce a meta-action, and have act1(a, meta) and act2(a, meta); to contract, we need to replace the trajectory with one action such that the distance is summed: 
         #   `traj(lvl,a,act1,act2)→meta`, `act1(lvl,a,meta)→act1`, `act2(lvl,a,meta)→act2`: products.
@@ -282,9 +284,6 @@ for iters in range(50000):
         #     …Not quite ready to write this down, huh… Do we need to combine this with `future`, and condition action-getting on the `future` in order to actually detect complex trajectories, and make all meta-actions reside in the same space (so that we can replace the actions) by not conditioning `meta` on the level but making it always return the action?…
 
         # TODO: …What about the semi-classical idea of contraction hierarchies, where we actually search which future-level is the same for src & dst, then go from src to it and from it to dst? What's our justification for not doing it — or if none, then what's deficient about our simpler method?…
-
-        # TODO: Can we write down a simplified loss that will *always* replace 2-step same-dst paths with 1-step paths? Which we can test out, at least on a simple graph? (Which we can scale up to whole hierarchies easily.)
-        #   …We have to infer the 0-lvl action from *exactly the same* meta/future (possibly, `meta=up(future)`; one of the meta/future has to be synthetic, not inferred from concrete actions), and make the higher level action predict the lower level action… And maybe `act` accepts not src & goal directly but their futures… How to write this down, exactly?…
 
 
 
