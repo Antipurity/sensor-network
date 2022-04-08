@@ -261,16 +261,16 @@ for iters in range(50000):
 
         # - 1-step futures:
         #   - We'd like to know where each action takes us, and form a coherent picture, so: for each a→b action, we need to ensure that this action from a leads to the same future as b: `leads_to(future(a), a→b) = sg future(b)` (BYOL) where `act(future(a), future(goal)) = a→b` (which has to learn the *shortest-path* action, otherwise everything is interconnected anyway).
-        # - n-step futures:
-        #   - Possibly: the `lvl` arg to `future` and `leads_to` and `act` and `up` and `down`: a one-hot embedding of the `n` in `2**n`-len steps.
-        #   - `up(future)→metafuture`, `down(metafuture)→future`.
-        #     - (Possibly, identity functions.)
+        #     - Loss, grounding: `act(future a, future b) = action` if a→b
+        #     - Loss, BYOL: `leads_to(future(a), act(future a, future b)) = sg future(b)` if a→b
+        # - n-step futures (a→b→c + a→c = a→c):
+        #   - Possibly: the `lvl` arg to `future` and `leads_to` and `act` and `up`: a one-hot embedding of the `n` in `2**n`-len steps.
+        #   - `up(future)→metafuture`.
+        #     - (Possibly, an identity function.)
+        #   - All losses in 1-step futures.
         #   - Loss, "each higher level encompasses 2 options of its lower level": `leads_to(up(x)) = sg up(leads_to(leads_to(x))) x:future(a)` (with appropriate-level `act`ions in `leads_to`).
         #     - Possibly, loss, "either 2 or 1 options on higher levels": `leads_to(up(x)) = sg up(leads_to(x))` (with *lower-level* `act`ions in `leads_to`).
-        #   - Loss, "autoencoder": `down(up(x)) = up(down(x)) = sg x x:future(a)`.
-        #   - Loss, "higher actions copy lower actions": `act(up(a), up(goal)) = sg act(a, goal)`. (If `up` is the identity function, we get this for free.)
-        #   - Loss, "shorter (lower) paths take precedence over longer (higher) paths": `act(f, goal) = sg act(down(f), goal) f:leads_to(up(a))` (with higher-level `act`ions).
-        #   - A basic loss: `act(prev, next) = action`.
+        #   - Loss, "higher (longer) paths copy lower (shorter) actions": `act(up(a), up(goal)) = sg act(a, goal)`. (If `up` is the identity function, we get this for free.)
         #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
         #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
         #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(2,A,C) = A→C` and not the longer path?
@@ -282,8 +282,10 @@ for iters in range(50000):
         #   …If we can detect situations where a→b→c leads to the same outcome as a→c and replace a→b→c with a→c… And do this in layers of 2**n-length options (action-sequences)… Isn't this the essence of node contraction? Isn't this why we have the meta-layer?
         #     …What's the loss that 'detects' this?
         #     …Not quite ready to write this down, huh… Do we need to combine this with `future`, and condition action-getting on the `future` in order to actually detect complex trajectories, and make all meta-actions reside in the same space (so that we can replace the actions) by not conditioning `meta` on the level but making it always return the action?…
+        #       …Didn't we write down everything except for meta-actions, though?
 
         # TODO: …What about the semi-classical idea of contraction hierarchies, where we actually search which future-level is the same for src & dst, then go from src to it and from it to dst? What's our justification for not doing it — or if none, then what's deficient about our simpler method?…
+        #   "Searching on the higher level after exhausting the lower level" is the same as "learning the higher level to reflect the lower level's info", right? So is our thing the same?
 
 
 
