@@ -278,26 +278,38 @@ for iters in range(50000):
         #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(plan(A,C,2)) = A→C` and not the longer path?
 
         # TODO: Consider this candidate loss: `leads_to(f A, act(f A, f A, <any lvl>)) = f A` — "when going to itself, assume that we will arrive at itself".
-        # TODO: Consider this candidate loss: `act(h,f B,2) = a a:act(h,f B,1) h:leads_to(f A,a)` — "to copy a lower-level action, have to actually do that lower-level action".
+        # TODO: Consider this candidate loss: `act(h,f B,2) = act(h,f B,1) h:leads_to(f A, act(f A,f B,1))` for all pairs — "to copy a lower-level action, have to actually do that lower-level action".
         #   (Since the loss without any `leads_to` seems useless.)
+        #   TODO: Do we need the first-action-copy loss, `act(leads_to(f A, act(f A,f B,2)), f B, 2) = act(leads_to(f A, act(f A,f B,1)), f B, 1)` for all pairs?
+        #     …Wouldn't this copy the next lvl=1 action into the double-next lvl=2 plan?… Isn't this incorrect?…
+        #     …Would it really copy the first action… Shouldn't it be more closely related to the `leads_to` double-stepping loss…
+        #     (And, wouldn't these two losses conflict if we don't learn the levels of actions…)
 
+        # TODO: …Do we really need that `future`/`f` func, mathematically…
         # A→C, A→B, B→C;    `up x = x`;   `leads_to` is `lvl`-independent (thus, it handles transitive closures' multi-step transitions).
         # act(f A,f C,1)=A→C,  act(f A,f B,1)=A→B,  act(f B,f C,1)=B→C
         #   Goal: act(f A,f C,2)=A→C
-        # leads_to(f A, A→C)=f C
-        # leads_to(f A, A→B)=f B
-        # leads_to(f B, B→C)=f C
-        # leads_to(f A, act(f A,f A,2)) = leads_to(y, act(y,f A,1)) y:leads_to(f A, act(f A,f A,1))
+        # leads_to(f A, A→C)=(f C),  leads_to(f A, A→B)=(f B),  leads_to(f B, B→C)=(f C)
         # leads_to(f A, act(f A,f B,2)) = leads_to(f B, act(f B,f B,1))
         # leads_to(f A, act(f A,f C,2)) = leads_to(f C, act(f C,f C,1))
-        # leads_to(f B, act(f B,f A,2)) = leads_to(y, act(y,f A,1)) y:leads_to(f B, act(f B,f A,1))
-        # leads_to(f B, act(f B,f B,2)) = leads_to(y, act(y,f B,1)) y:leads_to(f B, act(f B,f B,1))
         # leads_to(f B, act(f B,f C,2)) = leads_to(f C, act(f C,f C,1))
-        # leads_to(f C, act(f C,f A,2)) = leads_to(y, act(y,f A,1)) y:leads_to(f C, act(f C,f A,1))
-        # leads_to(f C, act(f C,f B,2)) = leads_to(y, act(y,f B,1)) y:leads_to(f C, act(f C,f B,1))
-        # leads_to(f C, act(f C,f C,2)) = leads_to(y, act(y,f C,1)) y:leads_to(f C, act(f C,f C,1))
         # act(f A,f C,2)=A→C,  act(f A,f B,2)=A→B,  act(f B,f C,2)=B→C
         #   …Correct, but insufficient to see whether the losses are correct (we didn't even use the action-combination loss anywhere, though it didn't collapse either)…
+        #   TODO: …But I don't think we've even managed to apply the loss correctly…
+        # act(leads_to(f A, act(f A,f C,2)), f C, 2) — reduce lvl # TODO:
+        # TODO: A→B, B→C
+        # act(f A,f B,1)=A→B,  act(f B,f C,1)=B→C;        act(f A,f C,1)=?
+        #   Goal: act(f A,f C,2)=A→B
+        # leads_to(f A, A→B)=(f B),  leads_to(f B, B→C)=(f C)
+        # leads_to(f A, act(f A,f B,2)) = leads_to(f B, act(f B,f B,1))
+        # leads_to(f A, act(f A,f C,2)) = leads_to(y, act(y,f C,1)) y:leads_to(f A, act(f A,f C,1))
+        # leads_to(f B, act(f B,f C,2)) = leads_to(f C, act(f C,f C,1))
+        # act(leads_to(f A, A→B), f B, 2) = act(f B,f B,2) = act(f B,f B,1) — reduce lvl (…why is this suddenly not useful at all…)
+        # act(leads_to(f A, act(f A,f C,1)), f B, 2) — reduce lvl (TODO: Any potential inferences? …The action seems to be missing, so no…)
+        # TODO: That copying loss?
+        #   TODO: …We only succeeded at the prev graph because we didn't even consider 2-len steps… How to consider them, *in a manner that decisively picks only the shorter action on overlap*?…
+        #     (Sure hope we won't have to learn an action→lvl func for action-prediction to be gated by.)
+        #       (…There's technically still a chance: if we have 3 levels, and the lowest level has A→B & B→C & A→C, then level 2 could predict only A→C while making embeddings of destinations equal, and level 3 could learn to predict that equal embedding as its "action"… BUT: how could this possibly learn without A→C? We'll have no direct action target, so the action will be random, right?… Say we have 2 funcs from that equal-embedding, direct-action and first-action, where direct-action could be untethered; is it possible to predict direct-act if tethered else first-act?…)
         # TODO: A more complex graph.
 
 
