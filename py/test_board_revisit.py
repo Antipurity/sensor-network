@@ -284,6 +284,7 @@ for iters in range(50000):
         #     …Wouldn't this copy the next lvl=1 action into the double-next lvl=2 plan?… Isn't this incorrect?…
         #     …Would it really copy the first action… Shouldn't it be more closely related to the `leads_to` double-stepping loss…
         #     (And, wouldn't these two losses conflict if we don't learn the levels of actions…)
+        # TODO: …Should `leads_to` be on the other side of the BYOL equation… (The meaning of `future` seems inverted, since past+present=next_past.)
 
         # TODO: …Do we really need that `future`/`f` func, mathematically…
         # A→C, A→B, B→C;    `up x = x`;   `leads_to` is `lvl`-independent (thus, it handles transitive closures' multi-step transitions).
@@ -309,8 +310,23 @@ for iters in range(50000):
         # TODO: That copying loss?
         #   TODO: …We only succeeded at the prev graph because we didn't even consider 2-len steps… How to consider them, *in a manner that decisively picks only the shorter action on overlap*?…
         #     (Sure hope we won't have to learn an action→lvl func for action-prediction to be gated by.)
-        #       (…There's technically still a chance: if we have 3 levels, and the lowest level has A→B & B→C & A→C, then level 2 could predict only A→C while making embeddings of destinations equal, and level 3 could learn to predict that equal embedding as its "action"… BUT: how could this possibly learn without A→C? We'll have no direct action target, so the action will be random, right?… Say we have 2 funcs from that equal-embedding, direct-action and first-action, where direct-action could be untethered; is it possible to predict direct-act if tethered else first-act?…)
+        #       (…There's technically still a chance: if we have 3 levels, and the lowest level has A→B & B→C & A→C, then level 2 could predict only A→C while making embeddings of destinations equal, and level 3 could learn to predict that equal embedding as its "action"… BUT: how could this possibly learn without A→C? We'll have no direct action target, so the action will be random, right?… Say we have 2 funcs from that equal-embedding, direct-action and first-action, where direct-action could be untethered; is it possible to predict direct-act if tethered else first-act?… If we just have 2 losses without any gating, then there's no way to get past smudging as long as we still want to remain in action-space (no joint-embedding), is there…)
         # TODO: A more complex graph.
+
+
+
+        # …Ideally, we'd like to solve all most-trivial tasks, then do nothing but *combine* the tasks — which should give us the exponential-improvement that dist-learning RL is too bogged-down by quadratic-info to have…
+        #   (But we still can't come up with a good way to combine tasks.)
+
+
+
+        # …What if we think again about a fill-from-goal, by altering goals: `act(prev, next) = action`, but from this `prev→next` transition, we know that whoever wanted to go to `next` could also go to `prev` instead, then follow `act` without a care in the world. If we have `alter(goal)→goal2`… No, we'll have many… Hm; perhaps we should have the `src` arg — but then, we don't know the *previous* transitions, right?
+        #   Like always with filling, we need a way to distinguish, per-goal (per-task), which sources can reach that spot; or, per-src (per-task), which goals it can reach.
+        #     With that, for each src/dst, we'd like to partition the dst/src space into actions that first lead to it, which implies linear capacity (nodes × actions), not the quadratic capacity (nodes × nodes × actions) of dist-learning.
+        #       But how can that be done? The obvious solution is `reaches(src,dst)→0|1`, 1 where we've seen and 0 everywhere else (allowing the GAN `reachable(dst)→src`) (and allowing to only learn actions that we haven't seen before)… But; is it possible to do joint-embedding instead, where the embedding represents the set of "which task does this src/dst combination belong to" (and have a net from that to the first action)? Initially, all embeddings are distinct, but as we learn to combine tasks (how exactly?), consecutive task embeddings become equal… Without even a BYOL predictor (how bold)…
+        #       Need `task(src,dst)`, and `act(task)`… But how to combine "consecutive task embeddings", not just consecutive *step* embeddings? Or is `task(prev, cur) = task(cur, next)` enough; but wouldn't non-trivial tasks just not change in consecutive steps? Don't we need a "what happens after the task" net; what would we use it for?
+        #         …Double-task's result… same as task's… no… Double-task is still a task, maybe, AKA transitive closures? If we have an action, and we can know src+task=dst2 (with the help of BYOL I guess), then we can make the double-removed's future the same as single-removed future… Not very consistent, is it…
+        #         …I think we still need to know whether a task was already assigned an action, to only connect closest actions…
 
 
 
