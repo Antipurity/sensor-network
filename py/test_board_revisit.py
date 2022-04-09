@@ -267,12 +267,31 @@ for iters in range(50000):
         #     - Have `plan(src_fut, dst_fut, lvl)→plan`  and `act(plan, lvl)→action`.
         #   - `up(future)→metafuture`. (Possibly, an identity function.)
         #   - All losses in 1-step futures.
-        #   - Loss, "each higher level encompasses 2 options of its lower level": `leads_to(up(x)) = sg up(leads_to(leads_to(x))) x:future(a)` (with appropriate-level `act`ions in `leads_to`).
-        #     - Possibly, loss, "either 2 or 1 options on higher levels": `leads_to(up(x)) = sg up(leads_to(x))` (with *lower-level* `act`ions in `leads_to`).
+        #   - Loss, "each higher level encompasses 2 options of its lower level": `leads_to(up(x)) = sg up(leads_to(leads_to(x))) x:future(a)` (with appropriate-level `act`ions in `leads_to`, with any goal).
+        #     - Possibly, loss, "either 2 or 1 options on higher levels": `leads_to(up(x)) = sg up(leads_to(x)) x:future(a)` (with *lower-level* `act`ions in `leads_to`).
+        #       - …This loss mostly exists to make `up` and `lvl`-in-`leads_to` irrelevant, doesn't it…
         #   - Loss, "higher (longer) paths copy lower (shorter) actions": `act(plan(up(a), up(goal), lvl+1), lvl+1) = sg act(plan(a, goal, lvl), lvl)`. (If `up` is the identity function, we get this for free.)
         #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
+        #   - (…Also, do we maybe want a GAN/DDPG of goals, especially one that predicts & maximizes the loss?)
+        #     - (DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data.)
         #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
-        #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(plan(2,A,C)) = A→C` and not the longer path?
+        #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(plan(A,C,2)) = A→C` and not the longer path?
+
+        # A→C, A→B, B→C;    `up x = x`;   `leads_to` is `lvl`-independent (thus, it handles transitive closures' multi-step transitions).
+        # act(f A,f C,1)=A→C,  act(f A,f B,1)=A→B,  act(f B,f C,1)=B→C
+        # leads_to(f A, A→C)=f C
+        # leads_to(f A, A→B)=f B
+        # leads_to(f B, B→C)=f C
+        # leads_to(f A, act(f A,f A,2)) = leads_to(y, act(y,f A,1)) y:leads_to(f A, act(f A,f A,1))
+        # leads_to(f A, act(f A,f B,2)) = leads_to(f B, act(f B,f B,1))
+        # leads_to(f A, act(f A,f C,2)) = leads_to(f C, act(f C,f C,1))
+        # leads_to(f B, act(f B,f A,2)) = leads_to(y, act(y,f A,1)) y:leads_to(f B, act(f B,f A,1))
+        # leads_to(f B, act(f B,f B,2)) = leads_to(y, act(y,f B,1)) y:leads_to(f B, act(f B,f B,1))
+        # leads_to(f B, act(f B,f C,2)) = leads_to(f C, act(f C,f C,1))
+        # leads_to(f C, act(f C,f A,2)) = leads_to(y, act(y,f A,1)) y:leads_to(f C, act(f C,f A,1))
+        # leads_to(f C, act(f C,f B,2)) = leads_to(y, act(y,f B,1)) y:leads_to(f C, act(f C,f B,1))
+        # leads_to(f C, act(f C,f C,2)) = leads_to(y, act(y,f C,1)) y:leads_to(f C, act(f C,f C,1))
+        # TODO: Apply the loss that copies lower actions into same-destination higher actions.
 
 
 
