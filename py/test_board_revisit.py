@@ -277,8 +277,13 @@ for iters in range(50000):
         #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
         #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(plan(A,C,2)) = A→C` and not the longer path?
 
+        # TODO: Consider this candidate loss: `leads_to(f A, act(f A, f A, <any lvl>)) = f A` — "when going to itself, assume that we will arrive at itself".
+        # TODO: Consider this candidate loss: `act(h,f B,2) = a a:act(h,f B,1) h:leads_to(f A,a)` — "to copy a lower-level action, have to actually do that lower-level action".
+        #   (Since the loss without any `leads_to` seems useless.)
+
         # A→C, A→B, B→C;    `up x = x`;   `leads_to` is `lvl`-independent (thus, it handles transitive closures' multi-step transitions).
         # act(f A,f C,1)=A→C,  act(f A,f B,1)=A→B,  act(f B,f C,1)=B→C
+        #   Goal: act(f A,f C,2)=A→C
         # leads_to(f A, A→C)=f C
         # leads_to(f A, A→B)=f B
         # leads_to(f B, B→C)=f C
@@ -291,7 +296,9 @@ for iters in range(50000):
         # leads_to(f C, act(f C,f A,2)) = leads_to(y, act(y,f A,1)) y:leads_to(f C, act(f C,f A,1))
         # leads_to(f C, act(f C,f B,2)) = leads_to(y, act(y,f B,1)) y:leads_to(f C, act(f C,f B,1))
         # leads_to(f C, act(f C,f C,2)) = leads_to(y, act(y,f C,1)) y:leads_to(f C, act(f C,f C,1))
-        # TODO: Apply the loss that copies lower actions into same-destination higher actions.
+        # act(f A,f C,2)=A→C,  act(f A,f B,2)=A→B,  act(f B,f C,2)=B→C
+        #   …Correct, but insufficient to see whether the losses are correct (we didn't even use the action-combination loss anywhere, though it didn't collapse either)…
+        # TODO: A more complex graph.
 
 
 
