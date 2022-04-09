@@ -272,6 +272,7 @@ for iters in range(50000):
         #       - …This loss mostly exists to make `up` and `lvl`-in-`leads_to` irrelevant, doesn't it…
         #   - Loss, "higher (longer) paths copy lower (shorter) actions": `act(plan(up(a), up(goal), lvl+1), lvl+1) = sg act(plan(a, goal, lvl), lvl)`. (If `up` is the identity function, we get this for free.)
         #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
+        #     - …Here, `lvl` is an input, which multiplies the needed compute by how many levels we have; is it maybe better to have `lvl` as an output, AKA learn imprecise distances?…
         #   - (…Also, do we maybe want a GAN/DDPG of goals, especially one that predicts & maximizes the loss?)
         #     - (DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data.)
         #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
@@ -313,6 +314,9 @@ for iters in range(50000):
         #       (…There's technically still a chance: if we have 3 levels, and the lowest level has A→B & B→C & A→C, then level 2 could predict only A→C while making embeddings of destinations equal, and level 3 could learn to predict that equal embedding as its "action"… BUT: how could this possibly learn without A→C? We'll have no direct action target, so the action will be random, right?… Say we have 2 funcs from that equal-embedding, direct-action and first-action, where direct-action could be untethered; is it possible to predict direct-act if tethered else first-act?… If we just have 2 losses without any gating, then there's no way to get past smudging as long as we still want to remain in action-space (no joint-embedding), is there…)
         # TODO: A more complex graph.
 
+        # TODO: …Do we give up on the above, on the grounds that making the level the output is equivalent, and better for compute anyway?…
+        #   Do we just classify it as the "floor of log2 of dist (level) is an input, increasing compute by level-count times" variant of how to estimate distances?…
+
 
 
         # …Ideally, we'd like to solve all most-trivial tasks, then do nothing but *combine* the tasks — which should give us the exponential-improvement that dist-learning RL is too bogged-down by quadratic-info to have…
@@ -320,16 +324,30 @@ for iters in range(50000):
 
 
 
-        # …What if we think again about a fill-from-goal, by altering goals: `act(prev, next) = action`, but from this `prev→next` transition, we know that whoever wanted to go to `next` could also go to `prev` instead, then follow `act` without a care in the world (so, if we have a `alter(dst)→dst2` set, then we'd always like to pick an instance closest to `src`). If we have `alter(goal)→goal2`… No, we'll have many… Hm; perhaps we should have the `src` arg — but then, we don't know the *previous* transitions, right?
+        # What's the best that we can make filling?
         #   Like always with filling, we need a way to distinguish, per-goal (per-task), which sources can reach that spot; or, per-src (per-task), which goals it can reach.
-        #     With that, for each src/dst, we'd like to partition the dst/src space into actions that first lead to it, which implies linear capacity (nodes × actions), not the quadratic capacity (nodes × nodes × actions) of dist-learning.
-        #       But how can that be done? The obvious solution is `reaches(src,dst)→0|1`, 1 where we've seen and 0 everywhere else (allowing the GAN `reachable(dst)→src`) (and allowing to only learn actions that we haven't seen before)… But; is it possible to do joint-embedding instead, where the embedding represents the set of "which task does this src/dst combination belong to" (and have a net from that to the first action)? Initially, all embeddings are distinct, but as we learn to combine tasks (how exactly?), consecutive task embeddings become equal… Without even a BYOL predictor (how bold)…
-        #       Need `task(src,dst)`, and `act(task)`… But how to combine "consecutive task embeddings", not just consecutive *step* embeddings? Or is `task(prev, cur) = task(cur, next)` enough; but wouldn't non-trivial tasks just not change in consecutive steps? Don't we need a "what happens after the task" net; what would we use it for?
-        #         …Double-task's result… same as task's… no… Double-task is still a task, maybe, AKA transitive closures? If we have an action, and we can know src+task=dst2 (with the help of BYOL I guess), then we can make the double-removed's future the same as single-removed future… Not very consistent, is it…
-        #         …I think we still need to know whether a task was already assigned an action, to only connect closest actions…
-        #         (…Or maybe, we can flatten the "hierarchy levels" (floor of log2 of distance) by making the level an output (possibly a probability distribution) instead of an input, and only incremented when the levels match? Way less to remember, at least, and it's not like accomplishing tasks at half the speed is likely to be a problem in real-world scenarios.)
-        #           (And, if we learn this distance metric, then we *can* learn TODO: Do we want an intermediate-node GAN, minimizing the sum of distances? Or what? Naked src→dst and dst→src probably aren't useful, right?… I feel like, to get exponential reach or contraction, we either need to output nodes in the middle, or combine 2 consecutive tasks (and possibly add the middle to the second-dst's GAN)… Even with the minimal 2-stepping, we can estimate dist of each step and dist of both-steps, and override the both-step action with the first-step action if the 2-step dist is smaller than both-step dist. Can THIS be the basis for an algorithm?…)
-        #             TODO: …Do we want those GANs to be conditioned on the level?… Otherwise, it'd quickly devolve into random-goal-picking, won't it… …Unless we condition on the loss…
+        #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
+
+        # TODO: Formalize the filling:
+        #   `dist(A,B)=n` (a small integer: floor of log-2 of dist; possibly a probability distribution), where `d:dist(A,B)  dist(A,C) = 1+d if d==dist(B,C) else d`.
+        #     (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
+        #     (Not like accomplishing tasks at half the speed (at worst) is likely to be a problem in real-world scenarios.)
+        #   TODO: And `act`. …With what args? Futures of src & dst? If we have those GANs, then we need to learn their BYOL representations, right?…
+        #   TODO: And the GAN of dst given src.
+        #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being action-conditioned, where the action's goal is sampled randomly.)
+        #     Needs to be trained on both single-transitions and src-of-src-is-our-src, right?
+        #       (With the discriminator-to-maximize predicting the sum of other losses, to make sure that the system learns what it encounters adequately; whatever we generate, should become 0, so that only new-encounters matter (TODO: when exactly, and which parts?).)
+        #     TODO: …How to sample dst-of-dst, and update actions & distances, sampling mid-on-the-way-to-dst's-dst to gate that updating?…
+        #   TODO: Also the GAN of src given dst.
+        #     …How exactly is this used?… Do we really just do the same as src→dst but reversed?
+        #     (Might be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. …But is it really that good if we need to learn all-to-all anyway? No: if we're immediately using learned paths for RL, then wouldn't it be a good idea to prioritize goal-states?)
+        #       …With this proliferation of GANs: do we want a GAN class in `model`?
+        #   TODO: And the GAN of mid given src and dst.
+        #     (…Having the intermediate-node (optimized to be in the middle, AKA both its dists are one level lower than the total-dist) is the only way to overcome `min` and low init, because if we don't ground the distance in an explicit node, then we can't ever increase it.)
+        #     (…It's also the only way to make dist-quantization work, since otherwise we'd need to rely on single-step updates, which just won't work.)
+        #     TODO: …How do we keep the mid in the middle (and on the shortest path), going by distances?
+        #   TODO: …And we also need the BYOL loss so that we can have a differentiable proxy for observations (`future`), right?…
+        #   TODO: …We also need to ground everything in the basic one-step loss, especially the GANs, so that they very quickly learn to start at single-steps.
 
 
 
