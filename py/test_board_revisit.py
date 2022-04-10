@@ -282,7 +282,13 @@ for iters in range(50000):
         #     (…It's also the only way to make dist-quantization work, since otherwise we'd need to rely on single-step updates, which just won't work.)
         #     TODO: …How do we keep the mid in the middle (and on the shortest path), going by distances?
         #   TODO: …And we also need the BYOL loss so that we can have a differentiable proxy for observations (`future`), right?…
+        #     TODO: `leads_to(ev(prev)) = sg ev(next)` on RNNs may be better than the other way around for control-by-human (same as control-by-data, so interfaces check out), since that ensures max sensitivity to which of the possible outcomes came to pass.
         #   TODO: …We also need to ground everything in the basic one-step loss, especially the GANs, so that they very quickly learn to start at single-steps.
+
+
+
+        # best control, for `sn`: max sensitivity to outcomes, *given possible outcomes* (otherwise, involuntary movements would take up bandwidth).
+        #   …the ideal control-by-human method is an RNN that doesn't change when the outcome is by far the most likely, and otherwise, changes in a way most distinct from other outcomes… does `leads_to(ev(prev))=sg ev(next)` BYOL-on-RNNs really fit?… do we need to do separate research on this?
 
 
 
