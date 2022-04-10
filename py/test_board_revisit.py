@@ -274,9 +274,10 @@ for iters in range(50000):
         #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
         #     - …Here, `lvl` is an input, which multiplies the needed compute by how many levels we have; is it maybe better to have `lvl` as an output, AKA learn imprecise distances?…
         #   - (…Also, do we maybe want a GAN/DDPG of goals, especially one that predicts & maximizes the loss?)
-        #     - (DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data.)
+        #     - (DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude).)
         #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
         #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(plan(A,C,2)) = A→C` and not the longer path?
+        #     - Pretty sure it won't. In fact, it's missing higher-length (and only handles 1-step paths), and if we add that, then we either blur actions (very bad) or have to learn the distance (back to dist-learning again).
 
         # TODO: Consider this candidate loss: `leads_to(f A, act(f A, f A, <any lvl>)) = f A` — "when going to itself, assume that we will arrive at itself".
         # TODO: Consider this candidate loss: `act(h,f B,2) = act(h,f B,1) h:leads_to(f A, act(f A,f B,1))` for all pairs — "to copy a lower-level action, have to actually do that lower-level action".
@@ -317,6 +318,8 @@ for iters in range(50000):
         # TODO: …Do we give up on the above, on the grounds that making the level the output is equivalent, and better for compute anyway?…
         #   Do we just classify it as the "floor of log2 of dist (level) is an input, increasing compute by level-count times" variant of how to estimate distances?…
         #     …And, how much info does the suggestion above need to learn? To keep `future`s non-collapsed, every single combination of actions with distinct endpoints needs a separate embedding, which requires quadratic capacity; so we haven't actually improved over distance-learning, have we?…
+        # TODO: Add a mention of this approach to the list of failed "how to circumvent dist-learning" approaches.
+        # TODO: Remove all this text.
 
 
 
