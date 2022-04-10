@@ -245,84 +245,14 @@ for iters in range(50000):
         #       - `alter_dist(prev, next, |prev-next| or more) = |prev-next|`
         #       - `alter_dist(prev, goal, max_dist) = min(max_dist, |prev-next| + .99 * alter_dist(next, goal, dist - |prev-next|))`
         #       - (…Wow, this is even worse than all-to-all distance learning.)
+        #   - Discrete contraction hierarchies: ground *tasks* in one-step transitions, and combine 2 consecutive *tasks* on each new hierarchy level (contracting a node by combining 2 actions that go through it in 1 meta-action/shortcut: similar to classical contraction hierarchies). Effectively, the level (an extra input to many neural nets) is floor of log-2 of dist.
+        #     - Good: the 'distance' has much less precision and thus takes less space in neural nets. Bad: with N levels, we need N× more compute.
+        #     - To always pick the shortest action on each level (especially when we have `A→B  B→C  A→C`) instead of smudging (and trying to connect all to all), we need to learn a "which level does this action come from" net, and use that for gated action-prediction. Which is pretty much the old dist.
+        #     - Nodes are learned with BYOL (`next(ev(A)) = sg ev(B)` if A→B is a real meta/transition) to be differentiable, and to make same-endpoints paths have the same embeddings, but if we want this to not collapse or smudge, then we need every single meta-action with distinct endpoints to be both distinct and perfectly-learned. Since there are as many total meta-actions as there are node pairs, we're back to the non-scalable "need quadratic neural-net capacity" but in a worse way.
+        #       - (…Wow, this is even worse than all-to-all distance learning. But aren't at least some of its ideas salvageable?)
 
 
         # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything).
-
-
-        # TODO: Organize the possible ideas on how contraction hierarchies could be done.
-
-        # Contraction hierarchies:
-        #   - Classically: first preprocess using node contraction: in the order of node importance (always a heuristic, but important to query-time performance), create a new hierarchy level: remove a node/state, and add all its incoming+outcoming edges/actions as shortcuts. And at query-time, meet at the least-abstract level: always go up a node-importance level, go from both ends, and pick the min-dist-sum meeting node.
-        #   - ML, where to-search means having-learned:
-
-
-
-        # - 1-step futures:
-        #   - We'd like to know where each action takes us, and form a coherent picture, so: for each a→b action, we need to ensure that this action from a leads to the same future as b: `leads_to(future(a), a→b) = sg future(b)` (BYOL) where `plan(future(a), future(goal)) = a→b` (which has to learn the *shortest-path* action, otherwise everything is interconnected anyway).
-        #     - Loss, grounding: `plan(future a, future b) = action` if a→b
-        #     - Loss, BYOL: `leads_to(future(a), plan(future a, future b)) = sg future(b)` if a→b
-        # - n-step futures (a→b→c + a→c = a→c):
-        #   - Possibly: the `lvl` arg to `future` and `leads_to` and `plan` and `act` and `up`: a one-hot embedding of the `n` in `2**n`-len steps.
-        #     - Have `plan(src_fut, dst_fut, lvl)→plan`  and `act(plan, lvl)→action`.
-        #   - `up(future)→metafuture`. (Possibly, an identity function.)
-        #   - All losses in 1-step futures.
-        #   - Loss, "each higher level encompasses 2 options of its lower level": `leads_to(up(x)) = sg up(leads_to(leads_to(x))) x:future(a)` (with appropriate-level `act`ions in `leads_to`, with any goal).
-        #     - Possibly, loss, "either 2 or 1 options on higher levels": `leads_to(up(x)) = sg up(leads_to(x)) x:future(a)` (with *lower-level* `act`ions in `leads_to`).
-        #       - …This loss mostly exists to make `up` and `lvl`-in-`leads_to` irrelevant, doesn't it…
-        #   - Loss, "higher (longer) paths copy lower (shorter) actions": `act(plan(up(a), up(goal), lvl+1), lvl+1) = sg act(plan(a, goal, lvl), lvl)`. (If `up` is the identity function, we get this for free.)
-        #   - (…Aren't we pretty much performing ever-less-precise clustering via this hierarchy, so that src & dst will definitely have a level where they do match…)
-        #     - …Here, `lvl` is an input, which multiplies the needed compute by how many levels we have; is it maybe better to have `lvl` as an output, AKA learn imprecise distances?…
-        #   - (…Also, do we maybe want a GAN/DDPG of goals, especially one that predicts & maximizes the loss?)
-        #     - (DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude).)
-        #   - TODO: …THINK: will all this structure really *always* converge to low-distance actions?
-        #     - TODO: Given `A→C, A→B, B→C`, can we *prove* that `act(plan(A,C,2)) = A→C` and not the longer path?
-        #     - Pretty sure it won't. In fact, it's missing higher-length (and only handles 1-step paths), and if we add that, then we either blur actions (very bad) or have to learn the distance (back to dist-learning again).
-
-        # TODO: Consider this candidate loss: `leads_to(f A, act(f A, f A, <any lvl>)) = f A` — "when going to itself, assume that we will arrive at itself".
-        # TODO: Consider this candidate loss: `act(h,f B,2) = act(h,f B,1) h:leads_to(f A, act(f A,f B,1))` for all pairs — "to copy a lower-level action, have to actually do that lower-level action".
-        #   (Since the loss without any `leads_to` seems useless.)
-        #   TODO: Do we need the first-action-copy loss, `act(leads_to(f A, act(f A,f B,2)), f B, 2) = act(leads_to(f A, act(f A,f B,1)), f B, 1)` for all pairs?
-        #     …Wouldn't this copy the next lvl=1 action into the double-next lvl=2 plan?… Isn't this incorrect?…
-        #     …Would it really copy the first action… Shouldn't it be more closely related to the `leads_to` double-stepping loss…
-        #     (And, wouldn't these two losses conflict if we don't learn the levels of actions…)
-        # TODO: …Should `leads_to` be on the other side of the BYOL equation… (The meaning of `future` seems inverted, since past+present=next_past.)
-
-        # TODO: …Do we really need that `future`/`f` func, mathematically…
-        # A→C, A→B, B→C;    `up x = x`;   `leads_to` is `lvl`-independent (thus, it handles transitive closures' multi-step transitions).
-        # act(f A,f C,1)=A→C,  act(f A,f B,1)=A→B,  act(f B,f C,1)=B→C
-        #   Goal: act(f A,f C,2)=A→C
-        # leads_to(f A, A→C)=(f C),  leads_to(f A, A→B)=(f B),  leads_to(f B, B→C)=(f C)
-        # leads_to(f A, act(f A,f B,2)) = leads_to(f B, act(f B,f B,1))
-        # leads_to(f A, act(f A,f C,2)) = leads_to(f C, act(f C,f C,1))
-        # leads_to(f B, act(f B,f C,2)) = leads_to(f C, act(f C,f C,1))
-        # act(f A,f C,2)=A→C,  act(f A,f B,2)=A→B,  act(f B,f C,2)=B→C
-        #   …Correct, but insufficient to see whether the losses are correct (we didn't even use the action-combination loss anywhere, though it didn't collapse either)…
-        #   TODO: …But I don't think we've even managed to apply the loss correctly…
-        # act(leads_to(f A, act(f A,f C,2)), f C, 2) — reduce lvl # TODO:
-        # TODO: A→B, B→C
-        # act(f A,f B,1)=A→B,  act(f B,f C,1)=B→C;        act(f A,f C,1)=?
-        #   Goal: act(f A,f C,2)=A→B
-        # leads_to(f A, A→B)=(f B),  leads_to(f B, B→C)=(f C)
-        # leads_to(f A, act(f A,f B,2)) = leads_to(f B, act(f B,f B,1))
-        # leads_to(f A, act(f A,f C,2)) = leads_to(y, act(y,f C,1)) y:leads_to(f A, act(f A,f C,1))
-        # leads_to(f B, act(f B,f C,2)) = leads_to(f C, act(f C,f C,1))
-        # act(leads_to(f A, A→B), f B, 2) = act(f B,f B,2) = act(f B,f B,1) — reduce lvl (…why is this suddenly not useful at all…)
-        # act(leads_to(f A, act(f A,f C,1)), f B, 2) — reduce lvl (TODO: Any potential inferences? …The action seems to be missing, so no…)
-        # TODO: That copying loss?
-        #   TODO: …We only succeeded at the prev graph because we didn't even consider 2-len steps… How to consider them, *in a manner that decisively picks only the shorter action on overlap*?…
-        #     (Sure hope we won't have to learn an action→lvl func for action-prediction to be gated by.)
-        #       (…There's technically still a chance: if we have 3 levels, and the lowest level has A→B & B→C & A→C, then level 2 could predict only A→C while making embeddings of destinations equal, and level 3 could learn to predict that equal embedding as its "action"… BUT: how could this possibly learn without A→C? We'll have no direct action target, so the action will be random, right?… Say we have 2 funcs from that equal-embedding, direct-action and first-action, where direct-action could be untethered; is it possible to predict direct-act if tethered else first-act?… If we just have 2 losses without any gating, then there's no way to get past smudging as long as we still want to remain in action-space (no joint-embedding), is there…)
-        # TODO: A more complex graph.
-
-        # TODO: …Do we give up on the above, on the grounds that making the level the output is equivalent, and better for compute anyway?…
-        #   Do we just classify it as the "floor of log2 of dist (level) is an input, increasing compute by level-count times" variant of how to estimate distances?…
-        #     …And, how much info does the suggestion above need to learn? To keep `future`s non-collapsed, every single combination of actions with distinct endpoints needs a separate embedding, which requires quadratic capacity; so we haven't actually improved over distance-learning, have we?…
-        # TODO: Add a mention of this approach to the list of failed "how to circumvent dist-learning" approaches.
-        # TODO: Remove all this text.
-
-
-
         # …Ideally, we'd like to solve all most-trivial tasks, then do nothing but *combine* the tasks — which should give us the exponential-improvement that dist-learning RL is too bogged-down by quadratic-info to have…
         #   (But we still can't come up with a good way to combine tasks.)
 
@@ -331,6 +261,7 @@ for iters in range(50000):
         # What's the best that we can make filling?
         #   Like always with filling, we need a way to distinguish, per-goal (per-task), which sources can reach that spot; or, per-src (per-task), which goals it can reach.
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
+        #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere?)
 
         # TODO: Formalize the filling:
         #   `dist(A,B)=n` (a small integer: floor of log-2 of dist; possibly a probability distribution), where `d:dist(A,B)  dist(A,C) = 1+d if d==dist(B,C) else d`.
