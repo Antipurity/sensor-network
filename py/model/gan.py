@@ -1,5 +1,5 @@
 """
-TODO:
+Contains the class `GAN` that can generatively model data, or maximize a learned reward signal.
 """
 
 
@@ -55,5 +55,20 @@ class GAN(nn.Module):
 
 
 
-if __file__ == '__main__':
-    pass # TODO: How to test the GAN?
+if __name__ == '__main__':
+    N, input_sz, noise_sz = 16, 16, 4
+    g = nn.Sequential(
+        nn.Linear(input_sz + noise_sz, N), nn.LayerNorm(N), nn.ReLU(),
+        nn.Linear(N, N), nn.LayerNorm(N), nn.ReLU(),
+        nn.Linear(N, N),
+    )
+    d = nn.Sequential(
+        nn.Linear(input_sz + N, N), nn.LayerNorm(N), nn.ReLU(),
+        nn.Linear(N, N), nn.LayerNorm(N), nn.ReLU(),
+        nn.Linear(N, 1),
+    )
+    gan = GAN(g,d, noise_sz=noise_sz)
+    opt = torch.optim.Adam(gan.parameters(), lr=1e-3)
+    # TODO: How to test the GAN?
+    #   What data do we want to model?
+    #     2 groups, with 4 examples each?… And test generative-ness by measuring same-group min L2?… How to implement that?
