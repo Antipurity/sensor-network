@@ -28,7 +28,7 @@ class GAN(nn.Module):
     - `.pred(*args, sample, reward=1) → loss`: updates the discriminator.
     - `.max(*args, sample, reward=1) → loss`: updates the generator.
 
-    A full GAN update would do `sample = gan(*args)`, then `loss = gan.pred(real, *args, reward=1) + gan.pred(fake, *args, reward=0) + gan.max(fake, *args, reward=1)`.
+    A full GAN update would do `sample = gan(*args)`, then `loss = gan.pred(*args, real, reward=1) + gan.pred(*args, sample, reward=0) + gan.max(*args, sample, reward=1)`.
 
     Neural nets often generalize poorly outside of training distribution, especially if decision boundaries are sparse there and linear behavior is allowed to drift. You can use a trick from DDPG: have 2 `discriminator`s and combine them by returning the min value.
     """
@@ -40,7 +40,7 @@ class GAN(nn.Module):
         self.loss = loss
     def forward(self, *args):
         """Generates a sample; pass it to `.max(…)`."""
-        shape = [*args[0].shape, self.noise_sz]
+        shape = [*args[0].shape[:-1], self.noise_sz]
         noise = torch.randn(shape, device=args[0].device)
         return self.generator(_cat(*args, noise))
     def pred(self, *args, reward=1):
@@ -56,28 +56,34 @@ class GAN(nn.Module):
 
 
 if __name__ == '__main__':
-    input_sz, noise_sz, N = 2, 4, 16
+    input_sz, noise_sz, N = 2, 4, 4
     g = nn.Sequential(
-        nn.Linear(input_sz + noise_sz, N), nn.LayerNorm(N), nn.ReLU(),
-        nn.Linear(N, N), nn.LayerNorm(N), nn.ReLU(),
+        nn.Linear(input_sz + noise_sz, N), nn.LayerNorm(N), nn.LeakyReLU(),
+        nn.Linear(N, N), nn.LayerNorm(N), nn.LeakyReLU(),
         nn.Linear(N, N),
     )
     d = nn.Sequential(
-        nn.Linear(input_sz + N, N), nn.LayerNorm(N), nn.ReLU(),
-        nn.Linear(N, N), nn.LayerNorm(N), nn.ReLU(),
+        nn.Linear(input_sz + N, N), nn.LayerNorm(N), nn.LeakyReLU(),
+        nn.Linear(N, N), nn.LayerNorm(N), nn.LeakyReLU(),
         nn.Linear(N, 1),
     )
     gan = GAN(g,d, noise_sz=noise_sz)
-    opt = torch.optim.Adam(gan.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(gan.parameters(), lr=1e-3, weight_decay=.01)
 
-    # 2 groups (input) with 4 examples each (output).
-    inputs = torch.randn(2, 1, input_sz).expand(2, 4, input_sz).reshape(8, input_sz)
-    outputs = torch.randn(8, N)
+    # 2 groups (input) with 3 examples each (output).
+    input = torch.randn(2, 1, input_sz).expand(2, 3, input_sz).reshape(6, input_sz)
+    output = torch.randn(6, N)
 
     for _ in range(5000):
-        sample = gan(inputs)
-        l1 = gan.pred(inputs, outputs, reward=1)
-        l2 = gan.pred(inputs, sample, reward=0)
-        l3 = gan.max(inputs, sample, reward=1)
+        sample = gan(input)
+        l1 = gan.pred(input, output, reward=1)
+        l2 = gan.pred(input, sample, reward=-1)
+        l3 = gan.max(input, sample, reward=1)
+        l = l1 + l2 + l3
+        print(l1.detach().cpu().numpy(), '\t', l2.detach().cpu().numpy(), '\t', l3.detach().cpu().numpy())
+        l.backward() # TODO: Why is l3 so bad? Why isn't the GAN learning? What to do when discriminator gets too good?
+        print('     ', output[..., 0].detach().cpu().numpy(), sample[..., 0].detach().cpu().numpy()) # TODO: Clearly not learning anything.
+        #   …Are GANs *supposed* to be unable to learn super-simplified stuff?…
+        # TODO: How to measure same-group closeness between `sample` and `output`?
         opt.step();  opt.zero_grad()
         # TODO: Run & fix.
