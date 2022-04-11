@@ -273,6 +273,8 @@ for iters in range(50000):
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
         #   TODO: And the src→dst GAN, `dst(src)→dst`.
+        #     TODO: …Wait, maybe it's a good idea to condition on the level? After all, we only have very few levels, so it's not like it'll be that much of a performance hit, right? And the main benefit includes the ability to correctly learn `mid` without filtering out any "A→B and B→C distances must match, otherwise we'll be able to construct low-dist chains to infinity".
+        #       TODO: LEVEL-CONDITION
         #     TODO: Ground: `dst.pred(prev, next, reward=1)`
         #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being action-conditioned, where the action's goal is sampled randomly.)
         #     Needs to be trained on both single-transitions and src-of-src-is-our-src, right?
