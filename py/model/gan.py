@@ -16,19 +16,19 @@ def _cat(*a, dim=-1): return torch.cat(a, dim)
 
 class GAN(nn.Module):
     """
-    (Conditional) Generative Adversarial Network: a generative model, where a *discriminator* predicts how realistic a sample is, and a *generator* maximizes discriminator's output.
+    (Conditional) Generative Adversarial Network: a generative model, where a *discriminator* predicts how realistic a sample is, and a *generator* maximizes discriminator's output. Notoriously hard to train.
 
     Args:
     - `generator`, `discriminator`: neural nets, from a concatenation of `args` and noise/sample to sample/number.
     - `noise_sz = 16`: size of noise, in the last dimension.
-    - `loss = L2`: the loss for the learned loss (`discriminator`).
+    - `loss = L2`: the loss for the learned loss (`discriminator`), [L2 by default](https://arxiv.org/abs/1611.04076).
 
     Methods:
     - `.forward(*args) → sample` or just call: generate. Needs to be conditioned on at least 1 arg, to at least establish the batch size.
     - `.pred(*args, sample, reward=1) → loss`: updates the discriminator.
     - `.max(*args, sample, reward=1) → loss`: updates the generator.
 
-    A full GAN update would do `sample = gan(*args)`, then `loss = gan.pred(*args, real, reward=1) + gan.pred(*args, sample, reward=0) + gan.max(*args, sample, reward=1)`.
+    A full GAN update would do `sample = gan(*args)`, then `loss = gan.pred(*args, real, reward=1) + gan.pred(*args, sample, reward=0) + gan.max(*args, sample, reward=1)`. Distributions of real & fake samples must always overlap, so that gradient descent knows where to go.
 
     Neural nets often generalize poorly outside of training distribution, especially if decision boundaries are sparse there and linear behavior is allowed to drift. You can use a trick from DDPG: have 2 `discriminator`s and combine them by returning the min value.
     """
@@ -38,10 +38,11 @@ class GAN(nn.Module):
         self.discriminator = discriminator
         self.noise_sz = noise_sz
         self.loss = loss
-    def forward(self, *args):
+    def forward(self, *args, noise = ...):
         """Generates a sample; pass it to `.max(…)`."""
-        shape = [*args[0].shape[:-1], self.noise_sz]
-        noise = torch.randn(shape, device=args[0].device)
+        if noise is ...:
+            shape = [*args[0].shape[:-1], self.noise_sz]
+            noise = torch.randn(shape, device=args[0].device)
         return self.generator(_cat(*args, noise))
     def pred(self, *args, reward=1):
         """Simply updates the discriminator to output `reward`. `.detach()` inputs if they should not be updated."""
@@ -56,14 +57,18 @@ class GAN(nn.Module):
 
 
 if __name__ == '__main__':
-    input_sz, noise_sz, N = 4, 4, 1
+    # GANs on a super-simple dataset.
+    #   (Using the "min distance to any data point" loss is most-efficient;
+    #     learning that loss is second-most-efficient;
+    #     and the GAN's way of "we're not there yet" is often unstable but often works.)
+    input_sz, noise_sz, N = 4, 4, 4
     g = nn.Sequential(
-        nn.Linear(input_sz + noise_sz, 4*N), nn.LayerNorm(4*N), nn.LeakyReLU(),
-        nn.Dropout(),
+        # (LayerNorm *after* ReLU improves performance of GANs, compared to *before*.)
+        nn.Linear(input_sz + noise_sz, 4*N), nn.LeakyReLU(), nn.LayerNorm(4*N),
         nn.Linear(4*N, N),
     )
     d = nn.Sequential(
-        nn.Linear(input_sz + N, 4*N), nn.LayerNorm(4*N), nn.LeakyReLU(),
+        nn.Linear(input_sz + N, 4*N), nn.LeakyReLU(), nn.LayerNorm(4*N),
         nn.Linear(4*N, 1),
     )
     gan = GAN(g,d, noise_sz=noise_sz)
@@ -71,26 +76,25 @@ if __name__ == '__main__':
     # 2 groups (input) with 3 examples each (output).
     input = torch.randn(2, 1, input_sz).expand(2, 3, input_sz).reshape(6, input_sz)
     output = torch.randn(6, N)
-    TEST = torch.randn(6, N, requires_grad=True) # TODO: Use `sample` again after this works (and this *has* to work, right?…).
-    opt = torch.optim.SGD([TEST, *gan.parameters()], lr=1e-3, weight_decay=.001)
+    opt = torch.optim.Adam(gan.parameters(), lr=1e-3, weight_decay=.0)
 
-    for iter in range(10001):
-        # TODO: …Try noising the output, maybe?…
-        #   …Why does nothing work…
-        sample = gan(input)
-        TEST = sample
-        import random
-        l1 = gan.pred(input, output + torch.randn_like(output) * (1 - iter/10000), reward=1)
-        l2 = gan.pred(input, TEST, reward=0)
-        l3 = gan.max(input, TEST, reward=1)
-        # print(TEST.mean().detach().cpu().numpy(), '\t', TEST.std().detach().cpu().numpy()) # TODO:
-        # p = random.random();  l4 = gan.pred(input, p*output + (1-p)*sample, reward=p) # TODO: …What if we try learning linear mixes too?… No change…
-        l = l1 + l2 + l3
-        print(l1.detach().cpu().numpy(), '\t', l2.detach().cpu().numpy(), '\t', l3.detach().cpu().numpy())
-        l.backward() # TODO: Why is l3 so bad? Why isn't the GAN learning? What to do when discriminator gets too good?
-        if iter % 1000 == 0:
-            print('     ', output[..., 0].detach().cpu().numpy(), TEST[..., 0].detach().cpu().numpy()) # TODO: Clearly not learning anything.
-        #   …Are GANs *supposed* to be unable to learn super-simplified stuff (since our prior test with diffusion models also failed)?…
-        # TODO: How to measure same-group closeness between `sample` and `output`?
+    def min_L2(sample, output, groups=2):
+        sample = sample.reshape((groups, sample.shape[0]//groups, *sample.shape[1:]))
+        output = output.reshape((groups, output.shape[0]//groups, *output.shape[1:]))
+        return (output.unsqueeze(2) - sample.unsqueeze(1)).square().sum(-1).min(1)[0].sum(0)
+    from log import log, finish
+
+    for iter in range(20001):
+        sample = gan(input) # (We seem to usually collapse into generating a single output, though.)
+        with torch.no_grad():
+            log(0, False, L2=min_L2(sample, output).sum().cpu().numpy())
+        l1 = gan.pred(input, output, reward=0)
+        # l2 = gan.pred(input, sample, reward=min_L2(sample, output))
+        l2 = gan.pred(input, sample, reward=1)
+        l3 = gan.max(input, sample, reward=0)
+        # l1, l2, l3 = 0, min_L2(sample, output).sum(), 0
+        (l1 + l2 + l3).backward()
+        if iter % 5000 == 0:
+            print('     ', output[..., 0].detach().cpu().numpy(), sample[..., 0].detach().cpu().numpy())
         opt.step();  opt.zero_grad()
-        # TODO: Run & fix.
+    finish()
