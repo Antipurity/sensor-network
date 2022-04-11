@@ -263,12 +263,6 @@ for iters in range(50000):
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
         #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere?)
 
-        # TODO: Have `model/gan.py`: a class which takes the generator & discriminator models, & the size of noise (an extra input to discriminator at the end).
-        #   TODO: `.forward(*args) → sample` which generates a new sample; pass it to `.fake(…)`.
-        #   TODO: `.real(*args, sample.detach(), reward=1)→loss` which makes the GAN want to generate this more.
-        #   TODO: `.fake(*args, sample, reward=0)→loss` which gives gradient to `sample` without adjusting the discriminator.
-        #   TODO: A note about a trick from DDPG for the discriminator: have 2 models and return the min between the 2.
-
         # TODO: Formalize the filling:
         #   TODO: `act(A,B)→action`
         #     TODO: Ground: `act(prev, next) = prev→next`
@@ -279,7 +273,7 @@ for iters in range(50000):
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
         #   TODO: And the src→dst GAN, `dst(src)→dst`.
-        #     TODO: Ground: `dst.real(prev, next, reward=1)`
+        #     TODO: Ground: `dst.pred(prev, next, reward=1)`
         #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being action-conditioned, where the action's goal is sampled randomly.)
         #     Needs to be trained on both single-transitions and src-of-src-is-our-src, right?
         #       (With the discriminator-to-maximize predicting the sum of other losses, to make sure that the system learns what it encounters adequately; whatever we generate, should become 0, so that only new-encounters matter (TODO: when exactly, and which parts?).)
@@ -290,7 +284,7 @@ for iters in range(50000):
         #       TODO: <update act(A,C) if the new A→B→C distance is less than through A→M→C>
         #       TODO: What's real? Should B & C be made fake? Should M?
         #       TODO: How to weigh discriminator-preference by loss?
-        #       `dst.real(A, C.detach(), reward=1)`
+        #       `dst.pred(A, C.detach(), reward=1)`
         #   TODO: And the `mid(src,dst)→mid` GAN.
         #     (…Having the intermediate-node (optimized to be in the middle, AKA both its dists are one level lower than the total-dist) is the only way to overcome `min` and low init, because if we don't ground the distance in an explicit node, then we can't ever increase it.)
         #     (…It's also the only way to make dist-quantization work, since otherwise we'd need to rely on single-step updates, which just won't work.)
