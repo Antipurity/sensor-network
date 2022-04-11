@@ -265,8 +265,8 @@ for iters in range(50000):
 
         # TODO: Have `model/gan.py`: a class which takes the generator & discriminator models, & the size of noise (an extra input to discriminator at the end).
         #   TODO: `.forward(*args) → sample` which generates a new sample; pass it to `.fake(…)`.
-        #   TODO: `.real(sample, reward=1)→loss` which makes the GAN want to generate this more.
-        #   TODO: `.fake(sample, reward=0)→loss` which gives gradient to `sample` without adjusting the discriminator.
+        #   TODO: `.real(*args, sample.detach(), reward=1)→loss` which makes the GAN want to generate this more.
+        #   TODO: `.fake(*args, sample, reward=0)→loss` which gives gradient to `sample` without adjusting the discriminator.
         #   TODO: A note about a trick from DDPG for the discriminator: have 2 models and return the min between the 2.
 
         # TODO: Formalize the filling:
@@ -275,18 +275,22 @@ for iters in range(50000):
         #   TODO: `dist(A,B)=n`: a small integer: floor of log-2 of dist.
         #     TODO: Ground: `dist(prev, next) = 0`
         #     `dist(A,C) = 1+d1 if (d1-d2).abs()<1 else max(d1,d2)  d1:dist(A,B)  d2:dist(B,C)`
-        #     (Could be made a probability distribution too.)
-        #     (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
+        #     (Could be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
         #   TODO: And the src→dst GAN, `dst(src)→dst`.
+        #     TODO: Ground: `dst.real(prev, next, reward=1)`
         #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being action-conditioned, where the action's goal is sampled randomly.)
         #     Needs to be trained on both single-transitions and src-of-src-is-our-src, right?
         #       (With the discriminator-to-maximize predicting the sum of other losses, to make sure that the system learns what it encounters adequately; whatever we generate, should become 0, so that only new-encounters matter (TODO: when exactly, and which parts?).)
         #       (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
         #     TODO: …How to sample dst-of-dst, and update actions & distances, sampling mid-on-the-way-to-dst's-dst to gate that updating?…
-        #       `B = dst(A);  C = dst(B);  M = mid(A,C);  <update distance>;  <update act(A,C) if the new A→B→C distance is less than through A→M→C>;  TODO: What's real? Should B & C be made fake? Should M? TODO: Maybe M should be explicitly kept in the middle, not be a GAN?…`
-        #     …Also should ground in prev→next transitions to start the process…
+        #       `B = dst(A);  C = dst(B);  M = mid(A,C)`
+        #       TODO: <update the A→C dist to be the min of A→M→C and A→B→C>
+        #       TODO: <update act(A,C) if the new A→B→C distance is less than through A→M→C>
+        #       TODO: What's real? Should B & C be made fake? Should M?
+        #       TODO: How to weigh discriminator-preference by loss?
+        #       `dst.real(A, C.detach(), reward=1)`
         #   TODO: And the `mid(src,dst)→mid` GAN.
         #     (…Having the intermediate-node (optimized to be in the middle, AKA both its dists are one level lower than the total-dist) is the only way to overcome `min` and low init, because if we don't ground the distance in an explicit node, then we can't ever increase it.)
         #     (…It's also the only way to make dist-quantization work, since otherwise we'd need to rely on single-step updates, which just won't work.)
