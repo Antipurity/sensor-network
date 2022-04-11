@@ -56,34 +56,41 @@ class GAN(nn.Module):
 
 
 if __name__ == '__main__':
-    input_sz, noise_sz, N = 2, 4, 4
+    input_sz, noise_sz, N = 4, 4, 1
     g = nn.Sequential(
-        nn.Linear(input_sz + noise_sz, N), nn.LayerNorm(N), nn.LeakyReLU(),
-        nn.Linear(N, N), nn.LayerNorm(N), nn.LeakyReLU(),
-        nn.Linear(N, N),
+        nn.Linear(input_sz + noise_sz, 4*N), nn.LayerNorm(4*N), nn.LeakyReLU(),
+        nn.Dropout(),
+        nn.Linear(4*N, N),
     )
     d = nn.Sequential(
-        nn.Linear(input_sz + N, N), nn.LayerNorm(N), nn.LeakyReLU(),
-        nn.Linear(N, N), nn.LayerNorm(N), nn.LeakyReLU(),
-        nn.Linear(N, 1),
+        nn.Linear(input_sz + N, 4*N), nn.LayerNorm(4*N), nn.LeakyReLU(),
+        nn.Linear(4*N, 1),
     )
     gan = GAN(g,d, noise_sz=noise_sz)
-    opt = torch.optim.Adam(gan.parameters(), lr=1e-3, weight_decay=.01)
 
     # 2 groups (input) with 3 examples each (output).
     input = torch.randn(2, 1, input_sz).expand(2, 3, input_sz).reshape(6, input_sz)
     output = torch.randn(6, N)
+    TEST = torch.randn(6, N, requires_grad=True) # TODO: Use `sample` again after this works (and this *has* to work, right?…).
+    opt = torch.optim.SGD([TEST, *gan.parameters()], lr=1e-3, weight_decay=.001)
 
-    for _ in range(5000):
+    for iter in range(10001):
+        # TODO: …Try noising the output, maybe?…
+        #   …Why does nothing work…
         sample = gan(input)
-        l1 = gan.pred(input, output, reward=1)
-        l2 = gan.pred(input, sample, reward=-1)
-        l3 = gan.max(input, sample, reward=1)
+        TEST = sample
+        import random
+        l1 = gan.pred(input, output + torch.randn_like(output) * (1 - iter/10000), reward=1)
+        l2 = gan.pred(input, TEST, reward=0)
+        l3 = gan.max(input, TEST, reward=1)
+        # print(TEST.mean().detach().cpu().numpy(), '\t', TEST.std().detach().cpu().numpy()) # TODO:
+        # p = random.random();  l4 = gan.pred(input, p*output + (1-p)*sample, reward=p) # TODO: …What if we try learning linear mixes too?… No change…
         l = l1 + l2 + l3
         print(l1.detach().cpu().numpy(), '\t', l2.detach().cpu().numpy(), '\t', l3.detach().cpu().numpy())
         l.backward() # TODO: Why is l3 so bad? Why isn't the GAN learning? What to do when discriminator gets too good?
-        print('     ', output[..., 0].detach().cpu().numpy(), sample[..., 0].detach().cpu().numpy()) # TODO: Clearly not learning anything.
-        #   …Are GANs *supposed* to be unable to learn super-simplified stuff?…
+        if iter % 1000 == 0:
+            print('     ', output[..., 0].detach().cpu().numpy(), TEST[..., 0].detach().cpu().numpy()) # TODO: Clearly not learning anything.
+        #   …Are GANs *supposed* to be unable to learn super-simplified stuff (since our prior test with diffusion models also failed)?…
         # TODO: How to measure same-group closeness between `sample` and `output`?
         opt.step();  opt.zero_grad()
         # TODO: Run & fix.
