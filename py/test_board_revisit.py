@@ -263,30 +263,38 @@ for iters in range(50000):
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
         #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere?)
 
+        # TODO: Have `model/gan.py`: a class which takes the generator & discriminator models, & the size of noise (an extra input to discriminator at the end).
+        #   TODO: `.forward(*args) → sample` which generates a new sample; pass it to `.fake(…)`.
+        #   TODO: `.real(sample, reward=1)→loss` which makes the GAN want to generate this more.
+        #   TODO: `.fake(sample, reward=0)→loss` which gives gradient to `sample` without adjusting the discriminator.
+        #   TODO: A note about a trick from DDPG for the discriminator: have 2 models and return the min between the 2.
+
         # TODO: Formalize the filling:
         #   TODO: `act(A,B)→action`
         #     TODO: Ground: `act(prev, next) = prev→next`
         #   TODO: `dist(A,B)=n`: a small integer: floor of log-2 of dist.
         #     TODO: Ground: `dist(prev, next) = 0`
-        #     `dist(A,C) = 1+d1 if d1==d2 else max(d1,d2)  d1:dist(A,B)  d2:dist(B,C)`
+        #     `dist(A,C) = 1+d1 if (d1-d2).abs()<1 else max(d1,d2)  d1:dist(A,B)  d2:dist(B,C)`
         #     (Could be made a probability distribution too.)
         #     (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
-        #   TODO: And the GAN of dst given src.
+        #   TODO: And the src→dst GAN, `dst(src)→dst`.
         #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being action-conditioned, where the action's goal is sampled randomly.)
         #     Needs to be trained on both single-transitions and src-of-src-is-our-src, right?
         #       (With the discriminator-to-maximize predicting the sum of other losses, to make sure that the system learns what it encounters adequately; whatever we generate, should become 0, so that only new-encounters matter (TODO: when exactly, and which parts?).)
+        #       (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
         #     TODO: …How to sample dst-of-dst, and update actions & distances, sampling mid-on-the-way-to-dst's-dst to gate that updating?…
+        #       `B = dst(A);  C = dst(B);  M = mid(A,C);  <update distance>;  <update act(A,C) if the new A→B→C distance is less than through A→M→C>;  TODO: What's real? Should B & C be made fake? Should M? TODO: Maybe M should be explicitly kept in the middle, not be a GAN?…`
         #     …Also should ground in prev→next transitions to start the process…
-        #   TODO: Also the GAN of src given dst.
-        #     …How exactly is this used?… Do we really just do the same as src→dst but reversed?
-        #     (Might be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. …But is it really that good if we need to learn all-to-all anyway? No: if we're immediately using learned paths for RL, then wouldn't it be a good idea to prioritize goal-states?)
-        #       …With this proliferation of GANs: do we want a GAN class in `model`?
-        #   TODO: And the GAN of mid given src and dst.
+        #   TODO: And the `mid(src,dst)→mid` GAN.
         #     (…Having the intermediate-node (optimized to be in the middle, AKA both its dists are one level lower than the total-dist) is the only way to overcome `min` and low init, because if we don't ground the distance in an explicit node, then we can't ever increase it.)
         #     (…It's also the only way to make dist-quantization work, since otherwise we'd need to rely on single-step updates, which just won't work.)
         #     TODO: …How do we keep the mid in the middle (and on the shortest path), going by distances?
+        #       TODO: …Should this "GAN" minimize some metric that keeps it in the middle, such as `(dist(A,C)-1 - dist(A,M)).abs() + (dist(A,C)-1 - dist(M,C)).abs()`?
+        #     TODO: …Would conditioning the src→dst GAN on distance be a good idea, which would help us with mid-conditioning too?… But at what cost? Do we just randomly sample the level to train?
+        #   TODO: Also the dst→src GAN, `src(dst)→src`: exactly the same as src→dst but reversed.
+        #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
 
 
 
