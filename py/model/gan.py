@@ -56,7 +56,7 @@ class GAN(nn.Module):
 
 
 if __name__ == '__main__':
-    N, input_sz, noise_sz = 16, 16, 4
+    input_sz, noise_sz, N = 2, 4, 16
     g = nn.Sequential(
         nn.Linear(input_sz + noise_sz, N), nn.LayerNorm(N), nn.ReLU(),
         nn.Linear(N, N), nn.LayerNorm(N), nn.ReLU(),
@@ -69,6 +69,15 @@ if __name__ == '__main__':
     )
     gan = GAN(g,d, noise_sz=noise_sz)
     opt = torch.optim.Adam(gan.parameters(), lr=1e-3)
-    # TODO: How to test the GAN?
-    #   What data do we want to model?
-    #     2 groups, with 4 examples each?… And test generative-ness by measuring same-group min L2?… How to implement that?
+
+    # 2 groups (input) with 4 examples each (output).
+    inputs = torch.randn(2, 1, input_sz).expand(2, 4, input_sz).reshape(8, input_sz)
+    outputs = torch.randn(8, N)
+
+    for _ in range(5000):
+        sample = gan(inputs)
+        l1 = gan.pred(inputs, outputs, reward=1)
+        l2 = gan.pred(inputs, sample, reward=0)
+        l3 = gan.max(inputs, sample, reward=1)
+        opt.step();  opt.zero_grad()
+        # TODO: Run & fix.
