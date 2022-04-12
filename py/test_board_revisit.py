@@ -62,6 +62,7 @@ Unimplemented:
 
 
 from model.log import log, clear, finish
+from model.gan import GAN
 
 
 
@@ -113,8 +114,9 @@ action_sz = 64
 
 unroll_len = N
 
-replay_buffer = [None] * 1024
+rb, replay_buffer = 0, [None] * 1024
 updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long and of width `batch_size`.
+# TODO: Also have dist_levels = 8.
 
 
 
@@ -143,9 +145,9 @@ act = nn.Sequential( # (prev_board, target) → action
     nn.Linear(action_sz, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
-dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
-    # (For picking an action that leads to getting to the target board the fastest.)
-    nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+dist = nn.Sequential( # (prev_board, target) → floor(log2(future_distance_sum))
+    # (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
+    nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, 1),
@@ -181,28 +183,33 @@ for iters in range(50000):
     action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     reached = torch.full((batch_size, 1), False, device=device)
+    prev_action, prev_board = action, board
     boards, actions = [board], [action.detach()]
     with torch.no_grad():
         # First pick the target to go to.
         target = env_init(N, batch_size=batch_size)
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
+            prev_action, prev_board = action, board
             action = act(cat(board, target))
-
+            if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device) # TODO:
             board = env_step(N, board, action[..., 0:4])
 
             reached |= (board == target).all(-1, keepdim=True)
-            boards.append(board);  actions.append(action.detach())
-        replay_buffer[iters % len(replay_buffer)] = (torch.stack(boards, 0), torch.stack(actions, 0))
+            rb = (rb+1) % len(replay_buffer)
+            replay_buffer[rb] = (prev_action, prev_board, action, board)
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
-        boards = torch.cat([c[0] for c in choices], -2) # unroll_len+1 × B × N*N
-        actions = torch.cat([c[1] for c in choices], -2) # unroll_len+1 × B × action_sz
+        prev_action = torch.cat([c[0] for c in choices], -2)
+        prev_board = torch.cat([c[1] for c in choices], -2)
+        action = torch.cat([c[2] for c in choices], -2)
+        board = torch.cat([c[3] for c in choices], -2)
 
-        # TODO: …So do we remove, like, all of this code?
-        #   TODO: …But what about all those runs that we did?… Do we really just throw them out, just like that?… Not even leaving it for comparing performance of algorithms?…
+        # Ground.
+        l_ground_act = (act(prev_board, board) - action).square().sum()
+        l_ground_dist = dist(prev_board, board).square().sum()
 
 
 
@@ -219,12 +226,7 @@ for iters in range(50000):
 
         # TODO: The filling:
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
-        #   TODO: `act(A,B)→action`
-        #     TODO: Ground: `act(prev, next) = prev→next`
-        #   TODO: `dist(A,B)=n`: a small integer: floor of log-2 of dist.
-        #     TODO: Ground: `dist(prev, next) = 0`
-        #     TODO: Have `combine(D1,D2) = torch.where((d1-d2).abs()<1, 1+d1, d1.max(d2))  d1:D1.floor()  d2:D2.floor()`
-        #     (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
+        #   TODO: Have `combine(D1,D2) = torch.where((d1-d2).abs()<1, 1+d1, d1.max(d2))  d1:D1.floor()  d2:D2.floor()`
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
         #   TODO: And the `mid(src,dst)→mid` GAN.
@@ -267,11 +269,13 @@ for iters in range(50000):
 
 
         # Optimize.
-        (torch.zeros(1, device=device, requires_grad=True)).backward()
+        (l_ground_act + l_ground_dist + torch.zeros(1, device=device, requires_grad=True)).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
             log(0, False, dist = show_dist)
-            log(1, False, reached = to_np(reached.float().mean()))
+            log(1, False, ground_act = to_np(l_ground_act))
+            log(2, False, ground_dist = to_np(l_ground_dist))
+            log(3, False, reached = to_np(reached.float().mean()))
 
 
         if iters == 1000: clear()
