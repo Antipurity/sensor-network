@@ -30,6 +30,31 @@ Unimplemented:
     - We need to either try to come up with some, or revisit continuous-control with task-horizons.
     - (Isn't the "dst's dst is our dst too" idea related to node contraction's "remove a graph node and join the path; at query-time, only go up the query-hierarchy (probably measuring embedding similarity)"?)
     - (Joint-embedding is probably the only real option to scale up to realistic environments, because the neural nets will no longer have to learn every single quadratically-numerous dist & action, and very slowly update them when they discover unexpected paths; many implicit datapoints can be updated at once if we use joint-embedding.)
+    - TODO: Our latest exponential space-filling method is quite reminiscent of contraction hierarchies, isn't it? So, replace this with that, right?
+
+---
+
+# Past attempts to overcome the quadratic bottleneck 
+
+---
+
+- For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', possibly BYOL-learned, by notation here):
+  - Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
+    - (But compared to any of the options below, it's amazing.)
+  - Learn a goal-dependent embedding `ev` for which `ev(prev,g) = prev_ev(ev(next,g))` and `ev(g,g) = OK` (make it smoothly transform into goals), and compare func-call-depths when needed:
+    - Learn the actual distance given `ev`.
+    - Learn a comparator of 2 `ev`s, `cmp(fut1, fut2)→-1…0…1`: `cmp(RNN(f),f)=-1`, `cmp(f,f)=0`, `cmp(f,RNN(f))=1`, `cmp(RNN(f), RNN(g)) = cmp(f,g)`, `cmp(RNN(f),g) where cmp(f,g)<0 = -1`, `cmp(f,RNN(g)) where cmp(f,g)>0 = 1`.
+    - (…Though, learning a goal-dependent vortex is as info-heavy as learning all pairwise distances if not more, so it's just as bad as that.)
+  - Continuous contraction: given src & dst & max-dist, alter src within those confines to get closer to dst. Then, we can decompose all problems at unroll-time: go halfway, then the rest of the way.
+    - Have a GAN `alter(src, dst, max_dist)→src` & `alter_dist`, where the 'discriminator' is the distance from output to dst. Losses:
+      - `alter_dist(prev, next, |prev-next| or more) = |prev-next|`
+      - `alter_dist(prev, goal, max_dist) = min(max_dist, |prev-next| + .99 * alter_dist(next, goal, dist - |prev-next|))`
+      - (…Wow, this is even worse than all-to-all distance learning.)
+  - Discrete contraction hierarchies: ground *tasks* in one-step transitions, and combine 2 consecutive *tasks* on each new hierarchy level (contracting a node by combining 2 actions that go through it in 1 meta-action/shortcut: similar to classical contraction hierarchies). Effectively, the level (an extra input to many neural nets) is floor of log-2 of dist.
+    - Good: the 'distance' has much less precision and thus takes less space in neural nets. Bad: with N levels, we need N× more compute.
+    - To always pick the shortest action on each level (especially when we have `A→B  B→C  A→C`) instead of smudging (and trying to connect all to all), we need to learn a "which level does this action come from" net, and use that for gated action-prediction. Which is pretty much the old dist.
+    - Nodes are learned with BYOL (`next(ev(A)) = sg ev(B)` if A→B is a real meta/transition) to be differentiable, and to make same-endpoints paths have the same embeddings, but if we want this to not collapse or smudge, then we need every single meta-action with distinct endpoints to be both distinct and perfectly-learned. Since there are as many total meta-actions as there are node pairs, we're back to the non-scalable "need quadratic neural-net capacity" but in a worse way.
+      - (…Wow, this is way worse than all-to-all distance learning. But aren't at least some of its ideas salvageable?)
 """
 
 
@@ -182,6 +207,11 @@ for iters in range(50000):
     if len(choices):
         boards = torch.cat([c[0] for c in choices], -2) # unroll_len+1 × B × N*N
         actions = torch.cat([c[1] for c in choices], -2) # unroll_len+1 × B × action_sz
+
+        # TODO: …So do we remove, like, all of this code?
+        #   TODO: …But what about all those runs that we did?… Do we really just throw them out, just like that?… Not even leaving it for comparing performance of algorithms?…
+        #   TODO: At the very least, rename `future_dist` to `dist` for conciseness.
+
         K, B = boards.shape[0], boards.shape[1]
         targets = torch.where( # This improves convergence speed 5×. It's the key.
             # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
@@ -225,6 +255,16 @@ for iters in range(50000):
             next_actions_are2 = torch.where(cond, next_actions, next_actions2)
         self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
 
+        # Optimize.
+        (dist_pred_loss + self_imitation_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
+        opt.step();  opt.zero_grad(True)
+        with torch.no_grad(): # Print metrics.
+            log(0, False, dist = show_dist)
+            log(1, False, dist_pred_loss = to_np(dist_pred_loss))
+            log(2, False, self_imitation_loss = to_np(self_imitation_loss))
+            log(3, False, reached = to_np(reached.float().mean()))
+            #   (Reaching about .66 means that targets are reached about 100% of the time.)
+            log(4, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
 
 
 
@@ -233,37 +273,14 @@ for iters in range(50000):
 
 
 
-        # For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', by notation here):
-        #   - Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
-        #     - (But compared to any of the options below, it's amazing.)
-        #   - Learn a goal-dependent embedding `ev` for which `ev(prev,g) = prev_ev(ev(next,g))` and `ev(g,g) = OK` (make it smoothly transform into goals), and compare func-call-depths when needed:
-        #     - Learn the actual distance given `ev`.
-        #     - Learn a comparator of 2 `ev`s, `cmp(fut1, fut2)→-1…0…1`: `cmp(RNN(f),f)=-1`, `cmp(f,f)=0`, `cmp(f,RNN(f))=1`, `cmp(RNN(f), RNN(g)) = cmp(f,g)`, `cmp(RNN(f),g) where cmp(f,g)<0 = -1`, `cmp(f,RNN(g)) where cmp(f,g)>0 = 1`.
-        #     - (…Though, learning a goal-dependent vortex is as info-heavy as learning all pairwise distances if not more, so it's just as bad as that.)
-        #   - Continuous contraction: given src & dst & max-dist, alter src within those confines to get closer to dst. Then, we can decompose all problems at unroll-time: go halfway, then the rest of the way.
-        #     - Have a GAN `alter(src, dst, max_dist)→src` & `alter_dist`, where the 'discriminator' is the distance from output to dst. Losses:
-        #       - `alter_dist(prev, next, |prev-next| or more) = |prev-next|`
-        #       - `alter_dist(prev, goal, max_dist) = min(max_dist, |prev-next| + .99 * alter_dist(next, goal, dist - |prev-next|))`
-        #       - (…Wow, this is even worse than all-to-all distance learning.)
-        #   - Discrete contraction hierarchies: ground *tasks* in one-step transitions, and combine 2 consecutive *tasks* on each new hierarchy level (contracting a node by combining 2 actions that go through it in 1 meta-action/shortcut: similar to classical contraction hierarchies). Effectively, the level (an extra input to many neural nets) is floor of log-2 of dist.
-        #     - Good: the 'distance' has much less precision and thus takes less space in neural nets. Bad: with N levels, we need N× more compute.
-        #     - To always pick the shortest action on each level (especially when we have `A→B  B→C  A→C`) instead of smudging (and trying to connect all to all), we need to learn a "which level does this action come from" net, and use that for gated action-prediction. Which is pretty much the old dist.
-        #     - Nodes are learned with BYOL (`next(ev(A)) = sg ev(B)` if A→B is a real meta/transition) to be differentiable, and to make same-endpoints paths have the same embeddings, but if we want this to not collapse or smudge, then we need every single meta-action with distinct endpoints to be both distinct and perfectly-learned. Since there are as many total meta-actions as there are node pairs, we're back to the non-scalable "need quadratic neural-net capacity" but in a worse way.
-        #       - (…Wow, this is even worse than all-to-all distance learning. But aren't at least some of its ideas salvageable?)
-
-
-        # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything).
-        # …Ideally, we'd like to solve all most-trivial tasks, then do nothing but *combine* the tasks — which should give us the exponential-improvement that dist-learning RL is too bogged-down by quadratic-info to have…
-        #   (But we still can't come up with a good way to combine tasks.)
 
 
 
-        # What's the best that we can make filling?
-        #   Like always with filling, we need a way to distinguish, per-goal (per-task), which sources can reach that spot; or, per-src (per-task), which goals it can reach.
-        #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
-        #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere?)
+        # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything). Ideally, we'd like to solve all most-trivial tasks (ground), then do nothing but *combine* the tasks — which should give us the exponential-improvement that dist-learning RL is too bogged-down by quadratic-info to have…
+
 
         # TODO: The filling:
+        #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
         #   TODO: `act(A,B)→action`
         #     TODO: Ground: `act(prev, next) = prev→next`
         #   TODO: `dist(A,B)=n`: a small integer: floor of log-2 of dist.
@@ -291,9 +308,10 @@ for iters in range(50000):
         #         `dst.fake(A0,D+1, C, reward=D+1)` # Get that distance right.
         #         `mid.pred(A0,C0, M0, reward = (DC-1-DAM).abs() + (DC-1-DMC).abs())`
         #         `mid.fake(A0,C0, M, reward = 0)` # Minimize non-middle-ness.
-        #       TODO: How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness?
+        #       TODO: How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness? Should we, even, especially in this most-simple env?
         #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
         #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
+        #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere, like in `dst` and/or `mid`?)
 
 
 
@@ -312,14 +330,4 @@ for iters in range(50000):
 
 
         if iters == 1000: clear()
-
-        (dist_pred_loss + self_imitation_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
-        opt.step();  opt.zero_grad(True)
-        with torch.no_grad():
-            log(0, False, dist = show_dist)
-            log(1, False, dist_pred_loss = to_np(dist_pred_loss))
-            log(2, False, self_imitation_loss = to_np(self_imitation_loss))
-            log(3, False, reached = to_np(reached.float().mean()))
-            #   (Reaching about .66 means that targets are reached about 100% of the time.)
-            log(4, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
 finish()
