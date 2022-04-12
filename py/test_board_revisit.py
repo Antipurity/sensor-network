@@ -7,11 +7,13 @@ This time:
 
 - To remove prediction-interference: the env's action needs 4 numbers, and is decided by which is higher.
 
+- REMOVED everything below for now:
+
 - For grounding, remembered to ensure that `act(prev, goal=next) = action` for all transitions, by setting distance to 0 in these cases.
 
 - Self-imitation now *gates* by old-distance-is-better, doesn't multiply by the distance-differential.
 
-- Now have tree-backup (basically multi-step returns so that dist-sum bootstrapping has more accurate targets), which does improve dist-learning speed, though due to implementation details, .
+- Now have tree-backup (basically multi-step returns so that dist-sum bootstrapping has more accurate targets), which does improve dist-learning speed.
 
 Unimplemented:
 
@@ -114,11 +116,11 @@ unroll_len = N
 replay_buffer = [None] * 1024
 updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long and of width `batch_size`.
 
-bootstrap_discount = torch.tensor([.99], device=device)
-#   Bootstrapping is `f(next) = THIS * f(prev) + local_metric(next)`
-#   (Predicting many discounts at once doesn't help.)
-#   (N=8: 40% at 5k, 53% at 10k, 53% at 20k. BIAS)
 
+
+# (The below is old news, to compare the future impl to…)
+#   Bootstrapping, `f(next) = p * f(prev) + local_metric(next)`:
+#   (N=8: 40% at 5k, 53% at 10k, 53% at 20k. BIAS)
 perfect_distance_targets = True # Replaces dist-bootstrapping with `distance` calls.
 #   (N=4: 90% at 5k, 99% at 10k.)
 #   (N=8: 55% at 5k, 90% at 10k.)
@@ -141,14 +143,14 @@ act = nn.Sequential( # (prev_board, target) → action
     nn.Linear(action_sz, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
-future_dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
+dist = nn.Sequential( # (prev_board, action, target) → future_distance_sum
     # (For picking an action that leads to getting to the target board the fastest.)
     nn.Linear(N*N + action_sz + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
     nn.Linear(action_sz, 1),
 ).to(device)
-opt = torch.optim.Adam([*act.parameters(), *future_dist.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*act.parameters(), *dist.parameters()], lr=1e-3)
 
 def show_dist(plt, key):
     """An image of the *learned* distance."""
@@ -156,8 +158,7 @@ def show_dist(plt, key):
         board = torch.eye(N*N, N*N, device=device)
         target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
         action = act(cat(board, target))
-        dist = future_dist(cat(board, action, target)).reshape(N, N)
-        plt.imshow(dist.cpu().numpy(), label=key)
+        plt.imshow(dist(cat(board, action, target)).reshape(N, N).cpu().numpy(), label=key)
 def distance(b1, b2):
     """Analytic distance between boards. Used for seeing what the theoretical max performance is."""
     def xy(board):
@@ -183,23 +184,15 @@ for iters in range(50000):
     boards, actions = [board], [action.detach()]
     with torch.no_grad():
         # First pick the target to go to.
-        #   (From tests, in this trivial env, performance is the same even if we re-pick the target at each step.)
         target = env_init(N, batch_size=batch_size)
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
-            randn = torch.randn(batch_size, action_sz, device=device)
-            # Minimize the future-distance-sum by considering all 4 possible actions right here.
-            #   (Minimizing by gradient descent in this environment is no bueno.)
             action = act(cat(board, target))
-            if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device)
-            #   (Having this is very much not ideal, but it does actually ensure that the RNN explores a lot.)
 
             board = env_step(N, board, action[..., 0:4])
 
             reached |= (board == target).all(-1, keepdim=True)
-
             boards.append(board);  actions.append(action.detach())
-
         replay_buffer[iters % len(replay_buffer)] = (torch.stack(boards, 0), torch.stack(actions, 0))
 
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
@@ -210,61 +203,6 @@ for iters in range(50000):
 
         # TODO: …So do we remove, like, all of this code?
         #   TODO: …But what about all those runs that we did?… Do we really just throw them out, just like that?… Not even leaving it for comparing performance of algorithms?…
-        #   TODO: At the very least, rename `future_dist` to `dist` for conciseness.
-
-        K, B = boards.shape[0], boards.shape[1]
-        targets = torch.where( # This improves convergence speed 5×. It's the key.
-            # (Possibly because it makes distances ≈5 instead of ≈65. And removes a factor of variation.)
-            torch.rand(1, B, 1, device=device) < .5,
-            torch.cat((boards[1:], boards[-1:]), 0), # This is somehow better than `boards[-1:]`.
-            torch.cat((boards[1:], boards[-1:]), 0)[:, torch.randperm(B, device=device)],
-        )
-
-        next_actions2 = act(cat(boards, targets))
-        next_actions = torch.cat((actions[1:], next_actions2[-1:]), 0).detach()
-        dists2 = future_dist(cat(boards, next_actions2, targets))
-        dists = future_dist(cat(boards, next_actions, targets))
-
-        # Bootstrapping: `future_dist(prev) = |next - target| + future_dist(next)*p`
-        #   Though if next==target, make the distance 0. (Which happens often due to our `targets`-sampling here.)
-        #   (Random actions contain a lot of noise, so distance for them may not transfer to distance for `act`'s actions.)
-        with torch.no_grad():
-            if not perfect_distance_targets:
-                # Compute (K-1)-step returns in Python, no care about efficiency.
-                micro_dists = (boards[1:] - targets[1:]).abs().sum(-1, keepdim=True) / 2
-                # dists_are = micro_dists + dists2[1:] * bootstrap_discount # 1-step-in-the-future returns.
-                # dists_are = torch.where(micro_dists < 1e-5, torch.tensor(0., device=device), dists_are)
-                dists_are, dist_so_far = [], dists2[-1]
-                for k in reversed(range(K-1)):
-                    dist_so_far = dist_so_far.min(dists2[k+1]) # Don't follow the old trajectory if we have a better option.
-                    dist_so_far = micro_dists[k] + dist_so_far * bootstrap_discount
-                    dist_so_far = torch.where(micro_dists[k] < 1e-5, torch.tensor(0., device=device), dist_so_far) # Ground `target`-reaching steps to have 0 distance.
-                    dists_are.append(dist_so_far)
-                dists_are = torch.stack(list(reversed(dists_are)), 0)
-            else:
-                dists_are = distance(boards[1:], targets[1:])
-        dist_pred_loss = (dists[:-1] - dists_are.detach()).square().sum(-1).mean()
-        # Self-imitation gated by min-dist, by `act`.
-        #   (A lot like [SIL.](https://arxiv.org/abs/1806.05635))
-        with torch.no_grad():
-            if not perfect_distance:
-                cond = dists < dists2
-            else:
-                next_boards = torch.cat((boards[1:], boards[-1:]), 0).detach()
-                cond = distance(next_boards, targets) < distance(boards, targets)
-            next_actions_are2 = torch.where(cond, next_actions, next_actions2)
-        self_imitation_loss = (next_actions2 - next_actions_are2).square().sum(-1).mean()
-
-        # Optimize.
-        (dist_pred_loss + self_imitation_loss + torch.zeros(1, device=device, requires_grad=True)).backward()
-        opt.step();  opt.zero_grad(True)
-        with torch.no_grad(): # Print metrics.
-            log(0, False, dist = show_dist)
-            log(1, False, dist_pred_loss = to_np(dist_pred_loss))
-            log(2, False, self_imitation_loss = to_np(self_imitation_loss))
-            log(3, False, reached = to_np(reached.float().mean()))
-            #   (Reaching about .66 means that targets are reached about 100% of the time.)
-            log(4, False, action_mean = to_np(action.mean()), action_std = to_np(action.std()))
 
 
 
@@ -327,6 +265,13 @@ for iters in range(50000):
 
 
 
+
+        # Optimize.
+        (torch.zeros(1, device=device, requires_grad=True)).backward()
+        opt.step();  opt.zero_grad(True)
+        with torch.no_grad(): # Print metrics.
+            log(0, False, dist = show_dist)
+            log(1, False, reached = to_np(reached.float().mean()))
 
 
         if iters == 1000: clear()
