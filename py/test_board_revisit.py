@@ -263,37 +263,36 @@ for iters in range(50000):
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
         #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere?)
 
-        # TODO: Formalize the filling:
+        # TODO: The filling:
         #   TODO: `act(A,B)→action`
         #     TODO: Ground: `act(prev, next) = prev→next`
         #   TODO: `dist(A,B)=n`: a small integer: floor of log-2 of dist.
         #     TODO: Ground: `dist(prev, next) = 0`
-        #     `dist(A,C) = 1+d1 if (d1-d2).abs()<1 else max(d1,d2)  d1:dist(A,B)  d2:dist(B,C)`
-        #     (Could be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
+        #     TODO: Have `combine(D1,D2) = torch.where((d1-d2).abs()<1, 1+d1, d1.max(d2))  d1:D1.floor()  d2:D2.floor()`
+        #     (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
-        #   TODO: And the src→dst GAN, `dst(src)→dst`.
-        #     TODO: …Wait, maybe it's a good idea to condition on the level? After all, we only have very few levels, so it's not like it'll be that much of a performance hit, right? And the main benefit includes the ability to correctly learn `mid` without filtering out any "A→B and B→C distances must match, otherwise we'll be able to construct low-dist chains to infinity".
-        #       TODO: LEVEL-CONDITION
-        #     TODO: Ground: `dst.pred(prev, next, reward=1)`
-        #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being action-conditioned, where the action's goal is sampled randomly.)
-        #     Needs to be trained on both single-transitions and src-of-src-is-our-src, right?
-        #       (With the discriminator-to-maximize predicting the sum of other losses, to make sure that the system learns what it encounters adequately; whatever we generate, should become 0, so that only new-encounters matter (TODO: when exactly, and which parts?).)
-        #       (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
-        #     TODO: …How to sample dst-of-dst, and update actions & distances, sampling mid-on-the-way-to-dst's-dst to gate that updating?…
-        #       `B = dst(A);  C = dst(B);  M = mid(A,C)`
-        #       TODO: <update the A→C dist to be the min of A→M→C and A→B→C>
-        #       TODO: <update act(A,C) if the new A→B→C distance is less than through A→M→C>
-        #       TODO: What's real? Should B & C be made fake? Should M?
-        #       TODO: How to weigh discriminator-preference by loss?
-        #       `dst.pred(A, C.detach(), reward=1)`
         #   TODO: And the `mid(src,dst)→mid` GAN.
-        #     (…Having the intermediate-node (optimized to be in the middle, AKA both its dists are one level lower than the total-dist) is the only way to overcome `min` and low init, because if we don't ground the distance in an explicit node, then we can't ever increase it.)
-        #     (…It's also the only way to make dist-quantization work, since otherwise we'd need to rely on single-step updates, which just won't work.)
-        #     TODO: …How do we keep the mid in the middle (and on the shortest path), going by distances?
-        #       TODO: …Should this "GAN" minimize some metric that keeps it in the middle, such as `(dist(A,C)-1 - dist(A,M)).abs() + (dist(A,C)-1 - dist(M,C)).abs()`?
-        #     TODO: …Would conditioning the src→dst GAN on distance be a good idea, which would help us with mid-conditioning too?… But at what cost? Do we just randomly sample the level to train?
-        #   TODO: Also the dst→src GAN, `src(dst)→src`: exactly the same as src→dst but reversed.
+        #     (We need to ground dist-comparisons in this to be able to ever increase the dist.)
+        #   TODO: And the `dst(src, dist)→dst` GAN.
+        #     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
+        #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
+        #     TODO: Ground: `dst.pred(prev, 0, next, reward=1)`
+        #     TODO: Sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst:
+        #       TODO: Pick `D`: a per-sample int from 0 to max-dist (probably 16 for future-proofing).
+        #       TODO: `B = dst(A,D);  C = dst(B,D);  M = mid(A,C)`
+        #       TODO: `DAM, DMC = dist(A,M), dist(M,C)`
+        #       TODO: Compute `DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)`.
+        #       TODO: Loss: `DC = DB.min(DM)`
+        #       TODO: Loss: `act(A,C) = torch.where(DB < DM, act(A,B), act(A,M))`
+        #       TODO: Update the kinda-GANs:
+        #         `A0, C0, M0 = A.detach(), C.detach(), M.detach()`
+        #         `dst.pred(A0,D+1, C0, reward=DC)`
+        #         `dst.fake(A0,D+1, C, reward=D+1)` # Get that distance right.
+        #         `mid.pred(A0,C0, M0, reward = (DC-1-DAM).abs() + (DC-1-DMC).abs())`
+        #         `mid.fake(A0,C0, M, reward = 0)` # Minimize non-middle-ness.
+        #       TODO: How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness?
+        #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
         #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
 
 

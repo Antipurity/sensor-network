@@ -206,7 +206,7 @@ def replay():
             dprev_action_target = prev_action.grad * bootstrap_discount
         synth_grad_loss = (dprev_action - dprev_action_target).square().sum()
         synth_grad_loss.backward()
-        prev_action.requires_grad_(False)
+        prev_action.requires_grad_(False) # TODO: …Wait, this doesn't actually set `prev_action.grad` to None, so *of course* our synthetic gradient was broken.
 
         optim.step();  optim.zero_grad(True)
 
