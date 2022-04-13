@@ -1,5 +1,5 @@
 """
-Contains the class `GAN` that can generatively model data, or maximize a learned reward signal.
+Contains the class `GAN` that can generatively model data, or maximize a learned reward/goal signal.
 """
 
 
@@ -25,10 +25,10 @@ class GAN(nn.Module):
 
     Methods:
     - `.forward(*args) → sample` or just call: generate. Needs to be conditioned on at least 1 arg, to at least establish the batch size.
-    - `.pred(*args, sample, reward=1) → loss`: updates the discriminator.
-    - `.max(*args, sample, reward=1) → loss`: updates the generator.
+    - `.pred(*args, sample, goal=1) → loss`: updates the discriminator.
+    - `.goal(*args, sample, goal=1) → loss`: updates the generator.
 
-    A full GAN update would do `sample = gan(*args)`, then `loss = gan.pred(*args, real, reward=1) + gan.pred(*args, sample, reward=0) + gan.max(*args, sample, reward=1)`. Distributions of real & fake samples must always overlap, so that gradient descent knows where to go.
+    A full GAN update would do `sample = gan(*args)`, then `loss = gan.pred(*args, real, goal=1) + gan.pred(*args, sample, goal=0) + gan.goal(*args, sample, goal=1)`. Distributions of real & fake samples must always overlap, so that gradient descent knows where to go.
 
     Neural nets often generalize poorly outside of training distribution, especially if decision boundaries are sparse there and linear behavior is allowed to drift. You can use a trick from DDPG: have 2 `discriminator`s and combine them by returning the min value.
     """
@@ -39,18 +39,18 @@ class GAN(nn.Module):
         self.noise_sz = noise_sz
         self.loss = loss
     def forward(self, *args, noise = ...):
-        """Generates a sample; pass it to `.max(…)`."""
+        """Generates a sample; pass it to `.goal(…)`."""
         if noise is ...:
             shape = [*args[0].shape[:-1], self.noise_sz]
             noise = torch.randn(shape, device=args[0].device)
         return self.generator(_cat(*args, noise))
-    def pred(self, *args, reward=1):
-        """Simply updates the discriminator to output `reward`. `.detach()` inputs if they should not be updated."""
-        return self.loss(self.discriminator(_cat(*args)), reward)
-    def max(self, *args, reward=1):
-        """Freezes the discriminator, then makes it output `reward` by adjusting the args."""
+    def pred(self, *args, goal=1):
+        """Simply updates the discriminator to output `goal`. `.detach()` inputs if they should not be updated."""
+        return self.loss(self.discriminator(_cat(*args)), goal)
+    def goal(self, *args, goal=1):
+        """Freezes the discriminator, then makes it output `goal` by adjusting the args."""
         for p in self.discriminator.parameters(): p.requires_grad_(False)
-        L = self.loss(self.discriminator(_cat(*args)), reward)
+        L = self.loss(self.discriminator(_cat(*args)), goal)
         for p in self.discriminator.parameters(): p.requires_grad_(True)
         return L
 
@@ -88,10 +88,10 @@ if __name__ == '__main__':
         sample = gan(input) # (We seem to usually collapse into generating a single output, though.)
         with torch.no_grad():
             log(0, False, L2=min_L2(sample, output).sum().cpu().numpy())
-        l1 = gan.pred(input, output, reward=0)
-        # l2 = gan.pred(input, sample, reward=min_L2(sample, output))
-        l2 = gan.pred(input, sample, reward=1)
-        l3 = gan.max(input, sample, reward=0)
+        l1 = gan.pred(input, output, goal=0)
+        # l2 = gan.pred(input, sample, goal=min_L2(sample, output))
+        l2 = gan.pred(input, sample, goal=1)
+        l3 = gan.goal(input, sample, goal=0)
         # l1, l2, l3 = 0, min_L2(sample, output).sum(), 0
         (l1 + l2 + l3).backward()
         if iter % 5000 == 0:

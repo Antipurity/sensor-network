@@ -224,8 +224,8 @@ for iters in range(50000):
         l_ground_act = (act(cat(prev_board, board)) - action).square().sum()
         l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
-        l_ground_dst_d = dst.pred(prev_board, z, dst(cat(prev_board, z)), reward=1)
-        l_ground_dst_g = dst.max(prev_board, z, board, reward=0)
+        l_ground_dst_d = dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1)
+        l_ground_dst_g = dst.goal(prev_board, z, board, goal=0)
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
 
         # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
@@ -235,6 +235,15 @@ for iters in range(50000):
         DB, DM, DC = combine(dist(cat(A,B)), dist(cat(B,C))), combine(DAM, DMC), dist(cat(A,C))
         l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-1, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
+
+        # Learn generative models of faraway places.
+        A0, C0, M0 = A.detach(), C.detach(), M.detach()
+        l_dst_d = dst.pred(A0, D+1, C0, goal = DC)
+        l_dst_g = dst.goal(A0, D+1, C, goal = D+1) # Get that distance right.
+        l_mid_d = mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs())
+        l_mid_g = mid.goal(A0, C0, M0, goal = 0) # Minimize non-middle-ness.
+
+        # TODO: Run & fix!
 
 
 
@@ -253,15 +262,7 @@ for iters in range(50000):
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
-        #   TODO: And the `dst(src, dist)→dst` GAN.
-        #     TODO: Sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst:
-        #       TODO: Update the kinda-GANs:
-        #         `A0, C0, M0 = A.detach(), C.detach(), M.detach()`
-        #         `dst.pred(A0,D+1, C0, reward=DC)`
-        #         `dst.max(A0,D+1, C, reward=D+1)` # Get that distance right.
-        #         `mid.pred(A0,C0, M0, reward = (DC-1-DAM).abs() + (DC-1-DMC).abs())`
-        #         `mid.max(A0,C0, M, reward = 0)` # Minimize non-middle-ness.
-        #       TODO: How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness? Should we, even, especially in this most-simple env?
+        #   TODO: …How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness? Should we, even, especially in this most-simple env?
         #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
         #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
         #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere, like in `dst` and/or `mid`?)
@@ -282,7 +283,7 @@ for iters in range(50000):
 
 
         # Optimize.
-        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g + l_meta_act + l_meta_dist).backward()
+        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g + l_meta_act + l_meta_dist + l_dst_d + l_dst_g + l_mid_d + l_mid_g).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
             log(0, False, dist = show_dist)
@@ -292,7 +293,11 @@ for iters in range(50000):
             log(4, False, ground_dst_g = to_np(l_ground_dst_g))
             log(5, False, meta_act = to_np(l_meta_act))
             log(6, False, meta_dist = to_np(l_meta_dist))
-            log(7, False, reached = to_np(reached.float().mean()))
+            log(7, False, dst_d = to_np(l_dst_d))
+            log(8, False, dst_g = to_np(l_dst_g))
+            log(9, False, mid_d = to_np(l_mid_d))
+            log(10, False, mid_g = to_np(l_mid_g))
+            log(11, False, reached = to_np(reached.float().mean()))
 
 
         if iters == 1000: clear()
