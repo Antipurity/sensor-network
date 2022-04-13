@@ -254,6 +254,9 @@ for iters in range(50000):
         #   …It has many downsides and potential holes; but is it worse than GANs?…
         #   TODO: Try this model.
         #     …But should we try it here, or in `model/gan.py`?… With the latter, we can at least try to somehow measure diversity, right?…
+        #   (…It was meant to model "the prediction loss should affect not all samples, but only the closest sample"; is it modeled well enough?…)
+        #   …Wait: the non-T-trained-noise inputs wouldn't actually converge to the Ts that we were given, they'll just get their out-of-distribution out-of-whack outputs reinforced. So it's not a generative model at all. Might as well give up on it now, right?…
+        #     TODO: Give up instead.
 
         #   TODO: …If we fail to make progress, then we could simplify: replace the `dst` and `mid` GANs with literal dicts-of-sets (from a tuple of all args to all possible outputs) (both are added-to or removed-from based on the predicted distance), and go through CPU… If everything else works well, then GANs are the problem.
 
