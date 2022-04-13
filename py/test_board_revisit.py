@@ -242,7 +242,7 @@ for iters in range(50000):
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
         l_dst_g = dst.goal(A0, D+1, C, goal = D+1) # Get that distance right.
         l_dst_d = dst.pred(A0, D+1, C0, goal = DC)
-        l_mid_g = mid.goal(A0, C0, M0, goal = 0) # Minimize non-middle-ness.
+        l_mid_g = mid.goal(A0, C0, M, goal = 0) # Minimize non-middle-ness.
         l_mid_d = mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs())
 
         # TODO: Run & fix.
