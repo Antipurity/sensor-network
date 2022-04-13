@@ -116,6 +116,8 @@ unroll_len = N
 
 rb, replay_buffer = 0, [None] * 1024
 updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long and of width `batch_size`.
+
+noise_sz = 16
 dist_levels = 8
 
 def combine(D1, D2):
@@ -156,11 +158,11 @@ act = nn.Sequential( # (prev_board, target) → action
 ).to(device)
 dist = net(N*N + N*N, 1) # (prev_board, target) → floor(log2(future_distance_sum))
 #   (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
-mid = GAN(net(N*N + N*N, 1), net(N*N + N*N, N*N)) # (src, dst) → mid
+mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N, 1), noise_sz=noise_sz) # (src, dst) → mid
 #   Returns a midpoint halfway through.
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
-dst = GAN(net(N*N + 1, 1), net(N*N + 1, N*N)) # (src, dist) → dst
+dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1, 1), noise_sz=noise_sz) # (src, dist) → dst
 #   Sample two same-distance destinations, and the middle one is the midpoint to compare.
 #     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
 #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
