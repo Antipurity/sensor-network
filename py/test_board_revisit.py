@@ -251,6 +251,9 @@ for iters in range(50000):
 
         #   TODO: …If we fail to make progress, then we could simplify: replace the `dst` and `mid` GANs with literal dicts-of-sets (from a tuple of all args to all possible outputs) (both are added-to or removed-from based on the predicted distance), and go through CPU… If everything else works well, then GANs are the problem.
         #     …I think this is our only option left…
+        #     TODO: …Wait, or can we fake `dst` via a function that picks 2 consecutive directions and walks randomly as many times as was requested (or, 2 to the power of that)? (This GPU-going would be SO much better than CPU-copy-processing-copy.)
+        #     TODO: Can't we fake `mid` too by extracting x&y, averaging each, and reconstituting the board 9 times and picking the least-distance-sum one?
+        #   TODO: Fake `dst` and `mid`, and make the thing work with those fakes!
 
         # TODO: Try VAEs, since GANs kinda need rich distributions, not ≈3 distinct samples per class/input?
         #   TODO: Try [SWAEs](https://arxiv.org/abs/1804.01947)?
