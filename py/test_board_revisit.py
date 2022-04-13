@@ -158,11 +158,11 @@ act = nn.Sequential( # (prev_board, target) → action
 ).to(device)
 dist = net(N*N + N*N, 1) # (prev_board, target) → floor(log2(future_distance_sum))
 #   (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
-mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N, 1), noise_sz=noise_sz) # (src, dst) → mid
+mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N + N*N, 1), noise_sz=noise_sz) # (src, dst) → mid
 #   Returns a midpoint halfway through.
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
-dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1, 1), noise_sz=noise_sz) # (src, dist) → dst
+dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1 + N*N, 1), noise_sz=noise_sz) # (src, dist) → dst
 #   Sample two same-distance destinations, and the middle one is the midpoint to compare.
 #     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
 #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
@@ -226,8 +226,8 @@ for iters in range(50000):
         l_ground_act = (act(cat(prev_board, board)) - action).square().sum()
         l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
-        l_ground_dst_d = dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1)
         l_ground_dst_g = dst.goal(prev_board, z, board, goal=0)
+        l_ground_dst_d = dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1)
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
 
         # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
@@ -240,12 +240,16 @@ for iters in range(50000):
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
-        l_dst_d = dst.pred(A0, D+1, C0, goal = DC)
         l_dst_g = dst.goal(A0, D+1, C, goal = D+1) # Get that distance right.
-        l_mid_d = mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs())
+        l_dst_d = dst.pred(A0, D+1, C0, goal = DC)
         l_mid_g = mid.goal(A0, C0, M0, goal = 0) # Minimize non-middle-ness.
+        l_mid_d = mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs())
 
-        # TODO: Run & fix!
+        # TODO: Run & fix.
+        #   TODO: How to find out what goes wrong with combining plans?
+        #     ground_dst_d goes to 0, which is a sign of failure in GANs. As was feared, the distribution of neighboring states is too particular/small to be learned by a GAN… How can we overcome that?…
+
+        #   TODO: …If we fail to make progress, then we could simplify: replace the `dst` and `mid` GANs with literal dicts-of-sets (from a tuple of all args to all possible outputs) (both are added-to or removed-from based on the predicted distance), and go through CPU… If everything else works well, then GANs are the problem.
 
 
 
@@ -291,15 +295,12 @@ for iters in range(50000):
             log(0, False, dist = show_dist)
             log(1, False, ground_act = to_np(l_ground_act))
             log(2, False, ground_dist = to_np(l_ground_dist))
-            log(3, False, ground_dst_d = to_np(l_ground_dst_d))
-            log(4, False, ground_dst_g = to_np(l_ground_dst_g))
-            log(5, False, meta_act = to_np(l_meta_act))
-            log(6, False, meta_dist = to_np(l_meta_dist))
-            log(7, False, dst_d = to_np(l_dst_d))
-            log(8, False, dst_g = to_np(l_dst_g))
-            log(9, False, mid_d = to_np(l_mid_d))
-            log(10, False, mid_g = to_np(l_mid_g))
-            log(11, False, reached = to_np(reached.float().mean()))
+            log(3, False, ground_dst_d = to_np(l_ground_dst_d), ground_dst_g = to_np(l_ground_dst_g))
+            log(4, False, meta_act = to_np(l_meta_act))
+            log(5, False, meta_dist = to_np(l_meta_dist))
+            log(6, False, dst_d = to_np(l_dst_d), dst_g = to_np(l_dst_g))
+            log(7, False, mid_d = to_np(l_mid_d), mid_g = to_np(l_mid_g))
+            log(8, False, reached = to_np(reached.float().mean()))
 
 
         if iters == 1000: clear()
