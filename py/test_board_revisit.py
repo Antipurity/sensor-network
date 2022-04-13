@@ -118,6 +118,11 @@ rb, replay_buffer = 0, [None] * 1024
 updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long and of width `batch_size`.
 dist_levels = 8
 
+def combine(D1, D2):
+    """Combines two consecutive distance-levels (floor of log-2 of linear dist) into one."""
+    d1, d2 = D1.round(), D2.round()
+    return torch.where((d1-d2).abs() < 1, d1+1, d1.max(d2))
+
 
 
 # (The below is old news, to compare the future impl to…)
@@ -216,16 +221,20 @@ for iters in range(50000):
         B = board.shape[-2]
 
         # Ground.
-        l_ground_act = (act(prev_board, board) - action).square().sum()
-        l_ground_dist = dist(prev_board, board).square().sum()
+        l_ground_act = (act(cat(prev_board, board)) - action).square().sum()
+        l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
-        l_ground_dst_d = dst.pred(prev_board, z, dst(prev_board, z), reward=1)
+        l_ground_dst_d = dst.pred(prev_board, z, dst(cat(prev_board, z)), reward=1)
         l_ground_dst_g = dst.max(prev_board, z, board, reward=0)
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
 
+        # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
-        A = prev_board;  B = dst(A,D);  C = dst(B,D);  M = mid(A,C)
-        DAM, DMC = dist(A,M), dist(M,C)
+        A = prev_board;  B = dst(cat(A,D));  C = dst(cat(B,D));  M = mid(cat(A,C))
+        DAM, DMC = dist(cat(A,M)), dist(cat(M,C))
+        DB, DM, DC = combine(dist(cat(A,B)), dist(cat(B,C))), combine(DAM, DMC), dist(cat(A,C))
+        l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-1, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
+        l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
 
 
 
@@ -242,14 +251,10 @@ for iters in range(50000):
 
         # TODO: The filling:
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
-        #   TODO: Have `combine(D1,D2) = torch.where((d1-d2).abs()<1, 1+d1, d1.max(d2))  d1:D1.round()  d2:D2.round()`
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
         #   TODO: And the `dst(src, dist)→dst` GAN.
         #     TODO: Sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst:
-        #       TODO: Compute `DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)`.
-        #       TODO: Loss: `DC = DB.min(DM)`
-        #       TODO: Loss: `act(A,C) = torch.where(DB < DM, act(A,B), act(A,M))`
         #       TODO: Update the kinda-GANs:
         #         `A0, C0, M0 = A.detach(), C.detach(), M.detach()`
         #         `dst.pred(A0,D+1, C0, reward=DC)`
@@ -277,7 +282,7 @@ for iters in range(50000):
 
 
         # Optimize.
-        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g).backward()
+        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g + l_meta_act + l_meta_dist).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
             log(0, False, dist = show_dist)
@@ -285,7 +290,9 @@ for iters in range(50000):
             log(2, False, ground_dist = to_np(l_ground_dist))
             log(3, False, ground_dst_d = to_np(l_ground_dst_d))
             log(4, False, ground_dst_g = to_np(l_ground_dst_g))
-            log(5, False, reached = to_np(reached.float().mean()))
+            log(5, False, meta_act = to_np(l_meta_act))
+            log(6, False, meta_dist = to_np(l_meta_dist))
+            log(7, False, reached = to_np(reached.float().mean()))
 
 
         if iters == 1000: clear()
