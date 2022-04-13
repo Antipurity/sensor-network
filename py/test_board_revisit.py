@@ -116,7 +116,7 @@ unroll_len = N
 
 rb, replay_buffer = 0, [None] * 1024
 updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long and of width `batch_size`.
-# TODO: Also have dist_levels = 8.
+dist_levels = 8
 
 
 
@@ -219,9 +219,13 @@ for iters in range(50000):
         l_ground_act = (act(prev_board, board) - action).square().sum()
         l_ground_dist = dist(prev_board, board).square().sum()
         z = torch.zeros(B,1, device=device)
-        dst.pred(prev_board, z, dst(prev_board, z), reward=1)
-        dst.max(prev_board, z, board, reward=0)
+        l_ground_dst_d = dst.pred(prev_board, z, dst(prev_board, z), reward=1)
+        l_ground_dst_g = dst.max(prev_board, z, board, reward=0)
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
+
+        D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
+        A = prev_board;  B = dst(A,D);  C = dst(B,D);  M = mid(A,C)
+        DAM, DMC = dist(A,M), dist(M,C)
 
 
 
@@ -243,9 +247,6 @@ for iters in range(50000):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
         #   TODO: And the `dst(src, dist)→dst` GAN.
         #     TODO: Sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst:
-        #       TODO: Pick `D`: a per-sample int from 0 to max-dist (probably 16 for future-proofing).
-        #       TODO: `B = dst(A,D);  C = dst(B,D);  M = mid(A,C)`
-        #       TODO: `DAM, DMC = dist(A,M), dist(M,C)`
         #       TODO: Compute `DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)`.
         #       TODO: Loss: `DC = DB.min(DM)`
         #       TODO: Loss: `act(A,C) = torch.where(DB < DM, act(A,B), act(A,M))`
@@ -276,13 +277,15 @@ for iters in range(50000):
 
 
         # Optimize.
-        (l_ground_act + l_ground_dist + torch.zeros(1, device=device, requires_grad=True)).backward()
+        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
             log(0, False, dist = show_dist)
             log(1, False, ground_act = to_np(l_ground_act))
             log(2, False, ground_dist = to_np(l_ground_dist))
-            log(3, False, reached = to_np(reached.float().mean()))
+            log(3, False, ground_dst_d = to_np(l_ground_dst_d))
+            log(4, False, ground_dst_g = to_np(l_ground_dst_g))
+            log(5, False, reached = to_np(reached.float().mean()))
 
 
         if iters == 1000: clear()
