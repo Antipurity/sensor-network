@@ -138,21 +138,28 @@ perfect_distance = True # Makes self-imitation use perfect distance, not bootstr
 
 
 
+def net(ins, outs):
+    return nn.Sequential(
+        nn.Linear(ins, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
+        SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+        SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
+        nn.Linear(action_sz, outs),
+    ).to(device)
 act = nn.Sequential( # (prev_board, target) → action
-    nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    nn.Linear(action_sz, action_sz),
+    net(N*N + N*N, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
-dist = nn.Sequential( # (prev_board, target) → floor(log2(future_distance_sum))
-    # (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
-    nn.Linear(N*N + N*N, action_sz), nn.ReLU(), nn.LayerNorm(action_sz),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
-    nn.Linear(action_sz, 1),
-).to(device)
-opt = torch.optim.Adam([*act.parameters(), *dist.parameters()], lr=1e-3)
+dist = net(N*N + N*N, 1) # (prev_board, target) → floor(log2(future_distance_sum))
+#   (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
+mid = GAN(net(N*N + N*N, 1), net(N*N + N*N, N*N)) # (src, dst) → mid
+#   Returns a midpoint halfway through.
+#     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
+#     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
+dst = GAN(net(N*N + 1, 1), net(N*N + 1, N*N)) # (src, dist) → dst
+#   Sample two same-distance destinations, and the middle one is the midpoint to compare.
+#     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
+#     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
+opt = torch.optim.Adam([*act.parameters(), *dist.parameters(), *mid.parameters(), *dst.parameters()], lr=1e-3)
 
 def show_dist(plt, key):
     """An image of the *learned* distance."""
@@ -206,10 +213,15 @@ for iters in range(50000):
         prev_board = torch.cat([c[1] for c in choices], -2)
         action = torch.cat([c[2] for c in choices], -2)
         board = torch.cat([c[3] for c in choices], -2)
+        B = board.shape[-2]
 
         # Ground.
         l_ground_act = (act(prev_board, board) - action).square().sum()
         l_ground_dist = dist(prev_board, board).square().sum()
+        z = torch.zeros(B,1, device=device)
+        dst.pred(prev_board, z, dst(prev_board, z), reward=1)
+        dst.max(prev_board, z, board, reward=0)
+        #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
 
 
 
@@ -226,15 +238,10 @@ for iters in range(50000):
 
         # TODO: The filling:
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
-        #   TODO: Have `combine(D1,D2) = torch.where((d1-d2).abs()<1, 1+d1, d1.max(d2))  d1:D1.floor()  d2:D2.floor()`
+        #   TODO: Have `combine(D1,D2) = torch.where((d1-d2).abs()<1, 1+d1, d1.max(d2))  d1:D1.round()  d2:D2.round()`
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
-        #   TODO: And the `mid(src,dst)→mid` GAN.
-        #     (We need to ground dist-comparisons in this to be able to ever increase the dist.)
         #   TODO: And the `dst(src, dist)→dst` GAN.
-        #     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
-        #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
-        #     TODO: Ground: `dst.pred(prev, 0, next, reward=1)`
         #     TODO: Sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst:
         #       TODO: Pick `D`: a per-sample int from 0 to max-dist (probably 16 for future-proofing).
         #       TODO: `B = dst(A,D);  C = dst(B,D);  M = mid(A,C)`
@@ -245,9 +252,9 @@ for iters in range(50000):
         #       TODO: Update the kinda-GANs:
         #         `A0, C0, M0 = A.detach(), C.detach(), M.detach()`
         #         `dst.pred(A0,D+1, C0, reward=DC)`
-        #         `dst.fake(A0,D+1, C, reward=D+1)` # Get that distance right.
+        #         `dst.max(A0,D+1, C, reward=D+1)` # Get that distance right.
         #         `mid.pred(A0,C0, M0, reward = (DC-1-DAM).abs() + (DC-1-DMC).abs())`
-        #         `mid.fake(A0,C0, M, reward = 0)` # Minimize non-middle-ness.
+        #         `mid.max(A0,C0, M, reward = 0)` # Minimize non-middle-ness.
         #       TODO: How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness? Should we, even, especially in this most-simple env?
         #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
         #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
