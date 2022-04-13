@@ -252,6 +252,9 @@ for iters in range(50000):
         #   TODO: …If we fail to make progress, then we could simplify: replace the `dst` and `mid` GANs with literal dicts-of-sets (from a tuple of all args to all possible outputs) (both are added-to or removed-from based on the predicted distance), and go through CPU… If everything else works well, then GANs are the problem.
         #     …I think this is our only option left…
 
+        # TODO: Try VAEs, since GANs kinda need rich distributions, not ≈3 distinct samples per class/input?
+        #   TODO: Try [SWAEs](https://arxiv.org/abs/1804.01947)?
+
 
 
 
