@@ -249,6 +249,12 @@ for iters in range(50000):
         #   TODO: How to find out what goes wrong with combining plans?
         #     ground_dst_d goes to 0, which is a sign of failure in GANs. As was feared, the distribution of neighboring states is too particular/small to be learned by a GAN… How can we overcome that?…
 
+        # …What about this generative model: `gen` that's the usual prediction-model but also takes randn noise, and `gen_noise` to predict the noise given inputs&output (learned whenever we call `act2`); and to 'add a sample' to the generative distribution, use `act2` with the predicted noise (its action should be what-we-want-to-predict). Needs 2 losses: for `gen` (predict T given noise-for-T) and for `gen_noise` (predict randn given gen-for-randn).
+        #   …Why have I never heard of this model? Is it that bad?
+        #   …It has many downsides and potential holes; but is it worse than GANs?…
+        #   TODO: Try this model.
+        #     …But should we try it here, or in `model/gan.py`?… With the latter, we can at least try to somehow measure diversity, right?…
+
         #   TODO: …If we fail to make progress, then we could simplify: replace the `dst` and `mid` GANs with literal dicts-of-sets (from a tuple of all args to all possible outputs) (both are added-to or removed-from based on the predicted distance), and go through CPU… If everything else works well, then GANs are the problem.
 
 
