@@ -205,10 +205,20 @@ def perfect_dst(src, level): # → dst
     # (The probability of drawing DX==0|DY==0 is twice as high as any other point on the ring, but it shouldn't matter.)
     return from_xy(x+DX, y+DY)
 def perfect_mid(src, dst): # → mid
+    """What `mid` should converge to: some midpoint that's on the path from source to destination."""
+    # Avg the coords, but also handle wrapping by picking the closest-avg for a reflected point.
     (x1,y1), (x2,y2) = xy(src), xy(dst)
-    # TODO: Go through 9 x/y offsets.
-    # TODO: Pick  — TODO: …by what metric?…
-    # TODO: …How to reconstitute the picked x,y into the board?…
+    mx, my, mD = None, None, None
+    for dx in range(2):
+        for dy in range(2):
+            x,y = torch.floor((x1+x2)/2 + dx*N/2) % N, torch.floor((y1+y2)/2 + dy*N/2) % N
+            D = torch.min((x-x1).abs() + (y-y1).abs(), (x-x2).abs() + (y-y2).abs())
+            if mD is None:
+                mx, my, mD = x, y, D
+            else:
+                cond = D < mD
+                mx, my, mD = torch.where(cond, x, mx), torch.where(cond, y, my), torch.where(cond, D, mD)
+    return from_xy(mx, my)
 
 
 
@@ -270,14 +280,9 @@ for iters in range(50000):
         #   TODO: How to find out what goes wrong with combining plans?
         #     ground_dst_d goes to 0, which is a sign of failure in GANs. As was feared, the distribution of neighboring states is too particular/small to be learned by a GAN… How can we overcome that?…
 
-        #   TODO: …If we fail to make progress, then we could simplify: replace the `dst` and `mid` GANs with literal dicts-of-sets (from a tuple of all args to all possible outputs) (both are added-to or removed-from based on the predicted distance), and go through CPU… If everything else works well, then GANs are the problem.
-        #     …I think this is our only option left…
-        #     TODO: …Wait, or can we fake `dst` via a function that picks 2 consecutive directions and walks randomly as many times as was requested (or, 2 to the power of that)? (This GPU-going would be SO much better than CPU-copy-processing-copy.)
-        #       TODO: Should really extract `xy` and move with that, instead of going through env_step.
-        #         …`dst` is supposed to be conditioned on the actual min distance; so, we only really need to only pick a direction and add appropriate offsets once.
-        #           …What are the appropriate offsets?…
-        #     TODO: Can't we fake `mid` too by extracting x&y, averaging each, and reconstituting the board 9 times and picking the least-distance-sum one?
-        #   TODO: Fake `dst` and `mid`, and make the thing work with those fakes!
+        #   TODO: Don't use `dst` and `mid`, instead use `perfect_dst` and `perfect_mid`.
+        #     TODO: Have bools `no_dst` and `no_mid`.
+        #     TODO: Run & fix. *Should* be able to reach 100% (and after that, the only problem is the generative-ness of models).
 
         # TODO: Try VAEs, since GANs kinda need rich distributions, not ≈3 distinct samples per class/input?
         #   TODO: Try [SWAEs](https://arxiv.org/abs/1804.01947)?
