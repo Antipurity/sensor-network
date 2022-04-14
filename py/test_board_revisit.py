@@ -168,6 +168,9 @@ dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1 + N*N, 1), noise_sz=noise_sz
 #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
 opt = torch.optim.Adam([*act.parameters(), *dist.parameters(), *mid.parameters(), *dst.parameters()], lr=1e-3)
 
+
+
+# These funcs use domain knowledge; used for debugging.
 def show_dist(plt, key):
     """An image of the *learned* distance."""
     with torch.no_grad():
@@ -175,12 +178,14 @@ def show_dist(plt, key):
         target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
         action = act(cat(board, target))
         plt.imshow(dist(cat(board, action, target)).reshape(N, N).cpu().numpy(), label=key)
+def xy(board):
+    ind = board.argmax(-1, keepdim=True)
+    x = torch.div(ind, N, rounding_mode='floor')
+    return x, ind - x*N
+def from_xy(x,y): # → board
+    return nn.functional.one_hot((x.squeeze(-1) % N)*N + (y % N).squeeze(-1), N*N)
 def distance(b1, b2):
     """Analytic distance between boards. Used for seeing what the theoretical max performance is."""
-    def xy(board):
-        ind = board.argmax(-1, keepdim=True)
-        x = torch.div(ind, N, rounding_mode='floor')
-        return x, ind - x*N
     (x1, y1), (x2, y2) = xy(b1), xy(b2)
     d = (x1-x2).abs() + (y1-y2).abs()
     for ox in range(-1, 2):
@@ -188,6 +193,22 @@ def distance(b1, b2):
             (x3, y3) = (x1+ox*N, y1+oy*N)
             d = d.min((x3-x2).abs() + (y3-y2).abs())
     return d
+def perfect_dst(src, level): # → dst
+    """What `dst` should converge to: concentric ever-thicker rings."""
+    x,y = xy(src)
+    min_dist = 2**level # 2**level … 2**(level+1)-1
+    D = torch.floor(min_dist + torch.rand_like(level) * min_dist) # |x₁-x₂|+|y₁-y₂|
+    DX = torch.floor(torch.rand_like(D) * (D+1))
+    DY = D - DX
+    DX = torch.where(torch.rand_like(D) < .5, DX, -DX)
+    DY = torch.where(torch.rand_like(D) < .5, DY, -DY)
+    # (The probability of drawing DX==0|DY==0 is twice as high as any other point on the ring, but it shouldn't matter.)
+    return from_xy(x+DX, y+DY)
+def perfect_mid(src, dst): # → mid
+    (x1,y1), (x2,y2) = xy(src), xy(dst)
+    # TODO: Go through 9 x/y offsets.
+    # TODO: Pick  — TODO: …by what metric?…
+    # TODO: …How to reconstitute the picked x,y into the board?…
 
 
 
@@ -252,6 +273,9 @@ for iters in range(50000):
         #   TODO: …If we fail to make progress, then we could simplify: replace the `dst` and `mid` GANs with literal dicts-of-sets (from a tuple of all args to all possible outputs) (both are added-to or removed-from based on the predicted distance), and go through CPU… If everything else works well, then GANs are the problem.
         #     …I think this is our only option left…
         #     TODO: …Wait, or can we fake `dst` via a function that picks 2 consecutive directions and walks randomly as many times as was requested (or, 2 to the power of that)? (This GPU-going would be SO much better than CPU-copy-processing-copy.)
+        #       TODO: Should really extract `xy` and move with that, instead of going through env_step.
+        #         …`dst` is supposed to be conditioned on the actual min distance; so, we only really need to only pick a direction and add appropriate offsets once.
+        #           …What are the appropriate offsets?…
         #     TODO: Can't we fake `mid` too by extracting x&y, averaging each, and reconstituting the board 9 times and picking the least-distance-sum one?
         #   TODO: Fake `dst` and `mid`, and make the thing work with those fakes!
 
