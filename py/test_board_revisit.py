@@ -257,13 +257,13 @@ for iters in range(50000):
         l_ground_act = (act(cat(prev_board, board)) - action).square().sum()
         l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
-        l_ground_dst_g = dst.goal(prev_board, z, board, goal=0)
-        l_ground_dst_d = dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1)
+        l_ground_dst_g = 0 # dst.goal(prev_board, z, board, goal=0) # TODO:
+        l_ground_dst_d = 0 # dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1) # TODO:
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
 
         # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
-        A = prev_board;  B = dst(cat(A,D));  C = dst(cat(B,D));  M = mid(cat(A,C))
+        A = prev_board;  B = perfect_dst(A,D);  C = perfect_dst(B,D);  M = perfect_mid(A,C)
         DAM, DMC = dist(cat(A,M)), dist(cat(M,C))
         DB, DM, DC = combine(dist(cat(A,B)), dist(cat(B,C))), combine(DAM, DMC), dist(cat(A,C))
         l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-1, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
@@ -271,18 +271,16 @@ for iters in range(50000):
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
-        l_dst_g = dst.goal(A0, D+1, C, goal = D+1) # Get that distance right.
-        l_dst_d = dst.pred(A0, D+1, C0, goal = DC)
-        l_mid_g = mid.goal(A0, C0, M, goal = 0) # Minimize non-middle-ness.
-        l_mid_d = mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs())
+        l_dst_g = 0 # dst.goal(A0, D+1, C, goal = D+1) # Get that distance right. # TODO:
+        l_dst_d = 0 # dst.pred(A0, D+1, C0, goal = DC) # TODO:
+        l_mid_g = 0 # mid.goal(A0, C0, M, goal = 0) # Minimize non-middle-ness. # TODO:
+        l_mid_d = 0 # mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs()) # TODO:
 
         # TODO: Run & fix.
         #   TODO: How to find out what goes wrong with combining plans?
         #     ground_dst_d goes to 0, which is a sign of failure in GANs. As was feared, the distribution of neighboring states is too particular/small to be learned by a GAN… How can we overcome that?…
 
-        #   TODO: Don't use `dst` and `mid`, instead use `perfect_dst` and `perfect_mid`.
-        #     TODO: Have bools `no_dst` and `no_mid`.
-        #     TODO: Run & fix. *Should* be able to reach 100% (and after that, the only problem is the generative-ness of models).
+        #   TODO: Run & fix this synthetic-dst/mid variant. *Should* be able to reach 100% (and after that, the only problem is the generative-ness of models).
 
         # TODO: Try VAEs, since GANs kinda need rich distributions, not ≈3 distinct samples per class/input?
         #   TODO: Try [SWAEs](https://arxiv.org/abs/1804.01947)?
