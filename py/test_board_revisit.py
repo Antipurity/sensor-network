@@ -280,7 +280,12 @@ for iters in range(50000):
         #   TODO: How to fix the only failing component: generative models?
 
         # TODO: Try VAEs, since GANs kinda need rich distributions, not ≈3 distinct samples per class/input?
-        #   TODO: Try [SWAEs](https://arxiv.org/abs/1804.01947)?
+        #   (Need to condition both encoder & decoder on src&dist for `dst` and on src&dst for `mid`; only the output is autoencoded.)
+        #   TODO: First do the dst VAE, and see whether we can run & fix it.
+        #     Do we need a measure of sharpness (diff from a one-hot encoding) on generated samples? …If we fail, yes.
+        #   TODO: Then do mid.
+
+        # TODO: …Possibly try [SWAEs](https://arxiv.org/abs/1804.01947)?
 
 
 
