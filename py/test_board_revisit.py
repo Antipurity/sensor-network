@@ -197,7 +197,8 @@ def perfect_dst(src, level): # → dst
     """What `dst` should converge to: concentric ever-thicker rings."""
     x,y = xy(src)
     min_dist = 2**level # 2**level … 2**(level+1)-1
-    D = torch.floor(min_dist + torch.rand_like(level) * min_dist) # |x₁-x₂|+|y₁-y₂|
+    r = torch.rand(level.shape, device=device)
+    D = torch.floor(min_dist + r * min_dist) # |x₁-x₂|+|y₁-y₂|
     DX = torch.floor(torch.rand_like(D) * (D+1))
     DY = D - DX
     DX = torch.where(torch.rand_like(D) < .5, DX, -DX)
