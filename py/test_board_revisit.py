@@ -176,15 +176,14 @@ def show_dist(plt, key):
     with torch.no_grad():
         board = torch.eye(N*N, N*N, device=device)
         target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
-        action = act(cat(board, target))
-        plt.imshow(dist(cat(board, action, target)).reshape(N, N).cpu().numpy(), label=key)
+        plt.imshow(dist(cat(board, target)).reshape(N, N).cpu().numpy(), label=key)
 def xy(board):
     ind = board.argmax(-1, keepdim=True)
     x = torch.div(ind, N, rounding_mode='floor')
     return x, ind - x*N
 def from_xy(x,y): # → board
     return nn.functional.one_hot((x.long().squeeze(-1) % N)*N + (y.long() % N).squeeze(-1), N*N).float()
-def distance(b1, b2):
+def perfect_dist(b1, b2):
     """Analytic distance between boards. Used for seeing what the theoretical max performance is."""
     (x1, y1), (x2, y2) = xy(b1), xy(b2)
     d = (x1-x2).abs() + (y1-y2).abs()
@@ -267,8 +266,10 @@ for iters in range(50000):
         A = prev_board;  B = perfect_dst(A,D);  C = perfect_dst(B,D);  M = perfect_mid(A,C)
         DAM, DMC = dist(cat(A,M)), dist(cat(M,C))
         DB, DM, DC = combine(dist(cat(A,B)), dist(cat(B,C))), combine(DAM, DMC), dist(cat(A,C))
-        l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-1, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
+        l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-.5, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
+        #   TODO: .round() the target.
+        # l_meta_dist = (DC - ((perfect_dist(A,C).abs()+1e-3).log2().floor()).detach()).square().sum() # TODO:
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
