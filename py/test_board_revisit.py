@@ -183,7 +183,7 @@ def xy(board):
     x = torch.div(ind, N, rounding_mode='floor')
     return x, ind - x*N
 def from_xy(x,y): # → board
-    return nn.functional.one_hot((x.squeeze(-1) % N)*N + (y % N).squeeze(-1), N*N)
+    return nn.functional.one_hot((x.long().squeeze(-1) % N)*N + (y.long() % N).squeeze(-1), N*N).float()
 def distance(b1, b2):
     """Analytic distance between boards. Used for seeing what the theoretical max performance is."""
     (x1, y1), (x2, y2) = xy(b1), xy(b2)
