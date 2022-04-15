@@ -268,8 +268,6 @@ for iters in range(50000):
         DB, DM, DC = combine(dist(cat(A,B)), dist(cat(B,C))), combine(DAM, DMC), dist(cat(A,C))
         l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-.5, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
-        #   TODO: .round() the target.
-        # l_meta_dist = (DC - ((perfect_dist(A,C).abs()+1e-3).log2().floor()).detach()).square().sum() # TODO:
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
@@ -279,10 +277,7 @@ for iters in range(50000):
         l_mid_d = 0 # mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs()) # TODO:
 
         # TODO: Run & fix.
-        #   TODO: How to find out what goes wrong with combining plans?
-        #     ground_dst_d goes to 0, which is a sign of failure in GANs. As was feared, the distribution of neighboring states is too particular/small to be learned by a GAN… How can we overcome that?…
-
-        #   TODO: Run & fix this synthetic-dst/mid variant. *Should* be able to reach 100% (and after that, the only problem is the generative-ness of models).
+        #   TODO: How to fix the only failing component: generative models?
 
         # TODO: Try VAEs, since GANs kinda need rich distributions, not ≈3 distinct samples per class/input?
         #   TODO: Try [SWAEs](https://arxiv.org/abs/1804.01947)?
