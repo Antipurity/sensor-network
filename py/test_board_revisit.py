@@ -164,7 +164,7 @@ mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N + N*N, 1), noise_sz=nois
 #   Returns a midpoint halfway through.
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
-dst_encode = net(N*N + 1, 2 * noise_sz) # (src, dist) → mean_and_stdev
+dst_encode = net(N*N + 1 + noise_sz, 2 * noise_sz) # (src, dist, noise_for_diversity) → mean_and_stdev
 dst_decode = net(N*N + 1 + noise_sz, N*N) # (src, dist, noise) → dst
 #   A conditioned VAE.
 #   Sample two same-distance destinations, and the middle one is the midpoint to compare.
@@ -270,21 +270,22 @@ for iters in range(50000):
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
         #   Why is this so difficult?
-        dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z)).chunk(2, -1)
+        # TODO: …Try inputting random noise to the encoder too…
+        dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, torch.randn(B, noise_sz, device=device))).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
         dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
         l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
         theta = torch.randn(B, noise_sz, device=device)
         theta = theta / (theta**2).sum(-1, keepdim=True).sqrt()
         theta = theta.t()
-        l_ground_dst_d = 10 * ((dst_noise @ theta).sort(-1)[0] - (torch.randn_like(dst_noise_stdev) @ theta).sort(-1)[0]).square().sum() # SWAE
+        l_ground_dst_d = 1 * ((dst_noise @ theta).sort(-1)[0] - (torch.randn_like(dst_noise_stdev) @ theta).sort(-1)[0]).square().sum() # SWAE
         #   TODO: …Why are we failing to learn this?… Did we fail at implementing it?
         # l_ground_dst_d = .1 * dst_noise.mean(0).square().sum() + (dst_noise.std(0) - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
         if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
             BOARD = env_init(N, 1)
-            print(BOARD, 'neighbors:')
+            print(*[c.detach().cpu().numpy() for c in xy(BOARD)], 'neighbors:')
             for i in range(6):
                 NEIGH = dst_decode(cat(BOARD, torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
-                print(' ', i, NEIGH.argmax(-1), NEIGH)
+                print(' ', i, *[c.detach().cpu().numpy() for c in xy(NEIGH)], NEIGH)
                 # TODO: …Why does this generative model seemingly converge to just one output…
                 #   …Unusable…
                 # TODO: …What if we sort generated-noise and random-noise along -1, and simply minimize L2 diff? …Wait, this is literally SWAE, isn't it. …Without random projections though.
