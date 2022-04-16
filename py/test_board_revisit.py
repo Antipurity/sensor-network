@@ -272,12 +272,20 @@ for iters in range(50000):
         #   Why is this so difficult?
         # TODO: …Try inputting random noise to the encoder too…
         dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, torch.randn(B, noise_sz, device=device))).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
+        dst_noise_stdev = torch.nn.functional.softplus(dst_noise_stdev)
         dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
         l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
-        theta = torch.randn(B, noise_sz, device=device)
-        theta = theta / (theta**2).sum(-1, keepdim=True).sqrt()
-        theta = theta.t()
-        l_ground_dst_d = 1 * ((dst_noise @ theta).sort(-1)[0] - (torch.randn_like(dst_noise_stdev) @ theta).sort(-1)[0]).square().sum() # SWAE
+        def normal_log_prob(mean, std, z):
+            var2 = 2 * std.square()
+            return -.5 * (3.14159265359 * var2) - (z - mean).square() / var2
+        log_q_z = normal_log_prob(dst_noise_mean, dst_noise_stdev, dst_noise).sum(-1, keepdim=True) # TODO:
+        log_p_z = normal_log_prob(torch.zeros_like(dst_noise), torch.ones_like(dst_noise), dst_noise).sum(-1, keepdim=True) # TODO: (Penalize divergence from the normal distribution.)
+        # theta = torch.randn(B, noise_sz, device=device)
+        # theta = theta / theta.square().sum(-1, keepdim=True).sqrt()
+        # theta = theta.t()
+        # TODO: …Okay, what about VAEs then? …Why is this impl so bad.
+        #   (Adapted from https://github.com/altosaar/variational-autoencoder/blob/master/train_variational_autoencoder_pytorch.py)
+        l_ground_dst_d = (0*log_q_z - log_p_z).sum()           # 1 * ((dst_noise @ theta).sort(-1)[0] - (torch.randn_like(dst_noise_stdev) @ theta).sort(-1)[0]).square().sum() # SWAE
         #   TODO: …Why are we failing to learn this?… Did we fail at implementing it?
         # l_ground_dst_d = .1 * dst_noise.mean(0).square().sum() + (dst_noise.std(0) - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
         if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
