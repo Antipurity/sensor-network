@@ -264,19 +264,21 @@ for iters in range(50000):
         # TODO: Modify `dst`-loss to train the VAE instead of a GAN.
         #   …Wait, what's the exact VAE loss? Why does everything keep referring to probabilities?
         #     …Is the KL divergence really calculated on non-probability values?… But logarithm of negative numbers is undefined… Probability of a normal distribution (there's a formula for that, in source code of impls)?
-        #     …Can we get away with the dirty trick of making the batch's noise predict its normalized version?…
-        #       Or even make means 0s and stdevs 1s?
-        #       …No.
         l_ground_dst_g = 0 # dst.goal(prev_board, z, board, goal=0) # TODO:
         l_ground_dst_d = 0 # dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1) # TODO:
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
+        #   Why is this so difficult?
         dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z)).chunk(2, -1)
         dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
         l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
-        l_ground_dst_d = .1 * dst_noise_mean.square().sum() + (dst_noise_stdev - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
-        #   (Seems to learn, at least. …Though the normalization part is suspiciously close to 0.)
+        theta = torch.randn(B, noise_sz, device=device)
+        theta = theta / (theta**2).sum(-1, keepdim=True).sqrt()
+        theta = theta.t()
+        l_ground_dst_d = 10 * ((dst_noise @ theta).sort(-1)[0] - (torch.randn_like(dst_noise_stdev) @ theta).sort(-1)[0]).square().sum() # SWAE
+        #   TODO: …Why are we failing to learn this?… Did we fail at implementing it?
+        # l_ground_dst_d = .1 * dst_noise.mean(0).square().sum() + (dst_noise.std(0) - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
         if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
             BOARD = env_init(N, 1)
             print(BOARD, 'neighbors:')
@@ -285,6 +287,8 @@ for iters in range(50000):
                 print(' ', i, NEIGH.argmax(-1), NEIGH)
                 # TODO: …Why does this generative model seemingly converge to just one output…
                 #   …Unusable…
+                # TODO: …What if we sort generated-noise and random-noise along -1, and simply minimize L2 diff? …Wait, this is literally SWAE, isn't it. …Without random projections though.
+                #   …Still unusable…
 
         # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
@@ -293,6 +297,8 @@ for iters in range(50000):
         DB, DM, DC = combine(dist(cat(A,B)), dist(cat(B,C))), combine(DAM, DMC), dist(cat(A,C))
         l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-.5, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
+        # l_meta_act, l_meta_dist = 0,0 # TODO: …Okay, how long does it really take to fully learn single-step transitions? I feel like we *should* be needing less than 10k epochs, right?… Are we held back by still having to learn quadratically-many distances?
+        #   1-step-actions learning seems to only take about 2k…4k epochs. So combining is 6k…8k. Isn't this too much?
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
@@ -311,6 +317,7 @@ for iters in range(50000):
         #   TODO: Then do mid.
 
         # TODO: …Possibly try [SWAEs](https://arxiv.org/abs/1804.01947)?
+        #   …I think this is literally replacing the KL divergence of VAEs with the L2 loss between random projections of sorted generated (`dst_noise`) & random (`torch.randn`) noises.
 
 
 
@@ -366,5 +373,5 @@ for iters in range(50000):
             log(8, False, reached = to_np(reached.float().mean()))
 
 
-        if iters == 1000: clear()
+        # if iters == 1000: clear() # TODO: Does the reachability plot look like it plateaus after learning 1-step actions (2k…4k updates, 25% with N=8)? …No, it's way slower to reach 25%… Not sure if exponential-growth or stupid…
 finish()
