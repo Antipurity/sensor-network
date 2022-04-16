@@ -125,6 +125,8 @@ def combine(D1, D2):
     d1, d2 = D1.round(), D2.round()
     return torch.where((d1-d2).abs() < 1, d1+1, d1.max(d2))
 
+# TODO: Eventually, also try inputting not one-hot embeddings of boards, but their xy coords. Should be easy to learn, right?
+
 
 
 # (The below is old news, to compare the future impl to…)
@@ -246,7 +248,7 @@ for iters in range(50000):
             rb = (rb+1) % len(replay_buffer)
             replay_buffer[rb] = (prev_action, prev_board, action, board)
 
-    # Replay from the buffer. (Needs Python 3.6+ for convenience.)
+    # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
         prev_action = torch.cat([c[0] for c in choices], -2)
@@ -260,9 +262,29 @@ for iters in range(50000):
         l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
         # TODO: Modify `dst`-loss to train the VAE instead of a GAN.
+        #   …Wait, what's the exact VAE loss? Why does everything keep referring to probabilities?
+        #     …Is the KL divergence really calculated on non-probability values?… But logarithm of negative numbers is undefined… Probability of a normal distribution (there's a formula for that, in source code of impls)?
+        #     …Can we get away with the dirty trick of making the batch's noise predict its normalized version?…
+        #       Or even make means 0s and stdevs 1s?
+        #       …No.
         l_ground_dst_g = 0 # dst.goal(prev_board, z, board, goal=0) # TODO:
         l_ground_dst_d = 0 # dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1) # TODO:
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
+
+        # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
+        dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z)).chunk(2, -1)
+        dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
+        l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
+        l_ground_dst_d = .1 * dst_noise_mean.square().sum() + (dst_noise_stdev - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
+        #   (Seems to learn, at least. …Though the normalization part is suspiciously close to 0.)
+        if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
+            BOARD = env_init(N, 1)
+            print(BOARD, 'neighbors:')
+            for i in range(6):
+                NEIGH = dst_decode(cat(BOARD, torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
+                print(' ', i, NEIGH.argmax(-1), NEIGH)
+                # TODO: …Why does this generative model seemingly converge to just one output…
+                #   …Unusable…
 
         # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
@@ -316,6 +338,8 @@ for iters in range(50000):
 
         # best control, for `sn`: max sensitivity to outcomes, *given possible outcomes* (otherwise, involuntary movements would take up bandwidth).
         #   …the ideal control-by-human method is an RNN that doesn't change when the outcome is by far the most likely, and otherwise, changes in a way most distinct from other outcomes… does `leads_to(ev(prev))=sg ev(next)` BYOL-on-RNNs really fit beyond a superficial analysis?… do we need to do separate research on this?
+        #   Mathematically, it's maximizing [mutual info](https://en.wikipedia.org/wiki/Mutual_information): `sum(x&y, p(x,y) * log(p(x,y) / (p(x)*p(y))))`: sensitivity to least-probable states & actions, and most-probable state-action pairs.
+        #     (Or [pointwise MI](https://en.wikipedia.org/wiki/Pointwise_mutual_information): `log(p(y|x) / p(y))`.)
 
 
 
