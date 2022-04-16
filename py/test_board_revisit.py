@@ -162,11 +162,13 @@ mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N + N*N, 1), noise_sz=nois
 #   Returns a midpoint halfway through.
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
-dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1 + N*N, 1), noise_sz=noise_sz) # (src, dist) → dst
+dst_encode = net(N*N + 1, 2 * noise_sz) # (src, dist) → mean_and_stdev
+dst_decode = net(N*N + 1 + noise_sz, N*N) # (src, dist, noise) → dst
+#   A conditioned VAE.
 #   Sample two same-distance destinations, and the middle one is the midpoint to compare.
 #     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
 #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
-opt = torch.optim.Adam([*act.parameters(), *dist.parameters(), *mid.parameters(), *dst.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*act.parameters(), *dist.parameters(), *mid.parameters(), *dst_encode.parameters(), *dst_decode.parameters()], lr=1e-3)
 
 
 
@@ -257,6 +259,7 @@ for iters in range(50000):
         l_ground_act = (act(cat(prev_board, board)) - action).square().sum()
         l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
+        # TODO: Modify `dst`-loss to train the VAE instead of a GAN.
         l_ground_dst_g = 0 # dst.goal(prev_board, z, board, goal=0) # TODO:
         l_ground_dst_d = 0 # dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1) # TODO:
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
