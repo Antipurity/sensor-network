@@ -164,13 +164,15 @@ mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N + N*N, 1), noise_sz=nois
 #   Returns a midpoint halfway through.
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
-dst_encode = net(N*N + 1 + noise_sz, 2 * noise_sz) # (src, dist, noise_for_diversity) → mean_and_stdev
+dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1 + N*N, 1), noise_sz=noise_sz)
+dst_encode = net(N*N + 1 + N*N, 2 * noise_sz) # (src, dist, dst) → mean_and_stdev
+#   TODO: …Wait, don't we want this to accept `dst` too?…
 dst_decode = net(N*N + 1 + noise_sz, N*N) # (src, dist, noise) → dst
 #   A conditioned VAE.
 #   Sample two same-distance destinations, and the middle one is the midpoint to compare.
 #     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
 #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
-opt = torch.optim.Adam([*act.parameters(), *dist.parameters(), *mid.parameters(), *dst_encode.parameters(), *dst_decode.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*act.parameters(), *dist.parameters(), *mid.parameters(), *dst.parameters(), *dst_encode.parameters(), *dst_decode.parameters()], lr=1e-3)
 
 
 
@@ -267,10 +269,14 @@ for iters in range(50000):
         l_ground_dst_g = 0 # dst.goal(prev_board, z, board, goal=0) # TODO:
         l_ground_dst_d = 0 # dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1) # TODO:
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
+        #   TODO: Reject VAEs, return to GANs.
+        #     TODO: Normalize `noise = dst_encode(cat(prev_board, z, board))`, to 0-mean 1-stdev. TODO: …Don't we want to encode `board`?… Should we condition on both boards?… Yeah, should have done that in the first place.
+        #     TODO: Loss: `dst(prev_board, z, noise=noise.detach()) = board` (ensure that what we model is *always* in the embedding space, somewhere)
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
         #   Why is this so difficult?
-        dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, torch.randn(B, noise_sz, device=device))).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
+        #     MAYBE BECAUSE WE USED TO NOT LET THE ENCODER KNOW WHAT IT ENCODES
+        dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, board)).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
         dst_noise_stdev = torch.nn.functional.softplus(dst_noise_stdev)
         dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
         l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
@@ -280,7 +286,7 @@ for iters in range(50000):
         theta = torch.randn(B, noise_sz, device=device)
         theta = theta / theta.square().sum(-1, keepdim=True).sqrt()
         theta = theta.t()
-        l_ground_dst_d = 1 * ((dst_noise ).sort(0).values - (torch.randn_like(dst_noise_stdev) ).sort(0).values).square().sum() # SWAE
+        l_ground_dst_d = 1 * ((dst_noise @ theta).sort(0).values - (torch.randn_like(dst_noise_stdev) @ theta).sort(0).values).square().sum() # SWAE
         # TODO: …Okay, what about VAEs then? …Why is this impl so bad.
         #   (Adapted from https://github.com/altosaar/variational-autoencoder/blob/master/train_variational_autoencoder_pytorch.py)
         # log_q_z = normal_log_prob(dst_noise_mean, dst_noise_stdev, dst_noise).sum(-1, keepdim=True) # TODO:
@@ -364,6 +370,7 @@ for iters in range(50000):
         # TODO: …Should we return to GANs but this time with an output→noise encoder, so that we could ensure that at least one GAN-sample is definitely correct, and random-noise samples at least have a chance at a good gradient?…
         #   Maybe even, the encoder isn't trained, and its output is normalized (and so is the noise)?
         #   (Also, `dst` in particular doesn't need to make its discriminator predict the distance; the discr can just predict whether a value is reachable, and we can/should apply the loss that ensures that the (`dist` or L2) distance is as we requested.)
+        #   …I think it's better to do THIS next, because this way we'll still have the argmax visualization.
 
         # TODO: …Also, maybe we really should make `mid` a simple predictor, learned whenever a new midpoint's distance is better?
 
