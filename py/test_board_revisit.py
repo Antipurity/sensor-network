@@ -270,7 +270,6 @@ for iters in range(50000):
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
         #   Why is this so difficult?
-        # TODO: …Try inputting random noise to the encoder too…
         dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, torch.randn(B, noise_sz, device=device))).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
         dst_noise_stdev = torch.nn.functional.softplus(dst_noise_stdev)
         dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
@@ -278,15 +277,16 @@ for iters in range(50000):
         def normal_log_prob(mean, std, z):
             var2 = 2 * std.square()
             return -.5 * (3.14159265359 * var2) - (z - mean).square() / var2
-        log_q_z = normal_log_prob(dst_noise_mean, dst_noise_stdev, dst_noise).sum(-1, keepdim=True) # TODO:
-        log_p_z = normal_log_prob(torch.zeros_like(dst_noise), torch.ones_like(dst_noise), dst_noise).sum(-1, keepdim=True) # TODO: (Penalize divergence from the normal distribution.)
-        # theta = torch.randn(B, noise_sz, device=device)
-        # theta = theta / theta.square().sum(-1, keepdim=True).sqrt()
-        # theta = theta.t()
+        theta = torch.randn(B, noise_sz, device=device)
+        theta = theta / theta.square().sum(-1, keepdim=True).sqrt()
+        theta = theta.t()
+        l_ground_dst_d = 1 * ((dst_noise @ theta).sort(0).values - (torch.randn_like(dst_noise_stdev) @ theta).sort(0).values).square().sum() # SWAE
         # TODO: …Okay, what about VAEs then? …Why is this impl so bad.
         #   (Adapted from https://github.com/altosaar/variational-autoencoder/blob/master/train_variational_autoencoder_pytorch.py)
-        l_ground_dst_d = (0*log_q_z - log_p_z).sum()           # 1 * ((dst_noise @ theta).sort(-1)[0] - (torch.randn_like(dst_noise_stdev) @ theta).sort(-1)[0]).square().sum() # SWAE
-        #   TODO: …Why are we failing to learn this?… Did we fail at implementing it?
+        # log_q_z = normal_log_prob(dst_noise_mean, dst_noise_stdev, dst_noise).sum(-1, keepdim=True) # TODO:
+        # log_p_z = normal_log_prob(torch.zeros_like(dst_noise), torch.ones_like(dst_noise), dst_noise).sum(-1, keepdim=True) # TODO: (Penalize divergence from the normal distribution.)
+        # l_ground_dst_d = (0*log_q_z - log_p_z).sum() # VAE
+        #   TODO: …Why are we failing to learn this?… Did we fail at implementing it? (Including log_q_z makes loss diverge, so it seems likely.)
         # l_ground_dst_d = .1 * dst_noise.mean(0).square().sum() + (dst_noise.std(0) - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
         if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
             BOARD = env_init(N, 1)
@@ -349,6 +349,14 @@ for iters in range(50000):
         #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
         #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
         #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere, like in `dst` and/or `mid`?)
+
+
+
+        # TODO: Generative models compound errors, are spotty, and hard to learn… …Gotta get back, back to the past…
+        #   Can we learn multiscale joint-embeddings instead of reproducing inputs? How?
+        #     Do we still want pointwise embeddings (and meta/actions), or maybe src+dst embeddings? The latter can't be BYOLed, but, do we care? …The latter can't generate dst unless we learn a generative model. So, we can only have pointwise embeddings, and predict how meta/actions transform them… (And min-dists of meta/actions, and making the next level's embs the shortest embs between double-step and midpoint…)
+        #       How do we model src→dst? Do we want a generative model for this after all — if not for pointwise embs, then for actions… But with actions, we can at least do SIL, so it's not that bad.
+        #       (With embs, we'd replace generative-ness with acting-on-policy.)
 
 
 
