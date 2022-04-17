@@ -165,8 +165,8 @@ mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N + N*N, 1), noise_sz=nois
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
 dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1 + N*N, 1), noise_sz=noise_sz)
+dst_encode2 = net(N*N + 1 + N*N, noise_sz) # (src, dist, dst) → noise
 dst_encode = net(N*N + 1 + N*N, 2 * noise_sz) # (src, dist, dst) → mean_and_stdev
-#   TODO: …Wait, don't we want this to accept `dst` too?…
 dst_decode = net(N*N + 1 + noise_sz, N*N) # (src, dist, noise) → dst
 #   A conditioned VAE.
 #   Sample two same-distance destinations, and the middle one is the midpoint to compare.
@@ -264,13 +264,14 @@ for iters in range(50000):
         l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
         ground_dst = dst(cat(prev_board, z))
-        l_ground_dst_g = dst.goal(prev_board, z, ground_dst, goal=0) # TODO:
-        l_ground_dst_d = dst.pred(prev_board, z, ground_dst, goal=1) + dst.pred(prev_board, z, board, goal=0) # TODO:
-        #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
-        #   TODO: Reject VAEs, return to GANs.
-        #     TODO: Normalize `noise = dst_encode(cat(prev_board, z, board))`, to 0-mean 1-stdev. TODO: …Don't we want to encode `board`?… Should we condition on both boards?… Yeah, should have done that in the first place.
-        #     TODO: Loss: `dst(prev_board, z, noise=noise.detach()) = board` (ensure that what we model is *always* in the embedding space, somewhere)
-        #       `l_ground_dst_direct`
+        l_ground_dst_g = 0 # dst.goal(prev_board, z, ground_dst, goal=0) # TODO:
+        l_ground_dst_d = 0 # dst.pred(prev_board, z, ground_dst, goal=1) + dst.pred(prev_board, z, board, goal=0) # TODO:
+        with torch.no_grad():
+            noise = dst_encode2(cat(prev_board, z, board))
+            noise = (noise - noise.mean(-1, keepdim=True)) / (noise.std(-1, keepdim=True) + 1e-5)
+        l_ground_dst_direct = 0 # (dst(prev_board, z, noise=noise.detach()) - board).square().sum() # TODO:
+        # TODO: …Why do grounded GANs ALSO refuse to work well? (Slightly better than not-directly-grounded GANs because this way we at least have diversity-collapsed-but-correct neighbors for 10% of `dst` calls, but still: terrible.)
+        #   …What is left to try?…
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
         #   Why is this so difficult?
@@ -284,7 +285,7 @@ for iters in range(50000):
         # # theta = torch.randn(B, noise_sz, device=device)
         # # theta = theta / theta.square().sum(-1, keepdim=True).sqrt()
         # # theta = theta.t()
-        # # l_ground_dst_d = 1 * ((dst_noise @ theta).sort(0).values - (torch.randn_like(dst_noise_stdev) @ theta).sort(0).values).square().sum() # SWAE
+        # # l_ground_dst_d = 1 * ((dst_noise @ theta).sort(0).values - (torch.randn_like(dst_noise_stdev) @ theta).sort(0).values).square().sum() # [SWAE](https://arxiv.org/abs/1804.01947)
         # # TODO: …Okay, what about VAEs then? …Why is this impl so bad.
         # #   (Adapted from https://github.com/altosaar/variational-autoencoder/blob/master/train_variational_autoencoder_pytorch.py)
         # log_q_z = normal_log_prob(dst_noise_mean.detach(), dst_noise_stdev.detach(), dst_noise).sum(-1, keepdim=True) # TODO:
@@ -292,17 +293,17 @@ for iters in range(50000):
         # l_ground_dst_d = (log_q_z - log_p_z).sum() # VAE
         # #   TODO: …Why are we failing to learn this?… Did we fail at implementing it? (Including log_q_z makes loss diverge, so it seems likely.)
         # # l_ground_dst_d = .1 * dst_noise.mean(0).square().sum() + (dst_noise.std(0) - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
-        if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
-            BOARD = env_init(N, 1)
-            print(*[c.detach().cpu().numpy() for c in xy(BOARD)], 'neighbors:')
-            for i in range(6):
-                # NEIGH = dst_decode(cat(BOARD, torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
-                NEIGH = dst(BOARD, torch.zeros(1,1,device=device))
-                print(' ', i, *[c.detach().cpu().numpy() for c in xy(NEIGH)], NEIGH)
-                # TODO: …Why does this generative model seemingly converge to just one output…
-                #   …Unusable…
-                # TODO: …What if we sort generated-noise and random-noise along -1, and simply minimize L2 diff? …Wait, this is literally SWAE, isn't it. …Without random projections though.
-                #   …Still unusable…
+        # if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
+        #     BOARD = env_init(N, 1)
+        #     print(*[c.detach().cpu().numpy() for c in xy(BOARD)], 'neighbors:')
+        #     for i in range(6):
+        #         # NEIGH = dst_decode(cat(BOARD, torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
+        #         NEIGH = dst(BOARD, torch.zeros(1,1,device=device))
+        #         print(' ', i, *[c.detach().cpu().numpy() for c in xy(NEIGH)], NEIGH)
+        #         # TODO: …Why does this generative model seemingly converge to just one output…
+        #         #   …Unusable…
+        #         # TODO: …What if we sort generated-noise and random-noise along -1, and simply minimize L2 diff? …Wait, this is literally SWAE, isn't it. …Without random projections though.
+        #         #   …Still unusable…
 
         # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
@@ -323,15 +324,11 @@ for iters in range(50000):
 
         # TODO: Run & fix.
         #   TODO: How to fix the only failing component: generative models?
-
-        # TODO: Try VAEs, since GANs kinda need rich distributions, not ≈3 distinct samples per class/input?
-        #   (Need to condition both encoder & decoder on src&dist for `dst` and on src&dst for `mid`; only the output is autoencoded.)
-        #   TODO: First do the dst VAE, and see whether we can run & fix it.
-        #     Do we need a measure of sharpness (diff from a one-hot encoding) on generated samples? …If we fail, yes.
-        #   TODO: Then do mid.
-
-        # TODO: …Possibly try [SWAEs](https://arxiv.org/abs/1804.01947)?
-        #   …I think this is literally replacing the KL divergence of VAEs with the L2 loss between random projections of sorted generated (`dst_noise`) & random (`torch.randn`) noises.
+        #     GANs failed.
+        #     VAEs failed.
+        #     SWAEs failed.
+        #     GANs failed again.
+        #     So where is the truth in this world?…
 
 
 
@@ -350,7 +347,10 @@ for iters in range(50000):
         #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
         #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
         #     TODO: `leads_to(future(prev)) = sg future(next)`
+        #     (This single-step BYOL loss has no deeper basis, though.)
+        #     …In more recent times, thinking that we can have kinda-multiscale-BYOL by removing `dist` and using `embed`ding L2 distances as `dist` levels; this way, we should be able to have very semantically meaningful embeddings (like a torus for this 2D env).
         #   TODO: …How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness? Should we, even, especially in this most-simple env?
+        #     (If only we could actually generate something though, which we could then prioritize.)
         #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
         #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
         #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere, like in `dst` and/or `mid`?)
@@ -366,12 +366,8 @@ for iters in range(50000):
         #     (With such a world model, `act`'s per-src decision boundaries should become trivial: literally action-to-Nearest-Neighbor-of-dst.)
         #   (With perfect `dst` and `mid`, there should be no change in performance.)
 
-        # TODO: …Should we return to GANs but this time with an output→noise encoder, so that we could ensure that at least one GAN-sample is definitely correct, and random-noise samples at least have a chance at a good gradient?…
-        #   Maybe even, the encoder isn't trained, and its output is normalized (and so is the noise)?
-        #   (Also, `dst` in particular doesn't need to make its discriminator predict the distance; the discr can just predict whether a value is reachable, and we can/should apply the loss that ensures that the (`dist` or L2) distance is as we requested.)
-        #   …I think it's better to do THIS next, because this way we'll still have the argmax visualization.
-
         # TODO: …Also, maybe we really should make `mid` a simple predictor, learned whenever a new midpoint's distance is better?
+        #   (We can probably attempt this while we're still using `perfect_dst`.)
 
 
 
@@ -391,13 +387,13 @@ for iters in range(50000):
 
 
         # Optimize.
-        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g + l_meta_act + l_meta_dist + l_dst_d + l_dst_g + l_mid_d + l_mid_g).backward()
+        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g + l_ground_dst_direct + l_meta_act + l_meta_dist + l_dst_d + l_dst_g + l_mid_d + l_mid_g).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
             log(0, False, dist = show_dist)
             log(1, False, ground_act = to_np(l_ground_act))
             log(2, False, ground_dist = to_np(l_ground_dist))
-            log(3, False, ground_dst_d = to_np(l_ground_dst_d), ground_dst_g = to_np(l_ground_dst_g))
+            log(3, False, ground_dst_d = to_np(l_ground_dst_d), ground_dst_g = to_np(l_ground_dst_g), ground_dst_direct = to_np(l_ground_dst_direct))
             log(4, False, meta_act = to_np(l_meta_act))
             log(5, False, meta_dist = to_np(l_meta_dist))
             log(6, False, dst_d = to_np(l_dst_d), dst_g = to_np(l_dst_g))
