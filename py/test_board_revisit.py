@@ -352,27 +352,14 @@ for iters in range(50000):
 
 
 
-        # TODO: Generative models compound errors, are spotty, and hard to learn… …Gotta get back, back to the past…
-        #   Can we learn multiscale joint-embeddings instead of reproducing inputs? How?
-        #     Do we still want pointwise embeddings (and meta/actions), or maybe src+dst embeddings? The latter can't be BYOLed, but, do we care? …The latter can't generate dst unless we learn a generative model. So, we can only have pointwise embeddings, and predict how meta/actions transform them… (And min-dists of meta/actions, and making the next level's embs the shortest embs between double-step and midpoint…)
-        #       How do we model src→dst? Do we want a generative model for this after all — if not for pointwise embs, then for actions… But with actions, we can at least do SIL, so it's not that bad.
-        #       (With embs, we'd replace generative-ness with acting-on-policy.)
-        #         …Wait, but *where* do we aim with those actions? Don't we need to *generate* a dst?…
-        #           …So aren't we having the exact same problem?…
-        #           …The need for `act` to know the `dst` cannot just be shrugged off. It's a fundamental problem.
-        #             (If we had some faraway dst, then we could have theoretically used `mid` to construct a series of subgoals. But we don't, when replaying a transition.)
-        #           …Should we give up on multiscale-embs, or?…
-
-        # …That BYOL-embedding idea would have been real nice as multiscale-embs, but without those, it's more of a hack, isn't it?… (With no guarantee that it would even fix GANs — after all, the number & division of samples are still the same, so it's not like we'd get any extra smoothness guarantees…)
-        #   …Is it possible to embed boards in such a way that we don't need a `dist` net, we can just measure L2 dists in emb-space? (Then, embedding will at least be justified, though not quite BYOL-like, unless that BYOL is action-independent and multiscale.)
-        #     …This would also allow us to replace both `mid` and goal-directed neighbor generation with a super-simple "go 1 unit along the src—dst line".
-        #       …So can't we make `act` take the nearest goal-directed neighbor, making it super-simple, even simply learned from action:prev→next transitions?…
-        #       …Well, not quite, since this doesn't usually return real low-level neighbors. We still need those nets.
-        #     So isn't this a great idea? Learning world models by literally embedding world states, preserving shortest distances as well as we can (so that shortest paths approximate straight lines in emb-space, and `act`'s per-src decision boundaries are guaranteed to be extremely simple).
-        #     But how would we learn such a good distance map?
-        #       Isn't considering only one-step-removed neighbors not enough? Yeah, it's not: we'll only end up learning how to color, not a semantically-equivalent-to-the-world structure.
-        #       …If we have real `mid` and a `dst` generator, then can't we learn it in exactly the same way as we're currently learning it, just without a `dist` func and with a `embed` func?
-        # TODO: Clean up the text above, and implement it. (With perfect `dst` and `mid`, there should be no change in performance.)
+        # TODO: Have `embed(board)→emb`, `action_sz`-size.
+        # TODO: Make all neural nets (except for `embed`) take embeddings instead of boards.
+        # TODO: When replaying transitions, replace all `prev_board` and all `board` uses with `prev_emb` and `emb` respectively.
+        # TODO: Remove `dist`, instead consider the L2 distance to be that.
+        #   (`embed` would become a proper world model, which preserves topology and shortest-path distances. In 3D t-SNE, a 2D board should become a torus; a 1D board should become an actual circle.)
+        #     (Single-step BYOL wouldn't have been enough, since it would have just done coloring, which is counterproductive for having `act`. We need to be multi-scale.)
+        #     (With such a world model, `act`'s per-src decision boundaries should become trivial: literally action-to-Nearest-Neighbor-of-dst.)
+        #   (With perfect `dst` and `mid`, there should be no change in performance.)
 
         # TODO: …Should we return to GANs but this time with an output→noise encoder, so that we could ensure that at least one GAN-sample is definitely correct, and random-noise samples at least have a chance at a good gradient?…
         #   Maybe even, the encoder isn't trained, and its output is normalized (and so is the noise)?
