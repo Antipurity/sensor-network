@@ -263,42 +263,41 @@ for iters in range(50000):
         l_ground_act = (act(cat(prev_board, board)) - action).square().sum()
         l_ground_dist = dist(cat(prev_board, board)).square().sum()
         z = torch.zeros(B,1, device=device)
-        # TODO: Modify `dst`-loss to train the VAE instead of a GAN.
-        #   …Wait, what's the exact VAE loss? Why does everything keep referring to probabilities?
-        #     …Is the KL divergence really calculated on non-probability values?… But logarithm of negative numbers is undefined… Probability of a normal distribution (there's a formula for that, in source code of impls)?
-        l_ground_dst_g = 0 # dst.goal(prev_board, z, board, goal=0) # TODO:
-        l_ground_dst_d = 0 # dst.pred(prev_board, z, dst(cat(prev_board, z)), goal=1) # TODO:
+        ground_dst = dst(cat(prev_board, z))
+        l_ground_dst_g = dst.goal(prev_board, z, ground_dst, goal=0) # TODO:
+        l_ground_dst_d = dst.pred(prev_board, z, ground_dst, goal=1) + dst.pred(prev_board, z, board, goal=0) # TODO:
         #   (This GAN likely fails to converge, because the distributions hardly overlap… How to fix it?…)
         #   TODO: Reject VAEs, return to GANs.
         #     TODO: Normalize `noise = dst_encode(cat(prev_board, z, board))`, to 0-mean 1-stdev. TODO: …Don't we want to encode `board`?… Should we condition on both boards?… Yeah, should have done that in the first place.
         #     TODO: Loss: `dst(prev_board, z, noise=noise.detach()) = board` (ensure that what we model is *always* in the embedding space, somewhere)
+        #       `l_ground_dst_direct`
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
         #   Why is this so difficult?
-        #     MAYBE BECAUSE WE USED TO NOT LET THE ENCODER KNOW WHAT IT ENCODES
-        dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, board)).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
-        dst_noise_stdev = torch.nn.functional.softplus(dst_noise_stdev)
-        dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
-        l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
-        def normal_log_prob(mean, std, z):
-            var2 = 2 * std.square()
-            return -.5 * (3.14159265359 * var2) - (z - mean).square() / var2
-        theta = torch.randn(B, noise_sz, device=device)
-        theta = theta / theta.square().sum(-1, keepdim=True).sqrt()
-        theta = theta.t()
-        l_ground_dst_d = 1 * ((dst_noise @ theta).sort(0).values - (torch.randn_like(dst_noise_stdev) @ theta).sort(0).values).square().sum() # SWAE
-        # TODO: …Okay, what about VAEs then? …Why is this impl so bad.
-        #   (Adapted from https://github.com/altosaar/variational-autoencoder/blob/master/train_variational_autoencoder_pytorch.py)
-        # log_q_z = normal_log_prob(dst_noise_mean, dst_noise_stdev, dst_noise).sum(-1, keepdim=True) # TODO:
+        # dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, board)).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
+        # dst_noise_stdev = torch.nn.functional.softplus(dst_noise_stdev)
+        # dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
+        # l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
+        # def normal_log_prob(mean, std, z):
+        #     var2 = 2 * std.square()
+        #     return -.5 * (3.14159265359 * var2) - (z - mean).square() / var2
+        # # theta = torch.randn(B, noise_sz, device=device)
+        # # theta = theta / theta.square().sum(-1, keepdim=True).sqrt()
+        # # theta = theta.t()
+        # # l_ground_dst_d = 1 * ((dst_noise @ theta).sort(0).values - (torch.randn_like(dst_noise_stdev) @ theta).sort(0).values).square().sum() # SWAE
+        # # TODO: …Okay, what about VAEs then? …Why is this impl so bad.
+        # #   (Adapted from https://github.com/altosaar/variational-autoencoder/blob/master/train_variational_autoencoder_pytorch.py)
+        # log_q_z = normal_log_prob(dst_noise_mean.detach(), dst_noise_stdev.detach(), dst_noise).sum(-1, keepdim=True) # TODO:
         # log_p_z = normal_log_prob(torch.zeros_like(dst_noise), torch.ones_like(dst_noise), dst_noise).sum(-1, keepdim=True) # TODO: (Penalize divergence from the normal distribution.)
-        # l_ground_dst_d = (0*log_q_z - log_p_z).sum() # VAE
-        #   TODO: …Why are we failing to learn this?… Did we fail at implementing it? (Including log_q_z makes loss diverge, so it seems likely.)
-        # l_ground_dst_d = .1 * dst_noise.mean(0).square().sum() + (dst_noise.std(0) - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
+        # l_ground_dst_d = (log_q_z - log_p_z).sum() # VAE
+        # #   TODO: …Why are we failing to learn this?… Did we fail at implementing it? (Including log_q_z makes loss diverge, so it seems likely.)
+        # # l_ground_dst_d = .1 * dst_noise.mean(0).square().sum() + (dst_noise.std(0) - 1).square().sum() # It's no KL divergence, but eh, so much simpler.
         if iters % 1000 == 0: # TODO: …None of this looks correct at all… Do we need proper KL-divergence after all?…
             BOARD = env_init(N, 1)
             print(*[c.detach().cpu().numpy() for c in xy(BOARD)], 'neighbors:')
             for i in range(6):
-                NEIGH = dst_decode(cat(BOARD, torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
+                # NEIGH = dst_decode(cat(BOARD, torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
+                NEIGH = dst(BOARD, torch.zeros(1,1,device=device))
                 print(' ', i, *[c.detach().cpu().numpy() for c in xy(NEIGH)], NEIGH)
                 # TODO: …Why does this generative model seemingly converge to just one output…
                 #   …Unusable…
