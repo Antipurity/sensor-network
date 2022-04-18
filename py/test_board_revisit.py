@@ -118,7 +118,7 @@ rb, replay_buffer = 0, [None] * 1024
 updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long and of width `batch_size`.
 
 noise_sz = 16
-dist_levels = 8
+dist_levels = 8 # …Wait, if we won't have `dst`, then this will no longer be required…
 emb_sz = 64
 
 def dist(x,y):
@@ -159,8 +159,11 @@ def net(ins, outs):
         SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
         nn.Linear(action_sz, outs),
     ).to(device)
-embed = net(N*N, emb_sz)
-act = nn.Sequential( # (prev_emb, target) → action
+embed = net(N*N, emb_sz) # A topological map of the environment, learned by preserving distances.
+#   (Not only single-step dists but all dists: otherwise, a coloring (like a checkerboard pattern in this 2D board env) would have been enough.)
+act = nn.Sequential( # (prev_emb, dst_emb) → action
+    # (With an `embed`ded world model, `act`'s per-src decision boundaries may be simplified a lot: to the action-to-Nearest-Neighbor-of-dst.)
+    #   (Evidence: we can reach 80% reachability for N=8 when we learn *all* distances, but only 30% when we only learn single-transition distances to be 1.)
     net(emb_sz + emb_sz, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
@@ -269,7 +272,7 @@ for iters in range(50000):
         # Ground.
         l_ground_act = (act(cat(prev_emb, emb)) - action).square().sum()
         l_ground_dist = (dist(prev_emb, emb) - 1).square().sum()
-        z = torch.zeros(B,1, device=device)
+        # z = torch.zeros(B,1, device=device)
         # ground_dst = dst(cat(prev_emb, z))
         l_ground_dst_g = 0 # dst.goal(prev_emb, z, ground_dst, goal=0) # TODO:
         l_ground_dst_d = 0 # dst.pred(prev_emb, z, ground_dst, goal=1) + dst.pred(prev_emb, z, emb, goal=0) # TODO:
@@ -279,6 +282,7 @@ for iters in range(50000):
         l_ground_dst_direct = 0 # (dst(prev_emb, z, noise=noise.detach()) - emb).square().sum() # TODO:
         # TODO: …Why do grounded GANs ALSO refuse to work well? (Slightly better than not-directly-grounded GANs because this way we at least have diversity-collapsed-but-correct neighbors for 10% of `dst` calls, but still: terrible.)
         #   …What is left to try?…
+        #     …Sampling.
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
         #   Why is this so difficult?
@@ -320,34 +324,10 @@ for iters in range(50000):
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
         P = torch.where(DB < DM, B, M) # The picked point.
-        l_meta_act = (1 / dist_levels) * (act(cat(A,C).detach()) - act(cat(A,P)).detach()).square().sum()
-        #   TODO: …Lower multiplier? …It actually worked, I think. Son of a bitch.
-        #     N=8: 90% at 5k.
-        #     N=16: 90% at 12k, 95% at 14k.
-        def dir_sameness(x,y): # TODO: Still try it. …It breaks stuff, doesn't it. Maybe linearity is not what's desired after all. (Besides, *this* linearity is even worse than the other linearity.)
-            x = (x - x.mean(-1, keepdim=True)) / (x.std(-1, keepdim=True) + 1e-5)
-            y = (y - y.mean(-1, keepdim=True)) / (y.std(-1, keepdim=True) + 1e-5)
-            return torch.inner(x,y)
-        l_straighten = 0 # -dir_sameness(C-A.detach(), (P-A).detach()).sum() # TODO: How to straighten out the picked-point vector? How to normalize, even?
-        #   TODO: …Or can we straighten-out via not regressing `dist` but via making `C`'s embedding into a properly-offset-from-`P` point? Would it still work?
-        #   TODO: How to do that offsetting, exactly?
-        #     …`dist`, when its args are scaled linearly, scales its output exactly quadratically, doesn't it? So, if we want to multiply its output by `DB.min(DM) / dist(A,P)`, then we need to scale args by sqrt of that.
-        #   TODO: Write out the equation to solve for `p`. …Or just trust the intuition just above and multiply.
-        #   TODO: Write down the line-of-code, at least.
-        l_meta_dist = (C - torch.where((A != C).all(-1, keepdim=True), A + (P-A) * (DB.min(DM) / (dist(A,P)+1e-5)).sqrt(), C).detach()).square().sum() # TODO: Okay, what's the mistake here? …And why are we still able to learn actions just as well, even though our losses are messes…?
-        # l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
-        #   TODO: …Wait, does this actually ensure that midpoints are on a straight src→dst line? Dists are log-linear in emb-space, so it shouldn't, right?…
-        # l_meta_act = 0 # TODO: …Why does commenting this line out slow down convergence a lot, but only at first?…
-        #   The full loss:
-        #   95% at 10k with N=8  (un-plateaus after 4.5k)
-        #   90% at 11k with N=12 (un-plateaus after 6.5k)
-        #   95% at 17k with N=16 (un-plateaus after 12.5k)
-        #   (Scaling DOES look better than when we learned all dist pairs with a NN: N=16 used to need 30k epochs to get to 95%.)
-        #   TODO: …Why are we in min-performance regime for so long, but only with `l_meta_act`?…
-        #     …Is it because we're busy learning bullshit when lower-level actions are still inaccurate?…
-        #     …Simply adding a divisor to `l_meta_act` seems to improve this a lot, so, I guess the statement above is true.
-        #       TODO: Try with less `dist_levels` too.
-        # l_meta_act, l_meta_dist = 0,0 # TODO: …Why does it take so long to fully learn single-step transitions? I feel like we *should* be needing less than 10k epochs, or at least it should show continuous improvement (if it's all-or-nothing, then in more complex tasks, it may refuse to work at all), right?…
+        l_meta_act = (1/16) * (act(cat(A,C).detach()) - act(cat(A,P)).detach()).square().sum()
+        #   (Using `act(cat(A,C))` slows down convergence a bit.)
+        #   (Not dividing by 16 or smth makes meta_act interfere with ground_act too much, slowing down convergence by making the model stuck in 0-improvement for too long.)
+        l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
@@ -363,6 +343,13 @@ for iters in range(50000):
         #     SWAEs failed.
         #     GANs failed again.
         #     So where is the truth in this world?…
+        # …Perhaps we ought to preserve far-past samples and distances to them, instead of generating.
+
+        # `embed` with correct distances (AKA learn a topological transformation), instead of learning `dist`:
+        #   N=4: 90% at 1.2k, 99% at 2k.
+        #   N=8: 90% at 5k, 95% at 6k.
+        #   N=16: 90% at 12k, 95% at 14k.
+        #   …These use perfect `dst` and `mid`, though.
 
 
 
@@ -375,6 +362,7 @@ for iters in range(50000):
 
 
         # TODO: Our scalability here is atrocious. Be able to scale to the real world: make the goal of our goal *our* goal, AKA compute the transitive closure via embeddings, but only on first visits (otherwise everything will end up connected to everything). Ideally, we'd like to solve all most-trivial tasks (ground), then do nothing but *combine* the tasks — which should give us the exponential-improvement that dist-learning RL is too bogged-down by quadratic-info to have…
+        #   …But now, with `embed`, scalability seems to be quite a bit better. There's at least a chance that it's good enough.
 
 
         # TODO: The filling:
@@ -387,19 +375,15 @@ for iters in range(50000):
         #     (If only we could actually generate something though, which we could then prioritize.)
         #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
         #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
+        #     (…If we make `mid` dist-conditioned, and simply sample far-apart same-trajectory inputs, then reverse-filling may simply become a matter of what we've preserved.)
+        #   …So, none of the above might apply after we finish with the next batch of changes, assuming that they work out…
         #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere, like in `dst` and/or `mid`?)
 
 
 
-        # TODO: Make `embed` work well.
-        #   (`embed` would become a proper world model, which preserves topology and shortest-path distances. In 3D t-SNE, a 2D board should become a torus; a 1D board should become an actual circle.)
-        #     (Single-step BYOL wouldn't have been enough, since it would have just done coloring, which is counterproductive for having `act`. We need to be multi-scale.)
-        #     (With such a world model, `act`'s per-src decision boundaries should become trivial: literally action-to-Nearest-Neighbor-of-dst.)
-        #       (…And since we're reaching most of meta-action-loss performance with just ground-action-loss (only prev→next), I'm inclined to believe this.)
-        #   (With perfect `dst` and `mid`, there should be no change in performance.)
-
-        # TODO: …Also, maybe we really should make `mid` a simple predictor, learned whenever a new midpoint's distance is better?
-        #   (We can probably attempt this while we're still using `perfect_dst`.)
+        # TODO: Make `mid` a simple predictor, learned whenever a new midpoint's distance is better.
+        #   (We can attempt this while we're still using `perfect_dst`.)
+        #   (…Do we still need a GAN of what's real to avoid `mid` getting stuck in imaginary spots in the manifold, or will we be fine with changing `mid` whenever the new point's distance is lower?)
 
         # TODO: …If generative models fail, we can always use sampling for `dst`: the replay buffer preserves exponentially-far-in-the-future states, and we use *those* for A/B/C… (May even be more accurate/salient than faroff-neighbor-gen.)
         #   (If `mid` is conditioned on the dist, then we could store not just states at perfect-powers-of-2, but also just arbitrary past states along with marks of how long ago they occured.)
@@ -429,7 +413,7 @@ for iters in range(50000):
 
 
         # Optimize.
-        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g + l_ground_dst_direct + l_meta_act + l_meta_dist + l_straighten + l_dst_d + l_dst_g + l_mid_d + l_mid_g).backward()
+        (l_ground_act + l_ground_dist + l_ground_dst_d + l_ground_dst_g + l_ground_dst_direct + l_meta_act + l_meta_dist + l_dst_d + l_dst_g + l_mid_d + l_mid_g).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
             log(0, False, dist = show_dist)
@@ -438,10 +422,9 @@ for iters in range(50000):
             log(3, False, ground_dst_d = to_np(l_ground_dst_d), ground_dst_g = to_np(l_ground_dst_g), ground_dst_direct = to_np(l_ground_dst_direct))
             log(4, False, meta_act = to_np(l_meta_act))
             log(5, False, meta_dist = to_np(l_meta_dist))
-            log(6, False, straighten = to_np(l_straighten))
-            log(7, False, dst_d = to_np(l_dst_d), dst_g = to_np(l_dst_g))
-            log(8, False, mid_d = to_np(l_mid_d), mid_g = to_np(l_mid_g))
-            log(9, False, reached = to_np(reached.float().mean()))
+            log(6, False, dst_d = to_np(l_dst_d), dst_g = to_np(l_dst_g))
+            log(7, False, mid_d = to_np(l_mid_d), mid_g = to_np(l_mid_g))
+            log(8, False, reached = to_np(reached.float().mean()))
 
 
         # if iters == 1000: clear() # TODO: Does the reachability plot look like it plateaus after learning 1-step actions (2k…4k updates, 25% with N=8)? …No, it's way slower to reach 25%… Not sure if exponential-growth or stupid…
