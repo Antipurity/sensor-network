@@ -159,7 +159,7 @@ def net(ins, outs):
         SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
         nn.Linear(action_sz, outs),
     ).to(device)
-embed = net(N*N, emb_sz) # A topological map of the environment, learned by preserving distances.
+embed = net(N*N, emb_sz) # An locally-isometric map of the environment, learned by preserving distances.
 #   (Not only single-step dists but all dists: otherwise, a coloring (like a checkerboard pattern in this 2D board env) would have been enough.)
 #   (Downside: all distances are assumed to be symmetric.)
 act = nn.Sequential( # (prev_emb, dst_emb) → action
