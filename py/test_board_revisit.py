@@ -109,7 +109,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 16, 100
+N, batch_size = 8, 100
 action_sz = 64
 
 unroll_len = N
@@ -319,16 +319,24 @@ for iters in range(50000):
         A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = embed(perfect_mid(prev_board, C_board))
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
-        l_meta_act = (act(cat(A,C).detach()) - torch.where(DB < DM, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
+        P = torch.where(DB < DM, B, M) # The picked point.
+        l_meta_act = (act(cat(A,C).detach()) - act(cat(A,P)).detach()).square().sum()
+        l_straighten = 0 # TODO: How to straighten out the picked-point vector? How to normalize, even?
+        #   TODO: …Or can we straighten-out via not regressing `dist` but via making `C`'s embedding into a properly-offset-from-`P` point? Would it still work?
+        #   TODO: How to do that offsetting, exactly?
+        #     …`dist`, when its args are scaled linearly, scales its output exactly quadratically, doesn't it? So, if we want to multiply its output by `BD.min(DM) / dist(A,P)`, then we need to scale args by sqrt of that.
+        #   TODO: Write out the equation to solve for `p`. …Or just trust the intuition just above and multiply.
+        #   TODO: Write down the line-of-code, at least.
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
         #   TODO: …Wait, does this actually ensure that midpoints are on a straight src→dst line? Dists are log-linear in emb-space, so it shouldn't, right?…
-        l_meta_act = 0 # TODO: …Why does commenting this line out slow down convergence a lot, but only at first?…
+        # l_meta_act = 0 # TODO: …Why does commenting this line out slow down convergence a lot, but only at first?…
         #   The full loss:
         #   95% at 10k with N=8  (un-plateaus after 4.5k)
         #   90% at 11k with N=12 (un-plateaus after 6.5k)
         #   95% at 17k with N=16 (un-plateaus after 12.5k)
         #   (Scaling DOES look better than when we learned all dist pairs with a NN: N=16 used to need 30k epochs to get to 95%.)
         #   TODO: …Why are we in min-performance regime for so long, but only with `l_meta_act`?…
+        #     …Is it because we're busy learning bullshit when lower-level actions are still inaccurate?…
         # l_meta_act, l_meta_dist = 0,0 # TODO: …Why does it take so long to fully learn single-step transitions? I feel like we *should* be needing less than 10k epochs, or at least it should show continuous improvement (if it's all-or-nothing, then in more complex tasks, it may refuse to work at all), right?…
 
         # Learn generative models of faraway places.
@@ -377,6 +385,7 @@ for iters in range(50000):
         #   (`embed` would become a proper world model, which preserves topology and shortest-path distances. In 3D t-SNE, a 2D board should become a torus; a 1D board should become an actual circle.)
         #     (Single-step BYOL wouldn't have been enough, since it would have just done coloring, which is counterproductive for having `act`. We need to be multi-scale.)
         #     (With such a world model, `act`'s per-src decision boundaries should become trivial: literally action-to-Nearest-Neighbor-of-dst.)
+        #       (…And since we're reaching most of meta-action-loss performance with just ground-action-loss (only prev→next), I'm inclined to believe this.)
         #   (With perfect `dst` and `mid`, there should be no change in performance.)
 
         # TODO: …Also, maybe we really should make `mid` a simple predictor, learned whenever a new midpoint's distance is better?
