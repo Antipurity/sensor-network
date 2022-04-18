@@ -369,6 +369,8 @@ for iters in range(50000):
         # TODO: …Also, maybe we really should make `mid` a simple predictor, learned whenever a new midpoint's distance is better?
         #   (We can probably attempt this while we're still using `perfect_dst`.)
 
+        # TODO: …If generative models fail, we can always use sampling for `dst`: the replay buffer preserves exponentially-far-in-the-future states, and we use *those* for A/B/C… (May even be more accurate/salient than faroff-neighbor-gen.)
+
 
 
         # best control, for `sn`: max sensitivity to outcomes, *given possible outcomes* (otherwise, involuntary movements would take up bandwidth).
