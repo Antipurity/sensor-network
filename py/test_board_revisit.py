@@ -125,8 +125,7 @@ def dist(x,y):
     """Calculates the distance in embedding-space, which by training, should be made into `1+floor(log2(path_length))` between board-inputs.
 
     By not learning a neural net to output the distance, we learn an actual topological model of the environment, in which shortest-path actions are the ones closest to straight lines to where we want to go (so, little info for `act` to remember)."""
-    return (x - y).square().mean(-1, keepdim=True).sqrt() # TODO: …Maybe no sqrt?… …Also, maybe mean? …Also, maybe normalize it so that max-distance (at `dist_levels-1`) coincides with the opposite end of the hypersphere? But isn't that 2; how are we getting values higher than that?
-    #   …If we use the mean, then normalization definitely makes it 0…2.
+    return (x - y).square().mean(-1, keepdim=True)
 def combine(D1, D2):
     """Combines two consecutive distance-levels (one plus floor of log-2 of linear dist) into one."""
     d1, d2 = D1.round(), D2.round()
@@ -161,10 +160,7 @@ def net(ins, outs):
         SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
         nn.Linear(action_sz, outs),
     ).to(device)
-embed = nn.Sequential(
-    net(N*N, emb_sz),
-    nn.LayerNorm(emb_sz, elementwise_affine=False),
-)
+embed = net(N*N, emb_sz)
 act = nn.Sequential( # (prev_emb, target) → action
     net(emb_sz + emb_sz, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
@@ -321,14 +317,19 @@ for iters in range(50000):
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
         B_board = perfect_dst(prev_board, D)
         C_board = perfect_dst(B_board, D)
-        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = embed(perfect_mid(prev_emb, C_board))
+        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = embed(perfect_mid(prev_board, C_board))
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
         l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-.5, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
-        l_meta_dist = 0 # TODO: …Why does commenting this line out seem to destroy training?…
-        # print(l_meta_act, l_meta_dist) # TODO: Why are these NaN after the very first op?!
+        # l_meta_dist = (DC - 1).square().sum() # TODO: …Ah: if even this gives NaN, then `DC` must be the problem here.
+        #   TODO: …WAIT: trying to disentangle exactly-equal vectors WOULD result in an error, wouldn't it?
+        # print(DC.mean(), DB.min(DM).mean())
+        # print(l_meta_act, l_meta_dist, A.mean(), C.mean()) # TODO: Why are these NaN after the very first op?!
+        #   …This makes no sense.
+        #   …Removed `.sqrt()` from `dist` (which apparently used to break when `x==y`, exactly), now everything works fine. SUSPICIOUSLY fine, WAY better than with only ground_dist: for N=8, 80% in 5k epochs (with hardly any improvement afterward), *without meta-action loss*.
         #   TODO: …Also, why does enabling l_meta_act make the ground actions unable to be learned?…
+        # l_meta_act = 0 # TODO: …Why does commenting this line out drops performance from 80% (smooth improvement) to 40% (flatline for 4.5k epochs, then quick expansion to 55% at 6k, then 85% at 10k, 90% at 11k) at 5k epochs?… Does reach farther than only-ground, but why is it 2× slower to converge?
         # l_meta_act, l_meta_dist = 0,0 # TODO: …Okay, how long does it really take to fully learn single-step transitions? I feel like we *should* be needing less than 10k epochs, right?… Are we held back by still having to learn quadratically-many distances?
         #   1-step-actions learning seems to only take about 2k…4k epochs. So combining is 6k…8k. Isn't this too much?
 
