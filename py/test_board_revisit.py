@@ -161,6 +161,7 @@ def net(ins, outs):
     ).to(device)
 embed = net(N*N, emb_sz) # A topological map of the environment, learned by preserving distances.
 #   (Not only single-step dists but all dists: otherwise, a coloring (like a checkerboard pattern in this 2D board env) would have been enough.)
+#   (Downside: all distances are assumed to be symmetric.)
 act = nn.Sequential( # (prev_emb, dst_emb) → action
     # (With an `embed`ded world model, `act`'s per-src decision boundaries may be simplified a lot: to the action-to-Nearest-Neighbor-of-dst.)
     #   (Evidence: we can reach 80% reachability for N=8 when we learn *all* distances, but only 30% when we only learn single-transition distances to be 1.)
@@ -384,6 +385,8 @@ for iters in range(50000):
         # TODO: Make `mid` a simple predictor, learned whenever a new midpoint's distance is better.
         #   (We can attempt this while we're still using `perfect_dst`.)
         #   (…Do we still need a GAN of what's real to avoid `mid` getting stuck in imaginary spots in the manifold, or will we be fine with changing `mid` whenever the new point's distance is lower?)
+
+        # TODO: Make `mid` distance-conditioned.
 
         # TODO: …If generative models fail, we can always use sampling for `dst`: the replay buffer preserves exponentially-far-in-the-future states, and we use *those* for A/B/C… (May even be more accurate/salient than faroff-neighbor-gen.)
         #   (If `mid` is conditioned on the dist, then we could store not just states at perfect-powers-of-2, but also just arbitrary past states along with marks of how long ago they occured.)
