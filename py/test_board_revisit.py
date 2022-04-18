@@ -109,7 +109,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 8, 100
+N, batch_size = 16, 100
 action_sz = 64
 
 unroll_len = N
@@ -122,14 +122,13 @@ dist_levels = 8
 emb_sz = 64
 
 def dist(x,y):
-    """Calculates the distance in embedding-space, which by training, should be made into `1+floor(log2(path_length))` between board-inputs.
+    """Calculates the distance in embedding-space, which by training, should be made into `log2(path_length)` between board-inputs; for prev→next transitions, the path length is 2 (for simplicity of math).
 
     By not learning a neural net to output the distance, we learn an actual topological model of the environment, in which shortest-path actions are the ones closest to straight lines to where we want to go (so, little info for `act` to remember)."""
     return (x - y).square().mean(-1, keepdim=True)
 def combine(D1, D2):
-    """Combines two consecutive distance-levels (one plus floor of log-2 of linear dist) into one."""
-    d1, d2 = D1.round(), D2.round()
-    return torch.where((d1-d2).abs() < 1, d1+1, d1.max(d2))
+    """Combines two consecutive distance-levels (log-2 of linear dist) into one."""
+    return torch.logaddexp(D1, D2)
 
 # TODO: Eventually, also try inputting not one-hot embeddings of boards, but their xy coords. Should be easy to learn, right?
 
@@ -320,18 +319,17 @@ for iters in range(50000):
         A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = embed(perfect_mid(prev_board, C_board))
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
-        l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-.5, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
+        l_meta_act = (act(cat(A,C).detach()) - torch.where(DB < DM, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
-        # l_meta_dist = (DC - 1).square().sum() # TODO: …Ah: if even this gives NaN, then `DC` must be the problem here.
-        #   TODO: …WAIT: trying to disentangle exactly-equal vectors WOULD result in an error, wouldn't it?
-        # print(DC.mean(), DB.min(DM).mean())
-        # print(l_meta_act, l_meta_dist, A.mean(), C.mean()) # TODO: Why are these NaN after the very first op?!
-        #   …This makes no sense.
-        #   …Removed `.sqrt()` from `dist` (which apparently used to break when `x==y`, exactly), now everything works fine. SUSPICIOUSLY fine, WAY better than with only ground_dist: for N=8, 80% in 5k epochs (with hardly any improvement afterward), *without meta-action loss*.
-        #   TODO: …Also, why does enabling l_meta_act make the ground actions unable to be learned?…
-        # l_meta_act = 0 # TODO: …Why does commenting this line out drops performance from 80% (smooth improvement) to 40% (flatline for 4.5k epochs, then quick expansion to 55% at 6k, then 85% at 10k, 90% at 11k) at 5k epochs?… Does reach farther than only-ground, but why is it 2× slower to converge?
-        # l_meta_act, l_meta_dist = 0,0 # TODO: …Okay, how long does it really take to fully learn single-step transitions? I feel like we *should* be needing less than 10k epochs, right?… Are we held back by still having to learn quadratically-many distances?
-        #   1-step-actions learning seems to only take about 2k…4k epochs. So combining is 6k…8k. Isn't this too much?
+        #   TODO: …Wait, does this actually ensure that midpoints are on a straight src→dst line? Dists are log-linear in emb-space, so it shouldn't, right?…
+        l_meta_act = 0 # TODO: …Why does commenting this line out slow down convergence a lot, but only at first?…
+        #   The full loss:
+        #   95% at 10k with N=8  (un-plateaus after 4.5k)
+        #   90% at 11k with N=12 (un-plateaus after 6.5k)
+        #   95% at 17k with N=16 (un-plateaus after 12.5k)
+        #   (Scaling DOES look better than when we learned all dist pairs with a NN: N=16 used to need 30k epochs to get to 95%.)
+        #   TODO: …Why are we in min-performance regime for so long, but only with `l_meta_act`?…
+        # l_meta_act, l_meta_dist = 0,0 # TODO: …Why does it take so long to fully learn single-step transitions? I feel like we *should* be needing less than 10k epochs, or at least it should show continuous improvement (if it's all-or-nothing, then in more complex tasks, it may refuse to work at all), right?…
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
@@ -375,10 +373,7 @@ for iters in range(50000):
 
 
 
-        # TODO: Have `embed(board)→emb`, `action_sz`-size.
-        # TODO: Make all neural nets (except for `embed`) take embeddings instead of boards.
-        # TODO: When replaying transitions, replace all `prev_board` and all `board` uses with `prev_emb` and `emb` respectively.
-        # TODO: Remove `dist`, instead consider the L2 distance to be that.
+        # TODO: Make `embed` work well.
         #   (`embed` would become a proper world model, which preserves topology and shortest-path distances. In 3D t-SNE, a 2D board should become a torus; a 1D board should become an actual circle.)
         #     (Single-step BYOL wouldn't have been enough, since it would have just done coloring, which is counterproductive for having `act`. We need to be multi-scale.)
         #     (With such a world model, `act`'s per-src decision boundaries should become trivial: literally action-to-Nearest-Neighbor-of-dst.)
@@ -388,6 +383,13 @@ for iters in range(50000):
         #   (We can probably attempt this while we're still using `perfect_dst`.)
 
         # TODO: …If generative models fail, we can always use sampling for `dst`: the replay buffer preserves exponentially-far-in-the-future states, and we use *those* for A/B/C… (May even be more accurate/salient than faroff-neighbor-gen.)
+
+        # TODO: Try doing a 3D t-SNE on `embed`dings.
+
+
+
+        # …Would learning [direction-preserving funcs](https://en.wikipedia.org/wiki/Direction-preserving_function), AKA maximizing `torch.inner(embed(prev), embed(next))` (`embed(prev).unsqueeze(-2) @ embed(next).unsqueeze(-1)`) so that `embed`dings point in the same direction, be better than learning "N-adjacent cells are equally-spaced" where directions are probably not preserved?… How would this translate to src→dst paths becoming simpler, straightening out? For straightening, wouldn't it be useful to dst-condition `embed`, and maybe only consider on-policy actions (getting kinda the same as that old vortex idea)?…
+        #   …Or maybe, here, we can explicitly straighten out A→B→C vectors whenever `B` is shortest, probably by making (B-A).norm() predict (C-A).norm()?
 
 
 
