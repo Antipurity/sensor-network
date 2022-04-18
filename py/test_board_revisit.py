@@ -119,9 +119,16 @@ updates_per_unroll = 1 # Each replay-buffer's entry is `unroll_len` steps long a
 
 noise_sz = 16
 dist_levels = 8
+emb_sz = 64
 
+def dist(x,y):
+    """Calculates the distance in embedding-space, which by training, should be made into `1+floor(log2(path_length))` between board-inputs.
+
+    By not learning a neural net to output the distance, we learn an actual topological model of the environment, in which shortest-path actions are the ones closest to straight lines to where we want to go (so, little info for `act` to remember)."""
+    return (x - y).square().mean(-1, keepdim=True).sqrt() # TODO: …Maybe no sqrt?… …Also, maybe mean? …Also, maybe normalize it so that max-distance (at `dist_levels-1`) coincides with the opposite end of the hypersphere? But isn't that 2; how are we getting values higher than that?
+    #   …If we use the mean, then normalization definitely makes it 0…2.
 def combine(D1, D2):
-    """Combines two consecutive distance-levels (floor of log-2 of linear dist) into one."""
+    """Combines two consecutive distance-levels (one plus floor of log-2 of linear dist) into one."""
     d1, d2 = D1.round(), D2.round()
     return torch.where((d1-d2).abs() < 1, d1+1, d1.max(d2))
 
@@ -154,25 +161,27 @@ def net(ins, outs):
         SkipConnection(nn.Linear(action_sz, action_sz), nn.ReLU(), nn.LayerNorm(action_sz)),
         nn.Linear(action_sz, outs),
     ).to(device)
-act = nn.Sequential( # (prev_board, target) → action
-    net(N*N + N*N, action_sz),
+embed = nn.Sequential(
+    net(N*N, emb_sz),
+    nn.LayerNorm(emb_sz, elementwise_affine=False),
+)
+act = nn.Sequential( # (prev_emb, target) → action
+    net(emb_sz + emb_sz, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
-dist = net(N*N + N*N, 1) # (prev_board, target) → floor(log2(future_distance_sum))
-#   (Could one day be made a probability distribution too.) (Really minimizing how much we need to remember: action-independent, and quantized. Info-to-remember is kinda linear: way way less separation boundaries than full-dist.)
-mid = GAN(net(N*N + N*N + noise_sz, N*N), net(N*N + N*N + N*N, 1), noise_sz=noise_sz) # (src, dst) → mid
+mid = GAN(net(emb_sz + emb_sz + noise_sz, emb_sz), net(emb_sz + emb_sz + emb_sz, 1), noise_sz=noise_sz) # (src, dst) → mid
 #   Returns a midpoint halfway through.
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
-dst = GAN(net(N*N + 1 + noise_sz, N*N), net(N*N + 1 + N*N, 1), noise_sz=noise_sz)
-dst_encode2 = net(N*N + 1 + N*N, noise_sz) # (src, dist, dst) → noise
-dst_encode = net(N*N + 1 + N*N, 2 * noise_sz) # (src, dist, dst) → mean_and_stdev
-dst_decode = net(N*N + 1 + noise_sz, N*N) # (src, dist, noise) → dst
+dst = GAN(net(emb_sz + 1 + noise_sz, emb_sz), net(emb_sz + 1 + emb_sz, 1), noise_sz=noise_sz)
+dst_encode2 = net(emb_sz + 1 + emb_sz, noise_sz) # (src, dist, dst) → noise
+dst_encode = net(emb_sz + 1 + emb_sz, 2 * noise_sz) # (src, dist, dst) → mean_and_stdev
+dst_decode = net(emb_sz + 1 + noise_sz, emb_sz) # (src, dist, noise) → dst
 #   A conditioned VAE.
 #   Sample two same-distance destinations, and the middle one is the midpoint to compare.
 #     (Good for scalability: in high-dimensional spaces, the probability of double-step revisiting single-step's territory vanishes, so useful learning occurs more often.)
 #     (If using `future`s, it's a tiny bit like the BYOL loss for faraway targets, but a GAN instead of being conditioned on random-goal actions/plans.)
-opt = torch.optim.Adam([*act.parameters(), *dist.parameters(), *mid.parameters(), *dst.parameters(), *dst_encode.parameters(), *dst_decode.parameters()], lr=1e-3)
+opt = torch.optim.Adam([*embed.parameters(), *act.parameters(), *mid.parameters(), *dst.parameters(), *dst_encode.parameters(), *dst_decode.parameters()], lr=1e-3)
 
 
 
@@ -182,7 +191,8 @@ def show_dist(plt, key):
     with torch.no_grad():
         board = torch.eye(N*N, N*N, device=device)
         target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
-        plt.imshow(dist(cat(board, target)).reshape(N, N).cpu().numpy(), label=key)
+        emb1, emb2 = embed(board), embed(target)
+        plt.imshow(dist(emb1, emb2).reshape(N, N).cpu().numpy(), label=key)
 def xy(board):
     ind = board.argmax(-1, keepdim=True)
     x = torch.div(ind, N, rounding_mode='floor')
@@ -242,7 +252,7 @@ for iters in range(50000):
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
             prev_action, prev_board = action, board
-            action = act(cat(board, target))
+            action = act(cat(embed(board), embed(target)))
             if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device) # TODO:
             board = env_step(N, board, action[..., 0:4])
 
@@ -259,26 +269,28 @@ for iters in range(50000):
         board = torch.cat([c[3] for c in choices], -2)
         B = board.shape[-2]
 
+        prev_emb, emb = embed(prev_board), embed(board)
+
         # Ground.
-        l_ground_act = (act(cat(prev_board, board)) - action).square().sum()
-        l_ground_dist = dist(cat(prev_board, board)).square().sum()
+        l_ground_act = (act(cat(prev_emb, emb)) - action).square().sum()
+        l_ground_dist = (dist(prev_emb, emb) - 1).square().sum()
         z = torch.zeros(B,1, device=device)
-        ground_dst = dst(cat(prev_board, z))
-        l_ground_dst_g = 0 # dst.goal(prev_board, z, ground_dst, goal=0) # TODO:
-        l_ground_dst_d = 0 # dst.pred(prev_board, z, ground_dst, goal=1) + dst.pred(prev_board, z, board, goal=0) # TODO:
-        with torch.no_grad():
-            noise = dst_encode2(cat(prev_board, z, board))
-            noise = (noise - noise.mean(-1, keepdim=True)) / (noise.std(-1, keepdim=True) + 1e-5)
-        l_ground_dst_direct = 0 # (dst(prev_board, z, noise=noise.detach()) - board).square().sum() # TODO:
+        # ground_dst = dst(cat(prev_emb, z))
+        l_ground_dst_g = 0 # dst.goal(prev_emb, z, ground_dst, goal=0) # TODO:
+        l_ground_dst_d = 0 # dst.pred(prev_emb, z, ground_dst, goal=1) + dst.pred(prev_emb, z, emb, goal=0) # TODO:
+        # with torch.no_grad():
+        #     noise = dst_encode2(cat(prev_emb, z, emb))
+        #     noise = (noise - noise.mean(-1, keepdim=True)) / (noise.std(-1, keepdim=True) + 1e-5)
+        l_ground_dst_direct = 0 # (dst(prev_emb, z, noise=noise.detach()) - emb).square().sum() # TODO:
         # TODO: …Why do grounded GANs ALSO refuse to work well? (Slightly better than not-directly-grounded GANs because this way we at least have diversity-collapsed-but-correct neighbors for 10% of `dst` calls, but still: terrible.)
         #   …What is left to try?…
 
         # TODO: Learn to generate neighboring boards via `dst_encode` & `dst_decode`, at least.
         #   Why is this so difficult?
-        # dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_board, z, board)).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
+        # dst_noise_mean, dst_noise_stdev = dst_encode(cat(prev_emb, z, emb)).chunk(2, -1) # (The noise helps cover the latent-space with our few samples, but diversity suffers, and accuracy is still bad. Not to mention, still too slow to learn, especially given that mistakes in lower levels compound in higher levels.)
         # dst_noise_stdev = torch.nn.functional.softplus(dst_noise_stdev)
         # dst_noise = dst_noise_mean + torch.randn_like(dst_noise_stdev) * dst_noise_stdev
-        # l_ground_dst_g = (dst_decode(cat(prev_board, z, dst_noise)) - board).square().sum()
+        # l_ground_dst_g = (dst_decode(cat(prev_emb, z, dst_noise)) - emb).square().sum()
         # def normal_log_prob(mean, std, z):
         #     var2 = 2 * std.square()
         #     return -.5 * (3.14159265359 * var2) - (z - mean).square() / var2
@@ -297,8 +309,8 @@ for iters in range(50000):
         #     BOARD = env_init(N, 1)
         #     print(*[c.detach().cpu().numpy() for c in xy(BOARD)], 'neighbors:')
         #     for i in range(6):
-        #         # NEIGH = dst_decode(cat(BOARD, torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
-        #         NEIGH = dst(BOARD, torch.zeros(1,1,device=device))
+        #         # NEIGH = dst_decode(cat(embed(BOARD), torch.zeros(1,1,device=device), torch.randn(1,noise_sz,device=device)))
+        #         NEIGH = dst(embed(BOARD), torch.zeros(1,1,device=device))
         #         print(' ', i, *[c.detach().cpu().numpy() for c in xy(NEIGH)], NEIGH)
         #         # TODO: …Why does this generative model seemingly converge to just one output…
         #         #   …Unusable…
@@ -307,11 +319,16 @@ for iters in range(50000):
 
         # Meta/combination: sample dst-of-dst to try to update midpoints, and learn our farther-dist-dst.
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
-        A = prev_board;  B = perfect_dst(A,D);  C = perfect_dst(B,D);  M = perfect_mid(A,C)
-        DAM, DMC = dist(cat(A,M)), dist(cat(M,C))
-        DB, DM, DC = combine(dist(cat(A,B)), dist(cat(B,C))), combine(DAM, DMC), dist(cat(A,C))
+        B_board = perfect_dst(prev_board, D)
+        C_board = perfect_dst(B_board, D)
+        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = embed(perfect_mid(prev_emb, C_board))
+        DAM, DMC = dist(A,M), dist(M,C)
+        DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
         l_meta_act = (act(cat(A,C)) - torch.where(DB < DM-.5, act(cat(A,B)), act(cat(A,M))).detach()).square().sum()
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
+        l_meta_dist = 0 # TODO: …Why does commenting this line out seem to destroy training?…
+        # print(l_meta_act, l_meta_dist) # TODO: Why are these NaN after the very first op?!
+        #   TODO: …Also, why does enabling l_meta_act make the ground actions unable to be learned?…
         # l_meta_act, l_meta_dist = 0,0 # TODO: …Okay, how long does it really take to fully learn single-step transitions? I feel like we *should* be needing less than 10k epochs, right?… Are we held back by still having to learn quadratically-many distances?
         #   1-step-actions learning seems to only take about 2k…4k epochs. So combining is 6k…8k. Isn't this too much?
 
