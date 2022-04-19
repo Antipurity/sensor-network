@@ -168,7 +168,8 @@ act = nn.Sequential( # (prev_emb, dst_emb) → action
     net(emb_sz + emb_sz, action_sz),
     nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
-mid = GAN(net(emb_sz + emb_sz + noise_sz, emb_sz), net(emb_sz + emb_sz + emb_sz, 1), noise_sz=noise_sz) # (src, dst) → mid
+mid = net(emb_sz + emb_sz, emb_sz) # TODO:
+# mid = GAN(net(emb_sz + emb_sz + noise_sz, emb_sz), net(emb_sz + emb_sz + emb_sz, 1), noise_sz=noise_sz) # (src, dst) → mid
 #   Returns a midpoint halfway through.
 #     Necessary to ever increase `dist`, by generating & comparing candidate midpoints.
 #     (A future candidate for a non-GAN solution, since we really don't need many midpoints? May want BYOL first though.)
@@ -321,7 +322,7 @@ for iters in range(50000):
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
         B_board = perfect_dst(prev_board, D)
         C_board = perfect_dst(B_board, D)
-        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = embed(perfect_mid(prev_board, C_board))
+        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = (C + (A-C)/(torch.dist(A,C)+1e-5)) + mid(cat(A,C)) # embed(perfect_mid(prev_board, C_board)) # TODO:
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
         P = torch.where(DB < DM, B, M) # The picked point.
@@ -336,6 +337,10 @@ for iters in range(50000):
         l_dst_d = 0 # dst.pred(A0, D+1, C0, goal = DC) # TODO:
         l_mid_g = 0 # mid.goal(A0, C0, M, goal = 0) # Minimize non-middle-ness. # TODO:
         l_mid_d = 0 # mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs()) # TODO:
+
+        l_mid_g = (M - P.detach()).square().sum() # TODO: (Learn the midpoint.)
+        #   TODO: …Why are we more-or-less failing to learn good midpoints? We're at 25% for N=8, which is the ground-action level.
+        #     (Is it because all midpoints quickly end up unrealistic? Do we need a GAN regularizer after all?)
 
         # TODO: Run & fix.
         #   TODO: How to fix the only failing component: generative models?
@@ -366,25 +371,14 @@ for iters in range(50000):
         #   …But now, with `embed`, scalability seems to be quite a bit better. There's at least a chance that it's good enough.
 
 
-        # TODO: The filling:
-        #   (For each src/dst, we'd like to partition the dst/src space into actions that *first* lead to it, which implies linear capacity (nodes×actions) despite the nodes×nodes input space, not the quadratic capacity of dist-learning (nodes×nodes×actions).)
-        #   TODO: BYOL loss, to have a good differentiable proxy for observations (`future`):
-        #     TODO: `leads_to(future(prev)) = sg future(next)`
-        #     (This single-step BYOL loss has no deeper basis, though.)
-        #     …In more recent times, thinking that we can have kinda-multiscale-BYOL by removing `dist` and using `embed`ding L2 distances as `dist` levels; this way, we should be able to have very semantically meaningful embeddings (like a torus for this 2D env).
-        #   TODO: …How to weigh `dst`'s discriminator-preference by loss, if we're already specializing to distance and non-middle-ness? Should we, even, especially in this most-simple env?
-        #     (If only we could actually generate something though, which we could then prioritize.)
-        #   TODO: Also the `src(dst, dist)→src` GAN: exactly the same as src→dst but reversed.
-        #     (May be a good idea to fill from both ends, since volumes of hyperspheres in D dims grow by `K**D` times when radii increase by `K` times. Especially good for RL, which is very interested in goal states but may want to explore starting states initially.)
-        #     (…If we make `mid` dist-conditioned, and simply sample far-apart same-trajectory inputs, then reverse-filling may simply become a matter of what we've preserved.)
-        #   …So, none of the above might apply after we finish with the next batch of changes, assuming that they work out…
-        #   (…DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Usable for GANs, and for synth grad (least-magnitude). Should we use it somewhere, like in `dst` and/or `mid`?)
+        # Usable for GANs, and for synth grad (least-magnitude): …DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data. Should we use it somewhere, like in `dst` and/or `mid`?
 
 
 
         # TODO: Make `mid` a simple predictor, learned whenever a new midpoint's distance is better.
         #   (We can attempt this while we're still using `perfect_dst`.)
         #   (…Do we still need a GAN of what's real to avoid `mid` getting stuck in imaginary spots in the manifold, or will we be fine with changing `mid` whenever the new point's distance is lower?)
+        #   TODO: …Can we get by with the trick of, picking the target not via strict DB<DM, but via DB<DM+1; so that we can increase but only slowly, hoping that better trajectories are more frequent than worse trajectories (making this an on-policy algo)?…
 
         # TODO: Make `mid` distance-conditioned.
 
