@@ -334,14 +334,14 @@ for iters in range(50000):
         # l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
         # TODO: Already try that "no-midpoint" strategy. Do we have *any* hope of a super-efficient implementation?
         dist_mult = ((DC+2-DB).detach().clamp(0,15)/1) # TODO:
-        act_mult = ((DC-DB+1).detach().clamp(0,15)/1)+1 # TODO:
+        act_mult = ((combine(DC, torch.full_like(DC, 1.))-DB).detach().clamp(0,15)/1)+1 # TODO:
         #   TODO: Re-run with +.5. …Complete failure: 35% at 9k.
         #   TODO: Re-run with +1. High-variance: 60%|60%|92%|90% at 5k, 75%|90%|95%|95% at 9k.
         #   TODO: Re-run with +2. Pretty good: 85% at 5k, 90% at 9k.
         #     TODO:✓With act_mult combine(·, 1). Good: 92% at 5k, 95% at 9k.
         #     TODO: With act_mult +1. 85% at 5k, 85% at 9k.
         #     TODO: With act_mult (+0)+1. Pretty good: 92% at 5k, 85% at 9k.
-        #     TODO: With act_mult (+1)+1. TODO:
+        #     TODO:✓With act_mult (+1)+1. 85% at 5k, 95% at 9k.
         #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
         #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
         #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
@@ -369,7 +369,7 @@ for iters in range(50000):
         #     TODO: With act_mult +1. Not bad: 80% at 5k, 90% at 9k.
         #     TODO: With act_mult +0. Not bad: 75% at 5k, 90% at 9k.
         #   TODO: Re-run with DC*2-DB.
-        #     TODO: With act_mult combine(·, 1). TODO:
+        #     TODO: With act_mult combine(·, 1). Bad: 75% at 5k, 80% at 9k.
         #     TODO:✓With act_mult +1. 95% at 5k, 95% at 9k.
         #     TODO: With act_mult +0. 92% at 5k, 90% at 9k.
         #     (I feel like the speed here is just because we effectively have a higher multiplier of loss.)
