@@ -333,17 +333,23 @@ for iters in range(50000):
         #   (Not dividing by 16 or smth makes meta_act interfere with ground_act too much, slowing down convergence by making the model stuck in 0-improvement for too long.)
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
         # TODO: Already try that "no-midpoint" strategy. Do we have *any* hope of a super-efficient implementation?
-        dist_mult = (DC-DB+3).detach().clamp(0,15) # TODO:
-        #   TODO: Re-run with +1. 60% at 5k, 75% at 9k.
-        #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
-        #   TODO: Re-run with (+1)**3. …Complete failure: 40% at 9k.
+        dist_mult = (DC-DB+2).detach().clamp(0,15) # TODO:
         #   TODO: Re-run with +.5. …Complete failure: 35% at 9k.
+        #   TODO: Re-run with +1. High-variance: 60%|60%|92%|90% at 5k, 75%|90%|95%|95% at 9k.
         #   TODO: Re-run with +2. Pretty good: 85% at 5k, 90% at 9k.
         #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
-        #   TODO: Re-run with (+2)**3.
+        #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
+        #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
+        #   TODO: Re-run with (+2)**2. Not terrible: 70% at 5k, 80% at 9k.
+        #   TODO: Re-run with (+1)**3. …Complete failure: 40%|45% at 9k.
+        #   TODO: Re-run with (+2)**3. Surprisingly good: 80% at 5k, 90% at 9k.
         #   TODO: Re-run with ((+2)/2)**4.
         #   TODO: Re-run with (+1).exp()-1.
         #   TODO: Re-run with (+2).exp()-1.
+        #   TODO: Have a separate action-multiplier, always 1 when distances match (so, probably `(DC-DB+1).detach().clamp(0,)` or `(DC-DB+.1).detach().clamp(0,)+.9`).
+        #   TODO: …Try dividing by 15 (or whatever we're clamping at, like 5), to control for "we're learning faster only because of a higher-than-1 loss multiplier".
+        #     (Maybe it'll fix us being unable to reach 99%.)
+        #   TODO: …Maybe also try not additive leniency (which is exponentially-more-steps) but some log-add-exp stuff?
         l_meta_act = (1/16) * (dist_mult * (act(cat(A,C).detach()) - act(cat(A,B)).detach()).square()).sum() # TODO:
         l_meta_dist = (dist_mult * (DC - DB.detach()).square()).sum() # TODO:
         #   N=8: 90% at 9k (perfect-midpoint reached this at 5k, but the fact that we even can go without a midpoint is very encouraging)
