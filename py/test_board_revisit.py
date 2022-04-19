@@ -327,30 +327,55 @@ for iters in range(50000):
         M = embed(perfect_mid(prev_board, C_board)) # TODO:
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
-        P = torch.where(DB < DM, B, M) # The picked point.
-        l_meta_act = (1/16) * (act(cat(A,C).detach()) - act(cat(A,P)).detach()).square().sum()
+        # P = torch.where(DB < DM, B, M) # The picked point.
+        # l_meta_act = (1/16) * (act(cat(A,C).detach()) - act(cat(A,P)).detach()).square().sum()
         #   (Using `act(cat(A,C))` slows down convergence a bit.)
         #   (Not dividing by 16 or smth makes meta_act interfere with ground_act too much, slowing down convergence by making the model stuck in 0-improvement for too long.)
-        l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
+        # l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
         # TODO: Already try that "no-midpoint" strategy. Do we have *any* hope of a super-efficient implementation?
-        dist_mult = (DC-DB+2).detach().clamp(0,15) # TODO:
+        dist_mult = ((DC+2-DB).detach().clamp(0,15)/1) # TODO:
+        act_mult = ((DC-DB+1).detach().clamp(0,15)/1)+1 # TODO:
         #   TODO: Re-run with +.5. …Complete failure: 35% at 9k.
         #   TODO: Re-run with +1. High-variance: 60%|60%|92%|90% at 5k, 75%|90%|95%|95% at 9k.
         #   TODO: Re-run with +2. Pretty good: 85% at 5k, 90% at 9k.
+        #     TODO:✓With act_mult combine(·, 1). Good: 92% at 5k, 95% at 9k.
+        #     TODO: With act_mult +1. 85% at 5k, 85% at 9k.
+        #     TODO: With act_mult (+0)+1. Pretty good: 92% at 5k, 85% at 9k.
+        #     TODO: With act_mult (+1)+1. TODO:
         #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
         #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
         #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
         #   TODO: Re-run with (+2)**2. Not terrible: 70% at 5k, 80% at 9k.
         #   TODO: Re-run with (+1)**3. …Complete failure: 40%|45% at 9k.
         #   TODO: Re-run with (+2)**3. Surprisingly good: 80% at 5k, 90% at 9k.
-        #   TODO: Re-run with ((+2)/2)**4.
-        #   TODO: Re-run with (+1).exp()-1.
-        #   TODO: Re-run with (+2).exp()-1.
-        #   TODO: Have a separate action-multiplier, always 1 when distances match (so, probably `(DC-DB+1).detach().clamp(0,)` or `(DC-DB+.1).detach().clamp(0,)+.9`).
-        #   TODO: …Try dividing by 15 (or whatever we're clamping at, like 5), to control for "we're learning faster only because of a higher-than-1 loss multiplier".
-        #     (Maybe it'll fix us being unable to reach 99%.)
-        #   TODO: …Maybe also try not additive leniency (which is exponentially-more-steps) but some log-add-exp stuff?
-        l_meta_act = (1/16) * (dist_mult * (act(cat(A,C).detach()) - act(cat(A,B)).detach()).square()).sum() # TODO:
+        #   TODO: Re-run with ((+2)/2)**4. Not terrible: 85% at 9k.
+        #   TODO:✓Re-run with (+1).exp()-1. Good: 90% at 5k, 97% at 9k.
+        #   TODO: Re-run with (+2).exp()-1. Not bad: 80% at 5k, 90% at 9k.
+        #   TODO:✓Re-run with (+2)/3. Good: 90% at 5k, 97% at 9k.
+        #     TODO: With act_mult +0. 90% at 5k, 95% at 9k.
+        #     TODO: With act_mult +1. 80% at 5k, 85% at 9k.
+        #     TODO: With act_mult (+0)+1. 90% at 5k, 95% at 9k.
+        #     TODO: With act_mult (+1)+1. 90% at 5k, 95% at 9k.
+        #     TODO: With act_mult (+.1)+.9. 85% at 5k, 85% at 9k.
+        #   TODO: Re-run with (+1)+1. 70% at 5k, 80% at 9k.
+        #   TODO: Re-run with combine(DC,1)-DB. …Complete failure: 35% at 5k, 35% at 9k.
+        #   TODO: Re-run with combine(DC,2)-DB. …Failure: 60% at 5k, 60% at 9k.
+        #     TODO: With act_mult combine(·, 1). …Failure: 45% at 5k, 55% at 9k.
+        #   TODO: Re-run with combine(DC,3)-DB. 70% at 5k, 85% at 9k.
+        #   TODO: Re-run with combine(DC,4)-DB. 80% at 5k, 90% at 9k.
+        #   TODO: Re-run with combine(DC,5)-DB. 80% at 5k, 85% at 9k.
+        #   TODO: Re-run with DC*1.5-DB.
+        #     TODO: With act_mult combine(·, 1). Not bad: 65% at 5k, 95% at 9k.
+        #     TODO: With act_mult +1. Not bad: 80% at 5k, 90% at 9k.
+        #     TODO: With act_mult +0. Not bad: 75% at 5k, 90% at 9k.
+        #   TODO: Re-run with DC*2-DB.
+        #     TODO: With act_mult combine(·, 1). TODO:
+        #     TODO:✓With act_mult +1. 95% at 5k, 95% at 9k.
+        #     TODO: With act_mult +0. 92% at 5k, 90% at 9k.
+        #     (I feel like the speed here is just because we effectively have a higher multiplier of loss.)
+        #   …I'm starting to think that the dist-differences are always small, less than 1 even. TODO: Log them. …Actually, yeah, they *should* be small, since that's what we're converging to.
+        #   TODO: Test with N=12 too.
+        l_meta_act = (1/16) * (act_mult * (act(cat(A,C).detach()) - act(cat(A,B)).detach()).square()).sum() # TODO:
         l_meta_dist = (dist_mult * (DC - DB.detach()).square()).sum() # TODO:
         #   N=8: 90% at 9k (perfect-midpoint reached this at 5k, but the fact that we even can go without a midpoint is very encouraging)
 
