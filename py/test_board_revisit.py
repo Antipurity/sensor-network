@@ -322,7 +322,7 @@ for iters in range(50000):
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
         B_board = perfect_dst(prev_board, D)
         C_board = perfect_dst(B_board, D)
-        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = (C + (A-C)/(torch.dist(A,C)+1e-5)) + mid(cat(A,C)) # embed(perfect_mid(prev_board, C_board)) # TODO:
+        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = C.detach() + mid(cat(A,C).detach()) # embed(perfect_mid(prev_board, C_board)) # TODO:
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
         P = torch.where(DB < DM, B, M) # The picked point.
@@ -338,9 +338,10 @@ for iters in range(50000):
         l_mid_g = 0 # mid.goal(A0, C0, M, goal = 0) # Minimize non-middle-ness. # TODO:
         l_mid_d = 0 # mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs()) # TODO:
 
-        l_mid_g = (M - P.detach()).square().sum() # TODO: (Learn the midpoint.)
+        l_mid_g = ((DM+1 - DB).detach() * (M - torch.where(DB < DM+1, B, M).detach()).square()).sum() # TODO: (Learn the midpoint.)
         #   TODO: …Why are we more-or-less failing to learn good midpoints? We're at 25% for N=8, which is the ground-action level.
         #     (Is it because all midpoints quickly end up unrealistic? Do we need a GAN regularizer after all?)
+        #     …What else is there to do?…
 
         # TODO: Run & fix.
         #   TODO: How to fix the only failing component: generative models?
@@ -379,6 +380,8 @@ for iters in range(50000):
         #   (We can attempt this while we're still using `perfect_dst`.)
         #   (…Do we still need a GAN of what's real to avoid `mid` getting stuck in imaginary spots in the manifold, or will we be fine with changing `mid` whenever the new point's distance is lower?)
         #   TODO: …Can we get by with the trick of, picking the target not via strict DB<DM, but via DB<DM+1; so that we can increase but only slowly, hoping that better trajectories are more frequent than worse trajectories (making this an on-policy algo)?…
+        #     Apparently not.
+        #   …Maybe our last non-GAN resort could be: not have `mid`, but with long-trajectory-subsampling, take real samples to be mids, but when updating the distance, instead of comparing with a midpoint, simply make sure that the distance has a much bigger multiplier when getting adjusted down than a-bit-up than a-lot-up (+.5 or more)?…
 
         # TODO: Make `mid` distance-conditioned.
 
