@@ -322,7 +322,9 @@ for iters in range(50000):
         D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
         B_board = perfect_dst(prev_board, D)
         C_board = perfect_dst(B_board, D)
-        A = prev_emb;  B = embed(B_board);  C = embed(C_board);  M = C.detach() + mid(cat(A,C).detach()) # embed(perfect_mid(prev_board, C_board)) # TODO:
+        A = prev_emb;  B = embed(B_board);  C = embed(C_board)
+        # M = C.detach() + mid(cat(A,C).detach()) # TODO:
+        M = embed(perfect_mid(prev_board, C_board)) # TODO:
         DAM, DMC = dist(A,M), dist(M,C)
         DB, DM, DC = combine(dist(A,B), dist(B,C)), combine(DAM, DMC), dist(A,C)
         P = torch.where(DB < DM, B, M) # The picked point.
@@ -330,6 +332,21 @@ for iters in range(50000):
         #   (Using `act(cat(A,C))` slows down convergence a bit.)
         #   (Not dividing by 16 or smth makes meta_act interfere with ground_act too much, slowing down convergence by making the model stuck in 0-improvement for too long.)
         l_meta_dist = (DC - DB.min(DM).detach()).square().sum()
+        # TODO: Already try that "no-midpoint" strategy. Do we have *any* hope of a super-efficient implementation?
+        dist_mult = (DC-DB+3).detach().clamp(0,15) # TODO:
+        #   TODO: Re-run with +1. 60% at 5k, 75% at 9k.
+        #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
+        #   TODO: Re-run with (+1)**3. …Complete failure: 40% at 9k.
+        #   TODO: Re-run with +.5. …Complete failure: 35% at 9k.
+        #   TODO: Re-run with +2. Pretty good: 85% at 5k, 90% at 9k.
+        #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
+        #   TODO: Re-run with (+2)**3.
+        #   TODO: Re-run with ((+2)/2)**4.
+        #   TODO: Re-run with (+1).exp()-1.
+        #   TODO: Re-run with (+2).exp()-1.
+        l_meta_act = (1/16) * (dist_mult * (act(cat(A,C).detach()) - act(cat(A,B)).detach()).square()).sum() # TODO:
+        l_meta_dist = (dist_mult * (DC - DB.detach()).square()).sum() # TODO:
+        #   N=8: 90% at 9k (perfect-midpoint reached this at 5k, but the fact that we even can go without a midpoint is very encouraging)
 
         # Learn generative models of faraway places.
         A0, C0, M0 = A.detach(), C.detach(), M.detach()
@@ -338,10 +355,11 @@ for iters in range(50000):
         l_mid_g = 0 # mid.goal(A0, C0, M, goal = 0) # Minimize non-middle-ness. # TODO:
         l_mid_d = 0 # mid.pred(A0, C0, M0, goal = (DC-1-DAM).abs() + (DC-1-DMC).abs()) # TODO:
 
-        l_mid_g = ((DM+1 - DB).detach() * (M - torch.where(DB < DM+1, B, M).detach()).square()).sum() # TODO: (Learn the midpoint.)
+        # l_mid_g = ((DM+1 - DB).detach() * (M - torch.where(DB < DM+1, B, M).detach()).square()).sum() # TODO: (Learn the midpoint.)
         #   TODO: …Why are we more-or-less failing to learn good midpoints? We're at 25% for N=8, which is the ground-action level.
         #     (Is it because all midpoints quickly end up unrealistic? Do we need a GAN regularizer after all?)
         #     …What else is there to do?…
+        #       Go midpoint-less, simply rely on our distance model to be easier to reduce than to increase?
 
         # TODO: Run & fix.
         #   TODO: How to fix the only failing component: generative models?
