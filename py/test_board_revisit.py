@@ -57,6 +57,11 @@ Unimplemented:
     - To always pick the shortest action on each level (especially when we have `A→B  B→C  A→C`) instead of smudging (and trying to connect all to all), we need to learn a "which level does this action come from" net, and use that for gated action-prediction. Which is pretty much the old dist.
     - Nodes are learned with BYOL (`next(ev(A)) = sg ev(B)` if A→B is a real meta/transition) to be differentiable, and to make same-endpoints paths have the same embeddings, but if we want this to not collapse or smudge, then we need every single meta-action with distinct endpoints to be both distinct and perfectly-learned. Since there are as many total meta-actions as there are node pairs, we're back to the non-scalable "need quadratic neural-net capacity" but in a worse way.
       - (…Wow, this is way worse than all-to-all distance learning. But aren't at least some of its ideas salvageable?)
+  - Dijkstra-algo-like filling from src and/or dst: given src, some dsts are "settled" (we know the action), some are "unknown" (we haven't reached it yet), others are "considered" (reached but learning how to re-reach). Model the "considered" set via generative models, one way or another.
+    - (We don't need all-to-all distances, we only need to know whether some distances are definitely worse than others.)
+    - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
+      - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
+    - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
 """
 
 
@@ -109,7 +114,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 16, 100
+N, batch_size = 8, 100
 action_sz = 64
 
 unroll_len = N
@@ -243,122 +248,178 @@ def perfect_mid(src, dst): # → mid
                 cond = D < mD
                 mx, my, mD = torch.where(cond, x, mx), torch.where(cond, y, my), torch.where(cond, D, mD)
     return from_xy(mx, my)
+def get_act(src_emb, dst_emb):
+    if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device) # TODO:
+    else: action = act(cat(src_emb, dst_emb))
+    return action
 
 
 
 # The main unrolling + training loop.
 for iters in range(50000):
     # Sample a batch of trajectories.
-    action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     reached = torch.full((batch_size, 1), False, device=device)
-    prev_action, prev_board = action, board # TODO: Won't be needing these. The action, at least.
+    # prev_action, prev_board = action, board # TODO: Won't be needing these. The action, at least.
     with torch.no_grad():
         # First pick the target to go to.
         target = env_init(N, batch_size=batch_size)
-        unroll = [(0, action.detach(), board)]
+        dst_emb = embed(target)
+        action = get_act(embed(board), dst_emb)
+
+        unroll = [(0, board, action.detach())]
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
-            prev_action, prev_board = action, board
-            action = act(cat(embed(board), embed(target)))
-            if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device) # TODO:
+            # prev_action, prev_board = action, board # TODO:
             board = env_step(N, board, action[..., 0:4])
+            action = get_act(embed(board), dst_emb)
 
             reached |= (board == target).all(-1, keepdim=True)
-            # TODO: Once again, preserve actions & boards in an array; and only afterwards, push several triplets (along with the distance between them) from that array to the replay buffer.
-            unroll.append((u+1, action, board)) # TODO: Save prev_board instead of board, since its resulting action is what we'd like to remember in order to reach the pair's other part.
+            unroll.append((u+1, board, action))
             # rb = (rb+1) % len(replay_buffer) # TODO:
             # replay_buffer[rb] = ((u, prev_action, prev_board), (u+1, action, board)) # TODO:
-        for _ in range(unroll_len): # Save random A → … → B → … → C triplets in the replay buffer.
+
+        # Save random faraway A → … → B pairs in the replay buffer.
+        for _ in range(unroll_len):
+            i = random.randint(0, len(unroll)-2)
+            j = random.randint(i+1, len(unroll)-1)
+            A, B = unroll[i], unroll[j] # (D, board, next_action)
+            D = torch.full((batch_size, 1), float(B[0]-A[0]), device=device)
+
             rb = (rb+1) % len(replay_buffer)
-            i = random.randint(0, len(unroll)-3)
-            j = random.randint(i+1, len(unroll)-2)
-            k = random.randint(j+1, len(unroll)-1)
-            # replay_buffer[rb] = (unroll[i], unroll[j], unroll[k])
-            replay_buffer[rb] = (unroll[i], unroll[i+1], unroll[k]) # TODO:
+            replay_buffer[rb] = (A[1], A[2], D, B[1]) # (src, action, D, dst)
+            # replay_buffer[rb] = (unroll[i], unroll[i+1]) # TODO:
 
     # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
-        # TODO: action1/board1/…, and dist1/…, no semantic names.
-        prev_action = torch.cat([c[0][1] for c in choices], -2)
-        prev_board = torch.cat([c[0][2] for c in choices], -2)
-        action = torch.cat([c[1][1] for c in choices], -2)
-        board = torch.cat([c[1][2] for c in choices], -2)
-        # TODO: Also load distances, now. (And use them. …With `perfect_dst`, we used to use `dist` for estimation; now we can use *actual* distances, right? Wouldn't this mean faster convergence? …But should we adjust both small-distances too, or only their sum?)
-        B = board.shape[-2]
+        src    = torch.cat([c[0] for c in choices], -2)
+        action = torch.cat([c[1] for c in choices], -2)
+        D      = torch.cat([c[2] for c in choices], -2).log()+1
+        dst    = torch.cat([c[3] for c in choices], -2)
 
-        prev_emb, emb = embed(prev_board), embed(board)
+        src_emb, dst_emb = embed(src), embed(dst)
+        D2 = dist(src_emb, dst_emb)
 
-        # Ground.
-        #   TODO: Don't "ground" since board1 does not necessarily go directly to board2; instead, should do the same thing with this as with meta, namely, weighing prediction by how much the stored-dist is worse than the predicted-dist, right?…
-        #     …Wait a second: how is it different from the meta-loss, then?…
-        #       Can we combine ground & meta losses into one (2, technically)? And if so, then maybe we don't need triplets, only faraway-pairs?…
-        l_ground_act = (act(cat(prev_emb, emb)) - action).square().sum()
-        l_ground_dist = (dist(prev_emb, emb) - 1).square().sum()
+        # Learn shortest paths and shortest distances.
+        mult_dist = (D2-D + 2).detach().clamp(0,15)
+        mult_act = (1/D) * 1 # (D2-D + 2).detach().clamp(0,15)
+        # TODO: …Try swapping D2 and D?… (Shouldn't work. …KINDA: 25% at 15k, 90% at 20k.)
+        # TODO: …Okay, try only inverting for distances? 70% at 8k, 80% at 12k, 95% at 17k.
+        # TODO: …Or try only inverting for actions? 60% at 12k, 95% at 20k
+        # TODO: …Does distance even matter?… What if mult_act was 1?…
+        #   …It still works: 95% at 14k… Unflattening at 4k…
+        #   …This env is hilariously simple, then.
+        # TODO: Try weighing actions by reverse-distance, so that shorter plans are learned first?…
+        #   95% at 11k. A bit better I guess?
+        #   TODO: Try 1/D**2.
+        #   TODO: Try 1/D**3.
+        l_dist = (mult_dist * (D2 - D).square()).sum()
+        l_act = (mult_act * (act(cat(src_emb, dst_emb).detach()) - action).square()).sum() # TODO: 1/16? Needed? No?
+        # TODO: …Is the meager code above truly able to learn as much as all the code below?…
+        #   (And if not, why not?)
+        #   …80% at 10k and 95% at 13k for N=8, unflattens at 4k… Such a slowdown… Why?
 
-        # Meta/combination: sample dst-of-dst to learn faraway dists & min-dist actions.
-        D = torch.randint(0, dist_levels, (B,1), device=device).float() # Distance.
-        B_board = perfect_dst(prev_board, D)
-        C_board = perfect_dst(B_board, D)
-        A = prev_emb;  B = embed(B_board);  C = embed(C_board)
-        DB, DC = combine(dist(A,B), dist(B,C)), dist(A,C)
-        TARG = (2*2**D).log() + 1 # TODO: To bootstrap, use `DB` here. (Seems to offer neither advantages nor disadvantages, though.)
-        dist_mult = ((DC+2-TARG).detach().clamp(0,15)/1) # TODO:
-        act_mult = dist_mult # ((DC-DB+0).detach().clamp(0,15)/1)+1 # TODO:
-        #   TODO: Re-run with +.5. …Complete failure: 35% at 9k.
-        #   TODO: Re-run with +1. High-variance: 60%|60%|92%|90% at 5k, 75%|90%|95%|95% at 9k.
-        #     ❌ N=16: 17% at 7k, 21% at 10k, 28% at 20k, 30% at 23k, 45% at 30k, 60% at 40k, 70% at 50k
-        #       …The dist map looks very spotty, very slowly converging to the correct picture. Is this a case of high-bias low-variance, since by cutting off high-dist, we're making propagation of changes very slow?
-        #   TODO: Re-run with +2. Pretty good: 85% at 5k, 90% at 9k.
-        #     TODO:✓With act_mult combine(·, 1). Good: 92% at 5k, 95% at 9k.
-        #       ✓ N=12: 80% at 6k
-        #     TODO: With act_mult +1. 85% at 5k, 85% at 9k.
-        #     TODO: With act_mult (+0)+1. Pretty good: 92% at 5k, 85% at 9k.
-        #     TODO: With act_mult (+.1)+1.
-        #       N=16: 60% at 8k, 70% at 11k, 75% at 12k (plateauing for 7k epochs, like everywhere else)
-        #     TODO:✓With act_mult (+1)+1. 85% at 5k, 95% at 9k.
-        #       N=12: 80% at 7k, 90% at 9k
-        #       ✓ N=16: 70% at 9k
-        #     Non-bootstrapped targets: 85% at 5k, 95% at 9k
-        #       N=16: 65% at 9k, 75% at 15k, 80% at 20k, 85% at 25k, 90% at 35k
-        #       N=16: 85% at 9k, 70% at 11k, 85% at 14k (second run; high-variance?)
-        #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
-        #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
-        #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
-        #   TODO: Re-run with (+2)**2. Not terrible: 70% at 5k, 80% at 9k.
-        #   TODO: Re-run with (+1)**3. …Complete failure: 40%|45% at 9k.
-        #   TODO: Re-run with (+2)**3. Surprisingly good: 80% at 5k, 90% at 9k.
-        #   TODO: Re-run with ((+2)/2)**4. Not terrible: 85% at 9k.
-        #   TODO:✓Re-run with (+1).exp()-1. Good: 90% at 5k, 97% at 9k.
-        #     ❌ N=12: 35% at 8k
-        #   TODO: Re-run with (+2).exp()-1. Not bad: 80% at 5k, 90% at 9k.
-        #   TODO:✓Re-run with (+2)/3. Good: 90% at 5k, 97% at 9k.
-        #     N=12: 70% at 6k
-        #     TODO: With act_mult +0. 90% at 5k, 95% at 9k.
-        #     TODO: With act_mult +1. 80% at 5k, 85% at 9k.
-        #     TODO: With act_mult (+0)+1. 90% at 5k, 95% at 9k.
-        #     TODO: With act_mult (+1)+1. 90% at 5k, 95% at 9k.
-        #     TODO: With act_mult (+.1)+.9. 85% at 5k, 85% at 9k.
-        #   TODO: Re-run with (+1)+1. 70% at 5k, 80% at 9k.
-        #   TODO: Re-run with combine(DC,1)-DB. …Complete failure: 35% at 5k, 35% at 9k.
-        #   TODO: Re-run with combine(DC,2)-DB. …Failure: 60% at 5k, 60% at 9k.
-        #     TODO: With act_mult combine(·, 1). …Failure: 45% at 5k, 55% at 9k.
-        #   TODO: Re-run with combine(DC,3)-DB. 70% at 5k, 85% at 9k.
-        #   TODO: Re-run with combine(DC,4)-DB. 80% at 5k, 90% at 9k.
-        #   TODO: Re-run with combine(DC,5)-DB. 80% at 5k, 85% at 9k.
-        #   TODO: Re-run with DC*1.5-DB.
-        #     TODO: With act_mult combine(·, 1). Not bad: 65% at 5k, 95% at 9k.
-        #     TODO: With act_mult +1. Not bad: 80% at 5k, 90% at 9k.
-        #     TODO: With act_mult +0. Not bad: 75% at 5k, 90% at 9k.
-        #   TODO: Re-run with DC*2-DB.
-        #     TODO: With act_mult combine(·, 1). Bad: 75% at 5k, 80% at 9k.
-        #     TODO:✓With act_mult +1. 95% at 5k, 95% at 9k.
-        #     TODO: With act_mult +0. 92% at 5k, 90% at 9k.
-        #     (I feel like the speed here is just because we effectively have a higher multiplier of loss.)
-        l_meta_act = (1/16) * (act_mult * (act(cat(A,C).detach()) - act(cat(A,B)).detach()).square()).sum() # TODO:
-        #   (TODO: …With faraway-sampling, we'd be able to use not just a predicted action but the actual taken action here, eliminating a source of instability/bootstrapping…)
-        l_meta_dist = (dist_mult * (DC - TARG.detach()).square()).sum() # TODO:
+        # Optimize.
+        (l_dist + l_act).backward()
+        opt.step();  opt.zero_grad(True)
+        with torch.no_grad(): # Print metrics.
+            log(0, False, dist = show_dist_and_act)
+            log(1, False, l_dist = to_np(l_dist))
+            log(2, False, l_act = to_np(l_act))
+            log(3, False, reached = to_np(reached.float().mean()))
+
+
+
+
+
+
+
+
+
+
+
+
+        # # TODO: action1/board1/…, and dist1/…, no semantic names.
+        # #   TODO: …Actually, should just have `src action D dst`.
+        # prev_action = torch.cat([c[0][2] for c in choices], -2)
+        # prev_board = torch.cat([c[0][1] for c in choices], -2)
+        # action = torch.cat([c[1][2] for c in choices], -2)
+        # board = torch.cat([c[1][1] for c in choices], -2)
+        # # TODO: Also load distances, now. (And use them. …With `perfect_dst`, we used to use `dist` for estimation; now we can use *actual* distances, right? Wouldn't this mean faster convergence? …But should we adjust both small-distances too, or only their sum?)
+        # B = board.shape[-2]
+
+        # prev_emb, emb = embed(prev_board), embed(board)
+
+        # # Ground.
+        # #   TODO: Don't "ground" since board1 does not necessarily go directly to board2; instead, should do the same thing with this as with meta, namely, weighing prediction by how much the stored-dist is worse than the predicted-dist, right?…
+        # #     …Wait a second: how is it different from the meta-loss, then?…
+        # #       Can we combine ground & meta losses into one (2, technically)? And if so, then maybe we don't need triplets, only faraway-pairs?…
+        # l_ground_act = (act(cat(prev_emb, emb)) - action).square().sum()
+        # l_ground_dist = (dist(prev_emb, emb) - 1).square().sum()
+
+        # # Meta/combination: sample dst-of-dst to learn faraway dists & min-dist actions.
+        # D = torch.randint(0, dist_levels, (B,1), device=device).float() # Distance.
+        # B_board = perfect_dst(prev_board, D)
+        # C_board = perfect_dst(B_board, D)
+        # A = prev_emb;  B = embed(B_board);  C = embed(C_board)
+        # DB, DC = combine(dist(A,B), dist(B,C)), dist(A,C)
+        # TARG = (2*2**D).log() + 1 # TODO: To bootstrap, use `DB` here. (Seems to offer neither advantages nor disadvantages, though.)
+        # dist_mult = ((DC+2-TARG).detach().clamp(0,15)/1) # TODO:
+        # act_mult = dist_mult # ((DC-DB+0).detach().clamp(0,15)/1)+1 # TODO:
+        # #   TODO: Re-run with +.5. …Complete failure: 35% at 9k.
+        # #   TODO: Re-run with +1. High-variance: 60%|60%|92%|90% at 5k, 75%|90%|95%|95% at 9k.
+        # #     ❌ N=16: 17% at 7k, 21% at 10k, 28% at 20k, 30% at 23k, 45% at 30k, 60% at 40k, 70% at 50k
+        # #       …The dist map looks very spotty, very slowly converging to the correct picture. Is this a case of high-bias low-variance, since by cutting off high-dist, we're making propagation of changes very slow?
+        # #   TODO: Re-run with +2. Pretty good: 85% at 5k, 90% at 9k.
+        # #     TODO:✓With act_mult combine(·, 1). Good: 92% at 5k, 95% at 9k.
+        # #       ✓ N=12: 80% at 6k
+        # #     TODO: With act_mult +1. 85% at 5k, 85% at 9k.
+        # #     TODO: With act_mult (+0)+1. Pretty good: 92% at 5k, 85% at 9k.
+        # #     TODO: With act_mult (+.1)+1.
+        # #       N=16: 60% at 8k, 70% at 11k, 75% at 12k (plateauing for 7k epochs, like everywhere else)
+        # #     TODO:✓With act_mult (+1)+1. 85% at 5k, 95% at 9k.
+        # #       N=12: 80% at 7k, 90% at 9k
+        # #       ✓ N=16: 70% at 9k
+        # #     Non-bootstrapped targets: 85% at 5k, 95% at 9k
+        # #       N=16: 65% at 9k, 75% at 15k, 80% at 20k, 85% at 25k, 90% at 35k
+        # #       N=16: 85% at 9k, 70% at 11k, 85% at 14k (second run; high-variance?)
+        # #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
+        # #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
+        # #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
+        # #   TODO: Re-run with (+2)**2. Not terrible: 70% at 5k, 80% at 9k.
+        # #   TODO: Re-run with (+1)**3. …Complete failure: 40%|45% at 9k.
+        # #   TODO: Re-run with (+2)**3. Surprisingly good: 80% at 5k, 90% at 9k.
+        # #   TODO: Re-run with ((+2)/2)**4. Not terrible: 85% at 9k.
+        # #   TODO:✓Re-run with (+1).exp()-1. Good: 90% at 5k, 97% at 9k.
+        # #     ❌ N=12: 35% at 8k
+        # #   TODO: Re-run with (+2).exp()-1. Not bad: 80% at 5k, 90% at 9k.
+        # #   TODO:✓Re-run with (+2)/3. Good: 90% at 5k, 97% at 9k.
+        # #     N=12: 70% at 6k
+        # #     TODO: With act_mult +0. 90% at 5k, 95% at 9k.
+        # #     TODO: With act_mult +1. 80% at 5k, 85% at 9k.
+        # #     TODO: With act_mult (+0)+1. 90% at 5k, 95% at 9k.
+        # #     TODO: With act_mult (+1)+1. 90% at 5k, 95% at 9k.
+        # #     TODO: With act_mult (+.1)+.9. 85% at 5k, 85% at 9k.
+        # #   TODO: Re-run with (+1)+1. 70% at 5k, 80% at 9k.
+        # #   TODO: Re-run with combine(DC,1)-DB. …Complete failure: 35% at 5k, 35% at 9k.
+        # #   TODO: Re-run with combine(DC,2)-DB. …Failure: 60% at 5k, 60% at 9k.
+        # #     TODO: With act_mult combine(·, 1). …Failure: 45% at 5k, 55% at 9k.
+        # #   TODO: Re-run with combine(DC,3)-DB. 70% at 5k, 85% at 9k.
+        # #   TODO: Re-run with combine(DC,4)-DB. 80% at 5k, 90% at 9k.
+        # #   TODO: Re-run with combine(DC,5)-DB. 80% at 5k, 85% at 9k.
+        # #   TODO: Re-run with DC*1.5-DB.
+        # #     TODO: With act_mult combine(·, 1). Not bad: 65% at 5k, 95% at 9k.
+        # #     TODO: With act_mult +1. Not bad: 80% at 5k, 90% at 9k.
+        # #     TODO: With act_mult +0. Not bad: 75% at 5k, 90% at 9k.
+        # #   TODO: Re-run with DC*2-DB.
+        # #     TODO: With act_mult combine(·, 1). Bad: 75% at 5k, 80% at 9k.
+        # #     TODO:✓With act_mult +1. 95% at 5k, 95% at 9k.
+        # #     TODO: With act_mult +0. 92% at 5k, 90% at 9k.
+        # #     (I feel like the speed here is just because we effectively have a higher multiplier of loss.)
+        # l_meta_act = (1/16) * (act_mult * (act(cat(A,C).detach()) - act(cat(A,B)).detach()).square()).sum() # TODO:
+        # #   (TODO: …With faraway-sampling, we'd be able to use not just a predicted action but the actual taken action here, eliminating a source of instability/bootstrapping…)
+        # l_meta_dist = (dist_mult * (DC - TARG.detach()).square()).sum() # TODO:
 
         # TODO: Run & fix.
         #   TODO: How to fix the only failing component: generative models?
@@ -424,15 +485,15 @@ for iters in range(50000):
 
 
         # Optimize.
-        (l_ground_act + l_ground_dist + l_meta_act + l_meta_dist).backward()
-        opt.step();  opt.zero_grad(True)
-        with torch.no_grad(): # Print metrics.
-            log(0, False, dist = show_dist_and_act)
-            log(1, False, ground_act = to_np(l_ground_act))
-            log(2, False, ground_dist = to_np(l_ground_dist))
-            log(3, False, meta_act = to_np(l_meta_act))
-            log(4, False, meta_dist = to_np(l_meta_dist))
-            log(5, False, reached = to_np(reached.float().mean()))
+        # (l_ground_act + l_ground_dist + l_meta_act + l_meta_dist).backward()
+        # opt.step();  opt.zero_grad(True)
+        # with torch.no_grad(): # Print metrics.
+        #     log(0, False, dist = show_dist_and_act)
+        #     log(1, False, ground_act = to_np(l_ground_act))
+        #     log(2, False, ground_dist = to_np(l_ground_dist))
+        #     log(3, False, meta_act = to_np(l_meta_act))
+        #     log(4, False, meta_dist = to_np(l_meta_dist))
+        #     log(5, False, reached = to_np(reached.float().mean()))
 
 
         # if iters == 1000: clear() # TODO: Does the reachability plot look like it plateaus after learning 1-step actions (2k…4k updates, 25% with N=8)? …No, it's way slower to reach 25%… Not sure if exponential-growth or stupid…
