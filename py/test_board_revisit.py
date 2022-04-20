@@ -122,12 +122,12 @@ dist_levels = 8 # …Wait, if we won't have `dst`, then this will no longer be r
 emb_sz = 64
 
 def dist(x,y):
-    """Calculates the distance in embedding-space, which by training, should be made into `log2(path_length)` between board-inputs; for prev→next transitions, the path length is 2 (for simplicity of math).
+    """Calculates the distance in embedding-space, which by training, should be made into `1+log(path_length)` between board-inputs; for prev→next transitions, the path length is 2 (for simplicity of math).
 
     By not learning a neural net to output the distance, we learn an actual topological model of the environment, in which shortest-path actions are the ones closest to straight lines to where we want to go (so, little info for `act` to remember)."""
     return (x - y).square().mean(-1, keepdim=True)
 def combine(D1, D2):
-    """Combines two consecutive distance-levels (log-2 of linear dist) into one."""
+    """Combines two consecutive distance-levels (1 plus log of linear dist) into one."""
     return torch.logaddexp(D1, D2)
 
 # TODO: Eventually, also try inputting not one-hot embeddings of boards, but their xy coords. Should be easy to learn, right?
@@ -244,11 +244,11 @@ for iters in range(50000):
     action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     reached = torch.full((batch_size, 1), False, device=device)
-    prev_action, prev_board = action, board
-    boards, actions = [board], [action.detach()]
+    prev_action, prev_board = action, board # TODO: Won't be needing these.
     with torch.no_grad():
         # First pick the target to go to.
         target = env_init(N, batch_size=batch_size)
+        unroll = [(0, board, action.detach())]
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
             prev_action, prev_board = action, board
@@ -257,16 +257,22 @@ for iters in range(50000):
             board = env_step(N, board, action[..., 0:4])
 
             reached |= (board == target).all(-1, keepdim=True)
-            rb = (rb+1) % len(replay_buffer)
-            replay_buffer[rb] = (prev_action, prev_board, action, board)
+            # TODO: Once again, preserve actions & boards in an array; and only afterwards, push several triplets (along with the distance between them) from that array to the replay buffer.
+            unroll.append((u+1, action, board))
+            rb = (rb+1) % len(replay_buffer) # TODO:
+            replay_buffer[rb] = ((u, prev_action, prev_board), (u+1, action, board)) # TODO:
+        # for _ in range(unroll_len): # Save A → … → B → … → C triplets in the replay buffer.
+        #     rb = (rb+1) % len(replay_buffer)
+        #     replay_buffer[rb] = ((0, prev_action, prev_board), (0, action, board)) # TODO: How to pick the triplets, indices 0 <= i < j < k < len(unroll)?
 
     # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
-        prev_action = torch.cat([c[0] for c in choices], -2)
-        prev_board = torch.cat([c[1] for c in choices], -2)
-        action = torch.cat([c[2] for c in choices], -2)
-        board = torch.cat([c[3] for c in choices], -2)
+        prev_action = torch.cat([c[0][1] for c in choices], -2)
+        prev_board = torch.cat([c[0][2] for c in choices], -2)
+        action = torch.cat([c[1][1] for c in choices], -2)
+        board = torch.cat([c[1][2] for c in choices], -2)
+        # TODO: Also load distances, now. (And use them. …With `perfect_dst`, we used to use `dist` for estimation; now we can use *actual* distances, right? Wouldn't this mean faster convergence? …But should we adjust both small-distances too, or only their sum?)
         B = board.shape[-2]
 
         prev_emb, emb = embed(prev_board), embed(board)
@@ -276,12 +282,13 @@ for iters in range(50000):
         l_ground_dist = (dist(prev_emb, emb) - 1).square().sum()
 
         # Meta/combination: sample dst-of-dst to learn faraway dists & min-dist actions.
-        D = torch.randint(0, dist_levels, (B,1), device=device) # Distance.
+        D = torch.randint(0, dist_levels, (B,1), device=device).float() # Distance.
         B_board = perfect_dst(prev_board, D)
         C_board = perfect_dst(B_board, D)
         A = prev_emb;  B = embed(B_board);  C = embed(C_board)
         DB, DC = combine(dist(A,B), dist(B,C)), dist(A,C)
-        dist_mult = ((DC+1-DB).detach().clamp(0,15)/1) # TODO:
+        TARG = (2*2**D).log() + 1 # TODO: To bootstrap, use `DB` here. (Seems to offer neither advantages nor disadvantages, though.)
+        dist_mult = ((DC+2-TARG).detach().clamp(0,15)/1) # TODO:
         act_mult = dist_mult # ((DC-DB+0).detach().clamp(0,15)/1)+1 # TODO:
         #   TODO: Re-run with +.5. …Complete failure: 35% at 9k.
         #   TODO: Re-run with +1. High-variance: 60%|60%|92%|90% at 5k, 75%|90%|95%|95% at 9k.
@@ -297,6 +304,8 @@ for iters in range(50000):
         #     TODO:✓With act_mult (+1)+1. 85% at 5k, 95% at 9k.
         #       N=12: 80% at 7k, 90% at 9k
         #       ✓ N=16: 70% at 9k
+        #     Non-bootstrapped targets: 85% at 5k, 95% at 9k
+        #       N=16: 65% at 9k
         #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
         #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
         #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
@@ -331,7 +340,8 @@ for iters in range(50000):
         #     TODO: With act_mult +0. 92% at 5k, 90% at 9k.
         #     (I feel like the speed here is just because we effectively have a higher multiplier of loss.)
         l_meta_act = (1/16) * (act_mult * (act(cat(A,C).detach()) - act(cat(A,B)).detach()).square()).sum() # TODO:
-        l_meta_dist = (dist_mult * (DC - DB.detach()).square()).sum() # TODO:
+        #   (TODO: …With faraway-sampling, we'd be able to use not just a predicted action but the actual taken action here, eliminating a source of instability/bootstrapping…)
+        l_meta_dist = (dist_mult * (DC - TARG.detach()).square()).sum() # TODO:
 
         # TODO: Run & fix.
         #   TODO: How to fix the only failing component: generative models?
