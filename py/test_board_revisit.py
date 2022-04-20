@@ -200,7 +200,7 @@ def show_dist_and_act(plt, key):
         x, y = torch.arange(2*N, 3*N), torch.arange(0, N)
         u = torch.where(acts==1, 1, torch.where(acts==2, -1, 0)).reshape(N,N)
         v = torch.where(acts==3, 1, torch.where(acts==4, -1, 0)).reshape(N,N)
-        plt.quiver(x, y, u.cpu(), v.cpu(), scale=1, scale_units='xy', angles='xy')
+        plt.quiver(x, y, u.cpu(), v.cpu(), scale=1, scale_units='xy', angles='xy', units='xy')
 def xy(board):
     ind = board.argmax(-1, keepdim=True)
     x = torch.div(ind, N, rounding_mode='floor')
