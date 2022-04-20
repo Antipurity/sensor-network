@@ -303,22 +303,66 @@ for iters in range(50000):
 
         # Learn shortest paths and shortest distances.
         mult_dist = (D2-D + 2).detach().clamp(0,15)
-        mult_act = (1/D) * 1 # (D2-D + 2).detach().clamp(0,15)
+        mult_act  = (D2-D + 2).detach().clamp(0,15)
         # TODO: …Try swapping D2 and D?… (Shouldn't work. …KINDA: 25% at 15k, 90% at 20k.)
         # TODO: …Okay, try only inverting for distances? 70% at 8k, 80% at 12k, 95% at 17k.
         # TODO: …Or try only inverting for actions? 60% at 12k, 95% at 20k
         # TODO: …Does distance even matter?… What if mult_act was 1?…
         #   …It still works: 95% at 14k… Unflattening at 4k…
         #   …This env is hilariously simple, then.
+        #   90% at 9k, 95% at 10k, though it's high-variance (possibly because isolated regions can form and are hard to break).
+        #   TODO: Try torch.where(D < 1.1, 1., 0.). (Ground-only.)
+        #     85% at 9k.
+        #   Apparently, distance matters, insofar as it provides representations.
         # TODO: Try weighing actions by reverse-distance, so that shorter plans are learned first?…
         #   95% at 11k. A bit better I guess?
+        #   90% at 7k; high-variance.
         #   TODO: Try 1/D**2.
+        #     …Encountered a 50% local minimum, where there was an isolated region of arrows… (I guess "longer paths are less likely and thus won't get reinforced" is only *likely*, not guaranteed.)
+        #     90% at 8k, 95% at 9k.
         #   TODO: Try 1/D**3.
+        #     90% at 8k, 95% at 10k.
+        #   TODO: Try torch.where(D < 1.1, 1., 1/16), like it was in the prior loss.
+        #     90% at 8k.
+        #     No significant advantages.
+        #   TODO: Try torch.where(D < 1.1, 1., 0.) * ×. (Ground-only.)
+        #     80% at 9k.
+        # TODO: Re-run dist-diff-weighted act-learning.
+        #   95% at 9k. No significant advantages.
+        #   TODO: Try 1/D**2.
+        #     90% at 8k.
+        # TODO: …Try distance-learning-less.
+        #   Complete failure, at 10k.
+        #   TODO: Try 1/D**2.
+        #     Almost complete failure: 20% at 10k.
+        #   TODO: Try torch.where(D < 1.1, 1., 1/16).
+        #     Almost complete failure: 20% at 11k.
+        # TODO: …Try with the actual boards as inputs to `act`.
+        #   60% at 10k, 75% at 12k, 90% at 16k.
+        #   TODO: Try 1/D**2.
+        #     50% at 10k, 70% at 16k.
+        #   TODO: Try torch.where(D < 1.1, 1., 1/16).
+        #     40% at 16k, 45% at 20k.
+        #   TODO: Try torch.where(D < 1.1, 1., 0.). (AKA grounding-only. If it can reach >25% performance, then we have no ground to stand on when saying "dist-diff-weighting gives a significantly nicer representation".)
+        #     Failing with 25% at 20k, as expected.
+        #   Always worse than with dist-learning, so I guess that does do something useful.
+        # TODO: Try dist-diff-weighting, but without detaching the inputs of `act`.
+        #   TODO: Try 1.
+        #     95% at 10k.
+        #   TODO: Try 1 * ×.
+        #     95% at 10k. (Dist-diff-weighting doesn't make a difference then? Or, only matters to reach near-99%? I guess it would matter a lot more in very long paths, especially in envs with many episodes in one, where we'd need to discard different-episode paths via learned-dist in order to not smudge everything.)
+        #   TODO: Try torch.where(D < 1.1, 1., 0.). (Ground-only.)
+        #     65% at 10k, 75% at 20k.
+        # TODO: …Run with N=12…
+        # TODO: …Run with N=16…
         l_dist = (mult_dist * (D2 - D).square()).sum()
-        l_act = (mult_act * (act(cat(src_emb, dst_emb).detach()) - action).square()).sum() # TODO: 1/16? Needed? No?
+        l_act = (mult_act * (act(cat(src_emb, dst_emb).detach()) - action).square()).sum()
         # TODO: …Is the meager code above truly able to learn as much as all the code below?…
         #   (And if not, why not?)
         #   …80% at 10k and 95% at 13k for N=8, unflattens at 4k… Such a slowdown… Why?
+        #     We're able to get to 95% at 9k in the best case, so we're only 2× slower. Acceptable, really. (The only difference from old code is that we use `action` instead of a predicted-`act`ion as the target.)
+
+        # TODO: …Also make a note about the "only learning ground-actions: pretty good with full distance learning, trash with only ground-dist-learning" phenomenon (particularly, about the need to re-test it in this setting), then remove the old code.
 
         # Optimize.
         (l_dist + l_act).backward()
