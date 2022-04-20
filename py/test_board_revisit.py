@@ -194,8 +194,13 @@ def show_dist_and_act(plt, key):
         emb1, emb2 = embed(src), embed(dst)
         dists = dist(emb1, emb2).reshape(N, N)
         zeros = torch.zeros_like(dists)
-        acts = act(cat(emb1, emb2))[..., 0:4].argmax(-1).reshape(N, N)
-        plt.imshow(torch.cat((dists, zeros, acts), -1).cpu().numpy(), label=key, cmap='nipy_spectral')
+        maxes = torch.ones_like(dists) * dists.max()
+        acts = act(cat(emb1, emb2))[..., 0:4].argmax(-1).reshape(N, N)+1
+        plt.imshow(torch.cat((dists, zeros, maxes), -1).cpu().numpy(), label=key, cmap='nipy_spectral')
+        x, y = torch.arange(2*N, 3*N), torch.arange(0, N)
+        u = torch.where(acts==1, 1, torch.where(acts==2, -1, 0)).reshape(N,N)
+        v = torch.where(acts==3, 1, torch.where(acts==4, -1, 0)).reshape(N,N)
+        plt.quiver(x, y, u.cpu(), v.cpu(), scale=1, scale_units='xy', angles='xy')
 def xy(board):
     ind = board.argmax(-1, keepdim=True)
     x = torch.div(ind, N, rounding_mode='floor')
@@ -317,6 +322,7 @@ for iters in range(50000):
         #       ✓ N=16: 70% at 9k
         #     Non-bootstrapped targets: 85% at 5k, 95% at 9k
         #       N=16: 65% at 9k, 75% at 15k, 80% at 20k, 85% at 25k, 90% at 35k
+        #       N=16: 85% at 9k, 70% at 11k, 85% at 14k (second run; high-variance?)
         #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
         #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
         #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
