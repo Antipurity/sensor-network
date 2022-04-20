@@ -259,15 +259,20 @@ for iters in range(50000):
             reached |= (board == target).all(-1, keepdim=True)
             # TODO: Once again, preserve actions & boards in an array; and only afterwards, push several triplets (along with the distance between them) from that array to the replay buffer.
             unroll.append((u+1, action, board))
-            rb = (rb+1) % len(replay_buffer) # TODO:
-            replay_buffer[rb] = ((u, prev_action, prev_board), (u+1, action, board)) # TODO:
-        # for _ in range(unroll_len): # Save A → … → B → … → C triplets in the replay buffer.
-        #     rb = (rb+1) % len(replay_buffer)
-        #     replay_buffer[rb] = ((0, prev_action, prev_board), (0, action, board)) # TODO: How to pick the triplets, indices 0 <= i < j < k < len(unroll)?
+            # rb = (rb+1) % len(replay_buffer) # TODO:
+            # replay_buffer[rb] = ((u, prev_action, prev_board), (u+1, action, board)) # TODO:
+        for _ in range(unroll_len): # Save random A → … → B → … → C triplets in the replay buffer.
+            rb = (rb+1) % len(replay_buffer)
+            i = random.randint(0, len(unroll)-3)
+            j = random.randint(i+1, len(unroll)-2)
+            k = random.randint(j+1, len(unroll)-1)
+            # replay_buffer[rb] = (unroll[i], unroll[j], unroll[k])
+            replay_buffer[rb] = (unroll[i], unroll[i+1], unroll[k]) # TODO:
 
     # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
+        # TODO: action1/board1/…, no semantic names.
         prev_action = torch.cat([c[0][1] for c in choices], -2)
         prev_board = torch.cat([c[0][2] for c in choices], -2)
         action = torch.cat([c[1][1] for c in choices], -2)
@@ -278,6 +283,9 @@ for iters in range(50000):
         prev_emb, emb = embed(prev_board), embed(board)
 
         # Ground.
+        #   TODO: Don't "ground" since board1 does not necessarily go directly to board2; instead, should do the same thing with this as with meta, namely, weighing prediction by how much the stored-dist is worse than the predicted-dist, right?…
+        #     …Wait a second: how is it different from the meta-loss, then?…
+        #       Can we combine ground & meta losses into one (2, technically)? And if so, then maybe we don't need triplets, only faraway-pairs?…
         l_ground_act = (act(cat(prev_emb, emb)) - action).square().sum()
         l_ground_dist = (dist(prev_emb, emb) - 1).square().sum()
 
@@ -305,7 +313,7 @@ for iters in range(50000):
         #       N=12: 80% at 7k, 90% at 9k
         #       ✓ N=16: 70% at 9k
         #     Non-bootstrapped targets: 85% at 5k, 95% at 9k
-        #       N=16: 65% at 9k
+        #       N=16: 65% at 9k, 75% at 15k, 80% at 20k, 85% at 25k, 90% at 35k
         #   TODO: Re-run with +3. Pretty good: 85% at 5k, 85% at 9k.
         #   TODO: Re-run with +4. Pretty good: 85% at 5k, 88% at 9k.
         #   TODO: Re-run with (+1)**2. …Bad: only 70% at 9k.
@@ -362,6 +370,7 @@ for iters in range(50000):
         #   N=12: 80% at 6k OR 90% at 9k
         #   N=16: 70% at 9k OR 75% at 12k
         #   (Can't seem to get any better. We're kind of in the off-policy regime due to `perfect_dst`; sampling from real close-to-min-dist trajectories might be able to achieve better results.)
+        #     (…Though, after removing dist-bootstrapping and using the actual `D`, improvement to 90% for N=16 seems quite possible, even if slow (at 35k).)
         #   (If perfect reachability is needed, could always learn to generate midpoints.)
 
 
