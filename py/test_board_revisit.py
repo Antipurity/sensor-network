@@ -186,13 +186,16 @@ opt = torch.optim.Adam([*embed.parameters(), *act.parameters(), *mid.parameters(
 
 
 # These funcs use domain knowledge; used for debugging.
-def show_dist(plt, key):
-    """An image of the *learned* distance."""
+def show_dist_and_act(plt, key):
+    """An image of the *learned* distance (0…+∞) and actions (0|1|2|3)."""
     with torch.no_grad():
-        board = torch.eye(N*N, N*N, device=device)
-        target = torch.eye(1, N*N, device=device).expand(N*N, N*N)
-        emb1, emb2 = embed(board), embed(target)
-        plt.imshow(dist(emb1, emb2).reshape(N, N).cpu().numpy(), label=key)
+        src = torch.eye(N*N, N*N, device=device)
+        dst = torch.eye(1, N*N, device=device).expand(N*N, N*N)
+        emb1, emb2 = embed(src), embed(dst)
+        dists = dist(emb1, emb2).reshape(N, N)
+        zeros = torch.zeros_like(dists)
+        acts = act(cat(emb1, emb2))[..., 0:4].argmax(-1).reshape(N, N)
+        plt.imshow(torch.cat((dists, zeros, acts), -1).cpu().numpy(), label=key, cmap='nipy_spectral')
 def xy(board):
     ind = board.argmax(-1, keepdim=True)
     x = torch.div(ind, N, rounding_mode='floor')
@@ -244,11 +247,11 @@ for iters in range(50000):
     action = torch.zeros(batch_size, action_sz, device=device)
     board = env_init(N, batch_size=batch_size)
     reached = torch.full((batch_size, 1), False, device=device)
-    prev_action, prev_board = action, board # TODO: Won't be needing these.
+    prev_action, prev_board = action, board # TODO: Won't be needing these. The action, at least.
     with torch.no_grad():
         # First pick the target to go to.
         target = env_init(N, batch_size=batch_size)
-        unroll = [(0, board, action.detach())]
+        unroll = [(0, action.detach(), board)]
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
             prev_action, prev_board = action, board
@@ -258,7 +261,7 @@ for iters in range(50000):
 
             reached |= (board == target).all(-1, keepdim=True)
             # TODO: Once again, preserve actions & boards in an array; and only afterwards, push several triplets (along with the distance between them) from that array to the replay buffer.
-            unroll.append((u+1, action, board))
+            unroll.append((u+1, action, board)) # TODO: Save prev_board instead of board, since its resulting action is what we'd like to remember in order to reach the pair's other part.
             # rb = (rb+1) % len(replay_buffer) # TODO:
             # replay_buffer[rb] = ((u, prev_action, prev_board), (u+1, action, board)) # TODO:
         for _ in range(unroll_len): # Save random A → … → B → … → C triplets in the replay buffer.
@@ -272,7 +275,7 @@ for iters in range(50000):
     # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
-        # TODO: action1/board1/…, no semantic names.
+        # TODO: action1/board1/…, and dist1/…, no semantic names.
         prev_action = torch.cat([c[0][1] for c in choices], -2)
         prev_board = torch.cat([c[0][2] for c in choices], -2)
         action = torch.cat([c[1][1] for c in choices], -2)
@@ -418,7 +421,7 @@ for iters in range(50000):
         (l_ground_act + l_ground_dist + l_meta_act + l_meta_dist).backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
-            log(0, False, dist = show_dist)
+            log(0, False, dist = show_dist_and_act)
             log(1, False, ground_act = to_np(l_ground_act))
             log(2, False, ground_dist = to_np(l_ground_dist))
             log(3, False, meta_act = to_np(l_meta_act))
