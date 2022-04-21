@@ -62,7 +62,7 @@ Unimplemented:
     - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
       - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
     - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
-  - Replace the `dist(src, dst)` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology. Preserve faraway states, along with inputs and first-action. Then, we can just learn the min-dist `act(src, dst)`.
+  - Replace the `dist(src, dst)` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology. Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
     - (The dead-simple "learn the actions" performs worse than also learning the dist map, so representation-learning is important.)
     - Seems to perform best with `A→B→C` double-stepping: `act(A,C) = act(A,B).detach()` (in addition to single-step `act(prev,next) = prev→next` grounding).
 """
@@ -117,7 +117,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 16, 100
+N, batch_size = 12, 100
 action_sz = 64
 
 unroll_len = N
@@ -284,33 +284,81 @@ for iters in range(50000):
 
         # Save random faraway A → … → B pairs in the replay buffer.
         for _ in range(unroll_len):
-            i = random.randint(0, len(unroll)-2)
-            j = random.randint(i+1, len(unroll)-1)
-            A, B = unroll[i], unroll[j] # (D, board, next_action)
-            D = torch.full((batch_size, 1), float(B[0]-A[0]), device=device)
+            i = random.randint(0, len(unroll)-3)
+            j = random.randint(i+1, len(unroll)-2)
+            k = random.randint(j+1, len(unroll)-1) # TODO: Maybe also try saving consecutive things in 50% of cases, to better ensure grounding?
+            A, B, C = unroll[i], unroll[j], unroll[k] # (D, board, next_action)
+            D12 = torch.full((batch_size, 1), float(B[0]-A[0]), device=device)
+            D23 = torch.full((batch_size, 1), float(C[0]-B[0]), device=device)
 
             rb = (rb+1) % len(replay_buffer)
-            replay_buffer[rb] = (A[1], A[2], D, B[1]) # (src, action, D, dst)
-            # replay_buffer[rb] = (unroll[i], unroll[i+1]) # TODO:
+            replay_buffer[rb] = (A[1], A[2], D12, B[1], B[2], D23, C[1])
+            #   (s1, action1, D12, s2, action2, D23, s3)
             # TODO: …Pairs may not have exponential improvement built-in after all… So, implement A→B→C triplets, with meta-loss for A and ground-loss for B (and all distance-learning stuffed into one loss, made up of 3 components).
 
     # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
     if len(choices):
-        src    = torch.cat([c[0] for c in choices], -2)
-        action = torch.cat([c[1] for c in choices], -2)
-        D      = torch.cat([c[2] for c in choices], -2).log()+1
-        dst    = torch.cat([c[3] for c in choices], -2)
+        s1      = torch.cat([c[0] for c in choices], -2)
+        action1 = torch.cat([c[1] for c in choices], -2)
+        D12     = torch.cat([c[2] for c in choices], -2)
+        s2      = torch.cat([c[3] for c in choices], -2)
+        action2 = torch.cat([c[4] for c in choices], -2)
+        D23     = torch.cat([c[5] for c in choices], -2)
+        s3      = torch.cat([c[6] for c in choices], -2)
 
-        src_emb, dst_emb = embed(src), embed(dst)
-        D2 = dist(src_emb, dst_emb)
+        e1, e2, e3 = embed(s1), embed(s2), embed(s3)
+        d12, d23, d13 = dist(e1, e2), dist(e2, e3), dist(e1, e3)
+        D12, D23, D13 = D12.log()+1, D23.log()+1, (D12 + D23).log()+1
+        # D12, D23, D13 = D12, D23, (D12 + D23) # TODO: Try linear distances, just because we can? …Not bad: 90% in 8k. And, distances are very clearly and correctly arranged.
+        #   TODO: Try grounding-only.
+
+        a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3))
+
+        # TODO:
+        def loss_dist(d,D):
+            # Always nonzero, but fades if dist is too high; prefers lower dists.
+            mult = (d.detach() - D)
+            mult = torch.where( D>1.1, 1 * torch.where(mult>0, mult+1, mult.exp()).clamp(0,15), torch.tensor(1., device=device) )
+            # TODO: Maybe, the distance in particular should always let in some gradient, possibly by .exp(<=0)? If on-policy, this shouldn't really matter; and, might make beginnings better.
+            return (mult * (d - D).square())
+        def loss_act(d,D, a,A):
+            mult = torch.where( D>1.1, 1 * (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )
+            return (mult * (a - A).square())
 
         # Learn shortest paths and shortest distances.
-        mult_dist = (D2-D + 2).detach().clamp(0,15)
-        mult_act  = 1 * (D2-D + 2).detach().clamp(0,15)
-        # TODO: …Try swapping D2 and D?… (Shouldn't work. …KINDA: 25% at 15k, 90% at 20k.)
-        # TODO: …Okay, try only inverting for distances? 70% at 8k, 80% at 12k, 95% at 17k.
-        # TODO: …Or try only inverting for actions? 60% at 12k, 95% at 20k
+        l_dist = torch.where(D12<1.1,1.,0.)*loss_dist(d12, D12) + torch.where(D23<1.1,1.,0.)*loss_dist(d23, D23) + loss_dist(d13, D13) # TODO:
+        l_act = torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1) + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2) + (1/16) * loss_act(d13, D13, a13, action1) + (1/16) * loss_act(d13, combine(d12-1,d23-1)+1, a13, a12.detach()) # TODO:
+        l_act = l_act*3
+
+
+
+        # …The code above, for N=12, is 20% at 5k, 75% at 10k, 95% at 40k. Again: 70% at 10k, 85% at 12k, 90% at 13k (…though, wait, is it really the same code? Didn't we change the prediction target?).
+        #   Is this because of triplets, or was this always a possibility?… Or are we just having 2|3 times as much data to train on?
+        #   With perfect dist-targets and only-base actions, 25% at 6k & 55% at 10k, with improvement looking quite smooth after 2k; though dist-loss is quite high, in hundreds. To take proper advantage of exp improvement, this smoothness should still exist.
+        #   With N=8 and just-as-old-code (including the closer-predicted-action as a target), 90% at 8k, same as pairs. But the same code with N=12? 8% at 6k, 45% at 15k, 50% at 20k.
+        #     Why is this so much worse than only-base actions?
+        #     Do we want two action-nets, and only train meta-actions when their predictions agree?
+        #       …But even if we *do* do that, it wouldn't transfer to continuous-control at all, right?
+        #   What about using `action1` as the meta-target? 12% at 6k, 30% at 10k.
+        #   THEN, BETTER:
+        #   …What about just weighing the non-base part by 1/16? 35% at 6k, 50% at 8k, 60% at 10k. Smooth improvement.
+        #     …But, disconnected arrow regions are still a huge problem…
+        #   …Weighing the non-base part by 1/16 (now with (+1) in losses): 80% at 10k. 2nd run: 50% at 10k.
+        #   …What about using `action1` as the meta-target, but mult by 1/16? 45% at 10k; 50% at 10k; 45% at 10k. TODO: What's with the new dist estimation, which lets in higher dists too?
+        #     …Why so bad, comparatively… This is the so-much-simpler and much-more-grounded idea…
+        #     …Would better-high-dist-learning fix action-targets?…
+        #       60% at 10k; 70% at 10k.
+        #   TODO: …What about learning both real and fake acts, one with the real dist and the other with the sum of fake dists? Best one wins, right? …Well, the fake, assuming convergence, will always just let itself in… …Well, the trajectory may have gone through a novel state, in which case the fake may provide a shortcut.
+
+
+
+        # …What if we had not `act(src,dst)` but `act(src,dst,max_dist)`? And, `act(A,B, D1+D2) = act(A,C, D1+D2) = act(A,B, D1)`, dist-diff-gated? Would this solve our (hypothesized) interference issues?
+        #   …Can it be, one target is predicted-act, one actual? What would that correspond to?
+        # …Or, `act(src,dst, imitate_until_dist)`, `act(A,C, D1+D2) = action` and `act(A,C,D1) = act(A,B,D1)`? …The latter loss would ideally be taking the dist-min among all actions… If our dist isn't action-conditioned, then we can't compare on/off-policy actions… Except by dist-diff…
+
+
+
         # TODO: …Does distance even matter?… What if mult_act was 1?…
         #   …It still works: 95% at 14k… Unflattening at 4k…
         #   …This env is hilariously simple, then.
@@ -374,8 +422,10 @@ for iters in range(50000):
         #   TODO: (1/D**2)×: complete failure: 7% at 20k.
         #   TODO: 1×: total failure: 7% at 20k, then quickly unflattens to still-35%-at-50k.
         #     (Seeing *3* isolated arrow-rings, which I guess explains 33% reachability.)
-        l_dist = (mult_dist * (D2 - D).square()).sum()
-        l_act = (mult_act * (act(cat(src_emb, dst_emb)) - action).square()).sum()
+        # mult_dist = 1 * (d12-D12 + 2).detach().clamp(0,15)
+        # mult_act  = 1 * (d12-D12 + 2).detach().clamp(0,15)
+        # l_dist = (mult_dist * (d12 - D12).square()).sum()
+        # l_act = (mult_act * (act(cat(e1, e2)) - action1).square()).sum()
         # TODO: …Is the meager code above truly able to learn as much as all the code below?…
         #   (And if not, why not?)
         #   …80% at 10k and 95% at 13k for N=8, unflattens at 4k… Such a slowdown… Why?
@@ -384,16 +434,18 @@ for iters in range(50000):
         # TODO: …Also make a note about the "only learning ground-actions: pretty good with full distance learning, trash with only ground-dist-learning" phenomenon (particularly, about the need to re-test it in this setting), then remove the old code.
 
         # Optimize.
-        (l_dist + l_act).backward()
+        (l_dist + l_act).sum().backward()
         opt.step();  opt.zero_grad(True)
         with torch.no_grad(): # Print metrics.
             log(0, False, dist = show_dist_and_act)
-            log(1, False, l_dist = to_np(l_dist))
-            log(2, False, l_act = to_np(l_act))
+            log(1, False, l_dist = to_np(l_dist.sum()))
+            log(2, False, l_act = to_np(l_act.sum()))
             log(3, False, reached = to_np(reached.float().mean()))
 
 
         # …Possibly, log [NAS-WithOut-Training](https://arxiv.org/pdf/2006.04647.pdf) score, where in a batch and in a NN layer, we compute per-example binary codes of ReLU activations (1 when input>0, 0 when input<0), then compute the sum of pairwise abs-differences?
+
+        # …If `embed`-dist-learning is kinda like multiscale BYOL without the predictor, should we add that predictor (possibly conditioned on the dist, because we don't care if it's unusable directly post-training), so that a post-step repr can end up shifted wherever it wants?… Or is that too much…
 
 
 
