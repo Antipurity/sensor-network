@@ -62,6 +62,9 @@ Unimplemented:
     - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
       - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
     - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
+  - Replace the `dist(src, dst)` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology. Preserve faraway states, along with inputs and first-action. Then, we can just learn the min-dist `act(src, dst)`.
+    - (The dead-simple "learn the actions" performs worse than also learning the dist map, so representation-learning is important.)
+    - Seems to perform best with `A→B→C` double-stepping: `act(A,C) = act(A,B).detach()` (in addition to single-step `act(prev,next) = prev→next` grounding).
 """
 
 
@@ -114,7 +117,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 8, 100
+N, batch_size = 16, 100
 action_sz = 64
 
 unroll_len = N
@@ -289,6 +292,7 @@ for iters in range(50000):
             rb = (rb+1) % len(replay_buffer)
             replay_buffer[rb] = (A[1], A[2], D, B[1]) # (src, action, D, dst)
             # replay_buffer[rb] = (unroll[i], unroll[i+1]) # TODO:
+            # TODO: …Pairs may not have exponential improvement built-in after all… So, implement A→B→C triplets, with meta-loss for A and ground-loss for B (and all distance-learning stuffed into one loss, made up of 3 components).
 
     # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -303,7 +307,7 @@ for iters in range(50000):
 
         # Learn shortest paths and shortest distances.
         mult_dist = (D2-D + 2).detach().clamp(0,15)
-        mult_act  = (D2-D + 2).detach().clamp(0,15)
+        mult_act  = 1 * (D2-D + 2).detach().clamp(0,15)
         # TODO: …Try swapping D2 and D?… (Shouldn't work. …KINDA: 25% at 15k, 90% at 20k.)
         # TODO: …Okay, try only inverting for distances? 70% at 8k, 80% at 12k, 95% at 17k.
         # TODO: …Or try only inverting for actions? 60% at 12k, 95% at 20k
@@ -329,6 +333,7 @@ for iters in range(50000):
         #     80% at 9k.
         # TODO: Re-run dist-diff-weighted act-learning.
         #   95% at 9k. No significant advantages.
+        #   80% at 10k.
         #   TODO: Try 1/D**2.
         #     90% at 8k.
         # TODO: …Try distance-learning-less.
@@ -347,16 +352,30 @@ for iters in range(50000):
         #     Failing with 25% at 20k, as expected.
         #   Always worse than with dist-learning, so I guess that does do something useful.
         # TODO: Try dist-diff-weighting, but without detaching the inputs of `act`.
+        #   80% at 9k, 95% at 14k.
         #   TODO: Try 1.
         #     95% at 10k.
         #   TODO: Try 1 * ×.
         #     95% at 10k. (Dist-diff-weighting doesn't make a difference then? Or, only matters to reach near-99%? I guess it would matter a lot more in very long paths, especially in envs with many episodes in one, where we'd need to discard different-episode paths via learned-dist in order to not smudge everything.)
         #   TODO: Try torch.where(D < 1.1, 1., 0.). (Ground-only.)
         #     65% at 10k, 75% at 20k.
+        #   TODO: Try (+1) instead of (+2) in actions.
+        #     85% at 10k, 95% at 11k.
+        #   TODO: Try 1/D**2.
+        #     ✓ 90% at 8k, 95% at 9k.
         # TODO: …Run with N=12…
+        #   TODO: (1/D**2)×: 65% at 14k. No more. Pretty bad, compared to the old code.
+        #   TODO: 1×: 10% at 2k, 10% at 12k, 45% at 20k. Really bad.
+        #     TODO: With `act`-arg detaching? 15% at 10k, 45% at 20k. Just as bad.
+        #   (Seeing lots of swathes of whole isolated arrow-rings. And distance is misshapen, as if those rings are closer.)
+        #   Doesn't feel solved, anymore.
+        #   …So are triplets essential to good performance (and exponential-combining, not via hoping that NNs generalize to nearby destinations, but via *actually* using midpoint destinations)?…
         # TODO: …Run with N=16…
+        #   TODO: (1/D**2)×: complete failure: 7% at 20k.
+        #   TODO: 1×: total failure: 7% at 20k, then quickly unflattens to still-35%-at-50k.
+        #     (Seeing *3* isolated arrow-rings, which I guess explains 33% reachability.)
         l_dist = (mult_dist * (D2 - D).square()).sum()
-        l_act = (mult_act * (act(cat(src_emb, dst_emb).detach()) - action).square()).sum()
+        l_act = (mult_act * (act(cat(src_emb, dst_emb)) - action).square()).sum()
         # TODO: …Is the meager code above truly able to learn as much as all the code below?…
         #   (And if not, why not?)
         #   …80% at 10k and 95% at 13k for N=8, unflattens at 4k… Such a slowdown… Why?
@@ -372,6 +391,9 @@ for iters in range(50000):
             log(1, False, l_dist = to_np(l_dist))
             log(2, False, l_act = to_np(l_act))
             log(3, False, reached = to_np(reached.float().mean()))
+
+
+        # …Possibly, log [NAS-WithOut-Training](https://arxiv.org/pdf/2006.04647.pdf) score, where in a batch and in a NN layer, we compute per-example binary codes of ReLU activations (1 when input>0, 0 when input<0), then compute the sum of pairwise abs-differences?
 
 
 
