@@ -117,7 +117,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-N, batch_size = 12, 100
+N, batch_size = 16, 100
 action_sz = 64
 
 unroll_len = N
@@ -263,7 +263,6 @@ for iters in range(50000):
     # Sample a batch of trajectories.
     board = env_init(N, batch_size=batch_size)
     reached = torch.full((batch_size, 1), False, device=device)
-    # prev_action, prev_board = action, board # TODO: Won't be needing these. The action, at least.
     with torch.no_grad():
         # First pick the target to go to.
         target = env_init(N, batch_size=batch_size)
@@ -273,14 +272,11 @@ for iters in range(50000):
         unroll = [(0, board, action.detach())]
         for u in range(unroll_len):
             # Do the RNN transition (and an environment step), `unroll_len` times.
-            # prev_action, prev_board = action, board # TODO:
             board = env_step(N, board, action[..., 0:4])
             action = get_act(embed(board), dst_emb)
 
             reached |= (board == target).all(-1, keepdim=True)
             unroll.append((u+1, board, action))
-            # rb = (rb+1) % len(replay_buffer) # TODO:
-            # replay_buffer[rb] = ((u, prev_action, prev_board), (u+1, action, board)) # TODO:
 
         # Save random faraway A → … → B pairs in the replay buffer.
         for _ in range(unroll_len):
@@ -294,7 +290,6 @@ for iters in range(50000):
             rb = (rb+1) % len(replay_buffer)
             replay_buffer[rb] = (A[1], A[2], D12, B[1], B[2], D23, C[1])
             #   (s1, action1, D12, s2, action2, D23, s3)
-            # TODO: …Pairs may not have exponential improvement built-in after all… So, implement A→B→C triplets, with meta-loss for A and ground-loss for B (and all distance-learning stuffed into one loss, made up of 3 components).
 
     # Replay from the buffer. (Needs Python 3.6+ for our convenience.)
     choices = [c for c in random.choices(replay_buffer, k=updates_per_unroll) if c is not None]
@@ -309,9 +304,8 @@ for iters in range(50000):
 
         e1, e2, e3 = embed(s1), embed(s2), embed(s3)
         d12, d23, d13 = dist(e1, e2), dist(e2, e3), dist(e1, e3)
-        D12, D23, D13 = D12.log()+1, D23.log()+1, (D12 + D23).log()+1
-        # D12, D23, D13 = D12, D23, (D12 + D23) # TODO: Try linear distances, just because we can? …Not bad: 90% in 8k. And, distances are very clearly and correctly arranged.
-        #   TODO: Try grounding-only.
+        # D12, D23, D13 = D12.log()+1, D23.log()+1, (D12 + D23).log()+1
+        D12, D23, D13 = D12, D23, (D12 + D23) # TODO: (Lin-space. Very cleanly arranged.)
 
         a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3))
 
@@ -320,42 +314,47 @@ for iters in range(50000):
             # Always nonzero, but fades if dist is too high; prefers lower dists.
             mult = (d.detach() - D)
             mult = torch.where( D>1.1, 1 * torch.where(mult>0, mult+1, mult.exp()).clamp(0,15), torch.tensor(1., device=device) )
-            # TODO: Maybe, the distance in particular should always let in some gradient, possibly by .exp(<=0)? If on-policy, this shouldn't really matter; and, might make beginnings better.
             return (mult * (d - D).square())
         def loss_act(d,D, a,A):
+            # Tries to cut off anything not-min-dist, if in lin-space.
             mult = torch.where( D>1.1, 1 * (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )
             return (mult * (a - A).square())
 
         # Learn shortest paths and shortest distances.
-        l_dist = torch.where(D12<1.1,1.,0.)*loss_dist(d12, D12) + torch.where(D23<1.1,1.,0.)*loss_dist(d23, D23) + loss_dist(d13, D13) # TODO:
-        l_act = torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1) + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2) + (1/16) * loss_act(d13, D13, a13, action1) + (1/16) * loss_act(d13, combine(d12-1,d23-1)+1, a13, a12.detach()) # TODO:
+        l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, D13)
+        l_act = torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1) + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2) + (1/16) * loss_act(d13, D13, a13, a12.detach())
+        #   …What we're really missing here is the ability to action-condition the distance, so that we don't have to rely on sampled dist (which is random beyond the immediate horizon of what we've solved, effectively removing our ability to exp-combine)… …But isn't using the measured distance, in fact, the better form of action-cond, namely, task-cond?
         l_act = l_act*3
 
 
 
-        # …The code above, for N=12, is 20% at 5k, 75% at 10k, 95% at 40k. Again: 70% at 10k, 85% at 12k, 90% at 13k (…though, wait, is it really the same code? Didn't we change the prediction target?).
-        #   Is this because of triplets, or was this always a possibility?… Or are we just having 2|3 times as much data to train on?
-        #   With perfect dist-targets and only-base actions, 25% at 6k & 55% at 10k, with improvement looking quite smooth after 2k; though dist-loss is quite high, in hundreds. To take proper advantage of exp improvement, this smoothness should still exist.
+        # …The code above, for N=12:
         #   With N=8 and just-as-old-code (including the closer-predicted-action as a target), 90% at 8k, same as pairs. But the same code with N=12? 8% at 6k, 45% at 15k, 50% at 20k.
         #     Why is this so much worse than only-base actions?
-        #     Do we want two action-nets, and only train meta-actions when their predictions agree?
-        #       …But even if we *do* do that, it wouldn't transfer to continuous-control at all, right?
-        #   What about using `action1` as the meta-target? 12% at 6k, 30% at 10k.
-        #   THEN, BETTER:
+        #       Linear-space: …80% at 5k, 85% at 6k. 2× the efficiency of full-action-plans.
+        #       Logarithmic-space: 75% at 10k. OR WORSE.
         #   …What about just weighing the non-base part by 1/16? 35% at 6k, 50% at 8k, 60% at 10k. Smooth improvement.
         #     …But, disconnected arrow regions are still a huge problem…
         #   …Weighing the non-base part by 1/16 (now with (+1) in losses): 80% at 10k. 2nd run: 50% at 10k.
-        #   …What about using `action1` as the meta-target, but mult by 1/16? 45% at 10k; 50% at 10k; 45% at 10k. TODO: What's with the new dist estimation, which lets in higher dists too?
-        #     …Why so bad, comparatively… This is the so-much-simpler and much-more-grounded idea…
-        #     …Would better-high-dist-learning fix action-targets?…
-        #       60% at 10k; 70% at 10k.
-        #   TODO: …What about learning both real and fake acts, one with the real dist and the other with the sum of fake dists? Best one wins, right? …Well, the fake, assuming convergence, will always just let itself in… …Well, the trajectory may have gone through a novel state, in which case the fake may provide a shortcut.
+        #     Linear-space with second-order-dist-weighing:  85% at 7k; no more.
+        #       (`D13.min(combine(d12-1,d23-1).detach()+1)`)
+        #     Linear-space with first-order-dist-weighing:   85% at 8k, 90% at 9k, 95% at 12k.
+        #     Linear-space with min-of-orders-dist-weighing: 90% at 10k, 95% at 11k; no more.
+        #       (I like this one the most, for now: initially-unstable, but bubbles would get punctured.)
+        #     Linear-space with max-of-orders-dist-weighing: 90% at 7k; no more.
+        #     …Same performance everywhere… Starting to think that this env is too trivial, again…
+        #   …What about using `action1` as the meta-target, but mult by 1/16? 60% at 10k; 70% at 10k.
+        #     (Doesn't allow exp-combining of bringing in a solved subtask. Needs linear-time to expand.)
 
 
 
         # …What if we had not `act(src,dst)` but `act(src,dst,max_dist)`? And, `act(A,B, D1+D2) = act(A,C, D1+D2) = act(A,B, D1)`, dist-diff-gated? Would this solve our (hypothesized) interference issues?
         #   …Can it be, one target is predicted-act, one actual? What would that correspond to?
         # …Or, `act(src,dst, imitate_until_dist)`, `act(A,C, D1+D2) = action` and `act(A,C,D1) = act(A,B,D1)`? …The latter loss would ideally be taking the dist-min among all actions… If our dist isn't action-conditioned, then we can't compare on/off-policy actions… Except by dist-diff…
+
+
+
+        # …What if we do have two `act` nets, and gate task-combining by how well the first task is learned?
 
 
 
