@@ -156,8 +156,8 @@ embed = net(N*N, emb_sz) # An locally-isometric map of the environment, learned 
 act = nn.Sequential( # (prev_emb, dst_emb) → action
     # (With an `embed`ded world model, `act`'s per-src decision boundaries may be simplified a lot: to the action-to-Nearest-Neighbor-of-dst.)
     #   (Evidence: we can reach 80% reachability for N=8 when we learn *all* distances, but only 30% when we only learn single-transition distances to be 1.)
-    net(emb_sz + emb_sz, action_sz),
-    nn.LayerNorm(action_sz, elementwise_affine=False),
+    net(emb_sz + emb_sz, action_sz*2), # TODO:
+    nn.LayerNorm(action_sz*2, elementwise_affine=False),
 ).to(device)
 opt = torch.optim.Adam([*embed.parameters(), *act.parameters()], lr=1e-3)
 
@@ -181,7 +181,10 @@ def show_dist_and_act(plt, key):
         plt.quiver(x, y, u.cpu(), v.cpu(), scale=1, scale_units='xy', angles='xy', units='xy')
 def get_act(src_emb, dst_emb):
     if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device) # TODO:
-    else: action = act(cat(src_emb, dst_emb))
+    else:
+        a1, a2 = torch.chunk(act(cat(src_emb, dst_emb)), 2, -1) # TODO:
+        p = random.random()
+        action = a1*p + (1-p)*a2
     return action
 
 
@@ -235,7 +238,8 @@ for iters in range(50000):
         # D12, D23, D13 = D12.log()+1, D23.log()+1, (D12 + D23).log()+1 # (Log-space. Often performs worse.)
         D12, D23, D13 = D12, D23, (D12 + D23) # (Lin-space. Ends up very cleanly arranged.)
 
-        a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3))
+        # a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3)) # TODO: Chunk?
+        (a12, a12_), (a23, a23_), (a13, a13_) = torch.chunk(act(cat(e1,e2)), 2, -1), torch.chunk(act(cat(e2,e3)), 2, -1), torch.chunk(act(cat(e1,e3)), 2, -1) # TODO:
 
         def loss_dist(d,D):
             # Always nonzero, but fades if dist is too high; prefers lower dists.
@@ -248,11 +252,16 @@ for iters in range(50000):
             return (mult * (a - A).square())
 
         # Learn shortest distances, and shortest-actions and combined-plans.
+        act_target = a12.detach()
+        act_gating = 1 / ((a12 - a12_).square().mean(-1, keepdim=True) + 1) # TODO: Gating to only let well-predicted actions in.
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, D13)
         l_act = 0
         l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1)
         l_act = l_act + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2)
-        l_act = l_act + (1/16) * loss_act(d13, (d12+d23).detach(), a13, a12.detach())
+        l_act = l_act + act_gating * loss_act(d13, (d12+d23).detach(), a13, act_target)
+        l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12_, action1) # TODO: Are these extras good?
+        l_act = l_act + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23_, action2)
+        l_act = l_act + act_gating * loss_act(d13, (d12+d23).detach(), a13_, act_target)
         l_act = l_act*3
 
 
@@ -286,6 +295,7 @@ for iters in range(50000):
 
         # …What if we do have two `act` nets, and gate task-combining by how well the first task is learned?
         # TODO: Try making the output of `act` twice as big, and all action-getting to randomly interpolate between the two halves. When training, train both. When gating exp-combining, multiply the loss by `1 / ((act1-act2).square().mean(-1, keepdim=True) + 1)`, not by (1/16).
+        #   No, the two halves end up equal nearly instantly. Insufficient.
         # TODO: Try having an actual `act2`, and do the same but in different nets.
         #   (Separate-net should improve convergence speed; same-net might.)
 
@@ -299,6 +309,7 @@ for iters in range(50000):
             log(1, False, l_dist = to_np(l_dist.sum()))
             log(2, False, l_act = to_np(l_act.sum()))
             log(3, False, reached = to_np(reached.float().mean()))
+            log(4, False, act_gating = to_np(act_gating.mean().float().mean())) # TODO: …WAY too close to 1, already after 100 epochs… So, have to have an actual act2.
 
 
         # …Possibly, log [NAS-WithOut-Training](https://arxiv.org/pdf/2006.04647.pdf) score, where in a batch and in a NN layer, we compute per-example binary codes of ReLU activations (1 when input>0, 0 when input<0), then compute the sum of pairwise abs-differences?
@@ -310,8 +321,6 @@ for iters in range(50000):
         #   (If our goal-space is the compressed repr of history: unexpected human input changes that history, but an old-goal agent would try to undo that change, and/or prompt/control human inputs. Control should be in goal-setting.)
         #   Mathematically, it's maximizing [mutual info](https://en.wikipedia.org/wiki/Mutual_information): `sum(x&y, p(x,y) * log(p(x,y) / (p(x)*p(y))))`: sensitivity to least-probable states & actions, and most-probable state-action pairs.
         #     (Or [pointwise MI](https://en.wikipedia.org/wiki/Pointwise_mutual_information): `log(p(y|x) / p(y))`.)
-
-        # TODO: Try doing a 3D t-SNE on `embed`dings. (Ideally, we'd see a torus.)
 
 
 
