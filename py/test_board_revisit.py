@@ -325,7 +325,7 @@ for iters in range(50000):
 
         # Learn shortest paths and shortest distances.
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, D13)
-        l_act = torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1) + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2) + (1/16) * loss_act(d13, D13, a13, a12.detach()) # TODO:
+        l_act = torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1) + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2) + (1/16) * loss_act(d13, (d12+d23).detach(), a13, a12.detach()) # TODO:
         l_act = l_act*3
 
 
@@ -339,27 +339,32 @@ for iters in range(50000):
         #     …But, disconnected arrow regions are still a huge problem…
         #   …What about using `action1` as the meta-target, but mult by 1/16? 60% at 10k; 70% at 10k.
         #     (Doesn't allow exp-combining of bringing in a solved subtask. Needs linear-time to expand.)
+        #     (Worse than the thing below.)
         #   …Weighing the non-base part by 1/16 (now with (+1) in losses): 80% at 10k. 2nd run: 50% at 10k.
-        #     Linear-space with second-order-dist-weighing:  85% at 7k; no more.
-        #       N=16: 90% at 14k. (Flatline for 7k.)
-        #         Shit, fam, that's all you had to say.
-        #         45% at 12k.
-        #         dist_diff+1: 90% at 15k; 95% at 15k. (Flatline for 5k.)
-        #           (Much easier to burst bubbles.)
-        #     Linear-space with first-order-dist-weighing:   85% at 8k, 90% at 9k, 95% at 12k.
-        #       N=16: 60% at 10k, 90% at 18k; 60% at 14k, 80% at 20k; 45% at 13k. (Flatline for 5k|6k.)
-        #         dist_diff+1: 60% at 14k. (Flatline for 5k.)
-        #     Linear-space with min-of-orders-dist-weighing: 90% at 10k, 95% at 11k; no more.
-        #       (`D13.min(combine(d12-1,d23-1).detach()+1)` in log-space. `D13.min(d12+d23).detach())` in lin-space.)
+        #     Linear-space with second-order-dist-weighing:
+        #       N=16, dist_diff+1: 90% at 15k; 95% at 15k; 90% at 15k; 90% at 19k. (Flatline for 5k|3k.)
+        #         (Much easier to burst low-predicted-distance bubbles.)
+        #     Linear-space with first-order-dist-weighing:
+        #       N=16, dist_diff+1: 60% at 14k, 90% at 20k; 85% at 12k and no more; 85% at 14k and no more. (Flatline for 5k.)
+        #     Linear-space with min-of-orders-dist-weighing:
+        #       (`D13.min(combine(d12-1,d23-1).detach()+1)` in log-space. `D13.min(d12+d23).detach()` in lin-space.)
         #       (I like this one the most, for now: initially-unstable, but bubbles would get punctured.)
-        #       N=16: 90% at 11k, 95% at 12k. (Flatline for 6k.)
+        #       N=16: 90% at 11k, 95% at 12k; 85% at 13k. (Flatline for 6k|6k.)
         #     Linear-space with max-of-orders-dist-weighing: 90% at 7k; no more.
-        #       N=16: 55% at 12k, and no more.
-        #     TODO: …More runs with dist_diff+1…
+        #       N=16: 80% at 10k, 85% at 16k; 75% at 15k.
+        #     …So.
+        #     …I think not using sample-dist (D13) for meta-act-updating performs a bit better.
 
 
 
         # …What if we do have two `act` nets, and gate task-combining by how well the first task is learned?
+        # TODO: Try making the output of `act` twice as big, and all action-getting to randomly interpolate between the two halves. When training, train both. When gating exp-combining, multiply the loss by `1 / ((act1-act2).square().mean(-1, keepdim=True) + 1)`, not by (1/16).
+        # TODO: Try having an actual `act2`, and do the same but in different nets.
+        #   (Separate-net should improve convergence speed; same-net might.)
+
+
+
+        # TODO: …Remove everything below this now, right?…
 
 
 
