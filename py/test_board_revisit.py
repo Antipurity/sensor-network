@@ -65,7 +65,7 @@ Unimplemented:
       - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
     - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
   - Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology (a torus, in this 2D env). Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
-    - (The dead-simple "learn the `steps=1` actions" without dist-map-learning performs worse than with that, so representation-learning is important.)
+    - (The dead-simple "learn the `steps=1` actions" without dist-map-learning performs worse than with that, so representation-learning is important, and ensures (local) directional alignment.)
     - (While performing simple self-imitation weighed by the difference of in-replay and in-embedding dists works, for which storing even simple faraway pairs suffice, it doesn't scale.)
     - With `A→B→C` faraway double-stepping, we can do exponential improvement by reusing a task's result: `act(A,C) = act(A,B).detach()` — in addition to single-step `act(prev,next) = prev→next` grounding, and to dist-learning. (GANs are replaced by faraway sampling.)
 """
@@ -156,10 +156,14 @@ embed = net(N*N, emb_sz) # An locally-isometric map of the environment, learned 
 act = nn.Sequential( # (prev_emb, dst_emb) → action
     # (With an `embed`ded world model, `act`'s per-src decision boundaries may be simplified a lot: to the action-to-Nearest-Neighbor-of-dst.)
     #   (Evidence: we can reach 80% reachability for N=8 when we learn *all* distances, but only 30% when we only learn single-transition distances to be 1.)
-    net(emb_sz + emb_sz, action_sz*2), # TODO:
-    nn.LayerNorm(action_sz*2, elementwise_affine=False),
+    net(emb_sz + emb_sz, action_sz), # TODO:
+    nn.LayerNorm(action_sz, elementwise_affine=False),
 ).to(device)
-opt = torch.optim.Adam([*embed.parameters(), *act.parameters()], lr=1e-3)
+act_ = nn.Sequential( # (prev_emb, dst_emb) → action # TODO:
+    net(emb_sz + emb_sz, action_sz), # TODO:
+    nn.LayerNorm(action_sz, elementwise_affine=False),
+).to(device)
+opt = torch.optim.Adam([*embed.parameters(), *act.parameters(), *act_.parameters()], lr=1e-3)
 
 
 
@@ -182,7 +186,7 @@ def show_dist_and_act(plt, key):
 def get_act(src_emb, dst_emb):
     if iters % 100 < 50 and random.randint(1, 10) <= 3: action = torch.randn(batch_size, action_sz, device=device) # TODO:
     else:
-        a1, a2 = torch.chunk(act(cat(src_emb, dst_emb)), 2, -1) # TODO:
+        a1, a2 = act(cat(src_emb, dst_emb)), act_(cat(src_emb, dst_emb)) # torch.chunk(act(cat(src_emb, dst_emb)), 2, -1) # TODO:
         p = random.random()
         action = a1*p + (1-p)*a2
     return action
@@ -239,9 +243,9 @@ for iters in range(50000):
         D12, D23, D13 = D12, D23, (D12 + D23) # (Lin-space. Ends up very cleanly arranged.)
 
         # a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3)) # TODO: Chunk?
-        # a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3)) # TODO:
-        # a12_, a23_, a13_ = act_(cat(e1,e2)), act_(cat(e2,e3)), act_(cat(e1,e3)) # TODO:
-        (a12, a12_), (a23, a23_), (a13, a13_) = torch.chunk(act(cat(e1,e2)), 2, -1), torch.chunk((cat(e2,e3)), 2, -1), torch.chunk(act(cat(e1,e3)), 2, -1) # TODO:
+        a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3)) # TODO:
+        a12_, a23_, a13_ = act_(cat(e1,e2)), act_(cat(e2,e3)), act_(cat(e1,e3)) # TODO:
+        # (a12, a12_), (a23, a23_), (a13, a13_) = torch.chunk(act(cat(e1,e2)), 2, -1), torch.chunk((cat(e2,e3)), 2, -1), torch.chunk(act(cat(e1,e3)), 2, -1) # TODO:
 
         def loss_dist(d,D):
             # Always nonzero, but fades if dist is too high; prefers lower dists.
@@ -255,7 +259,7 @@ for iters in range(50000):
 
         # Learn shortest distances, and shortest-actions and combined-plans.
         act_target = a12.detach()
-        act_gating = (1/8) * (-(a12 - a12_).abs().sum(-1, keepdim=True)).exp().detach() # TODO: Gating to only let well-predicted actions in.
+        act_gating = 1 * (-(a12 - a12_).abs().sum(-1, keepdim=True)).exp().detach() # TODO: Gating to only let well-predicted actions in.
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, D13)
         l_act = 0
         l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1)
@@ -300,12 +304,17 @@ for iters in range(50000):
         #   No, the two halves end up equal nearly instantly. Insufficient.
         #     …Or, wait, is it because actual ensembles end up too similar too quickly?… TODO: Re-test. (For future reference, at least.)
         #   1×: 5% at 12k (huh)
-        #   1/8×: 
+        #   1/8×: 6% at 25k (uh-huh)
+        #   …Okay, there's no free ensembling.
         # TODO: Try having an actual `act2`, and do the same but in different nets.
         #   (Separate-net should improve convergence speed; same-net might.)
         #   1×: 90% at 13k, flatline for 9k. (Learning dynamics are suspicious: act-gating grows while flatlining, then is very low once reachability explosively grows.)
         #   1/8×: 50% at 14k.
         #   TODO: FORGOT TO .detach() `act_gating`; RE-RUN
+        #     1×: 15% at 10k, 90% at 13k (with false-starts)
+        #     1/8×: 70% at 10k, 85% at 14k, 90% at 16k.
+        #       (The intermediate states actually clearly combine tasks, with complex regions that lead to each other then to the goal. But maybe this env is too small for this to be an issue.)
+        #     No real benefit, it seems.
 
 
 
@@ -336,5 +345,4 @@ for iters in range(50000):
 
 
 
-        # if iters == 1000: clear() # TODO: Does the reachability plot look like it plateaus after learning 1-step actions (2k…4k updates, 25% with N=8)? …No, it's way slower to reach 25%… Not sure if exponential-growth or stupid…
 finish()
