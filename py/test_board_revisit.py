@@ -64,7 +64,7 @@ Unimplemented:
     - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
       - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
     - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
-  - Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology. Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
+  - Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology (a torus, in this 2D env). Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
     - (The dead-simple "learn the `steps=1` actions" without dist-map-learning performs worse than with that, so representation-learning is important.)
     - (While performing simple self-imitation weighed by the difference of in-replay and in-embedding dists works, for which storing even simple faraway pairs suffice, it doesn't scale.)
     - With `A→B→C` faraway double-stepping, we can do exponential improvement by reusing a task's result: `act(A,C) = act(A,B).detach()` — in addition to single-step `act(prev,next) = prev→next` grounding, and to dist-learning. (GANs are replaced by faraway sampling.)
@@ -239,7 +239,9 @@ for iters in range(50000):
         D12, D23, D13 = D12, D23, (D12 + D23) # (Lin-space. Ends up very cleanly arranged.)
 
         # a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3)) # TODO: Chunk?
-        (a12, a12_), (a23, a23_), (a13, a13_) = torch.chunk(act(cat(e1,e2)), 2, -1), torch.chunk(act(cat(e2,e3)), 2, -1), torch.chunk(act(cat(e1,e3)), 2, -1) # TODO:
+        # a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3)) # TODO:
+        # a12_, a23_, a13_ = act_(cat(e1,e2)), act_(cat(e2,e3)), act_(cat(e1,e3)) # TODO:
+        (a12, a12_), (a23, a23_), (a13, a13_) = torch.chunk(act(cat(e1,e2)), 2, -1), torch.chunk((cat(e2,e3)), 2, -1), torch.chunk(act(cat(e1,e3)), 2, -1) # TODO:
 
         def loss_dist(d,D):
             # Always nonzero, but fades if dist is too high; prefers lower dists.
@@ -253,13 +255,13 @@ for iters in range(50000):
 
         # Learn shortest distances, and shortest-actions and combined-plans.
         act_target = a12.detach()
-        act_gating = 1 / ((a12 - a12_).square().mean(-1, keepdim=True) + 1) # TODO: Gating to only let well-predicted actions in.
+        act_gating = (1/8) * (-(a12 - a12_).abs().sum(-1, keepdim=True)).exp().detach() # TODO: Gating to only let well-predicted actions in.
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, D13)
         l_act = 0
         l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1)
         l_act = l_act + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2)
         l_act = l_act + act_gating * loss_act(d13, (d12+d23).detach(), a13, act_target)
-        l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12_, action1) # TODO: Are these extras good?
+        l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12_, action1) # TODO: Are these extras good? …Hardly.
         l_act = l_act + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23_, action2)
         l_act = l_act + act_gating * loss_act(d13, (d12+d23).detach(), a13_, act_target)
         l_act = l_act*3
@@ -296,8 +298,14 @@ for iters in range(50000):
         # …What if we do have two `act` nets, and gate task-combining by how well the first task is learned?
         # TODO: Try making the output of `act` twice as big, and all action-getting to randomly interpolate between the two halves. When training, train both. When gating exp-combining, multiply the loss by `1 / ((act1-act2).square().mean(-1, keepdim=True) + 1)`, not by (1/16).
         #   No, the two halves end up equal nearly instantly. Insufficient.
+        #     …Or, wait, is it because actual ensembles end up too similar too quickly?… TODO: Re-test. (For future reference, at least.)
+        #   1×: 5% at 12k (huh)
+        #   1/8×: 
         # TODO: Try having an actual `act2`, and do the same but in different nets.
         #   (Separate-net should improve convergence speed; same-net might.)
+        #   1×: 90% at 13k, flatline for 9k. (Learning dynamics are suspicious: act-gating grows while flatlining, then is very low once reachability explosively grows.)
+        #   1/8×: 50% at 14k.
+        #   TODO: FORGOT TO .detach() `act_gating`; RE-RUN
 
 
 
