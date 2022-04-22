@@ -36,9 +36,11 @@ Unimplemented:
 
 ---
 
-# Past attempts to overcome the quadratic bottleneck 
+# Past attempts to overcome the quadratic bottleneck
 
 ---
+
+(As tedious as this may be to read through, this research trajectory was far more tedious to unroll.)
 
 - For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', possibly BYOL-learned, by notation here):
   - Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
@@ -62,9 +64,10 @@ Unimplemented:
     - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
       - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
     - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
-  - Replace the `dist(src, dst)` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology. Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
-    - (The dead-simple "learn the actions" performs worse than also learning the dist map, so representation-learning is important.)
-    - Seems to perform best with `A→B→C` double-stepping: `act(A,C) = act(A,B).detach()` (in addition to single-step `act(prev,next) = prev→next` grounding).
+  - Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology. Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
+    - (The dead-simple "learn the `steps=1` actions" without dist-map-learning performs worse than with that, so representation-learning is important.)
+    - (While performing simple self-imitation weighed by the difference of in-replay and in-embedding dists works, for which storing even simple faraway pairs suffice, it doesn't scale.)
+    - With `A→B→C` faraway double-stepping, we can do exponential improvement by reusing a task's result: `act(A,C) = act(A,B).detach()` — in addition to single-step `act(prev,next) = prev→next` grounding, and to dist-learning. (GANs are replaced by faraway sampling.)
 """
 
 
@@ -304,15 +307,15 @@ for iters in range(50000):
 
         e1, e2, e3 = embed(s1), embed(s2), embed(s3)
         d12, d23, d13 = dist(e1, e2), dist(e2, e3), dist(e1, e3)
-        # D12, D23, D13 = D12.log()+1, D23.log()+1, (D12 + D23).log()+1
-        D12, D23, D13 = D12, D23, (D12 + D23) # TODO: (Lin-space. Very cleanly arranged.)
+        # D12, D23, D13 = D12.log()+1, D23.log()+1, (D12 + D23).log()+1 # (Log-space. Often performs worse.)
+        D12, D23, D13 = D12, D23, (D12 + D23) # (Lin-space. Ends up very cleanly arranged.)
 
         a12, a23, a13 = act(cat(e1,e2)), act(cat(e2,e3)), act(cat(e1,e3))
 
         # TODO:
         def loss_dist(d,D):
             # Always nonzero, but fades if dist is too high; prefers lower dists.
-            mult = (d.detach() - D)
+            mult = (d.detach() - D) + 1 # TODO:
             mult = torch.where( D>1.1, 1 * torch.where(mult>0, mult+1, mult.exp()).clamp(0,15), torch.tensor(1., device=device) )
             return (mult * (d - D).square())
         def loss_act(d,D, a,A):
@@ -322,8 +325,7 @@ for iters in range(50000):
 
         # Learn shortest paths and shortest distances.
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, D13)
-        l_act = torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1) + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2) + (1/16) * loss_act(d13, D13, a13, a12.detach())
-        #   …What we're really missing here is the ability to action-condition the distance, so that we don't have to rely on sampled dist (which is random beyond the immediate horizon of what we've solved, effectively removing our ability to exp-combine)… …But isn't using the measured distance, in fact, the better form of action-cond, namely, task-cond?
+        l_act = torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1) + torch.where(D23<1.1,1.,0.)*loss_act(d23, D23, a23, action2) + (1/16) * loss_act(d13, D13, a13, a12.detach()) # TODO:
         l_act = l_act*3
 
 
@@ -335,22 +337,25 @@ for iters in range(50000):
         #       Logarithmic-space: 75% at 10k. OR WORSE.
         #   …What about just weighing the non-base part by 1/16? 35% at 6k, 50% at 8k, 60% at 10k. Smooth improvement.
         #     …But, disconnected arrow regions are still a huge problem…
-        #   …Weighing the non-base part by 1/16 (now with (+1) in losses): 80% at 10k. 2nd run: 50% at 10k.
-        #     Linear-space with second-order-dist-weighing:  85% at 7k; no more.
-        #       (`D13.min(combine(d12-1,d23-1).detach()+1)`)
-        #     Linear-space with first-order-dist-weighing:   85% at 8k, 90% at 9k, 95% at 12k.
-        #     Linear-space with min-of-orders-dist-weighing: 90% at 10k, 95% at 11k; no more.
-        #       (I like this one the most, for now: initially-unstable, but bubbles would get punctured.)
-        #     Linear-space with max-of-orders-dist-weighing: 90% at 7k; no more.
-        #     …Same performance everywhere… Starting to think that this env is too trivial, again…
         #   …What about using `action1` as the meta-target, but mult by 1/16? 60% at 10k; 70% at 10k.
         #     (Doesn't allow exp-combining of bringing in a solved subtask. Needs linear-time to expand.)
-
-
-
-        # …What if we had not `act(src,dst)` but `act(src,dst,max_dist)`? And, `act(A,B, D1+D2) = act(A,C, D1+D2) = act(A,B, D1)`, dist-diff-gated? Would this solve our (hypothesized) interference issues?
-        #   …Can it be, one target is predicted-act, one actual? What would that correspond to?
-        # …Or, `act(src,dst, imitate_until_dist)`, `act(A,C, D1+D2) = action` and `act(A,C,D1) = act(A,B,D1)`? …The latter loss would ideally be taking the dist-min among all actions… If our dist isn't action-conditioned, then we can't compare on/off-policy actions… Except by dist-diff…
+        #   …Weighing the non-base part by 1/16 (now with (+1) in losses): 80% at 10k. 2nd run: 50% at 10k.
+        #     Linear-space with second-order-dist-weighing:  85% at 7k; no more.
+        #       N=16: 90% at 14k. (Flatline for 7k.)
+        #         Shit, fam, that's all you had to say.
+        #         45% at 12k.
+        #         dist_diff+1: 90% at 15k; 95% at 15k. (Flatline for 5k.)
+        #           (Much easier to burst bubbles.)
+        #     Linear-space with first-order-dist-weighing:   85% at 8k, 90% at 9k, 95% at 12k.
+        #       N=16: 60% at 10k, 90% at 18k; 60% at 14k, 80% at 20k; 45% at 13k. (Flatline for 5k|6k.)
+        #         dist_diff+1: 60% at 14k. (Flatline for 5k.)
+        #     Linear-space with min-of-orders-dist-weighing: 90% at 10k, 95% at 11k; no more.
+        #       (`D13.min(combine(d12-1,d23-1).detach()+1)` in log-space. `D13.min(d12+d23).detach())` in lin-space.)
+        #       (I like this one the most, for now: initially-unstable, but bubbles would get punctured.)
+        #       N=16: 90% at 11k, 95% at 12k. (Flatline for 6k.)
+        #     Linear-space with max-of-orders-dist-weighing: 90% at 7k; no more.
+        #       N=16: 55% at 12k, and no more.
+        #     TODO: …More runs with dist_diff+1…
 
 
 
