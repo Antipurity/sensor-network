@@ -239,54 +239,44 @@ for iter in range(500000):
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
 
     # TODO: Find out why even distance-minimization remains broken.
+    #   TODO: Don't. Just replace it with exp-pretraining.
 
 
 
 
-# TODO: Empirically verify (or contradict) that RL can really be replaced by pointwise minimization.
-#   - TODO: Just doing what we want didn't work, so find out exactly what we *can* do:
-#     - TODO: Possibly, input not just xy but its `x → 1-2*abs(x)` fractal filling.
-#   - Tinker with goals:
-#     - TODO: New goal every step.
-#     - TODO: New goal only on BPTT resets.
-#     - TODO: Possibly, don't just randomly re-decide goals, instead (try to?) re-decide goals whenever they're either reached (L1-diff is below threshold) or are unreachable (the accumulated sum-of-L1-diffs gets much larger than predicted). (Seems hacky. Ideally, would be able to *learn* both the ideal moment, and the ideal new goal.)
-#     - TODO: Possibly: generate the step's goal by a neural-net, which maximizes future-distance or something. (Though it may make more sense to try to ensure uniform tiling, by maximizing prediction loss or something.) (Goals generate challenges, actions solve them: curriculum learning, ideally… Not too easy, not too hard…)
-#       - TODO: Possibly, have a separate objective/metric for a reachable goal's difficulty which we can learn and seek out… How to measure the difficulty of a goal — sum of distance-prediction losses?… But what if it's either too hard or inherently unpredictable…
-#       - TODO: …Also, isn't it possible to learn that, when the goal is literally right next to us (like, *is* the next state in the replay buffer, and we know the action), we should do the action that led to it? Why can't we spread *this* knowledge backward somehow (learn a immediate-goal net: from state and goal, return the immediate goal that the action will go to?? how is that different from just an action…), not the unreliable uncertain distance-to-goal? What do we need to learn, assuming that all neighbors already lead to the goal, so that we too lead to the goal, to construct the whole path, correct by induction?… Do we want some "if we do this action, will we end up at this goal" net, which we can train to be preserved throughout a trajectory (…but with what eventual goal?)?…
-#         - …Should intermediate goals transform in such a way that they become the real goal by the end of the trajectory (possibly through joint-embedding and making act(embed(prev))=embed_delayed(cur))?… How would we learn this from a replay buffer; do we preserve intermediate goals too?… (Like the old `ev` but grounded in actually-reached goals…)
-#   - TODO: Implement & test 2-part loss for shortest-path-learning: `act(prev_action=ev(prev_action, prev_state, goal=state), prev_state, goal=state) = action` (ground in what we actually achieve) and `act(prev_action=ev(prev_action, prev_state, goal), prev_state, goal) = ev_delayed(action, state, goal)` (propagate how-to-achieve to the past) (`ev` is what-to-achieve-right-now, `action`-sized). Though, how to see whether we've actually achieved anything is unclear…
-#     - (This form seems to be unstable.)
-#     - TODO: Or, make action-propagation predict `action`, not some func of it (which is sure to cause drift, making all non-final actions unable to be learned): `act(ev(prev_action, prev_state, goal=state)) = action` (copy ends of trajectories) and `act(ev(prev_action, prev_state, goal)) = action` (copy actions of non-terminal trajectories) and `ev_act(ev(prev_action, prev_state, goal)) = ev_delayed(action, state, goal)` (ensure that trajectories are actually followed, and we don't just switch between them).
-#     - TODO: …First try this on a 2D grid world, since we'd actually be able to easily notice success, and we have more presence there anyway…
-#   - Visualization:
-#     - TODO: `log` not just `pos_histogram` but also how poorly the goals are reached, by preserving distance-estimations and weighing by that in `plt.plot2d`.
-#   - TODO: If we end up doing distance-estimation with step-counting, then don't just do .99 discounting, instead encode as a binary uint.
-#   - TODO: Since self-imitation is so much like BYOL, but with only-better-actions and a replay-buffer instead of momentum-copy, increase resemblance: have an input-embedder to get an arg of `act`, and remember its momentum-delayed result. (Possibly, even try pretraining an agent by exposing it to image-aug sequences on CIFAR10, then training a classification model on embeddings. Would be funny.)
-#     - (If `ev_act` is next-action-dependent just like `future_dist` should be, this could shield us against action-stochasticity, and allow us to do proper BPTT on as-non-learned-as-possible target-reaching loss during a multistep unroll. …If we implement a separate BYOL, that is.)
-#   - TODO: Tree-backup: similarly to self-imitation, we can gate multi-step returns by whoever has the lowest distance at each step (path-distance or our-action predicted distance), and thus reduce the quadratic-difficulty of propagating distance back, without bias. So, should store long trajectory segments in the replay buffer, and do this. (Particularly good for the `goal`-is-here loss, which we can't seem to pin down by random goal sampling, and this should increase the net a lot.)
 
-# TODO: Make (min-dist) self-imitation with where-we-ended-up-is-our-`goal` with dist-is-+1 work. (Really seems like there shouldn't be a reason it doesn't work.)
 
-# - After we've established a more solid base of operations, retry what we did in the past:
-#   - TODO: Gradient descent again.
-#   - TODO: Re-enable (a-b).abs().sum() for distances, instead of just 1. (1 is chaotic, and thus may be impossible to learn.)
-#   - TODO: Possibly, for more accuracy (since it'll be much closer to 0 most of the time), bootstrap/learn not the distance directly but its advantage (diff between 2 distances, possibly only between `act`-suggested and in-replay actions), and for each replayed transition, maximize not the distance but the advantage over in-replay action. Downside: need to predict an action's next-state well, which we've failed at.
-#   - TODO: Learn synthetic gradient (multiplied by `bootstrap_discount` each time, to downrate the future's effect on the past), and compare with RL.
-#     - (A way to achieve the same effect could be to have a 'correction' net, which adjusts the action, and use that everywhere during an unroll.)
-#   - Retain non-differentiably-reachable minima, via self-imitation learning:
-#     - TODO: An extra loss on `act` of `prev_action`: `(act(prev_action) - action) * (dist(act(prev_action)) - dist(action)).detach()`.
-#     - TODO: Make that best-past-action a `.detach()`ed input to `act` instead (`best_act: (prev_action, input_emb) → best_action`), to not explicitly collapse diversity.
-#   - TODO: Instead of simple next-frame prediction, embed inputs once again. Self-imitation's action-prediction may become very similar to BYOL. (If goals are also in embedded-space, then their unpredictability should also gets washed away.)
+
+
+
+
+
+
+# TODO: …In this file, write down what we have to do to implement exponential-trajectory-filling, then implement it…
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
 # …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement — though not exactly to full-RNN-state invariance/prediction…
+#   …With `embed` dist learning, we're *kinda* doing something similar, making close-in-time images similar and far-in-time images distinct. Though whether this could possibly succeed in learning reprs on MNIST or something is not clear.
 
 # …We only try to improve the reachability of one goal at a time, which is synonymous with "non-scalable". Is there no way to construct representations of exponentially-many goals, and update many goals at once… Can embedding-prediction make similar goals the same and distinct goals different?…
+#   We can `embed` then measure distances in embedding-space rather than with a NN. Benefits are unclear.
 
 # …Also, similarly to Random Network Distillation, the hypothetical teacher (`goal`-proposer) could maximize misprediction (available even at unroll-time): of the distance (should be -1), or with joint-embedding, of the next-state embedding…
-
-# …Simple goal-dependent sparsity (for avoiding catastrophic forgetting) on Transformer cells could be implemented as: (maybe have a neural net from goal to a mask, and) turn its 0-|0+ into 0|1, and multiply a cell's output by that (AKA drop some). If we pass-through the gradient from output's multiplication, then we can even start at all-1 and sparsify exactly as the tasks require; if we randomly turn on 0s, then we can un-sparsify too.
+#   This is pretty much what AdaGoal is about.
 
 
 
@@ -297,14 +287,18 @@ for iter in range(500000):
 
 
 
+# …We can actually learn to achieve not just states, but arbitrary funcs of states (such as (pos,vel)→pos or state→return), by simply adding transitions from any states to those funcs-of-states to the replay buffer. (Very good: we can actually erase info, don't have to specify everything exactly.)
+#   (…Those funcs can even be human input.)
+#   …So is some goal-framework shaping up, like a func or class that gets called at every step and returns the new goal-state and whether the old one was reached, internally probabilistically keeping track of some recent most-error-on-dist states?…
+
 # …Possibly, log [NAS-WithOut-Training](https://arxiv.org/pdf/2006.04647.pdf) score, where in a batch and in a NN layer, we compute per-example binary codes of ReLU activations (1 when input>0, 0 when input<0), then compute the sum of pairwise abs-differences?
 
 # Usable for GANs, and for synth grad (least-magnitude): …DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data.
 
+# …Simple goal-dependent sparsity (for avoiding catastrophic forgetting) on Transformer cells could be implemented as: (maybe have a neural net from goal to a mask, and) turn its 0-|0+ into 0|1, and multiply a cell's output by that (AKA drop some). If we pass-through the gradient from output's multiplication, then we can even start at all-1 and sparsify exactly as the tasks require; if we randomly turn on 0s, then we can un-sparsify too.
+
 # Best control for `sn` would allow *arbitrary* human data (if limited, then `sn` is hardly an AI-based human-machine interface enabler) to control the goal (if just actions, then human capabilities won't get multiplied, `sn` will just be tiring and weird at best). Max sensitivity to an outcome, but min sensitivity to possible-outcomes: maximize [mutual info](https://en.wikipedia.org/wiki/Mutual_information), AKA channel capacity. (Or [pointwise MI](https://en.wikipedia.org/wiki/Pointwise_mutual_information): `log(p(y|x) / p(y))`.)
 #   Without further grounding, we may only need an SSL method, to make the compressed-history the goal: the simple `leads_to(ev(prev))=sg ev(next)` BYOL-on-RNNs, or maybe even our embed-space dist-learning. Needs further research.
 #   Do we want a separate channel for human actions, or would mixing them with all other data suffice?
-
-
-
-# TODO: …In this file, write down what we have to do to implement exponential-trajectory-filling, then implement it…
+#     (I guess for now, we should refine intent-amplification, and worry about plugging in intent later.)
+#     (If we want a separate channel, then damn, I guess those `import env` one-liners aren't gonna fly with `sn` anymore.)

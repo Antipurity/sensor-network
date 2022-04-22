@@ -65,6 +65,12 @@ For explicitly discriminating which action comes earlier (for self-imitation), c
 - Train an ensemble of `act`s, and gate meta-action-prediction by how certain the closer-destination action is (such as `act_loss / (-(act1-act2).abs().sum(-1, keepdim=True)).exp().detach()`). (Gives no benefit in this trivial env.)
 
 - Pick unroll-goals to maximize distance-misprediction, similarly to [AdaGoal](https://arxiv.org/abs/2111.12045).
+
+# This is pretraining for RL ("holy grail")
+
+Goal-state-reaching can actually learn to reach not only goal-states, but arbitrary funcs of them. All we need is to add fake `state→that` transitions to the replay buffer. This way, we can erase as much info as we want.
+
+- For example, RL (reward-maximization) can be written as reaching any state that gets a high future-sum-of-rewards. If we have goal-state-reaching trained, then a user can come along and mark states with reward; and the moment the reward-goals get nearly the same `embed`ding due to dist-learning, the agent would instantly know how to reach high reward from anywhere.
 """
 
 
