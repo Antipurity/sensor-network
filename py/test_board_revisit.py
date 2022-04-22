@@ -70,7 +70,16 @@ For explicitly discriminating which action comes earlier (for self-imitation), c
 
 Goal-state-reaching can actually learn to reach not only goal-states, but arbitrary funcs of them. All we need is to add fake `state→that` transitions to the replay buffer. This way, we can erase as much info as we want.
 
-- For example, RL (reward-maximization) can be written as reaching any state that gets a high future-sum-of-rewards. If we have goal-state-reaching trained, then a user can come along and mark states with reward; and the moment the reward-goals get nearly the same `embed`ding due to dist-learning, the agent would instantly know how to reach high reward from anywhere.
+Examples of goal-funcs:
+
+- RL (reward-maximization) can be written as reaching any state that gets a high future-sum-of-rewards. If we have goal-state-reaching trained, then a user can come along and mark states with reward; and the moment the reward-goals get nearly the same `embed`ding due to dist-learning, the agent would instantly know how to reach high reward from anywhere (though, situating the new closeness might take a while).
+
+- Another model's view, for example, [CLIP](https://github.com/openai/CLIP) embeddings of images and/or text. Explore semantically-meaningful states, not just distinct states — without huge computational resources.
+    - (If evaluating at every unroll-step is too expensive, then just don't.)
+
+- Arbitrary human input. Prompt distinct reactions from a human. (This might play with AI safety a bit too closely though.)
+
+- All of the above, with a header to distinguish which goal we're at.
 """
 
 
