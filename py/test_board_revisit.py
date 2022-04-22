@@ -14,25 +14,6 @@ What we want is:
 
 - Without the linear-time to backprop the info, since that's not transferrable to very long horizons (like millions of steps), especially with function approximation that can compound errors.
 
-Unimplemented:
-
-- Classical pathfinding but for ML: Dijkstra-algo-like horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET or [iterative deepening](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search). Goals are just randomly selected.
-    - (For state-visiting, apply "neighbor's goal can be our own goal too" via an src→goal GAN and an (src,goal)→action net: could initialize the GAN to always output the state as the goal, and to update, make the neighbor generate its goal-suggestion, and make the original-state discriminator judge that as real and make `act` with the generated goal predict the action that's in the picked replay-buffer step; like a GAN, its own generated goals should be judged as fake (*possibly* only if the action-learning loss is sufficiently low). Doesn't even learn the distance, instead just tries to crystallize closest-actions first.)
-        - (…Actually sounds unexpectedly simple and plausible…)
-        - (…Possibly, to revisit less, learn another GAN of what we've generated, and only allow a goal-suggestion if it's judged as secondhand-fake. Or even reuse the original GAN's discriminator to gate suggestions, but with a momentum-delayed copy.)
-        - (…Possibly, use not only goal-of-neighbor with a replayed action (which doesn't have to play nice with our goals), but also goal-of-goal with the same action (which kinda increases our reach, exponentially quickly in fact).)
-        - TODO: …Try it then, in this board env?
-            - TODO: What are the impl details of our first potentially-plausible algorithm here?
-                - TODO: At least map the goal-states through a neural net, right? (So that GANs can feasibly output them.)
-                - TODO: . . .
-            - …Or should we think about joint embeddings more…
-
-- Contraction hierarchies but for ML: unknown joint-embedding schemes, with which we might be able to *not* learn the distance. Ideally, would learn contraction hierarchies, but *how* is unknown.
-    - We need to either try to come up with some, or revisit continuous-control with task-horizons.
-    - (Isn't the "dst's dst is our dst too" idea related to node contraction's "remove a graph node and join the path; at query-time, only go up the query-hierarchy (probably measuring embedding similarity)"?)
-    - (Joint-embedding is probably the only real option to scale up to realistic environments, because the neural nets will no longer have to learn every single quadratically-numerous dist & action, and very slowly update them when they discover unexpected paths; many implicit datapoints can be updated at once if we use joint-embedding.)
-    - TODO: Our latest exponential space-filling method is quite reminiscent of contraction hierarchies, isn't it? So, replace this with that, right?
-
 ---
 
 # Past attempts to overcome the quadratic bottleneck
@@ -60,6 +41,7 @@ For explicitly discriminating which action comes earlier (for self-imitation), c
   - Nodes are learned with BYOL (`next(ev(A)) = sg ev(B)` if A→B is a real meta/transition) to be differentiable, and to make same-endpoints paths have the same embeddings, but if we want this to not collapse or smudge, then we need every single meta-action with distinct endpoints to be both distinct and perfectly-learned. Since there are as many total meta-actions as there are node pairs, we're back to the non-scalable "need quadratic neural-net capacity" but in a worse way.
     - (…Wow, this is way worse than all-to-all distance learning. But aren't at least some of its ideas salvageable?)
 - Dijkstra-algo-like filling from src and/or dst: given src, some dsts are "settled" (we know the action), some are "unknown" (we haven't reached it yet), others are "considered" (reached but learning how to re-reach). Model the "considered" set via generative models, one way or another.
+  - (Need horizons of tasks that are neither too easy (visited & settled) nor too hard (never neighboring any visited state), like in AMIGo or POET or [iterative deepening](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search).)
   - (We don't need all-to-all distances, we only need to know whether some distances are definitely worse than others.)
   - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
     - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
@@ -67,7 +49,7 @@ For explicitly discriminating which action comes earlier (for self-imitation), c
 
 # Final/current solution
 
-- Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology (a torus, in this 2D env). Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
+- Combining whole plans, shortcutting through midpoints. Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology (a torus, in this 2D env). Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
     - (The dead-simple "learn the `steps=1` actions" without dist-map-learning performs worse than with that, so representation-learning is important, and ensures (local) directional alignment.)
     - (While performing simple self-imitation weighed by the difference of in-replay and in-embedding dists works, for which storing even simple faraway pairs suffice, it doesn't scale.)
     - With `A→B→C` faraway double-stepping, we can do exponential improvement by reusing a task's result: `act(A,C) = act(A,B).detach()` — in addition to single-step `act(prev,next) = prev→next` grounding, and to dist-learning. (GANs are replaced by faraway sampling.)
