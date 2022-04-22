@@ -63,6 +63,8 @@ For explicitly discriminating which action comes earlier (for self-imitation), c
 - Stabilize dist-learning by conditioning it on the level, where level 0 always predicts the sampled distance, and each next level predicts prev-level dists but lower-dists get a higher loss-multiplier.
 
 - Train an ensemble of `act`s, and gate meta-action-prediction by how certain the closer-destination action is (such as `act_loss / (-(act1-act2).abs().sum(-1, keepdim=True)).exp().detach()`). (Gives no benefit in this trivial env.)
+
+- Pick unroll-goals to maximize distance-misprediction, similarly to [AdaGoal](https://arxiv.org/abs/2111.12045).
 """
 
 
@@ -278,22 +280,6 @@ for iters in range(50000):
             log(1, False, l_dist = to_np(l_dist.sum()))
             log(2, False, l_act = to_np(l_act.sum()))
             log(3, False, reached = to_np(reached.float().mean()))
-
-
-        # …Possibly, log [NAS-WithOut-Training](https://arxiv.org/pdf/2006.04647.pdf) score, where in a batch and in a NN layer, we compute per-example binary codes of ReLU activations (1 when input>0, 0 when input<0), then compute the sum of pairwise abs-differences?
-
-        # Usable for GANs, and for synth grad (least-magnitude): …DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data.
-
-        # best control, for `sn`: max sensitivity to outcomes, *given possible outcomes* (otherwise, involuntary movements would take up bandwidth).
-        #   …the ideal control-by-human method is an RNN that doesn't change when the outcome is by far the most likely, and otherwise, changes in a way most distinct from other outcomes… does `leads_to(ev(prev))=sg ev(next)` BYOL-on-RNNs really fit beyond a superficial analysis?… do we need to do separate research on this?
-        #   (If our goal-space is the compressed repr of history: unexpected human input changes that history, but an old-goal agent would try to undo that change, and/or prompt/control human inputs. Control should be in goal-setting.)
-        #   Mathematically, it's maximizing [mutual info](https://en.wikipedia.org/wiki/Mutual_information): `sum(x&y, p(x,y) * log(p(x,y) / (p(x)*p(y))))`: sensitivity to least-probable states & actions, and most-probable state-action pairs.
-        #     (Or [pointwise MI](https://en.wikipedia.org/wiki/Pointwise_mutual_information): `log(p(y|x) / p(y))`.)
-        # TODO: …Transfer this text to another file.
-
-
-
-
 
 
 
