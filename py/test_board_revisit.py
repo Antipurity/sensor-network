@@ -1,21 +1,18 @@
 """
-Here, we revisit the 2D board env, since continuous-control failed.
+Here, we revisit the 2D board env, since continuous-control with our prior RL-understanding refused to be solved, a few times already.
 
-Open-ended algorithms, to prepare for any goal, learn min-distance paths between *all* source and goal states. In theory, we've *seen* where we've been, so it should be trivial to revisit them, right? In practice, we haven't been able to break away from learning dist-sums, so far, which is probably non-scalable to real-world environments, because it needs to learn quadratically-many numbers — not to mention, not very biologically plausible due to magnitude & precision.
+This time, to remove prediction-interference: the env's action needs 4 numbers, and is decided by which is higher.
 
-# TODO: …Clean this all up…
+Open-ended algorithms, to prepare for any goal, learn min-distance paths between *all* source and goal states. (Reward-maximizing agents can be rewritten as agents that go to high-reward states.)
 
-This time:
+In theory, we've *seen* where we've been, so it should be trivial to revisit them, right? Learn min-dist trees from everywhere to everywhere.
 
-- To remove prediction-interference: the env's action needs 4 numbers, and is decided by which is higher.
+What we want is:
 
-- REMOVED everything below for now:
+- Without the quadratic bottleneck of learning precise all-to-all distances, like reinforcement-learning algorithms always do.
+  - (Besides, the ability to distinguish between 5312 and 5314 steps to judge plans isn't very biologically plausible.)
 
-- For grounding, remembered to ensure that `act(prev, goal=next) = action` for all transitions, by setting distance to 0 in these cases.
-
-- Self-imitation now *gates* by old-distance-is-better, doesn't multiply by the distance-differential.
-
-- Now have tree-backup (basically multi-step returns so that dist-sum bootstrapping has more accurate targets), which does improve dist-learning speed.
+- Without the linear-time to backprop the info, since that's not transferrable to very long horizons (like millions of steps), especially with function approximation that can compound errors.
 
 Unimplemented:
 
@@ -44,35 +41,46 @@ Unimplemented:
 
 (As tedious as this may be to read through, this research trajectory was far more tedious to unroll.)
 
-- For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', possibly BYOL-learned, by notation here):
-  - Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
-    - (But compared to any of the options below, it's amazing.)
-  - Learn a goal-dependent embedding `ev` for which `ev(prev,g) = prev_ev(ev(next,g))` and `ev(g,g) = OK` (make it smoothly transform into goals), and compare func-call-depths when needed:
-    - Learn the actual distance given `ev`.
-    - Learn a comparator of 2 `ev`s, `cmp(fut1, fut2)→-1…0…1`: `cmp(RNN(f),f)=-1`, `cmp(f,f)=0`, `cmp(f,RNN(f))=1`, `cmp(RNN(f), RNN(g)) = cmp(f,g)`, `cmp(RNN(f),g) where cmp(f,g)<0 = -1`, `cmp(f,RNN(g)) where cmp(f,g)>0 = 1`.
-    - (…Though, learning a goal-dependent vortex is as info-heavy as learning all pairwise distances if not more, so it's just as bad as that.)
-  - Continuous contraction: given src & dst & max-dist, alter src within those confines to get closer to dst. Then, we can decompose all problems at unroll-time: go halfway, then the rest of the way.
-    - Have a GAN `alter(src, dst, max_dist)→src` & `alter_dist`, where the 'discriminator' is the distance from output to dst. Losses:
-      - `alter_dist(prev, next, |prev-next| or more) = |prev-next|`
-      - `alter_dist(prev, goal, max_dist) = min(max_dist, |prev-next| + .99 * alter_dist(next, goal, dist - |prev-next|))`
-      - (…Wow, this is even worse than all-to-all distance learning.)
-  - Discrete contraction hierarchies: ground *tasks* in one-step transitions, and combine 2 consecutive *tasks* on each new hierarchy level (contracting a node by combining 2 actions that go through it in 1 meta-action/shortcut: similar to classical contraction hierarchies). Effectively, the level (an extra input to many neural nets) is floor of log-2 of dist.
-    - Good: the 'distance' has much less precision and thus takes less space in neural nets. Bad: with N levels, we need N× more compute.
-    - To always pick the shortest action on each level (especially when we have `A→B  B→C  A→C`) instead of smudging (and trying to connect all to all), we need to learn a "which level does this action come from" net, and use that for gated action-prediction. Which is pretty much the old dist.
-    - Nodes are learned with BYOL (`next(ev(A)) = sg ev(B)` if A→B is a real meta/transition) to be differentiable, and to make same-endpoints paths have the same embeddings, but if we want this to not collapse or smudge, then we need every single meta-action with distinct endpoints to be both distinct and perfectly-learned. Since there are as many total meta-actions as there are node pairs, we're back to the non-scalable "need quadratic neural-net capacity" but in a worse way.
-      - (…Wow, this is way worse than all-to-all distance learning. But aren't at least some of its ideas salvageable?)
-  - Dijkstra-algo-like filling from src and/or dst: given src, some dsts are "settled" (we know the action), some are "unknown" (we haven't reached it yet), others are "considered" (reached but learning how to re-reach). Model the "considered" set via generative models, one way or another.
-    - (We don't need all-to-all distances, we only need to know whether some distances are definitely worse than others.)
-    - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
-      - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
-    - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
+For explicitly discriminating which action comes earlier (for self-imitation), could learn distances or distance-surrogates (given a 'future', possibly BYOL-learned, by notation here):
+
+- Learn all the actual pairwise distances. (Quadratically-many numbers to learn: too much.)
+  - (But compared to any of the options below, it's amazing.)
+- Learn a goal-dependent embedding `ev` for which `ev(prev,g) = prev_ev(ev(next,g))` and `ev(g,g) = OK` (make it smoothly transform into goals), and compare func-call-depths when needed:
+  - Learn the actual distance given `ev`.
+  - Learn a comparator of 2 `ev`s, `cmp(fut1, fut2)→-1…0…1`: `cmp(RNN(f),f)=-1`, `cmp(f,f)=0`, `cmp(f,RNN(f))=1`, `cmp(RNN(f), RNN(g)) = cmp(f,g)`, `cmp(RNN(f),g) where cmp(f,g)<0 = -1`, `cmp(f,RNN(g)) where cmp(f,g)>0 = 1`.
+  - (…Though, learning a goal-dependent vortex is as info-heavy as learning all pairwise distances if not more, so it's just as bad as that.)
+- Continuous contraction: given src & dst & max-dist, alter src within those confines to get closer to dst. Then, we can decompose all problems at unroll-time: go halfway, then the rest of the way.
+  - Have a GAN `alter(src, dst, max_dist)→src` & `alter_dist`, where the 'discriminator' is the distance from output to dst. Losses:
+    - `alter_dist(prev, next, |prev-next| or more) = |prev-next|`
+    - `alter_dist(prev, goal, max_dist) = min(max_dist, |prev-next| + .99 * alter_dist(next, goal, dist - |prev-next|))`
+    - (…Wow, this is even worse than all-to-all distance learning.)
+- Discrete contraction hierarchies: ground *tasks* in one-step transitions, and combine 2 consecutive *tasks* on each new hierarchy level (contracting a node by combining 2 actions that go through it in 1 meta-action/shortcut: similar to classical contraction hierarchies). Effectively, the level (an extra input to many neural nets) is floor of log-2 of dist.
+  - Good: the 'distance' has much less precision and thus takes less space in neural nets. Bad: with N levels, we need N× more compute.
+  - To always pick the shortest action on each level (especially when we have `A→B  B→C  A→C`) instead of smudging (and trying to connect all to all), we need to learn a "which level does this action come from" net, and use that for gated action-prediction. Which is pretty much the old dist.
+  - Nodes are learned with BYOL (`next(ev(A)) = sg ev(B)` if A→B is a real meta/transition) to be differentiable, and to make same-endpoints paths have the same embeddings, but if we want this to not collapse or smudge, then we need every single meta-action with distinct endpoints to be both distinct and perfectly-learned. Since there are as many total meta-actions as there are node pairs, we're back to the non-scalable "need quadratic neural-net capacity" but in a worse way.
+    - (…Wow, this is way worse than all-to-all distance learning. But aren't at least some of its ideas salvageable?)
+- Dijkstra-algo-like filling from src and/or dst: given src, some dsts are "settled" (we know the action), some are "unknown" (we haven't reached it yet), others are "considered" (reached but learning how to re-reach). Model the "considered" set via generative models, one way or another.
+  - (We don't need all-to-all distances, we only need to know whether some distances are definitely worse than others.)
+  - A particularly easy impl is: with a `(src, dist) → dst` generative model, sample from it twice (with a random `dist`ance) and update the double-stepped distance if it's shorter than what we had in mind.
+    - The `dist`-to-learn could be `floor(log2(actual_dist))`, which reduces the required NN-output precision dramatically.
+  - (The problem is that generative models, of non-stationary sparse distributions, are very hard to actually learn.)
 
 # Final/current solution
 
-  - Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology (a torus, in this 2D env). Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
+- Replace the `dist(src, dst, [action?])` net with `embed(src)` and measure distances (`1+log(steps)`) in embedding space: so, learn a locally-isometric map of the env's topology (a torus, in this 2D env). Preserve faraway states, along with inputs and first-action and distance. Then, we can just learn the min-dist `act(src, dst)`.
     - (The dead-simple "learn the `steps=1` actions" without dist-map-learning performs worse than with that, so representation-learning is important, and ensures (local) directional alignment.)
     - (While performing simple self-imitation weighed by the difference of in-replay and in-embedding dists works, for which storing even simple faraway pairs suffice, it doesn't scale.)
     - With `A→B→C` faraway double-stepping, we can do exponential improvement by reusing a task's result: `act(A,C) = act(A,B).detach()` — in addition to single-step `act(prev,next) = prev→next` grounding, and to dist-learning. (GANs are replaced by faraway sampling.)
+
+# Potential good things
+
+(No good-enough reason to try.)
+
+- Ablate whether in-`embed`-space distances are really better than `dist`s.
+
+- Stabilize dist-learning by conditioning it on the level, where level 0 always predicts the sampled distance, and each next level predicts prev-level dists but lower-dists get a higher loss-multiplier.
+
+- Train an ensemble of `act`s, and gate meta-action-prediction by how certain the closer-destination action is (such as `act_loss / (-(act1-act2).abs().sum(-1, keepdim=True)).exp().detach()`). (Gives no benefit in this trivial env.)
 """
 
 
