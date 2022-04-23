@@ -87,7 +87,6 @@ Examples of goal-funcs:
 
 
 from model.log import log, clear, finish
-from model.gan import GAN
 
 
 
