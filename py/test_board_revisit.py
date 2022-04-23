@@ -56,15 +56,17 @@ For explicitly discriminating which action comes earlier (for self-imitation), c
 
 # Potential good things
 
-(No good-enough reason to try.)
+(No good-enough reason to try, here.)
 
-- Ablate whether in-`embed`-space distances are really better than `dist`s.
+- Pick unroll-goals to maximize distance-misprediction, similarly to [AdaGoal](https://arxiv.org/abs/2111.12045).
+
+- Problem: `embed`-space distances are symmetric. Solution: different nets for source-embedding and destination-embedding.
+
+- Ablate whether in-`embed`-space distances are really better than `dist`s. (Though, real closeness-learning in `embed`-space allows `act` to easily generalize, so the test should be in a complex env.)
 
 - Stabilize dist-learning by conditioning it on the level, where level 0 always predicts the sampled distance, and each next level predicts prev-level dists but lower-dists get a higher loss-multiplier.
 
 - Train an ensemble of `act`s, and gate meta-action-prediction by how certain the closer-destination action is (such as `act_loss / (-(act1-act2).abs().sum(-1, keepdim=True)).exp().detach()`). (Gives no benefit in this trivial env.)
-
-- Pick unroll-goals to maximize distance-misprediction, similarly to [AdaGoal](https://arxiv.org/abs/2111.12045).
 
 # This is pretraining for RL ("holy grail")
 
