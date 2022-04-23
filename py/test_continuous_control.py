@@ -75,17 +75,41 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 class ReplayBuffer:
     """Stores the in-order sequence of most-recent events."""
     def __init__(self, max_len=1024):
-        self.head = 0
-        self.buffer = [None] * max_len # TODO: We want to maintain a separate length, don't we? For `len(rb)`.
+        self.head, self.max_len = 0, max_len
+        self.buffer = []
     def __len__(self):
-        """TODO:"""
+        """How many data-samples are currently contained. Use this to decide the indices to sample at."""
+        return len(self.buffer)
     def add_data(self, data):
-        """TODO:"""
+        """Appends a data-sample to the replay buffer. Typically an array, such as `[ranking, state, action, as_goal]`.
+
+        Save unrolls."""
+        if len(self.buffer) == self.max_len:
+            self.buffer[self.head] = data
+        else:
+            self.buffer.append(data)
+        self.head = (self.head + 1) % len(self.max_len)
     def sample_data(self, index):
-        """TODO:"""
+        """Returns the sample at the given index. For example, use `random.randrange(len(replay_buffer))`.
+
+        Consecutive indices are guaranteed to be a part of a contiguous sequence.
+
+        Remember unrolls, either with independent samples, consecutive pairs, or ordered faraway sequences."""
+        return self.buffer[(self.head + index) % len(self)]
     def sample_best_data(self, samples=16, combine=lambda a,b:list(torch.where(a[0]>b[0], x, y) for x,y in zip(a,b))):
-        """TODO:"""
-    # TODO: A class for the replay buffer (with max-len as a hyperparam), with methods for `len(replay_buffer)` for indexing correctly, adding data (arrays, such as `[rating, input, action, as_goal]`; first item is required, possibly `None`, others are whatever), sampling data (at a 0-based index; in-internal-array index is that plus head-pos mod buffer-length), and sampling max-rating data (unroll-time goals) (primitive, on-GPU algo: sample like 10 (an arg) samples (reusing the data-sampling method), and use `torch.where` per-item to find the max-rating among them).
+        """A primitive algorithm for sampling likely-best data, ranked by the first array item.
+
+        For picking at-unroll goals.
+
+        Args:
+        - `samples=16`: how many samples to choose among. We don't have a precomputed data structure.
+        - `combine=...`: the actual chooser. By default, compares by the 0th item, and returns a list of max values."""
+        N, result = len(self), None
+        for _ in range(samples):
+            sample = self.sample_data(random.randrange(N))
+            result = sample if result is None else combine(result, sample)
+            # (This creates an O(N) chain of computations, though O(log(N)) is possible.)
+        return result
 
 
 
@@ -112,8 +136,8 @@ replays_per_step = 8
 def net(ins, outs, hidden=action_sz):
     return nn.Sequential(
         SkipConnection(nn.Linear(ins, hidden)),
-        SkipConnection(nn.LayerNorm(hidden), nn.ReLU(), nn.Linear(hidden, hidden)),
-        nn.LayerNorm(hidden), nn.ReLU(), nn.Linear(hidden, outs),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
 embed = [net(1+input_sz, embed_sz), net(1+input_sz, embed_sz)] # (src_or_dst: -1|1, input) → emb
 #   (Locally-isometric maps of the environment.)
