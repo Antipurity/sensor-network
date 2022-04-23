@@ -97,38 +97,21 @@ act = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `r
     # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
     SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
-        nn.ReLU(), nn.LayerNorm(action_sz),
-        nn.Linear(action_sz, action_sz),
+        nn.ReLU(), nn.LayerNorm(action_sz), nn.Linear(action_sz, action_sz),
     ) for _ in range(1)],
     nn.LayerNorm(action_sz),
 ).to(device)
 future_dist = nn.Sequential( # (action, state, goal) → dist
-    # TODO: In the grad-min formulation, this absolutely needs the next action, doesn't it?
+    # TODO: No distance-learning. Only embedding-distance.
     # (Returns the sum-of-future-L1-distances-to-`goal` for the considered `action`, the less the better.)
     SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
     *[SkipConnection(
-        nn.ReLU(), nn.LayerNorm(action_sz),
-        nn.Linear(action_sz, action_sz),
+        nn.ReLU(), nn.LayerNorm(action_sz), nn.Linear(action_sz, action_sz),
     ) for _ in range(1)],
     nn.Linear(action_sz, 1),
 ).to(device)
-action_grad = nn.Sequential( # (action, input, goal) → action_grad
-    # (Learning from the replay buffer cuts off gradient, so with this synthetic gradient, we could treat actions as RNN states.)
-    SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
-    *[SkipConnection(
-        nn.ReLU(), nn.LayerNorm(action_sz),
-        nn.Linear(action_sz, action_sz),
-    ) for _ in range(1)],
-).to(device)
 
-class WithInput(nn.Module):
-    def __init__(self, act, future_dist, action_grad):
-        super().__init__()
-        self.act, self.future_dist, self.action_grad = act, future_dist, action_grad
-    def forward(self, prev_action, input, randn, goal):
-        return self.act(cat(prev_action, input, goal))
-step = WithInput(act, future_dist, action_grad)
-optim = torch.optim.Adam(step.parameters(), lr=lr)
+optim = torch.optim.Adam([*act.parameters(), *future_dist.parameters()], lr=lr)
 
 
 
@@ -163,7 +146,6 @@ def replay():
         prev_state = torch.cat([c[1] for c in choices], 0)
         action = torch.cat([c[2] for c in choices], 0)
         state = torch.cat([c[3] for c in choices], 0)
-        prev_action.requires_grad_(True)
 
         goal = state[torch.randperm(state.shape[0], device=device)]
         randn = torch.randn(state.shape[0], action_sz, device=device)
@@ -174,6 +156,7 @@ def replay():
         #   But how would we not?
 
         # If you wanted to go somewhere else, well, that's 1 more step, assuming that we do go there.
+        #   TODO: Slow to propagate. Errors compounding. Must be inferior. Improve.
         action2 = act(cat(prev_action, state, goal))
         prev_dist = future_dist(cat(prev_action, prev_state, goal))
         with torch.no_grad():
@@ -194,30 +177,15 @@ def replay():
             target_action = torch.where(dist < dist2, action, action2) # Min distance.
         self_imitation_loss = (action2 - target_action).square().sum()
 
-        # Synthetic gradient of actions: give to non-prev actions, then learn from the prev action.
-        # with torch.no_grad():
-        #     daction2 = action_grad(cat(action2, state, goal))
-        synth_grad_loss = 0 # (action2 * daction2.detach()).sum() # TODO:
-        (zero_dist_loss + dist_loss + self_imitation_loss + synth_grad_loss).backward()
-        dprev_action = action_grad(cat(prev_action, prev_state, goal))
-        with torch.no_grad():
-            # (If this discounting fails to un-explode the learning, will have to limit the L2 norm.)
-            #   (Though, it's not like the gradient has not been essentially-random so far.)
-            dprev_action_target = prev_action.grad * bootstrap_discount
-        synth_grad_loss = (dprev_action - dprev_action_target).square().sum()
-        synth_grad_loss.backward()
-        prev_action.requires_grad_(False) # TODO: …Wait, this doesn't actually set `prev_action.grad` to None, so *of course* our synthetic gradient was broken.
-
+        (zero_dist_loss + dist_loss + self_imitation_loss).backward()
         optim.step();  optim.zero_grad(True)
 
-        # Log them.
+        # Log debugging info.
         N = state.shape[0]
         log(0, False, pos = pos_histogram)
         log(1, False, zero_dist_loss = to_np(zero_dist_loss / N))
         log(2, False, dist_loss = to_np(dist_loss / N))
         log(3, False, self_imitation_loss = to_np(self_imitation_loss / N))
-        log(4, False, synth_grad_loss = to_np(synth_grad_loss / N))
-        log(5, False, grad_magnitude = to_np(dprev_action_target.square().sum().sqrt()))
 
 
 
@@ -225,21 +193,20 @@ for iter in range(500000):
     prev_action, prev_state = action, state
     with torch.no_grad():
         state, hidden_state = env_step(state, hidden_state, prev_action)
-        randn = torch.randn(batch_size, action_sz, device=device)
-        action = step(prev_action, state, randn, goal)
-        # TODO: Also try exploration-noise on some epochs, just like the board env.
-        #   (…How, though? Isn't `WithInput` in charge of that?)
+        action = act(cat(prev_action, state, goal))
 
     replay()
     if iter == 1000: clear()
 
-    if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO:
+    if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO: No resetting. Only lifelong learning.
     if random.randint(1, 32) == 1: reset_goal()
 
     replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
-
-    # TODO: Find out why even distance-minimization remains broken.
-    #   TODO: Don't. Just replace it with exp-pretraining.
+    #   TODO: Store not only the prev&next actions for grounding, but also 2 faraway-past events.
+    #     TODO: And distances, and/or timestamps (`iter`).
+    #     TODO: …How do we decide which past events to include?… Do we, say, pull from the replay buffer — after checking that timestamps are OK… Or have a separate randomly-replaced past-event buffer?…
+    #       …Or should we pull faraway sequences at replay-time, after checking timestamps?
+    #         …May need to explicitly keep track of the replay buffer's current head-pos, so that we can sample faraway pairs directly by indices, without negative sampling…
 
 
 
@@ -253,7 +220,22 @@ for iter in range(500000):
 
 
 # TODO: …In this file, write down what we have to do to implement exponential-trajectory-filling, then implement it…
+#   TODO: No hidden state anymore. Expose acceleration too. (Focus on what we can provably do, *then* include RNN states.)
+#   TODO: No resetting anymore. Only lifelong learning.
+#   TODO: `embed_src(input)`, `embed_dst(input)`
+#     …Or should we just prepend -1|1 and share most parameters, biasing toward dist-symmetry without forcing it?
+#   TODO: `act(src, dst)`, possibly with random noise for more principled exploration than epsilon-greedy (though act-grounding should gradually choke out randomness, so maybe it's pointless).
+#   TODO: …Faraway-replay buffers…?
+#     How, exactly?…
+#       Maybe 'faraway-sampling' is better done at replay time? …I think so, actually.
+#   TODO: …Unroll-time destinations…?
+#     How, exactly?…
+#       …To implement AdaGoal's max-uncertainty-about-distance, should have 2 embeddings nets, and remember misprediction per-replay-sample (updating on each replay), then at unroll-time fetch an approximation of its max (which can be done in-GPU if we sample like 10 things and preserve max-misprediction ones).
+#   TODO: What else do we need?
+#     Visualization of how many destinations were reached?
+#     Visualization of same-destination actions as arrows?
 
+# TODO: A class for a replay buffer, with methods for adding data, sampling faraway-sequences of data, updating metadata, and sampling max-metadata…
 
 
 
@@ -280,11 +262,6 @@ for iter in range(500000):
 
 
 
-# TODO: Gotta get back, back to the past:
-#   TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `act`-dist-min and self-imitation) and self-targeting BPTT (with `act`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
-
-
-
 
 
 # …We can actually learn to achieve not just states, but arbitrary funcs of states (such as (pos,vel)→pos or state→return), by simply adding transitions from any states to those funcs-of-states to the replay buffer. (Very good: we can actually erase info, don't have to specify everything exactly.)
@@ -302,3 +279,9 @@ for iter in range(500000):
 #   Do we want a separate channel for human actions, or would mixing them with all other data suffice?
 #     (I guess for now, we should refine intent-amplification, and worry about plugging in intent later.)
 #     (If we want a separate channel, then damn, I guess those `import env` one-liners aren't gonna fly with `sn` anymore.)
+#   …However: making the agent learn to 'control' human data, and simply cutting out chunks of how-humans-want-to-be-controlled via reward, *may* create much richer experiences, without the tedious need to make the agent explore & acquire skills manually.
+
+
+
+# TODO: Gotta get back, back to the past:
+#   TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `act`-dist-min and self-imitation) and self-targeting BPTT (with `act`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
