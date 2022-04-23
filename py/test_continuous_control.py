@@ -73,45 +73,39 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class SkipConnection(nn.Module):
+    """Linearize gradients, to make learning easier."""
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
     def forward(self, x):
         y = self.fn(x)
-        return y + x[..., :y.shape[-1]]
+        return x + y if x.shape == y.shape else x[..., :y.shape[-1]] + y
 def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x
 def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
 batch_size = 100
-input_sz, action_sz = 2, 128
+input_sz, embed_sz, action_sz = 4, 128, 128
 lr = 1e-3
-
-bootstrap_discount = .99 # `future_dist` will have to predict numbers from 0 to 1/(1-this).
 
 replay_buffer = [None] * (1024)
 replays_per_step = 8
 
 
 
-act = nn.Sequential( # (prev_action, input, goal) → action # TODO: Also the `randn` arg (since we don't have `embed` anymore).
-    # (`goal` is sampled from the recent past: `replay_buffer`. It's what we want trajectories to minimize the distance to, to gain competency.)
-    SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
-    *[SkipConnection(
-        nn.ReLU(), nn.LayerNorm(action_sz), nn.Linear(action_sz, action_sz),
-    ) for _ in range(1)],
-    nn.LayerNorm(action_sz),
-).to(device)
-future_dist = nn.Sequential( # (action, state, goal) → dist
-    # TODO: No distance-learning. Only embedding-distance.
-    # (Returns the sum-of-future-L1-distances-to-`goal` for the considered `action`, the less the better.)
-    SkipConnection(nn.Linear(action_sz + input_sz + input_sz, action_sz)),
-    *[SkipConnection(
-        nn.ReLU(), nn.LayerNorm(action_sz), nn.Linear(action_sz, action_sz),
-    ) for _ in range(1)],
-    nn.Linear(action_sz, 1),
-).to(device)
+def net(ins, outs, hidden=action_sz):
+    return nn.Sequential(
+        SkipConnection(nn.Linear(ins, hidden)),
+        SkipConnection(nn.LayerNorm(hidden), nn.ReLU(), nn.Linear(hidden, hidden)),
+        nn.LayerNorm(hidden), nn.ReLU(), nn.Linear(hidden, outs),
+    ).to(device)
+embed = [net(1+input_sz, embed_sz), net(1+input_sz, embed_sz)] # (src_or_dst: -1|1, input) → emb
+#   (Locally-isometric maps of the environment.)
+#   (Temporally-close events are close here, far events are far.)
+#   (We have an ensemble of 2, so that we can estimate uncertainty.)
+act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action
+#   (Min-dist spanning trees that go to a destination.)
 
-optim = torch.optim.Adam([*act.parameters(), *future_dist.parameters()], lr=lr)
+optim = torch.optim.Adam([*embed[0].parameters(), *embed[1].parameters(), *act.parameters()], lr=lr)
 
 
 
@@ -146,42 +140,19 @@ def replay():
         prev_state = torch.cat([c[1] for c in choices], 0)
         action = torch.cat([c[2] for c in choices], 0)
         state = torch.cat([c[3] for c in choices], 0)
+        N = state.shape[0]
 
-        goal = state[torch.randperm(state.shape[0], device=device)]
-        randn = torch.randn(state.shape[0], action_sz, device=device)
+        goal = state[torch.randperm(N, device=device)]
+        randn = torch.randn(N, action_sz, device=device)
 
-        # If you wanted to go to `state`, well, success.
-        zero_dist_loss = future_dist(cat(prev_action, prev_state, state)).square().sum()
-        # TODO: …Do bad things happen because this loss interferes with the loss right below?…
-        #   But how would we not?
+        zero_dist_loss = 0
+        dist_loss = 0
+        self_imitation_loss = 0
 
-        # If you wanted to go somewhere else, well, that's 1 more step, assuming that we do go there.
-        #   TODO: Slow to propagate. Errors compounding. Must be inferior. Improve.
-        action2 = act(cat(prev_action, state, goal))
-        prev_dist = future_dist(cat(prev_action, prev_state, goal))
-        with torch.no_grad():
-            dist = future_dist(cat(action, state, goal))
-            dist2 = future_dist(cat(action2, state, goal))
-            target_dist = torch.where(dist < dist2, dist, dist2) # Min distance.
-            #   (We don't predict `state2` from `action2` here, so this is not perfect.)
-            #     TODO: IMPERFECTION; how could we solve it?
-            #       …Make `future_dist` take not the current but the previous state?… But isn't its input-action intended as a state-descriptor?…
-            #       …Remove the `state` arg entirely, and rely on gradient to make `act` predictive of the next state?…
-            #       …Can't see another option here…
-            target_dist = 1. + dist * bootstrap_discount
-        dist_loss = (prev_dist - target_dist).square().sum()
-
-        # Self-imitation learning: if the past was better than us, copy the past.
-        #   (Gradient descent on `dist` by `action2` doesn't seem to be good enough for optimization on trajectories, especially since consecutive steps can easily belong to different-goal trajectories.)
-        with torch.no_grad():
-            target_action = torch.where(dist < dist2, action, action2) # Min distance.
-        self_imitation_loss = (action2 - target_action).square().sum()
-
-        (zero_dist_loss + dist_loss + self_imitation_loss).backward()
+        # (zero_dist_loss + dist_loss + self_imitation_loss).backward()
         optim.step();  optim.zero_grad(True)
 
         # Log debugging info.
-        N = state.shape[0]
         log(0, False, pos = pos_histogram)
         log(1, False, zero_dist_loss = to_np(zero_dist_loss / N))
         log(2, False, dist_loss = to_np(dist_loss / N))
@@ -216,8 +187,6 @@ for iter in range(500000):
 
 # TODO: A class for the replay buffer (with max-len as a hyperparam), with methods for `len(replay_buffer)` for indexing correctly, adding data (arrays, such as `[rating, input, action, as_goal]`; first item is required, possibly `None`, others are whatever), sampling data (at a 0-based index; in-internal-array index is that plus head-pos mod buffer-length), and sampling max-rating data (unroll-time goals) (primitive, on-GPU algo: sample like 10 (an arg) samples (reusing the data-sampling method), and use `torch.where` per-item to find the max-rating among them).
 
-# TODO: Two `embed(src_or_dst: -1|1, input: [action_sz])` nets, for estimating uncertainty.
-# TODO: `act(src, dst)`
 # TODO: A replay buffer.
 # TODO: At unroll-time:
 #   TODO: Update env & get a new goal-conditioned action.
