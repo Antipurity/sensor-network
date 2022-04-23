@@ -174,7 +174,6 @@ opt = torch.optim.Adam([*embed.parameters(), *act.parameters()], lr=1e-3)
 
 
 
-# These funcs use domain knowledge; used for debugging.
 def show_dist_and_act(plt, key):
     """An image of the *learned* distance (0…+∞) and actions (0|1|2|3)."""
     with torch.no_grad():

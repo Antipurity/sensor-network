@@ -190,23 +190,18 @@ def replay():
 
 
 for iter in range(500000):
-    prev_action, prev_state = action, state
+    prev_action, prev_state = action, state # TODO: No need for these.
     with torch.no_grad():
         state, hidden_state = env_step(state, hidden_state, prev_action)
+        all_state = cat(state, hidden_state) # TODO: Use *this* everywhere, to not have to learn through time, for now. (Does it even make sense to learn actions through time? Or does that work out to self-compression?)
         action = act(cat(prev_action, state, goal))
 
     replay()
     if iter == 1000: clear()
 
-    if random.randint(1, 64) == 1: state, hidden_state = env_init(batch_size=batch_size) # TODO: No resetting. Only lifelong learning.
     if random.randint(1, 32) == 1: reset_goal()
 
-    replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach())
-    #   TODO: Store not only the prev&next actions for grounding, but also 2 faraway-past events.
-    #     TODO: And distances, and/or timestamps (`iter`).
-    #     TODO: …How do we decide which past events to include?… Do we, say, pull from the replay buffer — after checking that timestamps are OK… Or have a separate randomly-replaced past-event buffer?…
-    #       …Or should we pull faraway sequences at replay-time, after checking timestamps?
-    #         …May need to explicitly keep track of the replay buffer's current head-pos, so that we can sample faraway pairs directly by indices, without negative sampling…
+    replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach()) # TODO: Use the replay-buffer class. And, only store `action` and `state`, since our sampling will be index-based.
 
 
 
@@ -219,23 +214,29 @@ for iter in range(500000):
 
 
 
-# TODO: …In this file, write down what we have to do to implement exponential-trajectory-filling, then implement it…
-#   TODO: No hidden state anymore. Expose acceleration too. (Focus on what we can provably do, *then* include RNN states.)
-#   TODO: No resetting anymore. Only lifelong learning.
-#   TODO: `embed_src(input)`, `embed_dst(input)`
-#     …Or should we just prepend -1|1 and share most parameters, biasing toward dist-symmetry without forcing it?
-#   TODO: `act(src, dst)`, possibly with random noise for more principled exploration than epsilon-greedy (though act-grounding should gradually choke out randomness, so maybe it's pointless).
-#   TODO: …Faraway-replay buffers…?
-#     How, exactly?…
-#       Maybe 'faraway-sampling' is better done at replay time? …I think so, actually.
-#   TODO: …Unroll-time destinations…?
-#     How, exactly?…
-#       …To implement AdaGoal's max-uncertainty-about-distance, should have 2 embeddings nets, and remember misprediction per-replay-sample (updating on each replay), then at unroll-time fetch an approximation of its max (which can be done in-GPU if we sample like 10 things and preserve max-misprediction ones).
-#   TODO: What else do we need?
-#     Visualization of how many destinations were reached?
-#     Visualization of same-destination actions as arrows?
+# TODO: A class for the replay buffer (with max-len as a hyperparam), with methods for `len(replay_buffer)` for indexing correctly, adding data (arrays, such as `[rating, input, action, as_goal]`; first item is required, possibly `None`, others are whatever), sampling data (at a 0-based index; in-internal-array index is that plus head-pos mod buffer-length), and sampling max-rating data (unroll-time goals) (primitive, on-GPU algo: sample like 10 (an arg) samples (reusing the data-sampling method), and use `torch.where` per-item to find the max-rating among them).
 
-# TODO: A class for a replay buffer, with methods for adding data, sampling faraway-sequences of data, updating metadata, and sampling max-metadata…
+# TODO: Two `embed(src_or_dst: -1|1, input: [action_sz])` nets, for estimating uncertainty.
+# TODO: `act(src, dst)`
+# TODO: A replay buffer.
+# TODO: At unroll-time:
+#   TODO: Update env & get a new goal-conditioned action.
+#   TODO: Store None & state & action/accel & just-the-pos (`as_goal`: first 2 numbers of state, with constant padding to distinguish it from state) in the replay buffer.
+#   TODO: Sometimes (`torch.where`): max-sample a new goal from the replay-buffer (and compute the new estimated-steps-to-reach-it), if reached (abs of goal-state minus goal is less than 1e-3) or out-of-time.
+#     TODO: Keep track of how many times we've switched a goal, vs how many times the goal timed out.
+#       TODO: `log` these.
+# TODO: At replay:
+#   TODO: As many times as required (1 by default) (turn to tensors & concatenate):
+#     TODO: Sample 4 indices: i, i+1, i<j, j<k.
+#     TODO: Sample items at those indices.
+#   TODO: Update distances, to be the min of seen log2 of index-differences.
+#     TODO: Also update distances to func-of-destination.
+#     TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
+#   TODO: Update ground-actions, act(i,i+1)=i.action.
+#   TODO: Update meta-actions to k, to be the dist-min of actions to j.
+#     TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
+#   TODO: Perform the gradient-descent update.
+# TODO: `log`: pick a destination randomly, and visualize actions-to-it as arrows. (Assuming that we succeed in learning all-paths, at least a little.)
 
 
 
