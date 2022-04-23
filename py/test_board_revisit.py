@@ -74,7 +74,7 @@ Goal-state-reaching can actually learn to reach not only goal-states, but arbitr
 
 Examples of goal-funcs:
 
-- RL (reward-maximization) can be written as reaching any state that gets a high future-sum-of-rewards. If we have goal-state-reaching trained, then a user can come along and mark states with reward; and the moment the reward-goals get nearly the same `embed`ding due to dist-learning, the agent would instantly know how to reach high reward from anywhere (though, situating the new closeness might take a while).
+- RL (reward-maximization) can be written as reaching any state that gets a high sum-of-past-rewards. If we have goal-state-reaching trained, then a user can come along and mark states with reward; and the moment the reward-goals get nearly the same `embed`ding due to dist-learning, the agent would instantly know how to reach high reward from anywhere (though, situating the new closeness might take a while).
 
 - Another model's view, for example, [CLIP](https://github.com/openai/CLIP) embeddings of images and/or text. Explore semantically-meaningful states, not just distinct states — without huge computational resources.
     - (If evaluating at every unroll-step is too expensive, then just don't.)
