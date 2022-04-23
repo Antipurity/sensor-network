@@ -72,6 +72,23 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 
+class ReplayBuffer:
+    """Stores the in-order sequence of most-recent events."""
+    def __init__(self, max_len=1024):
+        self.head = 0
+        self.buffer = [None] * max_len # TODO: We want to maintain a separate length, don't we? For `len(rb)`.
+    def __len__(self):
+        """TODO:"""
+    def add_data(self, data):
+        """TODO:"""
+    def sample_data(self, index):
+        """TODO:"""
+    def sample_best_data(self, samples=16, combine=lambda a,b:list(torch.where(a[0]>b[0], x, y) for x,y in zip(a,b))):
+        """TODO:"""
+    # TODO: A class for the replay buffer (with max-len as a hyperparam), with methods for `len(replay_buffer)` for indexing correctly, adding data (arrays, such as `[rating, input, action, as_goal]`; first item is required, possibly `None`, others are whatever), sampling data (at a 0-based index; in-internal-array index is that plus head-pos mod buffer-length), and sampling max-rating data (unroll-time goals) (primitive, on-GPU algo: sample like 10 (an arg) samples (reusing the data-sampling method), and use `torch.where` per-item to find the max-rating among them).
+
+
+
 class SkipConnection(nn.Module):
     """Linearize gradients, to make learning easier."""
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
@@ -185,7 +202,6 @@ for iter in range(500000):
 
 
 
-# TODO: A class for the replay buffer (with max-len as a hyperparam), with methods for `len(replay_buffer)` for indexing correctly, adding data (arrays, such as `[rating, input, action, as_goal]`; first item is required, possibly `None`, others are whatever), sampling data (at a 0-based index; in-internal-array index is that plus head-pos mod buffer-length), and sampling max-rating data (unroll-time goals) (primitive, on-GPU algo: sample like 10 (an arg) samples (reusing the data-sampling method), and use `torch.where` per-item to find the max-rating among them).
 
 # TODO: A replay buffer.
 # TODO: At unroll-time:
