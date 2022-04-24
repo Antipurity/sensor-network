@@ -73,7 +73,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplayBuffer:
-    """Stores the in-order sequence of most-recent events. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
+    """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
     def __init__(self, max_len=1024):
         self.head, self.max_len = 0, max_len
         self.buffer = []
@@ -97,6 +97,8 @@ class ReplayBuffer:
         Remember unrolls, either with independent samples, consecutive pairs, or ordered faraway sequences."""
         assert isinstance(index, int)
         return self.buffer[(self.head + index) % len(self)]
+    def __iter__(self):
+        for i in range(len(self)): yield self[i]
     def sample_best(self, samples=16, combine=lambda a,b:list(torch.where(a[0]>b[0], x, y) for x,y in zip(a,b))):
         """A primitive algorithm for sampling likely-best data, ranked by the first array item.
 
@@ -125,12 +127,12 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_size = 100
+batch_size = 128
 input_sz, embed_sz, action_sz = 4, 128, 128
 lr = 1e-3
 
-replay_buffer = [None] * (1024)
-replays_per_step = 8
+replay_buffer = ReplayBuffer(max_len=1024) # [ranking, input, action, as_goal]
+replays_per_unroll = 4
 
 
 
@@ -151,73 +153,89 @@ optim = torch.optim.Adam([*embed[0].parameters(), *embed[1].parameters(), *act.p
 
 
 
-# The main loop, which steps the environment and trains `step`.
-action = torch.randn(batch_size, action_sz, device=device)
-goal = torch.rand(batch_size, input_sz, device=device)
-state, hidden_state = env_init(batch_size=batch_size)
-def reset_goal():
-    global goal
-    with torch.no_grad():
-        ch = random.choice(replay_buffer)
-        if ch is not None:
-            prev_action, prev_state, action, state = ch
-            randn = torch.randn(batch_size, action_sz, device=device)
-            # goal = state # TODO:
-            goal = torch.rand(batch_size, input_sz, device=device)
+# Debugging.
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
     x, y = [], []
     for ch in replay_buffer:
         if ch is not None:
-            prev_action, prev_state, action, state = ch
+            ranking, state, action, as_goal = ch
             pos = to_np(state)
-            for i in range(pos.shape[0]):
-                x.append(float(pos[i][0])), y.append(float(pos[i][1]))
-    plt.hist2d(x, y, bins=100, range=((0,1), (0,1)), cmap='rainbow', label=label)
-def replay():
+            x.append(pos[..., 0]), y.append(pos[..., 1])
+    import numpy as np
+    plt.hist2d(np.concatenate(x), np.concatenate(y), bins=100, range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
+    # TODO: `log`: pick a destination randomly (in `as_goal` space), and visualize actions-to-it as arrows. (Assuming that we succeed in learning all-paths, at least a little.)
+
+
+
+# The main loop, which steps the environment and trains `step`.
+action = torch.randn(batch_size, action_sz, device=device)
+goal = torch.randn(batch_size, input_sz, device=device)
+# TODO: Also need steps-until-new-goal.
+state, hidden_state = env_init(batch_size=batch_size)
+def maybe_reset_goal():
+    global goal
+    with torch.no_grad():
+        # TODO: Sometimes (`torch.where`): max-sample a new goal from the replay-buffer (and compute the new estimated-steps-to-reach-it), if reached (abs of goal-state minus goal is less than 1e-3) or out-of-time.
+        #   How do we estimate the distance, exactly?…
+        pass
+    # TODO: Return a tuple of how many times we've reached a goal, and how many times the goal timed out.
+def replay(reached_vs_timeout):
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
-    choices = [c for c in random.choices(replay_buffer, k=replays_per_step) if c is not None]
+    choices = [c for c in random.choices(replay_buffer, k=replays_per_unroll) if c is not None]
+    #   TODO: Use our own indices, not completely random: i, i+1, i<j, j<k.
     if len(choices):
-        prev_action = torch.cat([c[0] for c in choices], 0)
-        prev_state = torch.cat([c[1] for c in choices], 0)
+        # TODO: Concat each item, properly.
+        ranking = torch.cat([c[0] for c in choices], 0)
+        state = torch.cat([c[1] for c in choices], 0)
         action = torch.cat([c[2] for c in choices], 0)
-        state = torch.cat([c[3] for c in choices], 0)
+        as_goal = torch.cat([c[3] for c in choices], 0)
         N = state.shape[0]
 
-        goal = state[torch.randperm(N, device=device)]
+        goal = state[torch.randperm(N, device=device)] # TODO: Needs to be a real future-state now.
         randn = torch.randn(N, action_sz, device=device)
 
-        zero_dist_loss = 0
-        dist_loss = 0
-        self_imitation_loss = 0
+        # TODO: At replay:
+        #   TODO: As many times as required (1 by default) (turn to tensors & concatenate):
+        #     TODO: Sample 4 indices: i, i+1, i<j, j<k.
+        #     TODO: Sample items at those indices.
+        #   TODO: Update distances, to be the min of seen log2 of index-differences.
+        #     TODO: Also update distances to func-of-destination.
+        #     TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
+        #   TODO: Update ground-actions, act(i,i+1)=i.action.
+        #   TODO: Update meta-actions to k, to be the dist-min of actions to j.
+        #     TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
+        #   TODO: Perform the gradient-descent update.
 
-        # (zero_dist_loss + dist_loss + self_imitation_loss).backward()
+        dist_loss = 0
+        ground_loss = 0
+        meta_loss = 0
+
+        # (dist_loss + ground_loss + meta_loss).backward()
         optim.step();  optim.zero_grad(True)
 
         # Log debugging info.
         log(0, False, pos = pos_histogram)
-        log(1, False, zero_dist_loss = to_np(zero_dist_loss / N))
+        log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
         log(2, False, dist_loss = to_np(dist_loss / N))
-        log(3, False, self_imitation_loss = to_np(self_imitation_loss / N))
+        log(3, False, ground_loss = to_np(ground_loss / N))
+        log(4, False, meta_loss = to_np(meta_loss / N))
 
 
 
 for iter in range(500000):
-    prev_action, prev_state = action, state # TODO: No need for these.
     with torch.no_grad():
-        state, hidden_state = env_step(state, hidden_state, prev_action)
-        all_state = cat(state, hidden_state) # TODO: Use *this* everywhere, to not have to learn through time, for now. (Does it even make sense to learn actions through time? Or does that work out to self-compression?)
-        action = act(cat(prev_action, state, goal))
+        state, hidden_state = env_step(state, hidden_state, action)
+        all_state = cat(state, hidden_state)
+        action = act(cat(all_state, goal))
 
-    replay()
-    if iter == 1000: clear()
-
-    if random.randint(1, 32) == 1: reset_goal()
-
-    replay_buffer[iter % len(replay_buffer)] = (prev_action.detach(), prev_state.detach(), action.detach(), state.detach()) # TODO: Use the replay-buffer class. And, only store `action` and `state`, since our sampling will be index-based.
-
-
-
+        replay_buffer.append([
+            torch.zeros(batch_size, 1, device=device),
+            all_state,
+            action,
+            cat(all_state[:2], torch.ones(batch_size, 2, device=device)), # Wanna go places, not caring about final velocity.
+        ])
+    replay(maybe_reset_goal())
 
 
 
@@ -228,25 +246,9 @@ for iter in range(500000):
 
 
 
-# TODO: A replay buffer.
-# TODO: At unroll-time:
-#   TODO: Update env & get a new goal-conditioned action.
-#   TODO: Store None & state & action/accel & just-the-pos (`as_goal`: first 2 numbers of state, with constant padding to distinguish it from state) in the replay buffer.
-#   TODO: Sometimes (`torch.where`): max-sample a new goal from the replay-buffer (and compute the new estimated-steps-to-reach-it), if reached (abs of goal-state minus goal is less than 1e-3) or out-of-time.
-#     TODO: Keep track of how many times we've switched a goal, vs how many times the goal timed out.
-#       TODO: `log` these.
-# TODO: At replay:
-#   TODO: As many times as required (1 by default) (turn to tensors & concatenate):
-#     TODO: Sample 4 indices: i, i+1, i<j, j<k.
-#     TODO: Sample items at those indices.
-#   TODO: Update distances, to be the min of seen log2 of index-differences.
-#     TODO: Also update distances to func-of-destination.
-#     TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
-#   TODO: Update ground-actions, act(i,i+1)=i.action.
-#   TODO: Update meta-actions to k, to be the dist-min of actions to j.
-#     TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
-#   TODO: Perform the gradient-descent update.
-# TODO: `log`: pick a destination randomly, and visualize actions-to-it as arrows. (Assuming that we succeed in learning all-paths, at least a little.)
+
+
+
 
 
 
