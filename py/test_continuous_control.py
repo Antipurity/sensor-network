@@ -132,7 +132,7 @@ input_sz, embed_sz, action_sz = 4, 128, 128
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=1024) # [ranking, input, action, as_goal]
-replays_per_unroll = 4
+replays_per_unroll = 1
 
 
 
@@ -200,19 +200,17 @@ def maybe_reset_goal(input):
         steps_to_goal = torch.where(change, dist_to_steps(new_dist) + 4, steps_to_goal - 1)
     return reached.float().sum(), out_of_time.float().sum()
 def replay(reached_vs_timeout):
-    # Replay from the buffer. (Needs Python 3.6+ for convenience.)
-    choices = [c for c in random.choices(replay_buffer, k=replays_per_unroll) if c is not None]
-    #   TODO: Use our own indices, not completely random: i, i+1, i<j, j<k.
-    if len(choices):
-        # TODO: Concat each item, properly.
-        ranking = torch.cat([c[0] for c in choices], 0)
-        state = torch.cat([c[1] for c in choices], 0)
-        action = torch.cat([c[2] for c in choices], 0)
-        as_goal = torch.cat([c[3] for c in choices], 0)
-        N = state.shape[0]
+    """Replays samples from the buffer.
 
-        goal = state[torch.randperm(N, device=device)] # TODO: Needs to be a real future-state now.
-        randn = torch.randn(N, action_sz, device=device)
+    Picks samples at i<j<k and i+1, and refines min-distances and min-distance actions."""
+    L = len(replay_buffer)
+    if L < 4: return
+    dist_loss, ground_loss, meta_loss = 0,0,0
+    for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
+        i1 = random.randint(0, L-4)
+        i2 = i1 + 1
+        j = random.randint(i2+1, L-2)
+        k = random.randint(j+1, L-1)
 
         # TODO: At replay:
         #   TODO: As many times as required (1 by default) (turn to tensors & concatenate):
@@ -226,19 +224,15 @@ def replay(reached_vs_timeout):
         #     TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
         #   TODO: Perform the gradient-descent update.
 
-        dist_loss = 0
-        ground_loss = 0
-        meta_loss = 0
+    (dist_loss + ground_loss + meta_loss).backward()
+    optim.step();  optim.zero_grad(True)
 
-        # (dist_loss + ground_loss + meta_loss).backward()
-        optim.step();  optim.zero_grad(True)
-
-        # Log debugging info.
-        log(0, False, pos = pos_histogram)
-        log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
-        log(2, False, dist_loss = to_np(dist_loss / N))
-        log(3, False, ground_loss = to_np(ground_loss / N))
-        log(4, False, meta_loss = to_np(meta_loss / N))
+    # Log debugging info.
+    log(0, False, pos = pos_histogram)
+    log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
+    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll))
+    log(3, False, ground_loss = to_np(ground_loss / batch_size / replays_per_unroll))
+    log(4, False, meta_loss = to_np(meta_loss / batch_size / replays_per_unroll))
 
 
 
@@ -315,5 +309,4 @@ for iter in range(500000):
 
 
 
-# TODO: Gotta get back, back to the past:
-#   TODO: In `test.py`, implement self-targeting RL (with dist-bootstrapping and `act`-dist-min and self-imitation) and self-targeting BPTT (with `act`-dist-min and a skip connection), and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
+# …Gotta get back, back to the past: in `test.py`, implement ML pathfinding, and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
