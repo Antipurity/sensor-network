@@ -153,6 +153,17 @@ optim = torch.optim.Adam([*embed[0].parameters(), *embed[1].parameters(), *act.p
 
 
 
+def embed_(src_or_dst, input, which_from_ensemble=0):
+    """Convenience: `embed`s into a locally-isometric map for easy generalization and dist-estimation."""
+    x = cat(torch.ones(input.shape[0], 1, device=device) * (1 if src_or_dst else -1), input)
+    return embed[which_from_ensemble](x)
+def dist_(src, dst):
+    """Convenience: dist between `embed`dings, or rather, `1+log2(steps)`."""
+    return (src - dst).square().mean(-1, keepdim=True)
+def dist_to_steps(dist): return 2 ** (dist-1)
+
+
+
 # Debugging.
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
@@ -170,16 +181,24 @@ def pos_histogram(plt, label):
 
 # The main loop, which steps the environment and trains `step`.
 action = torch.randn(batch_size, action_sz, device=device)
-goal = torch.randn(batch_size, input_sz, device=device)
-# TODO: Also need steps-until-new-goal.
+goal = torch.randn(batch_size, embed_sz, device=device)
+steps_to_goal = torch.rand(batch_size, 1, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
-def maybe_reset_goal():
-    global goal
+def maybe_reset_goal(input):
+    """Changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
+
+    Returns a tuple of how many goals were reached and how many goals have timed out."""
+    global goal, steps_to_goal
     with torch.no_grad():
-        # TODO: Sometimes (`torch.where`): max-sample a new goal from the replay-buffer (and compute the new estimated-steps-to-reach-it), if reached (abs of goal-state minus goal is less than 1e-3) or out-of-time.
-        #   How do we estimate the distance, exactly?…
-        pass
-    # TODO: Return a tuple of how many times we've reached a goal, and how many times the goal timed out.
+        src = embed_(False, input)
+        dst = embed_(True, replay_buffer.sample_best())
+        old_dist, new_dist = dist_(src, goal), dist_(src, dst)
+        reached, out_of_time = old_dist < .1, steps_to_goal < 0
+        change = reached | out_of_time
+
+        goal = torch.where(change, dst, goal)
+        steps_to_goal = torch.where(change, dist_to_steps(new_dist) + 4, steps_to_goal - 1)
+    return reached.float().sum(), out_of_time.float().sum()
 def replay(reached_vs_timeout):
     # Replay from the buffer. (Needs Python 3.6+ for convenience.)
     choices = [c for c in random.choices(replay_buffer, k=replays_per_unroll) if c is not None]
@@ -235,7 +254,7 @@ for iter in range(500000):
             action,
             cat(all_state[:2], torch.ones(batch_size, 2, device=device)), # Wanna go places, not caring about final velocity.
         ])
-    replay(maybe_reset_goal())
+    replay(maybe_reset_goal(all_state))
 
 
 
