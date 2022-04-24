@@ -73,14 +73,14 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplayBuffer:
-    """Stores the in-order sequence of most-recent events."""
+    """Stores the in-order sequence of most-recent events. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
     def __init__(self, max_len=1024):
         self.head, self.max_len = 0, max_len
         self.buffer = []
     def __len__(self):
         """How many data-samples are currently contained. Use this to decide the indices to sample at."""
         return len(self.buffer)
-    def add_data(self, data):
+    def append(self, data):
         """Appends a data-sample to the replay buffer. Typically an array, such as `[ranking, state, action, as_goal]`.
 
         Save unrolls."""
@@ -89,14 +89,15 @@ class ReplayBuffer:
         else:
             self.buffer.append(data)
         self.head = (self.head + 1) % len(self.max_len)
-    def sample_data(self, index):
+    def __getitem__(self, index):
         """Returns the sample at the given index. For example, use `random.randrange(len(replay_buffer))`.
 
         Consecutive indices are guaranteed to be a part of a contiguous sequence.
 
         Remember unrolls, either with independent samples, consecutive pairs, or ordered faraway sequences."""
+        assert isinstance(index, int)
         return self.buffer[(self.head + index) % len(self)]
-    def sample_best_data(self, samples=16, combine=lambda a,b:list(torch.where(a[0]>b[0], x, y) for x,y in zip(a,b))):
+    def sample_best(self, samples=16, combine=lambda a,b:list(torch.where(a[0]>b[0], x, y) for x,y in zip(a,b))):
         """A primitive algorithm for sampling likely-best data, ranked by the first array item.
 
         For picking at-unroll goals.
