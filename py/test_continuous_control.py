@@ -72,6 +72,8 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 
+class ReplaySample:
+    __slots__ = ('ranking', 'state', 'action', 'as_goal')
 class ReplayBuffer:
     """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
     def __init__(self, max_len=1024):
@@ -81,7 +83,7 @@ class ReplayBuffer:
         """How many data-samples are currently contained. Use this to decide the indices to sample at."""
         return len(self.buffer)
     def append(self, data):
-        """Appends a data-sample to the replay buffer. Typically an array, such as `[ranking, state, action, as_goal]`.
+        """Appends a data-sample to the replay buffer.
 
         Save unrolls."""
         if len(self.buffer) == self.max_len:
@@ -99,14 +101,14 @@ class ReplayBuffer:
         return self.buffer[(self.head + index) % len(self)]
     def __iter__(self):
         for i in range(len(self)): yield self[i]
-    def sample_best(self, samples=16, combine=lambda a,b:list(torch.where(a[0]>b[0], x, y) for x,y in zip(a,b))):
-        """A primitive algorithm for sampling likely-best data, ranked by the first array item.
+    def sample_best(self, samples=16, combine=lambda a,b:list(torch.where(a.ranking>b.ranking, x, y) for x,y in zip(a,b))):
+        """A primitive algorithm for sampling likely-best data.
 
-        For picking at-unroll goals.
+        For picking at-unroll-time goals.
 
         Args:
         - `samples=16`: how many samples to choose among. We don't have a precomputed data structure.
-        - `combine=...`: the actual chooser. By default, compares by the 0th item, and returns a list of max values."""
+        - `combine=...`: the actual chooser. By default, compares by `.ranking`, and returns a list of max values."""
         N, result = len(self), None
         for _ in range(samples):
             sample = self.sample_data(random.randrange(N))
@@ -166,16 +168,20 @@ def dist_to_steps(dist): return 2 ** (dist-1)
 
 # Debugging.
 def pos_histogram(plt, label):
-    """That replay buffer contains lots of past positions. This func plots those as a 2D histogram."""
+    """That replay buffer contains lots of past positions. This func plots those as a 2D histogram, in addition to arrows indicating which action to take to get to a random position."""
     x, y = [], []
     for ch in replay_buffer:
-        if ch is not None:
-            ranking, state, action, as_goal = ch
-            pos = to_np(state)
-            x.append(pos[..., 0]), y.append(pos[..., 1])
+        pos = to_np(ch.state)
+        x.append(pos[..., 0]), y.append(pos[..., 1])
     import numpy as np
     plt.hist2d(np.concatenate(x), np.concatenate(y), bins=100, range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
-    # TODO: `log`: pick a destination randomly (in `as_goal` space), and visualize actions-to-it as arrows. (Assuming that we succeed in learning all-paths, at least a little.)
+
+    GS = 16 # grid size
+    dst = embed_(True, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
+    pos = (torch.linspace(0.,1.,GS, device=device)).reshape(GS*GS, 2) # TODO: How?
+    src = embed_(False, cat(pos, torch.zeros(GS*GS, 2, device=device)))
+    #   TODO: How to compute `src`, with 0-velocity positions all over the place?
+    # TODO: `log`: pick a destination randomly (in `as_goal` space), and visualize actions-to-it as arrows.
 
 
 
@@ -191,7 +197,7 @@ def maybe_reset_goal(input):
     global goal, steps_to_goal
     with torch.no_grad():
         src = embed_(False, input)
-        dst = embed_(True, replay_buffer.sample_best())
+        dst = embed_(True, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
         old_dist, new_dist = dist_(src, goal), dist_(src, dst)
         reached, out_of_time = old_dist < .1, steps_to_goal < 0
         change = reached | out_of_time
@@ -212,17 +218,12 @@ def replay(reached_vs_timeout):
         j = random.randint(i2+1, L-2)
         k = random.randint(j+1, L-1)
 
-        # TODO: At replay:
-        #   TODO: As many times as required (1 by default) (turn to tensors & concatenate):
-        #     TODO: Sample 4 indices: i, i+1, i<j, j<k.
-        #     TODO: Sample items at those indices.
-        #   TODO: Update distances, to be the min of seen log2 of index-differences.
-        #     TODO: Also update distances to func-of-destination.
-        #     TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
-        #   TODO: Update ground-actions, act(i,i+1)=i.action.
-        #   TODO: Update meta-actions to k, to be the dist-min of actions to j.
-        #     TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
-        #   TODO: Perform the gradient-descent update.
+        # TODO: Update distances, to be the min of seen log2 of index-differences.
+        #   TODO: Also update distances to func-of-destination.
+        #   TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
+        # TODO: Update ground-actions, act(i,i+1)=i.action.
+        # TODO: Update meta-actions to k, to be the dist-min of actions to j.
+        #   TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -242,12 +243,13 @@ for iter in range(500000):
         all_state = cat(state, hidden_state)
         action = act(cat(all_state, goal))
 
-        replay_buffer.append([
+        replay_buffer.append(ReplaySample( # TODO: Do we need kwargs, or something?
             torch.zeros(batch_size, 1, device=device),
             all_state,
             action,
-            cat(all_state[:2], torch.ones(batch_size, 2, device=device)), # Wanna go places, not caring about final velocity.
-        ])
+            cat(all_state[:2], torch.ones(batch_size, 2, device=device)),
+            #   Want to go to places, not caring about final velocity.
+        ))
     replay(maybe_reset_goal(all_state))
 
 
