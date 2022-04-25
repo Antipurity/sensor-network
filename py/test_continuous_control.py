@@ -216,17 +216,29 @@ def replay(reached_vs_timeout):
     if L < 4: return
     dist_loss, ground_loss, meta_loss = 0,0,0
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
-        i1 = random.randint(0, L-4)
-        i2 = i1 + 1
-        j = random.randint(i2+1, L-2)
+        i = random.randint(0, L-4)
+        I = i + 1
+        j = random.randint(I+1, L-2)
         k = random.randint(j+1, L-1)
+        a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
-        # TODO: Update distances, to be the min of seen log2 of index-differences.
+        sa, sA, sb, sc = embed(False, a.state), embed(False, A.state), embed(False, b.state), embed(False, c.state)
+        da, dA, db, dc = embed(True, a.state), embed(True, A.state), embed(True, b.state), embed(True, c.state)
+
+        # TODO: Distances, to be the min of seen log2 of index-differences.
         #   TODO: Also update distances to func-of-destination.
         #   TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
-        # TODO: Update ground-actions, act(i,i+1)=i.action.
-        # TODO: Update meta-actions to k, to be the dist-min of actions to j.
+        dist_loss = dist_loss + (2**(dist_(sa, dA)-1) - (I-i)).square().sum() # TODO: THIS IS NOT THE MIN; HOW TO MULTIPLY BY A PROPER NUMBER SUCH THAT LOWER PREDICTION TARGETS GET HIGHER PRIORITY?
+        dist_loss = dist_loss + (2**(dist_(sa, db)-1) - (j-i)).square().sum()
+        dist_loss = dist_loss + (2**(dist_(sa, dc)-1) - (k-i)).square().sum()
+        dist_loss = dist_loss + (2**(dist_(sb, dc)-1) - (k-j)).square().sum()
+
+        # Ground-actions.
+        ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum()
+
+        # TODO: Meta-actions to k, to be the dist-min of actions to j.
         #   TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
+        meta_loss = meta_loss + 0
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
