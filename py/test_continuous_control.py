@@ -166,22 +166,25 @@ def dist_to_steps(dist): return 2 ** (dist-1)
 
 
 
-# Debugging.
+# For debugging.
 def pos_histogram(plt, label):
-    """That replay buffer contains lots of past positions. This func plots those as a 2D histogram, in addition to arrows indicating which action to take to get to a random position."""
+    """That replay buffer contains lots of past positions. This func plots those as a 2D histogram, in addition to arrows indicating which action to take to get from anywhere to a random position."""
     x, y = [], []
     for ch in replay_buffer:
-        pos = to_np(ch.state)
-        x.append(pos[..., 0]), y.append(pos[..., 1])
-    import numpy as np
-    plt.hist2d(np.concatenate(x), np.concatenate(y), bins=100, range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
+        x.append(ch.state[..., 0]), y.append(ch.state[..., 1])
+    plt.hist2d(torch.cat(x).cpu(), torch.cat(y).cpu(), bins=100, range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
 
-    GS = 16 # grid size
+    # Display action-arrows everywhere.
+    GS = 32 # grid size
     dst = embed_(True, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
-    pos = (torch.linspace(0.,1.,GS, device=device)).reshape(GS*GS, 2) # TODO: How?
-    src = embed_(False, cat(pos, torch.zeros(GS*GS, 2, device=device)))
-    #   TODO: How to compute `src`, with 0-velocity positions all over the place?
-    # TODO: `log`: pick a destination randomly (in `as_goal` space), and visualize actions-to-it as arrows.
+    pos_x, pos_y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
+    pos_x = pos_x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
+    pos_y = pos_y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
+    veloc = torch.zeros(GS*GS, 2, device=device)
+    src = embed_(False, cat(pos_x, pos_y, veloc))
+    acts = act(cat(src, dst))
+    x, y = torch.arange(GS), torch.arange(GS)
+    plt.quiver(x, y, acts[:,0].cpu(), acts[:,1].cpu(), scale=1, scale_units='xy', angles='xy', units='xy')
 
 
 
