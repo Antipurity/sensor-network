@@ -73,7 +73,8 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplaySample:
-    # TODO: Yes, we NEED a constructor.
+    def __init__(self, ranking, state, action, as_goal):
+        self.ranking, self.state, self.action, self.as_goal = ranking, state, action, as_goal
     __slots__ = ('ranking', 'state', 'action', 'as_goal')
 class ReplayBuffer:
     """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
