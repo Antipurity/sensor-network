@@ -92,7 +92,7 @@ class ReplayBuffer:
             self.buffer[self.head] = data
         else:
             self.buffer.append(data)
-        self.head = (self.head + 1) % len(self.max_len)
+        self.head = (self.head + 1) % self.max_len
     def __getitem__(self, index):
         """Returns the sample at the given index. For example, use `random.randrange(len(replay_buffer))`.
 
