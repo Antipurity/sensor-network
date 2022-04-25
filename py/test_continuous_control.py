@@ -73,9 +73,18 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplaySample:
-    def __init__(self, ranking, state, action, as_goal):
-        self.ranking, self.state, self.action, self.as_goal = ranking, state, action, as_goal
-    __slots__ = ('ranking', 'state', 'action', 'as_goal')
+    __slots__ = ('uncertainty', 'state', 'action', 'as_goal')
+    def __init__(self, uncertainty, state, action, as_goal):
+        self.uncertainty, self.state, self.action, self.as_goal = uncertainty, state, action, as_goal
+    def combine(self, o):
+        """Pick the max-uncertainty replay sample."""
+        c = self.uncertainty > o.uncertainty
+        return ReplaySample(
+            torch.where(c, self.uncertainty, o.uncertainty),
+            torch.where(c, self.state, o.state),
+            torch.where(c, self.action, o.action),
+            torch.where(c, self.as_goal, o.as_goal),
+        )
 class ReplayBuffer:
     """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
     def __init__(self, max_len=1024):
@@ -103,14 +112,14 @@ class ReplayBuffer:
         return self.buffer[(self.head + index) % len(self)]
     def __iter__(self):
         for i in range(len(self)): yield self[i]
-    def sample_best(self, samples=16, combine=lambda a,b:list(torch.where(a.ranking>b.ranking, x, y) for x,y in zip(a,b))):
+    def sample_best(self, samples=16, combine=lambda a,b: a.combine(b)):
         """A primitive algorithm for sampling likely-best data.
 
         For picking at-unroll-time goals.
 
         Args:
         - `samples=16`: how many samples to choose among. We don't have a precomputed data structure.
-        - `combine=...`: the actual chooser. By default, compares by `.ranking`, and returns a list of max values."""
+        - `combine = lambda a,b: a.combine(b)`: the actual chooser."""
         N, result = len(self), None
         for _ in range(samples):
             sample = self[random.randrange(N)]
@@ -135,7 +144,7 @@ batch_size = 128
 input_sz, embed_sz, action_sz = 4, 128, 128
 lr = 1e-3
 
-replay_buffer = ReplayBuffer(max_len=1024) # [ranking, input, action, as_goal]
+replay_buffer = ReplayBuffer(max_len=1024) # of ReplaySample
 replays_per_unroll = 1
 
 
@@ -270,8 +279,8 @@ def replay(reached_vs_timeout):
         # Set/update the uncertainty of dist-prediction: overwrite if `None`, average otherwise.
         ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
         uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
-        a.ranking = ua if isinstance(a.ranking, float) else (a.ranking + ua)/2
-        c.ranking = uc if isinstance(c.ranking, float) else (c.ranking + uc)/2
+        a.uncertainty = ua if isinstance(a.uncertainty, float) else (a.uncertainty + ua)/2
+        c.uncertainty = uc if isinstance(c.uncertainty, float) else (c.uncertainty + uc)/2
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
