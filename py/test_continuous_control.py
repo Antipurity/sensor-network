@@ -288,17 +288,17 @@ def replay(reached_vs_timeout):
 for iter in range(500000):
     with torch.no_grad():
         state, hidden_state = env_step(state, hidden_state, action)
-        all_state = cat(state, hidden_state)
-        action = act(cat(all_state, goal))
+        full_state = cat(state, hidden_state)
+        action = act(cat(embed_(0, full_state), goal))
 
         replay_buffer.append(ReplaySample(
             0.,
-            all_state,
+            full_state,
             action,
-            cat(all_state[:2], torch.ones(batch_size, 2, device=device)),
+            cat(full_state[:2], torch.ones(batch_size, 2, device=device)),
             #   Want to go to places, not caring about final velocity.
         ))
-    replay(maybe_reset_goal(all_state))
+    replay(maybe_reset_goal(full_state))
 
 # TODO: Run & fix.
 
