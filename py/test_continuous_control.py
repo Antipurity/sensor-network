@@ -113,7 +113,7 @@ class ReplayBuffer:
         - `combine=...`: the actual chooser. By default, compares by `.ranking`, and returns a list of max values."""
         N, result = len(self), None
         for _ in range(samples):
-            sample = self.sample_data(random.randrange(N))
+            sample = self[random.randrange(N)]
             result = sample if result is None else combine(result, sample)
             # (This creates an O(N) chain of computations, though O(log(N)) is possible.)
         return result
