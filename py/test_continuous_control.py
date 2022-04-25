@@ -295,7 +295,7 @@ for iter in range(500000):
             0.,
             full_state,
             action,
-            cat(full_state[:2], torch.ones(batch_size, 2, device=device)),
+            cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)),
             #   Want to go to places, not caring about final velocity.
         ))
     replay(maybe_reset_goal(full_state))
