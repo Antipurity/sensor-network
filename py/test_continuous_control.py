@@ -73,6 +73,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplaySample:
+    # TODO: Yes, we NEED a constructor.
     __slots__ = ('ranking', 'state', 'action', 'as_goal')
 class ReplayBuffer:
     """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
@@ -176,12 +177,12 @@ def pos_histogram(plt, label):
 
     # Display action-arrows everywhere.
     GS = 32 # grid size
-    dst = embed_(True, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
+    dst = embed_(1, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
     pos_x, pos_y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
     pos_x = pos_x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
     pos_y = pos_y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
     veloc = torch.zeros(GS*GS, 2, device=device)
-    src = embed_(False, cat(pos_x, pos_y, veloc))
+    src = embed_(0, cat(pos_x, pos_y, veloc))
     acts = act(cat(src, dst))
     x, y = torch.arange(GS), torch.arange(GS)
     plt.quiver(x, y, acts[:,0].cpu(), acts[:,1].cpu(), scale=1, scale_units='xy', angles='xy', units='xy')
@@ -199,8 +200,8 @@ def maybe_reset_goal(input):
     Returns a tuple of how many goals were reached and how many goals have timed out."""
     global goal, steps_to_goal
     with torch.no_grad():
-        src = embed_(False, input)
-        dst = embed_(True, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
+        src = embed_(0, input)
+        dst = embed_(1, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
         old_dist, new_dist = dist_(src, goal), dist_(src, dst)
         reached, out_of_time = old_dist < .1, steps_to_goal < 0
         change = reached | out_of_time
@@ -223,12 +224,15 @@ def replay(reached_vs_timeout):
         a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
         # Source/destination embeddings.
-        sa, sA, sb = embed_(False, a.state), embed_(False, A.state), embed_(False, b.state)
-        dA, db, dc, dg = embed_(True, A.state), embed_(True, b.state), embed_(True, c.state), embed_(True, c.as_goal)
+        e = embed_
+        sa, sb = e(0, a.state, 0), e(0, b.state, 0)
+        Sa, Sb = e(0, a.state, 1), e(0, b.state, 1)
+        dA, db, dc, dg = e(1, A.state, 0), e(1, b.state, 0), e(1, c.state, 0), e(1, c.as_goal, 0)
+        DA, Db, Dc, Dg = e(1, A.state, 1), e(1, b.state, 1), e(1, c.state, 1), e(1, c.as_goal, 1)
 
         # Distances.
-        daA, dab, dac, dag, dbc = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sa, dg), dist_(sb, dc)
-        #   TODO: Capitalize, to distinguish from dst.
+        daA, dab, dac, dbc, dbg = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sb, dc), dist_(sb, dg)
+        DaA, Dab, Dac, Dbc, Dbg = dist_(Sa, DA), dist_(Sa, Db), dist_(Sa, Dc), dist_(Sb, Dc), dist_(Sb, Dg)
 
         # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
         def dstl(d,D):
@@ -239,13 +243,11 @@ def replay(reached_vs_timeout):
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (d - D).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
-        dist_loss = dist_loss + dstl(dab, j-i)
-        dist_loss = dist_loss + dstl(dac, k-i)
-        dist_loss = dist_loss + dstl(dag, k-i)
-        # TODO: Also learn embed(,,1), for estimating uncertainty.
-        #   …Don't we want to preserve distances of both subnets, and update uncertainties using those?
-
-        # TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
+        dist_loss = dist_loss + dstl(DaA, I-i)
+        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, k-i)
+        dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, k-i)
+        dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
+        dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
 
         # Learn ground-actions.
         ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum()
@@ -261,8 +263,14 @@ def replay(reached_vs_timeout):
         meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dc)), act_target)
 
         # Learn meta-actions to goal-of-k.
-        meta_loss = meta_loss + actl(dbc, dbc.detach(), act(cat(sb, dg)), act_target)
+        meta_loss = meta_loss + actl(dbc, dbc.detach(), act(cat(sb, dg)), act(cat(db, dc)).detach())
         meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dg)), act_target)
+
+        # Set/update the uncertainty of dist-prediction: overwrite if `None`, average otherwise.
+        ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
+        uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
+        a.ranking = ua if isinstance(a.ranking, float) else (a.ranking + ua)/2
+        c.ranking = uc if isinstance(c.ranking, float) else (c.ranking + uc)/2
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -282,14 +290,16 @@ for iter in range(500000):
         all_state = cat(state, hidden_state)
         action = act(cat(all_state, goal))
 
-        replay_buffer.append(ReplaySample( # TODO: Do we need kwargs, or something?
-            torch.zeros(batch_size, 1, device=device),
+        replay_buffer.append(ReplaySample(
+            0.,
             all_state,
             action,
             cat(all_state[:2], torch.ones(batch_size, 2, device=device)),
             #   Want to go to places, not caring about final velocity.
         ))
     replay(maybe_reset_goal(all_state))
+
+# TODO: Run & fix.
 
 
 
