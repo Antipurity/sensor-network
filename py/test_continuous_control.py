@@ -222,23 +222,47 @@ def replay(reached_vs_timeout):
         k = random.randint(j+1, L-1)
         a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
-        sa, sA, sb, sc = embed(False, a.state), embed(False, A.state), embed(False, b.state), embed(False, c.state)
-        da, dA, db, dc = embed(True, a.state), embed(True, A.state), embed(True, b.state), embed(True, c.state)
+        # Source/destination embeddings.
+        sa, sA, sb = embed_(False, a.state), embed_(False, A.state), embed_(False, b.state)
+        dA, db, dc, dg = embed_(True, A.state), embed_(True, b.state), embed_(True, c.state), embed_(True, c.as_goal)
 
-        # TODO: Distances, to be the min of seen log2 of index-differences.
-        #   TODO: Also update distances to func-of-destination.
-        #   TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
-        dist_loss = dist_loss + (2**(dist_(sa, dA)-1) - (I-i)).square().sum() # TODO: THIS IS NOT THE MIN; HOW TO MULTIPLY BY A PROPER NUMBER SUCH THAT LOWER PREDICTION TARGETS GET HIGHER PRIORITY?
-        dist_loss = dist_loss + (2**(dist_(sa, db)-1) - (j-i)).square().sum()
-        dist_loss = dist_loss + (2**(dist_(sa, dc)-1) - (k-i)).square().sum()
-        dist_loss = dist_loss + (2**(dist_(sb, dc)-1) - (k-j)).square().sum()
+        # Distances.
+        daA, dab, dac, dag, dbc = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sa, dg), dist_(sb, dc)
+        #   TODO: Capitalize, to distinguish from dst.
 
-        # Ground-actions.
+        # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
+        def dstl(d,D):
+            """Always nonzero, but fades if dist is too high; prefers lower dists."""
+            d = dist_to_steps(d.detach())
+            mult = (d-D) + 1
+            mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
+            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
+            return (mult * (d - D).square()).sum()
+        dist_loss = dist_loss + dstl(daA, I-i)
+        dist_loss = dist_loss + dstl(dab, j-i)
+        dist_loss = dist_loss + dstl(dac, k-i)
+        dist_loss = dist_loss + dstl(dag, k-i)
+        # TODO: Also learn embed(,,1), for estimating uncertainty.
+        #   …Don't we want to preserve distances of both subnets, and update uncertainties using those?
+
+        # TODO: Set/update the uncertainty (0th item of items), to be the abs-diff of the 2 versions of `embed`-dists: overwrite if `None`, average otherwise.
+
+        # Learn ground-actions.
         ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum()
 
-        # TODO: Meta-actions to k, to be the dist-min of actions to j.
-        #   TODO: Also update meta-actions that point not just to state but also to the `as_goal` func-of-state. (Func-of-goal has no grounding, but it *can* be learned to go to.)
-        meta_loss = meta_loss + 0
+        # Learn meta-actions to k, to be the dist-min of actions to j.
+        def actl(d,D, a,A):
+            """Tries to cut off anything not-min-dist, if in lin-space."""
+            d = dist_to_steps(d.detach())
+            mult = ((d-D) + 1).clamp(0,15)
+            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
+            return (mult * (a - A).square())
+        act_target = act(cat(sa, db)).detach()
+        meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dc)), act_target)
+
+        # Learn meta-actions to goal-of-k.
+        meta_loss = meta_loss + actl(dbc, dbc.detach(), act(cat(sb, dg)), act_target)
+        meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dg)), act_target)
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
