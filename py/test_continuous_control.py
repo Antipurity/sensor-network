@@ -142,7 +142,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_size = 128
+batch_size = 100
 input_sz, embed_sz, action_sz = 4, 64, 64
 lr = 1e-3
 
@@ -189,7 +189,7 @@ def pos_histogram(plt, label):
         plt.hist2d(torch.cat(x).cpu().numpy(), torch.cat(y).cpu().numpy(), bins=(100,100), range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
 
         # Display action-arrows everywhere.
-        GS = 24 # grid size
+        GS = 16 # grid size
         dst = embed_(1, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
         pos_x, pos_y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         pos_x = pos_x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
@@ -272,8 +272,10 @@ def replay(reached_vs_timeout):
             mult = ((d-D) + 1).clamp(0,15)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
-        act_target = act(cat(sa, db)).detach()
-        meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dc)), act_target)
+        act_target = act(cat(sa, db)).detach() # TODO: Is this subtask-combining loss better?…
+        # act_target = a.action
+        # meta_loss = meta_loss + actl(dac, torch.full_like(dac, k-i), act(cat(sa, dc)), act_target) # TODO: …Hasn't helped, so far…
+        meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dc)), act_target) # TODO:
 
         # Learn meta-actions to goal-of-k.
         meta_loss = meta_loss + actl(dbc, dbc.detach(), act(cat(sb, dg)), act(cat(db, dc)).detach())
@@ -301,25 +303,28 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         action = act(cat(embed_(0, full_state), goal))
 
+        as_goal = cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)) # TODO:
+        # print(full_state.shape, action.shape, as_goal.shape) # TODO: 100×4, 100×64, 100×4 — NOT 1GB MATERIAL, MORE LIKE 30MB, IT MAKES NO SENSE; WHY DO WE NEED SO MUCH GPU MEMORY?
         replay_buffer.append(ReplaySample(
             None,
             full_state,
             action,
-            cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)),
-            #   Want to go to places, not caring about final velocity.
+            as_goal, # Want to go to places, not caring about final velocity.
         ))
     replay(maybe_reset_goal(full_state))
 
 # TODO: Run & fix.
-#   TODO: …Why do we consume like 2GB of GPU memory? It makes no sense: the replay buffer should only be several megabytes, going by the numbers.
 #   TODO: …Why do all actions end up collapsing to the same action? And why do we end up in the exact same 4 bins on the histogram?
 #     Maybe our goal-sampling is very wrong?…
 #     (…Though actions eventually end up varying. But the spots where everything is, is still the same and ultra-concentrated.)
 #     TODO: Do we need to inject action-noise after all? …How?…
 #   TODO: Why doesn't the distance loss go down below like .3 at minimum, or 1 on average? And why does it eventually temporarily-explode to ever greater values, such as 80k at 25k epochs or 1M at 26k epochs?
 #     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
+#     TODO: Try training a real dist neural net. Does loss go lower than what we have now?
+#     TODO: Try both linspace and logspace dists.
 #   TODO: …Why does reachability percentage go down over time, from 4% to .5% over 25k epochs?…
 #     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
+#     TODO: …Do we want to always use real actions in meta-action-loss, counting on poor plans getting filtered out?… Hasn't improved anything so far…
 
 
 
