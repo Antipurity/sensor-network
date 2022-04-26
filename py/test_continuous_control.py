@@ -197,8 +197,8 @@ def pos_histogram(plt, label):
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = embed_(0, cat(pos_x, pos_y, veloc))
         acts = act(cat(src, dst))
-        x, y = torch.arange(GS), torch.arange(GS)
-        plt.quiver(x, y, acts[:,0].cpu(), acts[:,1].cpu(), scale=1, scale_units='xy', angles='xy', units='xy')
+        x, y = torch.linspace(0,1,GS), torch.linspace(0,1,GS)
+        plt.quiver(x, y, acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy')
 
 
 
@@ -291,9 +291,7 @@ def replay(reached_vs_timeout):
     # Log debugging info.
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
-    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll))
-    log(3, False, ground_loss = to_np(ground_loss / batch_size / replays_per_unroll))
-    log(4, False, meta_loss = to_np(meta_loss / batch_size / replays_per_unroll))
+    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), ground_loss = to_np(ground_loss / batch_size / replays_per_unroll), meta_loss = to_np(meta_loss / batch_size / replays_per_unroll))
 
 
 
@@ -313,6 +311,7 @@ for iter in range(500000):
     replay(maybe_reset_goal(full_state))
 
 # TODO: Run & fix.
+#   TODO: …Why out-of-memory?
 
 
 
