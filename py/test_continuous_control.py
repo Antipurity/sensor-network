@@ -143,7 +143,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 batch_size = 128
-input_sz, embed_sz, action_sz = 4, 128, 128
+input_sz, embed_sz, action_sz = 4, 64, 64
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=1024) # of ReplaySample
@@ -311,7 +311,9 @@ for iter in range(500000):
     replay(maybe_reset_goal(full_state))
 
 # TODO: Run & fix.
-#   TODO: …Why out-of-memory?
+#   TODO: …Why do we consume like 2GB of GPU memory? It makes no sense: the replay buffer should only be several megabytes, going by the numbers.
+#   TODO: …Why do all actions end up collapsing to the same action? And why do we end up in the exact same 4 bins on the histogram?
+#     Maybe our goal-sampling is very wrong?…
 
 
 
