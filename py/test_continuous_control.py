@@ -78,6 +78,8 @@ class ReplaySample:
         self.uncertainty, self.state, self.action, self.as_goal = uncertainty, state, action, as_goal
     def combine(self, o):
         """Pick the max-uncertainty replay sample."""
+        if o.uncertainty is None: return self
+        if self.uncertainty is None: return o
         c = self.uncertainty > o.uncertainty
         return ReplaySample(
             torch.where(c, self.uncertainty, o.uncertainty),
@@ -279,8 +281,8 @@ def replay(reached_vs_timeout):
         # Set/update the uncertainty of dist-prediction: overwrite if `None`, average otherwise.
         ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
         uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
-        a.uncertainty = ua if isinstance(a.uncertainty, float) else (a.uncertainty + ua)/2
-        c.uncertainty = uc if isinstance(c.uncertainty, float) else (c.uncertainty + uc)/2
+        a.uncertainty = ua if a.uncertainty is None else (a.uncertainty + ua)/2
+        c.uncertainty = uc if c.uncertainty is None else (c.uncertainty + uc)/2
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -301,7 +303,7 @@ for iter in range(500000):
         action = act(cat(embed_(0, full_state), goal))
 
         replay_buffer.append(ReplaySample(
-            0.,
+            None,
             full_state,
             action,
             cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)),
@@ -310,6 +312,14 @@ for iter in range(500000):
     replay(maybe_reset_goal(full_state))
 
 # TODO: Run & fix.
+
+
+
+
+
+
+
+# …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation), maximize regret (underestimation of dist, computed at unroll-time from encountered dst-embeddings) by goals.
 
 
 
