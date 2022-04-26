@@ -189,7 +189,7 @@ def pos_histogram(plt, label):
         plt.hist2d(torch.cat(x).cpu().numpy(), torch.cat(y).cpu().numpy(), bins=(100,100), range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
 
         # Display action-arrows everywhere.
-        GS = 32 # grid size
+        GS = 24 # grid size
         dst = embed_(1, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
         pos_x, pos_y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         pos_x = pos_x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
@@ -216,7 +216,7 @@ def maybe_reset_goal(input):
         src = embed_(0, input)
         dst = embed_(1, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
         old_dist, new_dist = dist_(src, goal), dist_(src, dst)
-        reached, out_of_time = old_dist < .1, steps_to_goal < 0
+        reached, out_of_time = old_dist < .5, steps_to_goal < 0
         change = reached | out_of_time
 
         goal = torch.where(change, dst, goal)
@@ -314,6 +314,12 @@ for iter in range(500000):
 #   TODO: …Why do we consume like 2GB of GPU memory? It makes no sense: the replay buffer should only be several megabytes, going by the numbers.
 #   TODO: …Why do all actions end up collapsing to the same action? And why do we end up in the exact same 4 bins on the histogram?
 #     Maybe our goal-sampling is very wrong?…
+#     (…Though actions eventually end up varying. But the spots where everything is, is still the same and ultra-concentrated.)
+#     TODO: Do we need to inject action-noise after all? …How?…
+#   TODO: Why doesn't the distance loss go down below like .3 at minimum, or 1 on average? And why does it eventually temporarily-explode to ever greater values, such as 80k at 25k epochs or 1M at 26k epochs?
+#     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
+#   TODO: …Why does reachability percentage go down over time, from 4% to .5% over 25k epochs?…
+#     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
 
 
 
