@@ -302,6 +302,7 @@ for iter in range(500000):
         state, hidden_state = env_step(state, hidden_state, action)
         full_state = cat(state, hidden_state)
         action = act(cat(embed_(0, full_state), goal))
+        # if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.2 # TODO:
 
         as_goal = cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)) # TODO:
         # print(full_state.shape, action.shape, as_goal.shape) # TODO: 100×4, 100×64, 100×4 — NOT 1GB MATERIAL, MORE LIKE 30MB, IT MAKES NO SENSE; WHY DO WE NEED SO MUCH GPU MEMORY?
@@ -328,12 +329,13 @@ for iter in range(500000):
 #     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
 #     TODO: …Do we want to always use real actions in meta-action-loss, counting on poor plans getting filtered out?… Hasn't improved anything so far…
 #   TODO: …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(a→c) = act(a→b).detach()`)?…
-#     (…Actually makes a lot of sense: if we're not good at reaching the goal, then we'd better learn from the trajectory that did reach that goal quick; but if we're so much better than all the trajectories we see, then we should do our own thinking and exp-combining now that it's stable.) (Don't need to think if the suggested plan is just as good as our own is.)
-#       (…Also, WAIT A SECOND: in board-env, we used to compare `a⇒c` to `a⇒b + b⇒c` to weigh the meta-action loss (by roundabout-dist minus direct-dist plus 1); but distances are in Euclidian space, so the triangle equality always holds. …Though, isn't the intention here to only use our indirect plans when they're the shortest path?…) # TODO: …So wait, what's our actual loss or prediction target?…
+#     (Action-target should be whichever of replayed/predicted actions is the shortest, index-diff vs sum-of-subdists. The dist-to-weigh-with should be the min of these.)
+#     (Don't need to think if the suggested plan is just as good as our own is.)
 #     TODO: …Should we try this in the board env first?…
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Distances, right? If not this, then only actions exist, right?
 #     TODO: Maybe, also print unroll-time the dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
+#     TODO: Also log distances to a random target. (A clear tool for telling whether our distance-learning is failing entirely.)
 
 
 
