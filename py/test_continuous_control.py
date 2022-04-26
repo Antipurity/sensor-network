@@ -191,14 +191,13 @@ def pos_histogram(plt, label):
         # Display action-arrows everywhere.
         GS = 16 # grid size
         dst = embed_(1, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
-        pos_x, pos_y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
-        pos_x = pos_x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
-        pos_y = pos_y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
+        x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
+        x = x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
+        y = y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
-        src = embed_(0, cat(pos_x, pos_y, veloc))
+        src = embed_(0, cat(x, y, veloc))
         acts = act(cat(src, dst))
-        x, y = torch.linspace(0,1,GS), torch.linspace(0,1,GS)
-        plt.quiver(x, y, acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy')
+        plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy')
 
 
 
@@ -306,19 +305,21 @@ for iter in range(500000):
 
         as_goal = cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)) # TODO:
         # print(full_state.shape, action.shape, as_goal.shape) # TODO: 100×4, 100×64, 100×4 — NOT 1GB MATERIAL, MORE LIKE 30MB, IT MAKES NO SENSE; WHY DO WE NEED SO MUCH GPU MEMORY?
+        #   …Wait, why is it no longer taking any GPU memory, even though nothing changed?
         replay_buffer.append(ReplaySample(
             None,
             full_state,
             action,
             as_goal, # Want to go to places, not caring about final velocity.
         ))
+        if random.randint(1,100)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
     replay(maybe_reset_goal(full_state))
 
 # TODO: Run & fix.
 #   TODO: …Why do all actions end up collapsing to the same action? And why do we end up in the exact same 4 bins on the histogram?
 #     Maybe our goal-sampling is very wrong?…
-#     (…Though actions eventually end up varying. But the spots where everything is, is still the same and ultra-concentrated.)
 #     TODO: Do we need to inject action-noise after all? …How?…
+#       (Making 50% of actions random doesn't seem to be working out.)
 #   TODO: Why doesn't the distance loss go down below like .3 at minimum, or 1 on average? And why does it eventually temporarily-explode to ever greater values, such as 80k at 25k epochs or 1M at 26k epochs?
 #     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
 #     TODO: Try training a real dist neural net. Does loss go lower than what we have now?
@@ -326,8 +327,9 @@ for iter in range(500000):
 #   TODO: …Why does reachability percentage go down over time, from 4% to .5% over 25k epochs?…
 #     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
 #     TODO: …Do we want to always use real actions in meta-action-loss, counting on poor plans getting filtered out?… Hasn't improved anything so far…
-#   TODO: …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(A→c) = act(a→b).detach()`)?…
-#     (…Actually makes a lot of sense: if we're not good at reaching the goal, then we'd better learn from the trajectory that did reach that goal quick; but if we're so much better than all the trajectories we see, then we should do our own thinking and exp-combining now that it's stable.)
+#   TODO: …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(a→c) = act(a→b).detach()`)?…
+#     (…Actually makes a lot of sense: if we're not good at reaching the goal, then we'd better learn from the trajectory that did reach that goal quick; but if we're so much better than all the trajectories we see, then we should do our own thinking and exp-combining now that it's stable.) (Don't need to think if the suggested plan is just as good as our own is.)
+#       (…Also, WAIT A SECOND: in board-env, we used to compare `a⇒c` to `a⇒b + b⇒c` to weigh the meta-action loss (by roundabout-dist minus direct-dist plus 1); but distances are in Euclidian space, so the triangle equality always holds. …Though, isn't the intention here to only use our indirect plans when they're the shortest path?…) # TODO: …So wait, what's our actual loss or prediction target?…
 #     TODO: …Should we try this in the board env first?…
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Distances, right? If not this, then only actions exist, right?
