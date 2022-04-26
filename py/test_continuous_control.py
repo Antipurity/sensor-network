@@ -252,7 +252,7 @@ def replay(reached_vs_timeout):
             d = dist_to_steps(d.detach())
             mult = (d-D) + 1
             mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
-            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
+            mult = mult if D != 1 else torch.tensor(1., device=device)
             return (mult * (d - D).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
         dist_loss = dist_loss + dstl(DaA, I-i)
@@ -269,7 +269,7 @@ def replay(reached_vs_timeout):
             """Tries to cut off anything not-min-dist, if in lin-space."""
             d = dist_to_steps(d.detach())
             mult = ((d-D) + 1).clamp(0,15)
-            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
+            mult = mult if D != 1 else torch.tensor(1., device=device)
             return (mult * (a - A).square())
         act_target = act(cat(sa, db)).detach()
         meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dc)), act_target)
