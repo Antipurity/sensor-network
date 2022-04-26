@@ -253,7 +253,7 @@ def replay(reached_vs_timeout):
             d = dist_to_steps(d)
             mult = (d.detach() - D) + 1
             mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
-            mult = mult if D != 1 else torch.tensor(1., device=device)
+            mult = mult if D != 1 else 1.
             return (mult * (d - D).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
         dist_loss = dist_loss + dstl(DaA, I-i)
@@ -327,9 +327,11 @@ for iter in range(500000):
 #     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
 #     TODO: …Do we want to always use real actions in meta-action-loss, counting on poor plans getting filtered out?… Hasn't improved anything so far…
 #   TODO: …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(A→c) = act(a→b).detach()`)?…
+#     (…Actually makes a lot of sense: if we're not good at reaching the goal, then we'd better learn from the trajectory that did reach that goal quick; but if we're so much better than all the trajectories we see, then we should do our own thinking and exp-combining now that it's stable.)
 #     TODO: …Should we try this in the board env first?…
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Distances, right? If not this, then only actions exist, right?
+#     TODO: Maybe, also print unroll-time the dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 
 
 
