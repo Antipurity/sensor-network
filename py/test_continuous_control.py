@@ -250,8 +250,8 @@ def replay(reached_vs_timeout):
         # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
-            d = dist_to_steps(d.detach())
-            mult = (d-D) + 1
+            d = dist_to_steps(d)
+            mult = (d.detach() - D) + 1
             mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
             mult = mult if D != 1 else torch.tensor(1., device=device)
             return (mult * (d - D).square()).sum()
@@ -268,13 +268,14 @@ def replay(reached_vs_timeout):
         # Learn meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
             """Tries to cut off anything not-min-dist, if in lin-space."""
-            d = dist_to_steps(d.detach())
-            mult = ((d-D) + 1).clamp(0,15)
+            d = dist_to_steps(d)
+            mult = (d.detach() - D + 1).clamp(0,15)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
         act_target = act(cat(sa, db)).detach() # TODO: Is this subtask-combining loss better?…
         # act_target = a.action
-        # meta_loss = meta_loss + actl(dac, torch.full_like(dac, k-i), act(cat(sa, dc)), act_target) # TODO: …Hasn't helped, so far…
+        # meta_loss = meta_loss + actl(dac, torch.full_like(dac, k-i), act(cat(sa, dc)), act_target) # TODO: …Hasn't helped, so far… Maybe because we used to not even learn the distance…
+        #   …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(A→c) = act(a→b).detach()`)?…
         meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dc)), act_target) # TODO:
 
         # Learn meta-actions to goal-of-k.
@@ -325,6 +326,10 @@ for iter in range(500000):
 #   TODO: …Why does reachability percentage go down over time, from 4% to .5% over 25k epochs?…
 #     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
 #     TODO: …Do we want to always use real actions in meta-action-loss, counting on poor plans getting filtered out?… Hasn't improved anything so far…
+#   TODO: …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(A→c) = act(a→b).detach()`)?…
+#     TODO: …Should we try this in the board env first?…
+#   TODO: …What component can we isolate to ensure that it's working right?…
+#     Distances, right? If not this, then only actions exist, right?
 
 
 
