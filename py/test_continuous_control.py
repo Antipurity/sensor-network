@@ -325,12 +325,14 @@ for iter in range(500000):
 #   TODO: Why doesn't the distance loss go down below like .3 at minimum, or 1 on average? And why does it eventually temporarily-explode to ever greater values, such as 80k at 25k epochs or 1M at 26k epochs?
 #     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
 #     TODO: Try training a real dist neural net. Does loss go lower than what we have now?
+#       (…May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
 #     TODO: Try both linspace and logspace dists.
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Distances, right? If not this, then only actions exist, right?
 #     TODO: Also log distances to a random dst, same one as the arrows point to. (A clear tool for telling whether our distance-learning is failing entirely.)
 #     TODO: Cheat on goal-setting, removing best-sampling and adding current-position-plus-noise.
 #     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
+#       (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
 
 
