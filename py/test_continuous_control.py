@@ -199,7 +199,7 @@ def pos_histogram(plt, label):
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = embed_(0, cat(x, y, veloc))
         acts = act(cat(src, dst))
-        dists = dist_(src, dst)
+        dists = dist_to_steps(dist_(src, dst))
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 
@@ -258,7 +258,8 @@ def replay(reached_vs_timeout):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
             d = dist_to_steps(d)
             mult = (d.detach() - D) + 1
-            mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
+            # mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15) # TODO:
+            mult = (mult+1).clamp(1,15) # TODO:
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - D).square()).sum()
@@ -339,6 +340,8 @@ for iter in range(500000):
 #     TODO: Cheat on goal-setting, removing best-sampling and adding current-position-plus-noise.
 #     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #       (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
+
+# TODO: …Worst-case: need to actually have creativity and establish a fuller baseline of what works, with DDPG and all…
 
 
 
