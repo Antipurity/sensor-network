@@ -188,6 +188,8 @@ def pos_histogram(plt, label):
             x.append(ch.state[..., 0]), y.append(ch.state[..., 1])
         plt.hist2d(torch.cat(x).cpu().numpy(), torch.cat(y).cpu().numpy(), bins=(100,100), range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
 
+        # TODO: How to compute & print the dist from everywhere to everywhere? (Same as actions, but with dist, and .imshow instead of .quiver, right?)
+
         # Display action-arrows everywhere.
         GS = 16 # grid size
         dst = embed_(1, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
@@ -254,7 +256,8 @@ def replay(reached_vs_timeout):
             d = dist_to_steps(d)
             mult = (d.detach() - D) + 1
             mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
-            mult = mult if D != 1 else 1.
+            if isinstance(D, int): D = torch.tensor(float(D), device=device)
+            mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - D).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
         dist_loss = dist_loss + dstl(DaA, I-i)
