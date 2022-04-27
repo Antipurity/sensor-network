@@ -245,6 +245,8 @@ def replay(reached_vs_timeout):
         # Distances.
         daA, dab, dac, dbc, dbg = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sb, dc), dist_(sb, dg)
         DaA, Dab, Dac, Dbc, Dbg = dist_(Sa, DA), dist_(Sa, Db), dist_(Sa, Dc), dist_(Sb, Dc), dist_(Sb, Dg)
+        dist_cond = dab+dbc < k-i
+        dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
 
         # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
         def dstl(d,D):
@@ -256,8 +258,8 @@ def replay(reached_vs_timeout):
             return (mult * (d - D).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
         dist_loss = dist_loss + dstl(DaA, I-i)
-        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, k-i)
-        dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, k-i)
+        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target)
+        dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
         dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
         dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
 
@@ -271,15 +273,12 @@ def replay(reached_vs_timeout):
             mult = (d.detach() - D + 1).clamp(0,15)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
-        act_target = act(cat(sa, db)).detach() # TODO: Is this subtask-combining loss better?…
-        # act_target = a.action
-        # meta_loss = meta_loss + actl(dac, torch.full_like(dac, k-i), act(cat(sa, dc)), act_target) # TODO: …Hasn't helped, so far… Maybe because we used to not even learn the distance…
-        #   …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(A→c) = act(a→b).detach()`)?…
-        meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dc)), act_target) # TODO:
+        act_target = torch.where(dist_cond, a.action, act(cat(sa, db)).detach()) # Don't think if what we have is good enough.
+        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dc)), act_target)
 
         # Learn meta-actions to goal-of-k.
-        meta_loss = meta_loss + actl(dbc, dbc.detach(), act(cat(sb, dg)), act(cat(db, dc)).detach())
-        meta_loss = meta_loss + actl(dac, (dab+dbc).detach(), act(cat(sa, dg)), act_target)
+        meta_loss = meta_loss + actl(dbc, dbc.detach(), act(cat(sb, dg)), act(cat(sb, dc)).detach())
+        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dg)), act_target)
 
         # Set/update the uncertainty of dist-prediction: overwrite if `None`, average otherwise.
         ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
@@ -318,24 +317,17 @@ for iter in range(500000):
 
 # TODO: Run & fix.
 #   TODO: …Why do all actions end up collapsing to the same action? And why do we end up in the exact same 4 bins on the histogram?
-#     Maybe our goal-sampling is very wrong?…
 #     TODO: Do we need to inject action-noise after all? …How?…
 #       (Making 50% of actions random doesn't seem to be working out.)
 #   TODO: Why doesn't the distance loss go down below like .3 at minimum, or 1 on average? And why does it eventually temporarily-explode to ever greater values, such as 80k at 25k epochs or 1M at 26k epochs?
 #     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
 #     TODO: Try training a real dist neural net. Does loss go lower than what we have now?
 #     TODO: Try both linspace and logspace dists.
-#   TODO: …Why does reachability percentage go down over time, from 4% to .5% over 25k epochs?…
-#     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
-#     TODO: …Do we want to always use real actions in meta-action-loss, counting on poor plans getting filtered out?… Hasn't improved anything so far…
-#   TODO: …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(a→c) = act(a→b).detach()`)?…
-#     (Action-target should be whichever of replayed/predicted actions is the shortest, index-diff vs sum-of-subdists. The dist-to-weigh-with AND a→c-dist-to-predict should be the min of these.)
-#     (Don't need to think if the suggested plan is just as good as our own is.)
-#     TODO: …Should we try this in the board env first?…
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Distances, right? If not this, then only actions exist, right?
-#     TODO: Maybe, also print unroll-time the dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #     TODO: Also log distances to a random dst, same one as the arrows point to. (A clear tool for telling whether our distance-learning is failing entirely.)
+#     TODO: Cheat on goal-setting, removing best-sampling and adding current-position-plus-noise.
+#     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 
 
 

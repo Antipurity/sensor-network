@@ -256,7 +256,14 @@ for iters in range(50000):
             return (mult * (d - D).square())
         def loss_act(d,D, a,A):
             # Tries to cut off anything not-min-dist, if in lin-space.
-            mult = torch.where( D>1.1, 1 * (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )
+            # TODO: …Try not d-D+1 but only adding +1 post-clamping?…
+            #   72% at 10k
+            #   …Wait a second: this is wrong; we MUST only let in 1 when it's positive... How?...
+            z = (d.detach() - D).clamp(-1,15)
+            z = torch.where(z >= 0, z+1, torch.zeros_like(z)) # TODO: IT IS CLAMPED SO IT IS NOT PROPER GATING AAAAAAAA
+            #     TODO: Re-run with the proper gating.
+            # mult = torch.where( D>1.1, (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )
+            mult = torch.where( D>1.1, z, torch.tensor(1., device=device) )
             return (mult * (a - A).square())
 
         # Learn shortest distances, and shortest-actions and combined-plans.
@@ -266,7 +273,7 @@ for iters in range(50000):
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, dist_target)
         l_act = 0
         l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1)
-        l_act = l_act + (1/16) * loss_act(d13, dist_target, a13, act_target)
+        l_act = l_act + (1/16) * loss_act(d13.detach(), dist_target, a13, act_target)
         l_act = l_act*3
 
 
@@ -288,6 +295,12 @@ for iters in range(50000):
         #        85% at 10k; 15% at 8k, 75% at 10k; 75% at 10k. (Seems a bit better.)
         # (Our code-configuration is the best we could find, though not by much.)
         # (After those runs, there were some code changes, so final performance may differ.)
+        # (Distance seems to converge faster than actions, so if we allowed ourselves to enumerate all actions at each cell instead of learning `act`, convergence would have been 2× or 3× faster.)
+
+        # Broken (swapped) dist-gating for meta-actions:
+        #   60% at 10k; 20% at 10k, 50% at 12k; 40% at 10k. (Worse.)
+        # With meta-action gating that only lets in strictly-lower distances (still with a multiplier of 1):
+        #   75% at 10k; 45% at 10k; 65% at 10k; 65% at 10k. (Func approx likely screws this up.)
 
 
 
