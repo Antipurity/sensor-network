@@ -183,25 +183,25 @@ def dist_to_steps(dist): return 2 ** (dist-1)
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram, in addition to arrows indicating which action to take to get from anywhere to a random position."""
     with torch.no_grad():
-        x, y = [], []
+        states = []
         for ch in replay_buffer:
-            x.append(ch.state[..., 0]), y.append(ch.state[..., 1])
-        plt.hist2d(torch.cat(x).cpu().numpy(), torch.cat(y).cpu().numpy(), bins=(100,100), range=((0,1), (0,1)), cmap='nipy_spectral', label=label)
-
-        # TODO: How to compute & print the dist from everywhere to everywhere? (Same as actions, but with dist, and .imshow instead of .quiver, right?)
+            states.append(ch.state[..., 0:2])
+        plt.hist2d((torch.cat(states)[:,0]+1).cpu().numpy(), torch.cat(states)[:,1].cpu().numpy(), bins=(100,100), range=((0,2), (0,1)), cmap='nipy_spectral', label=label, zorder=0)
 
         # Display action-arrows everywhere.
         GS = 16 # grid size
         dst_pos = torch.rand(1, 2, device=device)
         dst = embed_(1, cat(dst_pos.expand(GS*GS, 2), torch.ones(GS*GS, 2, device=device)))
-        plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white')
+        plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white', zorder=3)
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         x = x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         y = y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = embed_(0, cat(x, y, veloc))
         acts = act(cat(src, dst))
-        plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy')
+        dists = dist_(src, dst)
+        plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
+        plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 
 
 
@@ -330,8 +330,7 @@ for iter in range(500000):
 #       (…May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
 #     TODO: Try both linspace and logspace dists.
 #   TODO: …What component can we isolate to ensure that it's working right?…
-#     Distances, right? If not this, then only actions exist, right?
-#     TODO: Also log distances to a random dst, same one as the arrows point to. (A clear tool for telling whether our distance-learning is failing entirely.)
+#     Logging distances has revealed that they are not learned correctly if at all, even always 1.5…2.5…
 #     TODO: Cheat on goal-setting, removing best-sampling and adding current-position-plus-noise.
 #     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #       (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
