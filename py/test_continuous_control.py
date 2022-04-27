@@ -217,7 +217,8 @@ def maybe_reset_goal(input):
     global goal, steps_to_goal
     with torch.no_grad():
         src = embed_(0, input)
-        dst = embed_(1, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
+        # dst = embed_(1, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
+        dst = embed_(1, input + .2*torch.randn_like(input, device=device)) # TODO:
         old_dist, new_dist = dist_(src, goal), dist_(src, dst)
         reached, out_of_time = old_dist < .5, steps_to_goal < 0
         change = reached | out_of_time
@@ -298,6 +299,10 @@ def replay(reached_vs_timeout):
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
     log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), ground_loss = to_np(ground_loss / batch_size / replays_per_unroll), meta_loss = to_np(meta_loss / batch_size / replays_per_unroll))
+    log(3, False, j=j-i, k=k-i) # TODO: …Maybe our problem is that our dist-gating doesn't let basically anything we pick in, since the targets are so big?
+    #   TODO: What if we removed gating for dist-learning?
+    #   TODO: What if we picked j & k exponentially, where probabilities of 2/4/8/16/32/… distances are equal?
+    #     (If none of this still can't learn anything, then we've definitely screwed up our dist-learner. Maybe the `2**…` part.)
 
 
 
@@ -306,7 +311,7 @@ for iter in range(500000):
         state, hidden_state = env_step(state, hidden_state, action)
         full_state = cat(state, hidden_state)
         action = act(cat(embed_(0, full_state), goal))
-        # if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.2 # TODO:
+        if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.4 # TODO: (Seems to slightly improve dists, maybe?)
 
         as_goal = cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)) # TODO:
         # print(full_state.shape, action.shape, as_goal.shape) # TODO: 100×4, 100×64, 100×4 — NOT 1GB MATERIAL, MORE LIKE 30MB, IT MAKES NO SENSE; WHY DO WE NEED SO MUCH GPU MEMORY?
