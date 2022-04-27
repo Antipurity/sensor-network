@@ -218,7 +218,7 @@ def maybe_reset_goal(input):
     with torch.no_grad():
         src = embed_(0, input)
         # dst = embed_(1, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
-        dst = embed_(1, input + .2*torch.randn_like(input, device=device)) # TODO:
+        dst = embed_(1, (input + .4*torch.randn_like(input, device=device)).clamp(0,1)) # TODO: Cheating.
         old_dist, new_dist = dist_(src, goal), dist_(src, dst)
         reached, out_of_time = old_dist < .5, steps_to_goal < 0
         change = reached | out_of_time
@@ -257,8 +257,9 @@ def replay(reached_vs_timeout):
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
             d = dist_to_steps(d)
+            # TODO: Try making our loss not in `|pred.exp() - target|` space, but in `|pred - target.log()|` space.
             mult = (d.detach() - D) + 1
-            # mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15) # TODO:
+            # mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
             mult = (mult+1).clamp(1,15) # TODO:
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
@@ -273,6 +274,7 @@ def replay(reached_vs_timeout):
         # Learn ground-actions.
         ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum()
         #   TODO: Maybe, we should replace the a→A ground-loss with the faraway a→b "ground" loss? Since it's probably not as critical to know the last action exactly because the meta-loss lets in real actions now anyway.
+        #     …Does this work in the board env too?…
 
         # Learn meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
@@ -289,10 +291,11 @@ def replay(reached_vs_timeout):
         meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dg)), act_target)
 
         # Set/update the uncertainty of dist-prediction: overwrite if `None`, average otherwise.
-        ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
-        uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
-        a.uncertainty = ua if a.uncertainty is None else (a.uncertainty + ua)/2
-        c.uncertainty = uc if c.uncertainty is None else (c.uncertainty + uc)/2
+        with torch.no_grad():
+            ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
+            uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
+            a.uncertainty = ua if a.uncertainty is None else (a.uncertainty + ua)/2 # TODO: Don't learn uncertainty, at least for now, because we're currently cheating with our goal-setting.
+            c.uncertainty = uc if c.uncertainty is None else (c.uncertainty + uc)/2
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -303,6 +306,7 @@ def replay(reached_vs_timeout):
     log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), ground_loss = to_np(ground_loss / batch_size / replays_per_unroll), meta_loss = to_np(meta_loss / batch_size / replays_per_unroll))
     log(3, False, j=j-i, k=k-i) # TODO: …Maybe our problem is that our dist-gating doesn't let basically anything we pick in, since the targets are so big?
     #   TODO: What if we removed gating for dist-learning?
+    #     …Maybe? A hint of promise?
     #   TODO: What if we picked j & k exponentially, where probabilities of 2/4/8/16/32/… distances are equal?
     #     (If none of this still can't learn anything, then we've definitely screwed up our dist-learner. Maybe the `2**…` part.)
 
@@ -316,9 +320,6 @@ for iter in range(500000):
         if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.4 # TODO: (Seems to slightly improve dists, maybe?)
 
         as_goal = cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)) # TODO:
-        # print(full_state.shape, action.shape, as_goal.shape) # TODO: 100×4, 100×64, 100×4 — NOT 1GB MATERIAL, MORE LIKE 30MB, IT MAKES NO SENSE; WHY DO WE NEED SO MUCH GPU MEMORY?
-        #   …Wait, why is it no longer taking any GPU memory, even though nothing changed?
-        #     …Problem solved, I guess??
         replay_buffer.append(ReplaySample(
             None,
             full_state,
@@ -331,15 +332,17 @@ for iter in range(500000):
 # TODO: Run & fix.
 #   TODO: …Why do all actions end up collapsing to the same action? And why do we end up in the exact same 4 bins on the histogram?
 #     TODO: Do we need to inject action-noise after all? …How?…
-#       (Making 50% of actions random doesn't seem to be working out.)
-#   TODO: Why doesn't the distance loss go down below like .3 at minimum, or 1 on average? And why does it eventually temporarily-explode to ever greater values, such as 80k at 25k epochs or 1M at 26k epochs?
+#       (Making 50% of actions random doesn't seem to be working out. …But is it really possibly to have any other noise?…)
+#   TODO: Why isn't distance learned well?
 #     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
 #     TODO: Try training a real dist neural net. Does loss go lower than what we have now?
 #       (…May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
+#     TODO: Try making our loss not in `|pred.exp() - target|` space, but in `|pred - target.log()|` space.
 #     TODO: Try both linspace and logspace dists.
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Logging distances has revealed that they are not learned correctly if at all, even always 1.5…2.5…
 #     TODO: Cheat on goal-setting, removing best-sampling and adding current-position-plus-noise.
+#       Hasn't helped so far. Or maybe it did, and there's just no point in removing it.
 #     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #       (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
@@ -352,6 +355,8 @@ for iter in range(500000):
 
 
 # …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation), maximize regret (real dist is lower/better than predicted dist, computed at unroll-time from encountered dst-embeddings) by goals.
+
+# …Could also, instead of gating actions based on index-diffs (which have high variance), just learn i→i+1 actions if the predicted-distance has decreased by 1 — or maybe if dab+dbc==dac for faraway actions?…
 
 
 
