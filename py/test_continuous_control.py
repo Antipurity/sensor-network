@@ -329,13 +329,13 @@ for iter in range(500000):
 #     TODO: …Do we want to compute & log that NASWOT metric after all, since our few 0…1 inputs are likely to be poorly separated initially?…
 #     TODO: …Do we want to always use real actions in meta-action-loss, counting on poor plans getting filtered out?… Hasn't improved anything so far…
 #   TODO: …Wouldn't it kinda make sense to learn their-dist-is-better-than-ours acts (`act(a→c) = a.action`), AND learn our-dist-is-better-than-theirs acts (`act(a→c) = act(a→b).detach()`)?…
-#     (Action-target should be whichever of replayed/predicted actions is the shortest, index-diff vs sum-of-subdists. The dist-to-weigh-with should be the min of these.)
+#     (Action-target should be whichever of replayed/predicted actions is the shortest, index-diff vs sum-of-subdists. The dist-to-weigh-with AND a→c-dist-to-predict should be the min of these.)
 #     (Don't need to think if the suggested plan is just as good as our own is.)
 #     TODO: …Should we try this in the board env first?…
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Distances, right? If not this, then only actions exist, right?
 #     TODO: Maybe, also print unroll-time the dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
-#     TODO: Also log distances to a random target. (A clear tool for telling whether our distance-learning is failing entirely.)
+#     TODO: Also log distances to a random dst, same one as the arrows point to. (A clear tool for telling whether our distance-learning is failing entirely.)
 
 
 
@@ -343,7 +343,7 @@ for iter in range(500000):
 
 
 
-# …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation), maximize regret (underestimation of dist, computed at unroll-time from encountered dst-embeddings) by goals.
+# …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation), maximize regret (real dist is lower/better than predicted dist, computed at unroll-time from encountered dst-embeddings) by goals.
 
 
 

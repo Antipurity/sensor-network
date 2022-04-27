@@ -245,7 +245,7 @@ for iters in range(50000):
         e1, e2, e3 = embed(s1), embed(s2), embed(s3)
         d12, d23, d13 = dist(e1, e2), dist(e2, e3), dist(e1, e3)
         # D12, D23, D13 = D12.log()+1, D23.log()+1, (D12 + D23).log()+1 # (Log-space. Often performs worse.)
-        D12, D23, D13 = D12, D23, (D12 + D23) # (Lin-space. Ends up very cleanly arranged.)
+        D12, D23, D13 = D12, D23, D12+D23 # (Lin-space. Ends up very cleanly arranged.)
 
         a12, a13 = act(cat(e1,e2)), act(cat(e1,e3))
 
@@ -260,11 +260,13 @@ for iters in range(50000):
             return (mult * (a - A).square())
 
         # Learn shortest distances, and shortest-actions and combined-plans.
-        act_target = a12.detach()
-        l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, D13)
+        dist_cond = D13 < (d12+d23)
+        dist_target = torch.where(dist_cond, D13, (d12+d23).detach())
+        act_target = torch.where(dist_cond, action1, a12.detach())
+        l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, dist_target)
         l_act = 0
         l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1)
-        l_act = l_act + (1/16) * loss_act(d13, (d12+d23).detach(), a13, act_target)
+        l_act = l_act + (1/16) * loss_act(d13, dist_target, a13, act_target)
         l_act = l_act*3
 
 
@@ -276,12 +278,14 @@ for iters in range(50000):
         # Base-only actions, N=12:
         #   Logarithmic-space: 75% at 10k. OR WORSE.
         #        Linear-space: 80% at 5k, 85% at 6k. 2× the efficiency of full-action-plans.
-        # Weighing meta-action-loss by 1/16:
+        # Weighing meta-action-loss by 1/16, N=16:
         #   Not: 8% at 6k, 45% at 15k, 50% at 20k.
         #   Yes: 35% at 6k, 50% at 8k, 60% at 10k. Smooth improvement. (But disconnected arrow regions are still a problem.)
-        # `action1` as `act_target`:
+        # `action1` as `act_target`, N=16:
         #   Yes: 60% at 10k; 70% at 10k. (Doesn't allow reusing solved subtasks.)
         #   Not: 80% at 10k; 50% at 10k. (Exp-improvement, but this board env is probably way too small.)
+        # Min-dist between replay and predicted action as `act_target`:
+        #        85% at 10k; 15% at 8k, 75% at 10k; 75% at 10k. (Seems a bit better.)
         # (Our code-configuration is the best we could find, though not by much.)
         # (After those runs, there were some code changes, so final performance may differ.)
 
