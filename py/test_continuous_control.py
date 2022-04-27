@@ -192,7 +192,9 @@ def pos_histogram(plt, label):
 
         # Display action-arrows everywhere.
         GS = 16 # grid size
-        dst = embed_(1, cat(torch.rand(GS*GS, 2, device=device), torch.ones(GS*GS, 2, device=device)))
+        dst_pos = torch.rand(1, 2, device=device)
+        dst = embed_(1, cat(dst_pos.expand(GS*GS, 2), torch.ones(GS*GS, 2, device=device)))
+        plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white')
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         x = x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         y = y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
