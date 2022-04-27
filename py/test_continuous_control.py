@@ -146,7 +146,7 @@ batch_size = 100
 input_sz, embed_sz, action_sz = 4, 64, 64
 lr = 1e-3
 
-replay_buffer = ReplayBuffer(max_len=1024) # of ReplaySample
+replay_buffer = ReplayBuffer(max_len=256) # of ReplaySample
 replays_per_unroll = 1
 
 
@@ -272,6 +272,7 @@ def replay(reached_vs_timeout):
 
         # Learn ground-actions.
         ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum()
+        #   TODO: Maybe, we should replace the a→A ground-loss with the faraway a→b "ground" loss? Since it's probably not as critical to know the last action exactly because the meta-loss lets in real actions now anyway.
 
         # Learn meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
@@ -280,7 +281,7 @@ def replay(reached_vs_timeout):
             mult = (d.detach() - D + 1).clamp(0,15)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
-        act_target = torch.where(dist_cond, a.action, act(cat(sa, db)).detach()) # Don't think if what we have is good enough.
+        act_target = torch.where(dist_cond, act(cat(sa, db)).detach(), a.action) # Don't think if what we have is good enough.
         meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dc)), act_target)
 
         # Learn meta-actions to goal-of-k.
@@ -317,6 +318,7 @@ for iter in range(500000):
         as_goal = cat(full_state[..., :2], torch.ones(batch_size, 2, device=device)) # TODO:
         # print(full_state.shape, action.shape, as_goal.shape) # TODO: 100×4, 100×64, 100×4 — NOT 1GB MATERIAL, MORE LIKE 30MB, IT MAKES NO SENSE; WHY DO WE NEED SO MUCH GPU MEMORY?
         #   …Wait, why is it no longer taking any GPU memory, even though nothing changed?
+        #     …Problem solved, I guess??
         replay_buffer.append(ReplaySample(
             None,
             full_state,
@@ -341,7 +343,7 @@ for iter in range(500000):
 #     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #       (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
-# TODO: …Worst-case: need to actually have creativity and establish a fuller baseline of what works, with DDPG and all…
+# TODO: …Worst-case: need to actually have creativity and establish a fuller baseline of what works, with DDPG and/or search among neighbors and/or even fractal folding…
 
 
 
