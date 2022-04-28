@@ -203,8 +203,8 @@ def pos_histogram(plt, label):
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = embed_(0, cat(x, y, veloc))
         acts = act(cat(src, dst))
-        # dists = dist_to_steps(dist_(src, dst))
-        dists = dist(cat( cat(x,y,veloc), cat(dst_pos.expand(GS*GS, 2), torch.ones(GS*GS, 2, device=device)) )) # TODO: Does this look diverse enough, initially?
+        dists = dist_to_steps(dist_(src, dst))
+        # dists = dist(cat( cat(x,y,veloc), cat(dst_pos.expand(GS*GS, 2), torch.ones(GS*GS, 2, device=device)) )) # TODO:
         plt.imshow(dists.reshape(GS,GS).t().cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
@@ -262,7 +262,7 @@ def replay(reached_vs_timeout):
         # DA, Db, Dc, Dg = e(1, A.state, 1), e(1, b.state, 1), e(1, c.state, 1), e(1, c.as_goal, 1)
 
         # Distances.
-        daA, dab, dac, dbc, dbg = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sb, dc), dist_(sb, dg)
+        daA, dab, dac, dbc, dag, dbg = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sb, dc), dist_(sa, dg), dist_(sb, dg)
         # DaA, Dab, Dac, Dbc, Dbg = dist_(Sa, DA), dist_(Sa, Db), dist_(Sa, Dc), dist_(Sb, Dc), dist_(Sb, Dg)
         dist_cond = dab+dbc < k-i
         dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
@@ -283,7 +283,7 @@ def replay(reached_vs_timeout):
             return (mult * (d - steps_to_dist(D)).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
         # dist_loss = dist_loss + dstl(DaA, I-i)
-        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target)
+        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target) + dstl(dag, dist_target)
         # dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
         dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
         # dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
@@ -295,25 +295,36 @@ def replay(reached_vs_timeout):
         dist_loss = dist_loss + dstl(dist(cat(a.state, c.as_goal)), (k-i)) # TODO: Train `dist`.
 
         bz = (dac - dbc > j-i).float().sum() # TODO: Maybe gate by this relative-dist, not by absolute-dist (since the latter *might* be too high-variance to be meaningful)?…
+        #   …The old `dist_target` is `min(dab + dbc, k-i)`; what do we do with *that*, huh?
+        #     (So, gating by `dac < min(dab + dbc, k-i)`.)
+        #     Can't just replace it with `dac - dbc`, right?…
+        #       …Is replacing real-dist with `dac - dbc` and target-dist with `j-i` for `a→c = a.action` learning fine?… …Completely forgetting about min-dist gating, huh…
+        #         …Or maybe we can use `dac < min(dab + dbc, j-i + dbc, k-i)`?… (Which would *kinda* fit with the theme that we already had going… And might even want to add `dab + k-j` to the min…)
+        #           What about actions; which acts correspond to which dists here?
+        #         (…Maybe what we're missing is a 1/16 divisor of the meta-action loss…)
 
         # Learn ground-actions.
-        # ground_loss = ground_loss + 0#(act(cat(sa, dA)) - a.action).square().sum() # TODO: …Maybe, not dA, but db? And, weighted by distance? Like below?
+        # ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum() # TODO: …Maybe, not dA, but db? And, weighted by distance? Like below?
 
         # Learn meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
             """Tries to cut off anything not-min-dist, if in lin-space."""
             d = dist_to_steps(d)
-            mult = (d.detach() - D + 1).clamp(.1,15)
+            mult = (d.detach() - D + .5).clamp(0,15)
+            mult = mult + (mult > .5).float()
+            # TODO: How to cut off more aggressively, again? TODO: Run it like this. WHY ARE WE STILL UNABLE TO EVEN DIFFERENTIATE BETWEEN LOCATIONS
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
-            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) ) # TODO: …Try always 1? Is action-loss-magnitude saved? Fluctuates between 0 and 10, nothing in between… But how can that be?
+            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
-        ground_loss = ground_loss + actl(dab, j-i, act(cat(sa, db)), a.action) # TODO: Does this improve anything? …No?…
+        ground_loss = 0#ground_loss + actl(dab, j-i, act(cat(sa, db)), a.action) # TODO: Does this improve anything? …No?…
         #   TODO: …Why is the actual magnitude of this loss so low (0.02), typically? Shouldn't it be very high due to action noise?
-        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dc)), act_target)
+        # meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dc)), act_target)
+        # meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dg)), act_target)
+        meta_loss = meta_loss + actl(dac, j-i + dbc.detach(), act(cat(sa, dc)), a.action) # TODO: …This isn't working…
+        meta_loss = meta_loss + actl(dag, j-i + dbc.detach(), act(cat(sa, dg)), a.action) # TODO:
 
         # Learn meta-actions to goal-of-k.
-        meta_loss = meta_loss + actl(dbc, dbc.detach(), act(cat(sb, dg)), act(cat(sb, dc)).detach())
-        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dg)), act_target)
+        # meta_loss = meta_loss + actl(dbg, dbc.detach(), act(cat(sb, dg)), act(cat(sb, dc)).detach())
 
         # Set/update the uncertainty of dist-prediction: overwrite if `None`, average otherwise.
         #   (Not learned for now because we're currently cheating with our goal-setting.)
@@ -356,9 +367,11 @@ finish()
 #     TODO: …Maybe try just always reinforcing the replayed actions whenever the *estimated* distance goes down (for which we need next-states)?…
 #       Should only learn min-dist actions, AND faraway: gate a→c by `dac - dbc > j-i` (AKA relative dist, as opposed to the absolute dist that we're currently gating by) (in this formulation, should be very easy to integrate into existing code; a→b is still gated by absolute-distance).
 #         …But how would this gating interact with min-dist action-targets?…
+#           Replacing them entirely doesn't seem to nudge the actions…
 #       (This *might* help if our index-diff is too poor of an estimator, which *might* be true in continuous envs…)
 #   TODO: Why isn't distance learned well?
 #     (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
+#       (Gotta be real: `embed`-dists look like an NN gone bad, whereas `dist`-dists look reasonable… Though it does become nicer with enough time.)
 #   TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #     (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
