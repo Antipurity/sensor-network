@@ -236,7 +236,7 @@ def replay(reached_vs_timeout):
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
         i = random.randint(0, L-4)
         I = i + 1
-        j = random.randint(I+1, L-2)
+        j = random.randint(I+1, L-2) # TODO: Maybe start at i+1 instead.
         k = random.randint(j+1, L-1)
         a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
@@ -260,7 +260,7 @@ def replay(reached_vs_timeout):
             # TODO: Try making our loss not in `|pred.exp() - target|` space, but in `|pred - target.log()|` space.
             mult = (d.detach() - D) + 1
             # mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
-            mult = (mult+1).clamp(1,15) # TODO:
+            mult = (mult+1).clamp(.1,15) # TODO:
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - D).square()).sum()
@@ -273,8 +273,6 @@ def replay(reached_vs_timeout):
 
         # Learn ground-actions.
         ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum()
-        #   TODO: Maybe, we should replace the a→A ground-loss with the faraway a→b "ground" loss? Since it's probably not as critical to know the last action exactly because the meta-loss lets in real actions now anyway.
-        #     …Does this work in the board env too?…
 
         # Learn meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
@@ -294,7 +292,7 @@ def replay(reached_vs_timeout):
         with torch.no_grad():
             ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
             uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
-            a.uncertainty = ua if a.uncertainty is None else (a.uncertainty + ua)/2 # TODO: Don't learn uncertainty, at least for now, because we're currently cheating with our goal-setting.
+            a.uncertainty = ua if a.uncertainty is None else (a.uncertainty + ua)/2 # TODO: Don't learn uncertainty, at least for now, because we're currently cheating with our goal-setting. (2× the efficiency.)
             c.uncertainty = uc if c.uncertainty is None else (c.uncertainty + uc)/2
 
     (dist_loss + ground_loss + meta_loss).backward()

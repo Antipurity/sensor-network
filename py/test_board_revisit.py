@@ -221,7 +221,7 @@ for iters in range(50000):
         # Save random faraway A → … → B pairs in the replay buffer.
         for _ in range(unroll_len):
             i = random.randint(0, len(unroll)-3)
-            j = random.randint(i+1, len(unroll)-2) if random.randint(1,2)!=1 else i+1
+            j = random.randint(i+1, len(unroll)-2) if random.randint(1,2)!=1 else i+1 # TODO: Also try always picking at random.
             k = random.randint(j+1, len(unroll)-1)
             A, B, C = unroll[i], unroll[j], unroll[k] # (D, board, next_action)
             D12 = torch.full((batch_size, 1), float(B[0]-A[0]), device=device)
@@ -256,14 +256,7 @@ for iters in range(50000):
             return (mult * (d - D).square())
         def loss_act(d,D, a,A):
             # Tries to cut off anything not-min-dist, if in lin-space.
-            # TODO: …Try not d-D+1 but only adding +1 post-clamping?…
-            #   72% at 10k
-            #   …Wait a second: this is wrong; we MUST only let in 1 when it's positive... How?...
-            z = (d.detach() - D).clamp(-1,15)
-            z = torch.where(z >= 0, z+1, torch.zeros_like(z)) # TODO: IT IS CLAMPED SO IT IS NOT PROPER GATING AAAAAAAA
-            #     TODO: Re-run with the proper gating.
-            # mult = torch.where( D>1.1, (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )
-            mult = torch.where( D>1.1, z, torch.tensor(1., device=device) )
+            mult = torch.where( D>1.1, (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )
             return (mult * (a - A).square())
 
         # Learn shortest distances, and shortest-actions and combined-plans.
@@ -273,7 +266,7 @@ for iters in range(50000):
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, dist_target)
         l_act = 0
         l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1)
-        l_act = l_act + (1/16) * loss_act(d13.detach(), dist_target, a13, act_target)
+        l_act = l_act + (1/1) * loss_act(d13, dist_target, a13, act_target) # TODO: Does removing this 1/16 mult change stuff?
         l_act = l_act*3
 
 
