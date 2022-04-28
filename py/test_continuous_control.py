@@ -16,7 +16,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 
-from model.log import log, clear
+from model.log import log, clear, finish
 
 import random
 
@@ -146,7 +146,7 @@ batch_size = 100
 input_sz, embed_sz, action_sz = 4, 64, 64
 lr = 1e-3
 
-replay_buffer = ReplayBuffer(max_len=256) # of ReplaySample
+replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
 replays_per_unroll = 1
 
 
@@ -176,6 +176,7 @@ def dist_(src, dst):
     """Convenience: dist between `embed`dings, or rather, `1+log2(steps)`."""
     return (src - dst).square().mean(-1, keepdim=True)
 def dist_to_steps(dist): return 2 ** (dist-1)
+def steps_to_dist(step): return 1 + step.log2()
 
 
 
@@ -190,7 +191,7 @@ def pos_histogram(plt, label):
 
         # Display action-arrows everywhere.
         GS = 16 # grid size
-        dst_pos = torch.rand(1, 2, device=device)
+        dst_pos = pos_histogram.dst_pos
         dst = embed_(1, cat(dst_pos.expand(GS*GS, 2), torch.ones(GS*GS, 2, device=device)))
         plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white', zorder=3)
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
@@ -200,8 +201,17 @@ def pos_histogram(plt, label):
         src = embed_(0, cat(x, y, veloc))
         acts = act(cat(src, dst))
         dists = dist_to_steps(dist_(src, dst))
-        plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
+        plt.imshow(dists.reshape(GS,GS).t().cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
+def onclick(event):
+    """When clicking the distance/action plot, set destination and redraw."""
+    if 0 < event.xdata < 1 and 0 < event.ydata < 1:
+        pos_histogram.dst_pos = torch.tensor([[float(event.xdata), float(event.ydata)]], device=device)
+        try: finish(False)
+        except RuntimeError: pass # If an error, we're already in a `finish`.
+import matplotlib
+matplotlib.pyplot.subplots()[0].canvas.mpl_connect('button_press_event', onclick)
+pos_histogram.dst_pos = torch.rand(1,2, device=device)
 
 
 
@@ -218,7 +228,7 @@ def maybe_reset_goal(input):
     with torch.no_grad():
         src = embed_(0, input)
         # dst = embed_(1, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
-        dst = embed_(1, (input + .4*torch.randn_like(input, device=device)).clamp(0,1)) # TODO: Cheating.
+        dst = embed_(1, (input + .3*torch.randn_like(input, device=device)).clamp(0,1)) # TODO: Cheating.
         old_dist, new_dist = dist_(src, goal), dist_(src, dst)
         reached, out_of_time = old_dist < .5, steps_to_goal < 0
         change = reached | out_of_time
@@ -234,54 +244,59 @@ def replay(reached_vs_timeout):
     if L < 4: return
     dist_loss, ground_loss, meta_loss = 0,0,0
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
-        i = random.randint(0, L-4)
+        i = random.randint(0, L-3)
         I = i + 1
-        j = random.randint(I+1, L-2) # TODO: Maybe start at i+1 instead.
+        j = random.randint(i+1, L-2)
         k = random.randint(j+1, L-1)
         a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
         # Source/destination embeddings.
         e = embed_
         sa, sb = e(0, a.state, 0), e(0, b.state, 0)
-        Sa, Sb = e(0, a.state, 1), e(0, b.state, 1)
+        # Sa, Sb = e(0, a.state, 1), e(0, b.state, 1)
         dA, db, dc, dg = e(1, A.state, 0), e(1, b.state, 0), e(1, c.state, 0), e(1, c.as_goal, 0)
-        DA, Db, Dc, Dg = e(1, A.state, 1), e(1, b.state, 1), e(1, c.state, 1), e(1, c.as_goal, 1)
+        # DA, Db, Dc, Dg = e(1, A.state, 1), e(1, b.state, 1), e(1, c.state, 1), e(1, c.as_goal, 1)
 
         # Distances.
         daA, dab, dac, dbc, dbg = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sb, dc), dist_(sb, dg)
-        DaA, Dab, Dac, Dbc, Dbg = dist_(Sa, DA), dist_(Sa, Db), dist_(Sa, Dc), dist_(Sb, Dc), dist_(Sb, Dg)
+        # DaA, Dab, Dac, Dbc, Dbg = dist_(Sa, DA), dist_(Sa, Db), dist_(Sa, Dc), dist_(Sb, Dc), dist_(Sb, Dg)
         dist_cond = dab+dbc < k-i
         dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
+        act_target = torch.where(dist_cond, act(cat(sa, db)).detach(), a.action)
+        #   Don't think if what we have is good enough.
 
         # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
-            d = dist_to_steps(d)
+            # d = dist_to_steps(d)
             # TODO: Try making our loss not in `|pred.exp() - target|` space, but in `|pred - target.log()|` space.
-            mult = (d.detach() - D) + 1
+            #   …It's unreasonably low (≈2, whereas exp-space was ≈500.) while the learned maps look even worse.
+            mult = (dist_to_steps(d.detach()) - D) + 1
             # mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
             mult = (mult+1).clamp(.1,15) # TODO:
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
-            return (mult * (d - D).square()).sum()
+            return (mult * (d - steps_to_dist(D)).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
-        dist_loss = dist_loss + dstl(DaA, I-i)
+        # dist_loss = dist_loss + dstl(DaA, I-i)
         dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target)
-        dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
+        # dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
         dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
-        dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
+        # dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
 
         # Learn ground-actions.
-        ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum()
+        # ground_loss = ground_loss + 0#(act(cat(sa, dA)) - a.action).square().sum() # TODO: …Maybe, not dA, but db? And, weighted by distance? Like below?
 
         # Learn meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
             """Tries to cut off anything not-min-dist, if in lin-space."""
             d = dist_to_steps(d)
-            mult = (d.detach() - D + 1).clamp(0,15)
-            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
+            mult = (d.detach() - D + 1).clamp(.1,15)
+            if isinstance(D, int): D = torch.tensor(float(D), device=device)
+            mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) ) # TODO: …Try always 1? Is action-loss-magnitude saved? Fluctuates between 0 and 10, nothing in between… But how can that be?
             return (mult * (a - A).square()).sum()
-        act_target = torch.where(dist_cond, act(cat(sa, db)).detach(), a.action) # Don't think if what we have is good enough.
+        ground_loss = ground_loss + actl(dab, j-i, act(cat(sa, db)), a.action) # TODO: Does this improve anything? …No?…
+        #   TODO: …Why is the actual magnitude of this loss so low (0.02), typically? Shouldn't it be very high due to action noise?
         meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dc)), act_target)
 
         # Learn meta-actions to goal-of-k.
@@ -289,11 +304,12 @@ def replay(reached_vs_timeout):
         meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dg)), act_target)
 
         # Set/update the uncertainty of dist-prediction: overwrite if `None`, average otherwise.
-        with torch.no_grad():
-            ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
-            uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
-            a.uncertainty = ua if a.uncertainty is None else (a.uncertainty + ua)/2 # TODO: Don't learn uncertainty, at least for now, because we're currently cheating with our goal-setting. (2× the efficiency.)
-            c.uncertainty = uc if c.uncertainty is None else (c.uncertainty + uc)/2
+        #   (Not learned for now because we're currently cheating with our goal-setting.)
+        # with torch.no_grad():
+        #     ua = (daA - DaA).abs().sum(-1, keepdim=True) + (dab - Dab).abs().sum(-1, keepdim=True) + (dac - Dac).abs().sum(-1, keepdim=True)
+        #     uc = (dac - Dac).abs().sum(-1, keepdim=True) + (dbc - Dbc).abs().sum(-1, keepdim=True) + (dbg - Dbg).abs().sum(-1, keepdim=True)
+        #     a.uncertainty = ua if a.uncertainty is None else (a.uncertainty + ua)/2
+        #     c.uncertainty = uc if c.uncertainty is None else (c.uncertainty + uc)/2
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -326,21 +342,19 @@ for iter in range(500000):
         ))
         if random.randint(1,100)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
     replay(maybe_reset_goal(full_state))
+finish()
 
 # TODO: Run & fix.
-#   TODO: …Why do all actions end up collapsing to the same action? And why do we end up in the exact same 4 bins on the histogram?
-#     TODO: Do we need to inject action-noise after all? …How?…
-#       (Making 50% of actions random doesn't seem to be working out. …But is it really possibly to have any other noise?…)
+#   TODO: …Why is action diversity washed out by learning, despite the action-noise?
 #   TODO: Why isn't distance learned well?
 #     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
 #     TODO: Try training a real dist neural net. Does loss go lower than what we have now?
 #       (…May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
 #     TODO: Try making our loss not in `|pred.exp() - target|` space, but in `|pred - target.log()|` space.
+#       …Doesn't seem to work that great?…
 #     TODO: Try both linspace and logspace dists.
 #   TODO: …What component can we isolate to ensure that it's working right?…
-#     Logging distances has revealed that they are not learned correctly if at all, even always 1.5…2.5…
-#     TODO: Cheat on goal-setting, removing best-sampling and adding current-position-plus-noise.
-#       Hasn't helped so far. Or maybe it did, and there's just no point in removing it.
+#     Logging distances has revealed that they are not learned correctly if at all…
 #     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #       (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
