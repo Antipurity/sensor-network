@@ -151,7 +151,7 @@ replays_per_unroll = 1
 
 
 
-def net(ins, outs, hidden=action_sz):
+def net(ins, outs, hidden=embed_sz):
     return nn.Sequential(
         SkipConnection(nn.Linear(ins, hidden)),
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
@@ -163,6 +163,7 @@ embed = [net(1+input_sz, embed_sz), net(1+input_sz, embed_sz)] # (src_or_dst: -1
 #   (We have an ensemble of 2, so that we can estimate uncertainty.)
 act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action
 #   (Min-dist spanning trees that go to a destination.)
+dist = net(input_sz+input_sz, 1) # TODO: Train & log this.
 
 optim = torch.optim.Adam([*embed[0].parameters(), *embed[1].parameters(), *act.parameters()], lr=lr)
 
@@ -177,6 +178,8 @@ def dist_(src, dst):
     return (src - dst).square().mean(-1, keepdim=True)
 def dist_to_steps(dist): return 2 ** (dist-1)
 def steps_to_dist(step): return 1 + step.log2()
+# def dist_to_steps(dist): return dist # Log-space above seems to produce somewhat more accurate maps than this lin-space.
+# def steps_to_dist(step): return step
 
 
 
@@ -205,7 +208,7 @@ def pos_histogram(plt, label):
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
     """When clicking the distance/action plot, set destination and redraw."""
-    if 0 < event.xdata < 1 and 0 < event.ydata < 1:
+    if event.xdata is not None and event.ydata is not None and 0 < event.xdata < 1 and 0 < event.ydata < 1:
         pos_histogram.dst_pos = torch.tensor([[float(event.xdata), float(event.ydata)]], device=device)
         try: finish(False)
         except RuntimeError: pass # If an error, we're already in a `finish`.
@@ -345,14 +348,11 @@ for iter in range(500000):
 finish()
 
 # TODO: Run & fix.
-#   TODO: …Why is action diversity washed out by learning, despite the action-noise?
-#   TODO: Why isn't distance learned well?
+#   TODO: Why isn't distance learned well? Why does it look so blurry?
 #     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
-#     TODO: Try training a real dist neural net. Does loss go lower than what we have now?
+#     TODO: Try training a real dist neural net. Does loss go lower than what we have now? Do dists look cleaner?
 #       (…May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
-#     TODO: Try making our loss not in `|pred.exp() - target|` space, but in `|pred - target.log()|` space.
-#       …Doesn't seem to work that great?…
-#     TODO: Try both linspace and logspace dists.
+#   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out?
 #   TODO: …What component can we isolate to ensure that it's working right?…
 #     Logging distances has revealed that they are not learned correctly if at all…
 #     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
