@@ -281,12 +281,12 @@ def replay(reached_vs_timeout):
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - steps_to_dist(D)).square()).sum()
-        # dist_loss = dist_loss + dstl(daA, I-i)
-        # # dist_loss = dist_loss + dstl(DaA, I-i)
-        # dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target)
-        # # dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
-        # dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
-        # # dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
+        dist_loss = dist_loss + dstl(daA, I-i)
+        # dist_loss = dist_loss + dstl(DaA, I-i)
+        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target)
+        # dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
+        dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
+        # dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
 
         dist_loss = dist_loss + dstl(dist(cat(a.state, b.state)), (j-i)) # TODO: Train `dist`.
         dist_loss = dist_loss + dstl(dist(cat(b.state, c.state)), (k-j)) # TODO: Train `dist`.
@@ -328,11 +328,6 @@ def replay(reached_vs_timeout):
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
     log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), ground_loss = to_np(ground_loss / batch_size / replays_per_unroll), meta_loss = to_np(meta_loss / batch_size / replays_per_unroll))
-    log(3, False, j=j-i, k=k-i) # TODO: …Maybe our problem is that our dist-gating doesn't let basically anything we pick in, since the targets are so big?
-    #   TODO: What if we removed gating for dist-learning?
-    #     …Maybe? A hint of promise?
-    #   TODO: What if we picked j & k exponentially, where probabilities of 2/4/8/16/32/… distances are equal?
-    #     (If none of this still can't learn anything, then we've definitely screwed up our dist-learner. Maybe the `2**…` part.)
 
 
 
@@ -355,15 +350,13 @@ for iter in range(500000):
 finish()
 
 # TODO: Run & fix.
-#   TODO: Why isn't distance learned well? Why does it look so blurry?
-#     (Worst-case, our dist-metric is very inapplicable to continuous spaces…)
-#     TODO: Try training a real dist neural net. Does loss go lower than what we have now? Do dists look cleaner?
-#       (…May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
 #   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out?
-#   TODO: …What component can we isolate to ensure that it's working right?…
-#     Logging distances has revealed that they are not learned correctly if at all…
-#     TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
-#       (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
+#     TODO: …Maybe try just always reinforcing the replayed actions whenever the *estimated* distance goes down (for which we need next-states)?…
+#       (This *might* help if our index-diff is too poor of an estimator, which *might* be true in continuous envs…)
+#   TODO: Why isn't distance learned well?
+#     (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
+#   TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
+#     (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
 # TODO: …Worst-case: need to actually have creativity and establish a fuller baseline of what works, with DDPG and/or search among neighbors and/or even fractal folding…
 
