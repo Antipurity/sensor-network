@@ -294,6 +294,8 @@ def replay(reached_vs_timeout):
         dist_loss = dist_loss + dstl(dist(cat(b.state, c.as_goal)), (k-j)) # TODO: Train `dist`.
         dist_loss = dist_loss + dstl(dist(cat(a.state, c.as_goal)), (k-i)) # TODO: Train `dist`.
 
+        bz = (dac - dbc > j-i).float().sum() # TODO: Maybe gate by this relative-dist, not by absolute-dist (since the latter *might* be too high-variance to be meaningful)?…
+
         # Learn ground-actions.
         # ground_loss = ground_loss + 0#(act(cat(sa, dA)) - a.action).square().sum() # TODO: …Maybe, not dA, but db? And, weighted by distance? Like below?
 
@@ -352,6 +354,8 @@ finish()
 # TODO: Run & fix.
 #   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out?
 #     TODO: …Maybe try just always reinforcing the replayed actions whenever the *estimated* distance goes down (for which we need next-states)?…
+#       Should only learn min-dist actions, AND faraway: gate a→c by `dac - dbc > j-i` (AKA relative dist, as opposed to the absolute dist that we're currently gating by) (in this formulation, should be very easy to integrate into existing code; a→b is still gated by absolute-distance).
+#         …But how would this gating interact with min-dist action-targets?…
 #       (This *might* help if our index-diff is too poor of an estimator, which *might* be true in continuous envs…)
 #   TODO: Why isn't distance learned well?
 #     (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
