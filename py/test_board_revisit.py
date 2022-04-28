@@ -221,7 +221,7 @@ for iters in range(50000):
         # Save random faraway A → … → B pairs in the replay buffer.
         for _ in range(unroll_len):
             i = random.randint(0, len(unroll)-3)
-            j = random.randint(i+1, len(unroll)-2) #if random.randint(1,2)!=1 else i+1 # TODO: Also try always picking at random.
+            j = random.randint(i+1, len(unroll)-2) if random.randint(1,2)!=1 else i+1
             k = random.randint(j+1, len(unroll)-1)
             A, B, C = unroll[i], unroll[j], unroll[k] # (D, board, next_action)
             D12 = torch.full((batch_size, 1), float(B[0]-A[0]), device=device)
