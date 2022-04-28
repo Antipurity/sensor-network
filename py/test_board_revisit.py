@@ -221,7 +221,7 @@ for iters in range(50000):
         # Save random faraway A → … → B pairs in the replay buffer.
         for _ in range(unroll_len):
             i = random.randint(0, len(unroll)-3)
-            j = random.randint(i+1, len(unroll)-2) if random.randint(1,2)!=1 else i+1 # TODO: Also try always picking at random.
+            j = random.randint(i+1, len(unroll)-2) #if random.randint(1,2)!=1 else i+1 # TODO: Also try always picking at random.
             k = random.randint(j+1, len(unroll)-1)
             A, B, C = unroll[i], unroll[j], unroll[k] # (D, board, next_action)
             D12 = torch.full((batch_size, 1), float(B[0]-A[0]), device=device)
@@ -266,7 +266,8 @@ for iters in range(50000):
         l_dist = loss_dist(d12, D12) + loss_dist(d23, D23) + loss_dist(d13, dist_target)
         l_act = 0
         l_act = l_act + torch.where(D12<1.1,1.,0.)*loss_act(d12, D12, a12, action1)
-        l_act = l_act + (1/1) * loss_act(d13, dist_target, a13, act_target) # TODO: Does removing this 1/16 mult change stuff?
+        l_act = l_act + (1/16) * loss_act(d13, dist_target, a13, act_target)
+        #   (Not weighing is a bit worse, but not too terrible.)
         l_act = l_act*3
 
 
@@ -279,8 +280,8 @@ for iters in range(50000):
         #   Logarithmic-space: 75% at 10k. OR WORSE.
         #        Linear-space: 80% at 5k, 85% at 6k. 2× the efficiency of full-action-plans.
         # Weighing meta-action-loss by 1/16, N=16:
-        #   Not: 8% at 6k, 45% at 15k, 50% at 20k.
-        #   Yes: 35% at 6k, 50% at 8k, 60% at 10k. Smooth improvement. (But disconnected arrow regions are still a problem.)
+        #   Not: 8% at 6k, 45% at 15k, 50% at 20k. (…With later code: 70% at 10k; 60% at 10k.)
+        #   Yes: 35% at 6k, 50% at 8k, 60% at 10k. Smooth improvement. (But disconnected arrow regions are still a problem.) (…With later code: ≈80% at 10k.)
         # `action1` as `act_target`, N=16:
         #   Yes: 60% at 10k; 70% at 10k. (Doesn't allow reusing solved subtasks.)
         #   Not: 80% at 10k; 50% at 10k. (Exp-improvement, but this board env is probably way too small.)
