@@ -165,7 +165,7 @@ act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action
 #   (Min-dist spanning trees that go to a destination.)
 dist = net(input_sz+input_sz, 1) # TODO: Train & log this.
 
-optim = torch.optim.Adam([*embed[0].parameters(), *embed[1].parameters(), *act.parameters()], lr=lr)
+optim = torch.optim.Adam([*embed[0].parameters(), *embed[1].parameters(), *act.parameters(), *dist.parameters()], lr=lr)
 
 
 
@@ -176,10 +176,10 @@ def embed_(src_or_dst, input, which_from_ensemble=0):
 def dist_(src, dst):
     """Convenience: dist between `embed`dings, or rather, `1+log2(steps)`."""
     return (src - dst).square().mean(-1, keepdim=True)
-def dist_to_steps(dist): return 2 ** (dist-1)
-def steps_to_dist(step): return 1 + step.log2()
-# def dist_to_steps(dist): return dist # Log-space above seems to produce somewhat more accurate maps than this lin-space.
-# def steps_to_dist(step): return step
+# def dist_to_steps(dist): return 2 ** (dist-1)
+# def steps_to_dist(step): return 1 + step.log2()
+def dist_to_steps(dist): return dist # Log-space above seems to produce somewhat more accurate maps than this lin-space.
+def steps_to_dist(step): return step
 
 
 
@@ -203,7 +203,8 @@ def pos_histogram(plt, label):
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = embed_(0, cat(x, y, veloc))
         acts = act(cat(src, dst))
-        dists = dist_to_steps(dist_(src, dst))
+        # dists = dist_to_steps(dist_(src, dst))
+        dists = dist(cat( cat(x,y,veloc), cat(dst_pos.expand(GS*GS, 2), torch.ones(GS*GS, 2, device=device)) )) # TODO: Does this look diverse enough, initially?
         plt.imshow(dists.reshape(GS,GS).t().cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
@@ -280,12 +281,18 @@ def replay(reached_vs_timeout):
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - steps_to_dist(D)).square()).sum()
-        dist_loss = dist_loss + dstl(daA, I-i)
-        # dist_loss = dist_loss + dstl(DaA, I-i)
-        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target)
-        # dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
-        dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
-        # dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
+        # dist_loss = dist_loss + dstl(daA, I-i)
+        # # dist_loss = dist_loss + dstl(DaA, I-i)
+        # dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target)
+        # # dist_loss = dist_loss + dstl(Dab, j-i) + dstl(Dac, dist_target)
+        # dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
+        # # dist_loss = dist_loss + dstl(Dbc, k-j) + dstl(Dbg, k-j)
+
+        dist_loss = dist_loss + dstl(dist(cat(a.state, b.state)), (j-i)) # TODO: Train `dist`.
+        dist_loss = dist_loss + dstl(dist(cat(b.state, c.state)), (k-j)) # TODO: Train `dist`.
+        dist_loss = dist_loss + dstl(dist(cat(a.state, c.state)), (k-i)) # TODO: Train `dist`.
+        dist_loss = dist_loss + dstl(dist(cat(b.state, c.as_goal)), (k-j)) # TODO: Train `dist`.
+        dist_loss = dist_loss + dstl(dist(cat(a.state, c.as_goal)), (k-i)) # TODO: Train `dist`.
 
         # Learn ground-actions.
         # ground_loss = ground_loss + 0#(act(cat(sa, dA)) - a.action).square().sum() # TODO: …Maybe, not dA, but db? And, weighted by distance? Like below?
