@@ -146,26 +146,25 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-embed = net(1+input_sz*4, embed_sz) # (src_or_dst: -1|1, input) → emb # TODO: Remove.
-#   (Locally-isometric maps of the environment.)
-#   (Temporally-close events are made close here, far events are made far.)
 act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action # TODO: Remove.
 #   (Min-dist spanning trees that go to a destination.)
-dist = net(action_sz + input_sz + input_sz, action_sz + 1) # (0|action, src, dst) → (min_action, min_dist)
+dist = net(action_sz + 4*input_sz + 4*input_sz, action_sz + 1)
+#   (0|action, src, dst) → (min_action, min_dist)
 
-optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *dist.parameters()], lr=lr)
+optim = torch.optim.Adam([*act.parameters(), *dist.parameters()], lr=lr)
 
 
 
-def embed_(src_or_dst, input): # TODO: Remove.
-    """Convenience: `embed`s into a locally-isometric map for easy generalization and dist-estimation."""
-    input = fold(fold(input))
-    x = cat(torch.ones(input.shape[0], 1, device=device) * (1 if src_or_dst else -1), input)
-    return embed(x)
+def act_dist(action, src, dst):
+    """Returns a tuple `(action, dist)`, having refined the action (possibly `None`) & source & destination."""
+    if action is None:
+        action = torch.zeros(*src.shape[:-1], action_sz, device=device)
+    ad = dist(cat(action, fold(fold(src)), fold(fold(dst))))
+    return ad[..., :-1], dist_to_steps(ad[..., -1:])
 def fold(x):
     """Increase sensitivity to 0…1 actions, doubling the size of the input."""
     return cat(x, 1 - 2*x.abs())
-def dist_(src, dst):
+def dist_(src, dst): # TODO: Remove.
     """Convenience: dist between `embed`dings, or rather, `1+log2(steps)`."""
     return (src - dst).square().mean(-1, keepdim=True)
 def as_goal(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
@@ -188,16 +187,14 @@ def pos_histogram(plt, label):
         # Display action-arrows everywhere.
         GS = 16 # grid size
         dst_pos = pos_histogram.dst_pos
-        dst = embed_(1, as_goal(dst_pos.expand(GS*GS, 2)))
+        dst = as_goal(dst_pos.expand(GS*GS, 2))
         plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white', zorder=3)
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         x = x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         y = y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
-        src = embed_(0, cat(x, y, veloc))
-        acts = act(cat(src, dst))
-        dists = dist_to_steps(dist_(src, dst))
-        # dists = dist(cat( torch.zeros(GS*GS, action_sz, device=device), cat(x,y,veloc), as_goal(dst_pos.expand(GS*GS, 2)) ))[..., -1]
+        src = cat(x, y, veloc)
+        acts, dists = act_dist(None, src, dst)
         plt.imshow(dists.reshape(GS,GS).t().cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).t().cpu(), acts[:,1].reshape(GS,GS).t().cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
@@ -223,10 +220,9 @@ def maybe_reset_goal(input):
     Returns a tuple of how many goals were reached and how many goals have timed out."""
     global goal, steps_to_goal
     with torch.no_grad():
-        src = embed_(0, input)
-        # dst = embed_(1, replay_buffer.sample_best().state) # Not ever choosing `.as_goal` for simplicity.
-        dst = embed_(1, as_goal((input + .3*torch.randn_like(input, device=device)).clamp(0,1))) # TODO: Cheating.
-        old_dist, new_dist = dist_(src, goal), dist_(src, dst)
+        # dst = replay_buffer.sample_best().state # Not ever choosing `.as_goal` for simplicity.
+        dst = as_goal((input + .3*torch.randn_like(input, device=device)).clamp(0,1)) # TODO: Cheating.
+        old_dist, new_dist = dist_(input, goal), dist_(input, dst) # TODO: Use `act_dist` instead, right?
         reached, out_of_time = old_dist < .5, steps_to_goal < 0
         change = reached | out_of_time
 
@@ -247,24 +243,20 @@ def replay(reached_vs_timeout):
         k = random.randint(j+1, L-1)
         a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
-        # Source/destination embeddings.
-        e = embed_
-        sa, sb = e(0, a.state), e(0, b.state)
-        dA, db, dc, dg = e(1, A.state), e(1, b.state), e(1, c.state), e(1, c.as_goal)
-
+        # All actions & distances.
+        min_act = torch.zeros(batch_size, action_sz, device=device)
+        sa, sA, sb, sc, sg = a.state, A.state, b.state, c.state, c.as_goal
+        # TODO:
         # Distances.
-        daA, dab, dac, dbc, dag, dbg = dist_(sa, dA), dist_(sa, db), dist_(sa, dc), dist_(sb, dc), dist_(sa, dg), dist_(sb, dg)
+        daA, dab, dac, dbc, dag, dbg = dist_(sa, sA), dist_(sa, sb), dist_(sa, sc), dist_(sb, sc), dist_(sa, sg), dist_(sb, sg) # TODO: Use `act_dist`. (Also store actions, probably, in variables like `aaA`/`aac`.)
         dist_cond = dab+dbc < k-i
         dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
-        act_target = torch.where(dist_cond, act(cat(sa, db)).detach(), a.action)
+        act_target = torch.where(dist_cond, act(cat(sa, sb)).detach(), a.action) # TODO: Use `act_dist`.
         #   Don't think if what we have is good enough.
 
         # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
-            # d = dist_to_steps(d)
-            # TODO: Try making our loss not in `|pred.exp() - target|` space, but in `|pred - target.log()|` space.
-            #   …It's unreasonably low (≈2, whereas exp-space was ≈500.) while the learned maps look even worse.
             mult = (dist_to_steps(d.detach()) - D) + 1
             # mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
             mult = (mult+1).clamp(.1,15) # TODO:
@@ -276,52 +268,26 @@ def replay(reached_vs_timeout):
         dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
 
         # TODO: Add the action to `dist`, both as an output AND as an input (for DDPG convenience & shared weights). Learn that (action-inputs always get their min-dist and min-dist-action learned (an auto-encoder, but potential DDPG search could then be performed)) (input zero-actions represent any-action dist-minima).
-        min_act = torch.zeros(batch_size, action_sz, device=device)
-        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, b.state))[:,-1], (j-i)) # TODO:
+        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, b.state))[:,-1], (j-i)) # TODO: Use `act_dist`, don't call `dist` directly.
         dist_loss = dist_loss + dstl(dist(cat(min_act, b.state, c.state))[:,-1], (k-j)) # TODO:
         dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, c.state))[:,-1], (k-i)) # TODO:
         dist_loss = dist_loss + dstl(dist(cat(min_act, b.state, c.as_goal))[:,-1], (k-j)) # TODO:
         dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, c.as_goal))[:,-1], (k-i)) # TODO:
 
-        bz = (dac - dbc > j-i).float().sum() # TODO: Maybe gate by this relative-dist, not by absolute-dist (since the latter *might* be too high-variance to be meaningful)?…
-        #   …The old `dist_target` is `min(dab + dbc, k-i)`; what do we do with *that*, huh?
-        #     (So, gating by `dac < min(dab + dbc, k-i)`.)
-        #     Can't just replace it with `dac - dbc`, right?…
-        #       …Is replacing real-dist with `dac - dbc` and target-dist with `j-i` for `a→c = a.action` learning fine?… …Completely forgetting about min-dist gating, huh…
-        #         …Or maybe we can use `dac < min(dab + dbc, j-i + dbc, k-i)`?… (Which would *kinda* fit with the theme that we already had going… And might even want to add `dab + k-j` to the min…)
-        #           What about actions; which acts correspond to which dists here?
-        #         (…Maybe what we're missing is a 1/16 divisor of the meta-action loss…)
-
-        # Learn ground-actions.
-        # ground_loss = ground_loss + (act(cat(sa, dA)) - a.action).square().sum() # TODO: …Maybe, not dA, but db? And, weighted by distance? Like below?
-
-        # Learn meta-actions to k, to be the dist-min of actions to j.
+        # Learn ground-actions. And meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
             """Tries to cut off anything not-min-dist, if in lin-space."""
             d = dist_to_steps(d)
-            mult = (d.detach() - D.detach() + .5).clamp(0,15)
-            mult = mult + (mult > .5).float()
-            # TODO: How to cut off more aggressively, again? TODO: Run it like this. WHY ARE WE STILL UNABLE TO EVEN DIFFERENTIATE BETWEEN LOCATIONS
+            mult = (d.detach() - D.detach()).clamp(0,15)
+            mult = mult + (mult > 0).float()
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
-        ground_loss = 0#ground_loss + actl(dab, j-i, act(cat(sa, db)), a.action) # TODO: Does this improve anything? …No?…
-        #   TODO: …Why is the actual magnitude of this loss so low (0.02), typically? Shouldn't it be very high due to action noise?
-        # meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dc)), act_target)
-        # meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, dg)), act_target)
-        # meta_loss = meta_loss + actl(dac, j-i + dbc, act(cat(sa, dc)), a.action) # TODO: …This isn't working… Why not? Should we try single-step comparisons?
-        # meta_loss = meta_loss + actl(dag, j-i + dbc, act(cat(sa, dg)), a.action) # TODO:
-
-        # TODO: Does this single-action-self-distillation work? WHY NOT, IT'S LITERALLY DESIGNED TO MIMIC THE GRADIENT
-        dAc, dAg = dist_(e(0, A.state), dc), dist_(e(0, A.state), dg)
-        meta_loss = meta_loss + ((dbc - (k-j) + 1).clamp(0).detach() * (act(cat(sb, dc)) - b.action).square()).sum()
-        #   …Without any gating, the actions at least slightly differ between locations…
-        #   …But no matter what gating we try, all the action-arrows fuse together instead of following the direction of minimizing the distance…
-        meta_loss = meta_loss + ((dbg - (k-j) + 1).clamp(0).detach() * (act(cat(sb, dg)) - b.action).square()).sum()
-        meta_loss = meta_loss + ((daA - 1 + 1).clamp(0).detach() * (act(cat(sa, dA)) - a.action).square()).sum()
-        meta_loss = meta_loss + ((dab - (j-i) + 1).clamp(0).detach() * (act(cat(sa, db)) - a.action).square()).sum()
-        meta_loss = meta_loss + ((dac - (k-i) + 1).clamp(0).detach() * (act(cat(sa, dc)) - a.action).square()).sum()
-        meta_loss = meta_loss + ((dag - (k-i) + 1).clamp(0).detach() * (act(cat(sa, dg)) - a.action).square()).sum()
+        ground_loss = ground_loss + actl(dab, j-i, act(cat(sa, sb)), a.action) # TODO: Use `act_dist`.
+        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, sc)), act_target)
+        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, sg)), act_target)
+        # meta_loss = meta_loss + actl(dac, j-i + dbc, act(cat(sa, sc)), a.action) # TODO:
+        # meta_loss = meta_loss + actl(dag, j-i + dbc, act(cat(sa, sg)), a.action) # TODO:
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -337,7 +303,8 @@ for iter in range(500000):
     with torch.no_grad():
         state, hidden_state = env_step(state, hidden_state, action)
         full_state = cat(state, hidden_state)
-        action = act(cat(embed_(0, full_state), goal))
+        action = torch.zeros(batch_size, action_sz, device=device)
+        action = dist(cat(action, full_state, goal))[:, :-1]
         if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.4 # TODO: (Seems to slightly improve dists, maybe?)
 
         replay_buffer.append(ReplaySample(
