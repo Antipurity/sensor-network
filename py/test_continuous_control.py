@@ -146,12 +146,11 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action # TODO: Remove.
-#   (Min-dist spanning trees that go to a destination.)
 dist = net(action_sz + 4*input_sz + 4*input_sz, action_sz + 1)
 #   (0|action, src, dst) → (min_action, min_dist)
+#   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 
-optim = torch.optim.Adam([*act.parameters(), *dist.parameters()], lr=lr)
+optim = torch.optim.Adam([*dist.parameters()], lr=lr)
 
 
 
@@ -160,7 +159,7 @@ def act_dist(action, src, dst):
     if action is None:
         action = torch.zeros(*src.shape[:-1], action_sz, device=device)
     ad = dist(cat(action, fold(fold(src)), fold(fold(dst))))
-    return ad[..., :-1], dist_to_steps(ad[..., -1:])
+    return ad[..., :-1], ad[..., -1:]
 def fold(x):
     """Increase sensitivity to 0…1 actions, doubling the size of the input."""
     return cat(x, 1 - 2*x.abs())
@@ -244,35 +243,35 @@ def replay(reached_vs_timeout):
         a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
         # All actions & distances.
-        min_act = torch.zeros(batch_size, action_sz, device=device)
+        no_act = torch.zeros(batch_size, action_sz, device=device)
         sa, sA, sb, sc, sg = a.state, A.state, b.state, c.state, c.as_goal
-        # TODO:
-        # Distances.
-        daA, dab, dac, dbc, dag, dbg = dist_(sa, sA), dist_(sa, sb), dist_(sa, sc), dist_(sb, sc), dist_(sa, sg), dist_(sb, sg) # TODO: Use `act_dist`. (Also store actions, probably, in variables like `aaA`/`aac`.)
+        aaA, daA = act_dist(no_act, sa, sA)
+        aab, dab = act_dist(no_act, sa, sb)
+        aac, dac = act_dist(no_act, sa, sc)
+        aag, dag = act_dist(no_act, sa, sg)
+        abc, dbc = act_dist(no_act, sb, sc)
+        abg, dbg = act_dist(no_act, sb, sg)
+        # Don't think if what we have is good enough.
         dist_cond = dab+dbc < k-i
         dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
-        act_target = torch.where(dist_cond, act(cat(sa, sb)).detach(), a.action) # TODO: Use `act_dist`.
-        #   Don't think if what we have is good enough.
+        act_target = torch.where(dist_cond, aab.detach(), a.action)
+        #   TODO: (If we're doing the min, then should also do the min with `j-i + dbc` & `a.action`, and with `dab + k-j` & `aab.detach()`.)
 
         # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
             mult = (dist_to_steps(d.detach()) - D) + 1
-            # mult = torch.where(mult>0, mult+1, mult.exp()).clamp(0,15)
-            mult = (mult+1).clamp(.1,15) # TODO:
+            mult = (mult+1).clamp(.1,15)
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - steps_to_dist(D)).square()).sum()
         dist_loss = dist_loss + dstl(daA, I-i)
-        dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target) + dstl(dag, dist_target)
+        dist_loss = dist_loss + dstl(dab, j-i)
         dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
+        dist_loss = dist_loss + dstl(dac, dist_target) + dstl(dag, dist_target)
 
-        # TODO: Add the action to `dist`, both as an output AND as an input (for DDPG convenience & shared weights). Learn that (action-inputs always get their min-dist and min-dist-action learned (an auto-encoder, but potential DDPG search could then be performed)) (input zero-actions represent any-action dist-minima).
-        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, b.state))[:,-1], (j-i)) # TODO: Use `act_dist`, don't call `dist` directly.
-        dist_loss = dist_loss + dstl(dist(cat(min_act, b.state, c.state))[:,-1], (k-j)) # TODO:
-        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, c.state))[:,-1], (k-i)) # TODO:
-        dist_loss = dist_loss + dstl(dist(cat(min_act, b.state, c.as_goal))[:,-1], (k-j)) # TODO:
-        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, c.as_goal))[:,-1], (k-i)) # TODO:
+        # TODO: Learn `dist` (action-inputs always get their min-dist and min-dist-action learned (an auto-encoder, but potential DDPG search could then be performed)) (input zero-actions represent any-action dist-minima).
+        #   TODO: Write down what exactly we want to learn here, as to-do items.
 
         # Learn ground-actions. And meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
@@ -283,11 +282,9 @@ def replay(reached_vs_timeout):
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
-        ground_loss = ground_loss + actl(dab, j-i, act(cat(sa, sb)), a.action) # TODO: Use `act_dist`.
-        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, sc)), act_target)
-        meta_loss = meta_loss + actl(dac, dist_target, act(cat(sa, sg)), act_target)
-        # meta_loss = meta_loss + actl(dac, j-i + dbc, act(cat(sa, sc)), a.action) # TODO:
-        # meta_loss = meta_loss + actl(dag, j-i + dbc, act(cat(sa, sg)), a.action) # TODO:
+        ground_loss = ground_loss + actl(dab, j-i, aab, a.action)
+        meta_loss = meta_loss + actl(dac, dist_target, aac, act_target)
+        meta_loss = meta_loss + actl(dac, dist_target, aag, act_target)
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
