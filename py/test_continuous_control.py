@@ -218,7 +218,7 @@ action = torch.randn(batch_size, action_sz, device=device)
 goal = torch.randn(batch_size, input_sz, device=device)
 steps_to_goal = torch.rand(batch_size, 1, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
-def maybe_reset_goal(input, input_to_goal_dist):
+def maybe_reset_goal(input):
     """Changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
 
     Returns a tuple of how many goals were reached and how many goals have timed out."""
@@ -226,8 +226,8 @@ def maybe_reset_goal(input, input_to_goal_dist):
     with torch.no_grad():
         # dst = replay_buffer.sample_best().state # Not ever choosing `.as_goal` for simplicity.
         dst = as_goal((input + .3*torch.randn_like(input, device=device)).clamp(0,1)) # TODO: Cheating.
-        old_dist, new_dist = input_to_goal_dist, act_dist(None, input, dst)[1]
-        reached, out_of_time = old_dist < .5, steps_to_goal < 0
+        new_dist = act_dist(None, input, dst)[1]
+        reached, out_of_time = (as_goal(input) - goal).abs().sum(-1, keepdim=True) < .01, steps_to_goal < 0
         change = reached | out_of_time
 
         goal = torch.where(change, dst, goal)
@@ -293,8 +293,11 @@ def replay(reached_vs_timeout):
         ground_loss = ground_loss + actl(dab, j-i, aab, a.action)
         meta_loss = meta_loss + actl(dac, dist_target, aac, act_target)
         meta_loss = meta_loss + actl(dac, dist_target, aag, act_target)
+        #   TODO: Combine into one variable, `act_loss`.
 
-        # TODO: Implement DDPG, because actions still don't work.
+        # TODO: Implement DDPG, because self-imitation still doesn't work.
+        #   (`act_dist(aab, sa, sb)[1]` to compute the distance with frozen `dist`, then make that a loss.)
+        #   TODO: …Try completely disabling the action-losses, maybe?…
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -311,7 +314,7 @@ for iter in range(500000):
         state, hidden_state = env_step(state, hidden_state, action)
         full_state = cat(state, hidden_state)
         action = torch.zeros(batch_size, action_sz, device=device)
-        action, input_to_goal_dist = act_dist(action, full_state, goal)
+        action, _ = act_dist(action, full_state, goal)
         if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.4 # TODO: (Seems to slightly improve dists, maybe?)
 
         replay_buffer.append(ReplaySample(
@@ -321,7 +324,7 @@ for iter in range(500000):
             #   Want to go to places, not caring about final velocity.
         ))
         if random.randint(1,100)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
-    replay(maybe_reset_goal(full_state, input_to_goal_dist))
+    replay(maybe_reset_goal(full_state))
 finish()
 
 # TODO: Run & fix.
