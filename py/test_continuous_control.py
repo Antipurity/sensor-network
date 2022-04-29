@@ -146,18 +146,18 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-embed = net(1+input_sz*4, embed_sz) # (src_or_dst: -1|1, input) → emb
+embed = net(1+input_sz*4, embed_sz) # (src_or_dst: -1|1, input) → emb # TODO: Remove.
 #   (Locally-isometric maps of the environment.)
 #   (Temporally-close events are made close here, far events are made far.)
-act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action
+act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action # TODO: Remove.
 #   (Min-dist spanning trees that go to a destination.)
-dist = net(input_sz+input_sz, 1) # TODO: Train & log this. …Looks better than proper-dist embeddings…
+dist = net(action_sz + input_sz + input_sz, action_sz + 1) # (0|action, src, dst) → (min_action, min_dist)
 
 optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *dist.parameters()], lr=lr)
 
 
 
-def embed_(src_or_dst, input):
+def embed_(src_or_dst, input): # TODO: Remove.
     """Convenience: `embed`s into a locally-isometric map for easy generalization and dist-estimation."""
     input = fold(fold(input))
     x = cat(torch.ones(input.shape[0], 1, device=device) * (1 if src_or_dst else -1), input)
@@ -197,7 +197,7 @@ def pos_histogram(plt, label):
         src = embed_(0, cat(x, y, veloc))
         acts = act(cat(src, dst))
         dists = dist_to_steps(dist_(src, dst))
-        # dists = dist(cat( cat(x,y,veloc), as_goal(dst_pos.expand(GS*GS, 2)) )) # TODO:
+        # dists = dist(cat( torch.zeros(GS*GS, action_sz, device=device), cat(x,y,veloc), as_goal(dst_pos.expand(GS*GS, 2)) ))[..., -1]
         plt.imshow(dists.reshape(GS,GS).t().cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).t().cpu(), acts[:,1].reshape(GS,GS).t().cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
@@ -275,11 +275,13 @@ def replay(reached_vs_timeout):
         dist_loss = dist_loss + dstl(dab, j-i) + dstl(dac, dist_target) + dstl(dag, dist_target)
         dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
 
-        dist_loss = dist_loss + dstl(dist(cat(a.state, b.state)), (j-i)) # TODO: Train `dist`.
-        dist_loss = dist_loss + dstl(dist(cat(b.state, c.state)), (k-j)) # TODO: Train `dist`.
-        dist_loss = dist_loss + dstl(dist(cat(a.state, c.state)), (k-i)) # TODO: Train `dist`.
-        dist_loss = dist_loss + dstl(dist(cat(b.state, c.as_goal)), (k-j)) # TODO: Train `dist`.
-        dist_loss = dist_loss + dstl(dist(cat(a.state, c.as_goal)), (k-i)) # TODO: Train `dist`.
+        # TODO: Add the action to `dist`, both as an output AND as an input (for DDPG convenience & shared weights). Learn that (action-inputs always get their min-dist and min-dist-action learned (an auto-encoder, but potential DDPG search could then be performed)) (input zero-actions represent any-action dist-minima).
+        min_act = torch.zeros(batch_size, action_sz, device=device)
+        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, b.state))[:,-1], (j-i)) # TODO:
+        dist_loss = dist_loss + dstl(dist(cat(min_act, b.state, c.state))[:,-1], (k-j)) # TODO:
+        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, c.state))[:,-1], (k-i)) # TODO:
+        dist_loss = dist_loss + dstl(dist(cat(min_act, b.state, c.as_goal))[:,-1], (k-j)) # TODO:
+        dist_loss = dist_loss + dstl(dist(cat(min_act, a.state, c.as_goal))[:,-1], (k-i)) # TODO:
 
         bz = (dac - dbc > j-i).float().sum() # TODO: Maybe gate by this relative-dist, not by absolute-dist (since the latter *might* be too high-variance to be meaningful)?…
         #   …The old `dist_target` is `min(dab + dbc, k-i)`; what do we do with *that*, huh?
