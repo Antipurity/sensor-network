@@ -146,7 +146,7 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-embed = net(1+input_sz, embed_sz) # (src_or_dst: -1|1, input) → emb
+embed = net(1+input_sz*4, embed_sz) # (src_or_dst: -1|1, input) → emb
 #   (Locally-isometric maps of the environment.)
 #   (Temporally-close events are made close here, far events are made far.)
 act = net(embed_sz + embed_sz, action_sz) # (src, dst) → action
@@ -159,8 +159,12 @@ optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *dist.paramete
 
 def embed_(src_or_dst, input):
     """Convenience: `embed`s into a locally-isometric map for easy generalization and dist-estimation."""
+    input = fold(fold(input))
     x = cat(torch.ones(input.shape[0], 1, device=device) * (1 if src_or_dst else -1), input)
     return embed(x)
+def fold(x):
+    """Increase sensitivity to 0…1 actions, doubling the size of the input."""
+    return cat(x, 1 - 2*x.abs())
 def dist_(src, dst):
     """Convenience: dist between `embed`dings, or rather, `1+log2(steps)`."""
     return (src - dst).square().mean(-1, keepdim=True)
@@ -195,7 +199,7 @@ def pos_histogram(plt, label):
         dists = dist_to_steps(dist_(src, dst))
         # dists = dist(cat( cat(x,y,veloc), as_goal(dst_pos.expand(GS*GS, 2)) )) # TODO:
         plt.imshow(dists.reshape(GS,GS).t().cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
-        plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
+        plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).t().cpu(), acts[:,1].reshape(GS,GS).t().cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
     """When clicking the distance/action plot, set destination and redraw."""
     if event.xdata is not None and event.ydata is not None and 0 < event.xdata < 1 and 0 < event.ydata < 1:
@@ -340,13 +344,7 @@ finish()
 
 # TODO: Run & fix.
 #   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out?
-#     TODO: …Maybe try just always reinforcing the replayed actions whenever the *estimated* distance goes down (for which we need next-states)?…
-#       Should only learn min-dist actions, AND faraway: gate a→c by `dac - dbc > j-i` (AKA relative dist, as opposed to the absolute dist that we're currently gating by) (in this formulation, should be very easy to integrate into existing code; a→b is still gated by absolute-distance).
-#         …But how would this gating interact with min-dist action-targets?…
-#           Replacing them entirely doesn't seem to nudge the actions…
-#           Things are looking grim…
-#           Can we debug this, or do we need to go straight to DDPG?…
-#       (This *might* help if our index-diff is too poor of an estimator, which *might* be true in continuous envs…)
+#     TODO: …UHHHHHHHHHH…
 #   TODO: Why isn't distance learned well?
 #     (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
 #       (Gotta be real: `embed`-dists look like an NN gone bad, whereas `dist`-dists look reasonable… Though it does become nicer with enough time.)
@@ -363,8 +361,6 @@ finish()
 
 # …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation), maximize regret (real dist is lower/better than predicted dist, computed at unroll-time from encountered dst-embeddings) by goals.
 #   (Probably a good idea anyway, since uncertainty-estimation is so slow.)
-
-# …Could also, instead of gating actions based on index-diffs (which have high variance), just learn i→i+1 actions if the predicted-distance has decreased by 1 — or maybe if dab+dbc==dac for faraway actions?…
 
 
 
