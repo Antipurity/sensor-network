@@ -294,6 +294,8 @@ def replay(reached_vs_timeout):
         meta_loss = meta_loss + actl(dac, dist_target, aac, act_target)
         meta_loss = meta_loss + actl(dac, dist_target, aag, act_target)
 
+        # TODO: Implement DDPG, because actions still don't work.
+
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
 
