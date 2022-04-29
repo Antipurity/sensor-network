@@ -150,6 +150,13 @@ dist = net(action_sz + 4*input_sz + 4*input_sz, action_sz + 1)
 #   (0|action, src, dst) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 #   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
+#   Loss-wise:
+#     - `min_dist` with replayed `action`s is the index-diff;
+#     - `min_dist` with 0 is the index-diff;
+#     - `min_action` with 0 is the replayed `action`.
+#     - (For tighter losses, we sample not just faraway i→j but i→j→k, and make i→k losses also consider i→j + j→k for exponential-combining. Has not been ablated.)
+#     - Potentially, DDPG: generate an action from 0 and estimate it.
+#     - All losses are multiplied by how much the prediction-target improves/lessens the dist.
 
 optim = torch.optim.Adam([*dist.parameters()], lr=lr)
 
@@ -255,7 +262,7 @@ def replay(reached_vs_timeout):
         act_target = torch.where(dist_cond, aab.detach(), a.action)
         #   TODO: (If we're doing the min, then should also do the min with `j-i + dbc` & `a.action`, and with `dab + k-j` & `aab.detach()`.)
 
-        # Learn distance, to be the min of seen 1+log2 of steps (index-differences).
+        # Learn distances, to be index-differences.
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
             mult = (dist_to_steps(d.detach()) - D) + 1
@@ -263,13 +270,16 @@ def replay(reached_vs_timeout):
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - steps_to_dist(D)).square()).sum()
+        # Global dists.
         dist_loss = dist_loss + dstl(daA, I-i)
         dist_loss = dist_loss + dstl(dab, j-i)
         dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
         dist_loss = dist_loss + dstl(dac, dist_target) + dstl(dag, dist_target)
-
-        # TODO: Learn `dist` (action-inputs always get their min-dist and min-dist-action learned (an auto-encoder, but potential DDPG search could then be performed)) (input zero-actions represent any-action dist-minima).
-        #   TODO: Write down what exactly we want to learn here, as to-do items.
+        # Action-dependent dists.
+        dist_loss = dist_loss + dstl(act_dist(a.action, sa, sA)[1], I-i)
+        dist_loss = dist_loss + dstl(act_dist(a.action, sa, sb)[1], j-i)
+        dist_loss = dist_loss + dstl(act_dist(b.action, sb, sc)[1], k-j) + dstl(act_dist(b.action, sb, sg)[1], k-j)
+        dist_loss = dist_loss + dstl(act_dist(a.action, sa, sc)[1], dist_target) + dstl(act_dist(a.action, sa, sg)[1], dist_target)
 
         # Learn ground-actions. And meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
