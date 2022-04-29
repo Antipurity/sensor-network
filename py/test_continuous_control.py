@@ -309,7 +309,7 @@ for iter in range(500000):
         state, hidden_state = env_step(state, hidden_state, action)
         full_state = cat(state, hidden_state)
         action = torch.zeros(batch_size, action_sz, device=device)
-        input_to_goal_dist, action = act_dist(action, full_state, goal)
+        action, input_to_goal_dist = act_dist(action, full_state, goal)
         if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.4 # TODO: (Seems to slightly improve dists, maybe?)
 
         replay_buffer.append(ReplaySample(
