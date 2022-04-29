@@ -149,6 +149,7 @@ def net(ins, outs, hidden=embed_sz):
 dist = net(action_sz + 4*input_sz + 4*input_sz, action_sz + 1)
 #   (0|action, src, dst) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
+#   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
 
 optim = torch.optim.Adam([*dist.parameters()], lr=lr)
 
@@ -163,9 +164,6 @@ def act_dist(action, src, dst):
 def fold(x):
     """Increase sensitivity to 0…1 actions, doubling the size of the input."""
     return cat(x, 1 - 2*x.abs())
-def dist_(src, dst): # TODO: Remove.
-    """Convenience: dist between `embed`dings, or rather, `1+log2(steps)`."""
-    return (src - dst).square().mean(-1, keepdim=True)
 def as_goal(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
 # def dist_to_steps(dist): return 2 ** (dist-1)
 # def steps_to_dist(step): return 1 + step.log2()
@@ -213,7 +211,7 @@ action = torch.randn(batch_size, action_sz, device=device)
 goal = torch.randn(batch_size, embed_sz, device=device)
 steps_to_goal = torch.rand(batch_size, 1, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
-def maybe_reset_goal(input):
+def maybe_reset_goal(input, input_to_goal_dist):
     """Changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
 
     Returns a tuple of how many goals were reached and how many goals have timed out."""
@@ -221,7 +219,7 @@ def maybe_reset_goal(input):
     with torch.no_grad():
         # dst = replay_buffer.sample_best().state # Not ever choosing `.as_goal` for simplicity.
         dst = as_goal((input + .3*torch.randn_like(input, device=device)).clamp(0,1)) # TODO: Cheating.
-        old_dist, new_dist = dist_(input, goal), dist_(input, dst) # TODO: Use `act_dist` instead, right?
+        old_dist, new_dist = input_to_goal_dist, act_dist(None, input, dst)[1]
         reached, out_of_time = old_dist < .5, steps_to_goal < 0
         change = reached | out_of_time
 
@@ -301,7 +299,7 @@ for iter in range(500000):
         state, hidden_state = env_step(state, hidden_state, action)
         full_state = cat(state, hidden_state)
         action = torch.zeros(batch_size, action_sz, device=device)
-        action = dist(cat(action, full_state, goal))[:, :-1]
+        input_to_goal_dist, action = act_dist(action, full_state, goal)
         if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.4 # TODO: (Seems to slightly improve dists, maybe?)
 
         replay_buffer.append(ReplaySample(
@@ -311,11 +309,8 @@ for iter in range(500000):
             #   Want to go to places, not caring about final velocity.
         ))
         if random.randint(1,100)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
-    replay(maybe_reset_goal(full_state))
+    replay(maybe_reset_goal(full_state, input_to_goal_dist))
 finish()
-
-# TODO: Add the action to `dist`, both as an output AND as an input (for DDPG convenience & shared weights). Learn that (action-inputs always get their min-dist and min-dist-action learned (an auto-encoder, but potential DDPG search could then be performed)) (input zero-actions represent any-action dist-minima).
-#   (Usable for both self-imitation and DDPG. All in one NN.)
 
 # TODO: Run & fix.
 #   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out? Why has every attempt at self-imitation-learning failed?
