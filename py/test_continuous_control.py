@@ -312,8 +312,14 @@ def replay(reached_vs_timeout):
 
         # TODO: Does this single-action-self-distillation work? WHY NOT, IT'S LITERALLY DESIGNED TO MIMIC THE GRADIENT
         dAc, dAg = dist_(e(0, A.state), dc), dist_(e(0, A.state), dg)
-        meta_loss = meta_loss + ((dac - dAc).clamp(0).detach() * (act(cat(sa, dc).detach()) - a.action).square()).sum()
-        meta_loss = meta_loss + ((dag - dAg).clamp(0).detach() * (act(cat(sa, dg).detach()) - a.action).square()).sum()
+        meta_loss = meta_loss + ((dbc - (k-j) + 1).clamp(0).detach() * (act(cat(sb, dc)) - b.action).square()).sum()
+        #   …Without any gating, the actions at least slightly differ between locations…
+        #   …But no matter what gating we try, all the action-arrows fuse together instead of following the direction of minimizing the distance…
+        meta_loss = meta_loss + ((dbg - (k-j) + 1).clamp(0).detach() * (act(cat(sb, dg)) - b.action).square()).sum()
+        meta_loss = meta_loss + ((daA - 1 + 1).clamp(0).detach() * (act(cat(sa, dA)) - a.action).square()).sum()
+        meta_loss = meta_loss + ((dab - (j-i) + 1).clamp(0).detach() * (act(cat(sa, db)) - a.action).square()).sum()
+        meta_loss = meta_loss + ((dac - (k-i) + 1).clamp(0).detach() * (act(cat(sa, dc)) - a.action).square()).sum()
+        meta_loss = meta_loss + ((dag - (k-i) + 1).clamp(0).detach() * (act(cat(sa, dg)) - a.action).square()).sum()
 
     (dist_loss + ground_loss + meta_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -343,11 +349,11 @@ for iter in range(500000):
 finish()
 
 # TODO: Run & fix.
-#   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out?
-#     TODO: …UHHHHHHHHHH…
+#   TODO: …Try making `dist` also output the action, & learn that.
+#   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out? Why has every attempt at self-imitation-learning failed?
 #   TODO: Why isn't distance learned well?
-#     (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
-#       (Gotta be real: `embed`-dists look like an NN gone bad, whereas `dist`-dists look reasonable… Though it does become nicer with enough time.)
+#   (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
+#     (Gotta be real: `embed`-dists look like an NN gone bad, whereas `dist`-dists look reasonable… Though it does become nicer with enough time. Maybe the `dist` net is the way to go after all?…)
 #   TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #     (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
