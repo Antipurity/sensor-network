@@ -348,25 +348,25 @@ for iter in range(500000):
     replay(maybe_reset_goal(full_state))
 finish()
 
+# TODO: Add the action to `dist`, both as an output AND as an input (for DDPG convenience & shared weights). Learn that (action-inputs always get their min-dist and min-dist-action learned (an auto-encoder, but potential DDPG search could then be performed)) (input zero-actions represent any-action dist-minima).
+#   (Usable for both self-imitation and DDPG. All in one NN.)
+
 # TODO: Run & fix.
-#   TODO: …Try making `dist` also output the action, & learn that.
 #   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out? Why has every attempt at self-imitation-learning failed?
 #   TODO: Why isn't distance learned well?
 #   (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
 #     (Gotta be real: `embed`-dists look like an NN gone bad, whereas `dist`-dists look reasonable… Though it does become nicer with enough time. Maybe the `dist` net is the way to go after all?…)
+
+
+
+
+
+
+
+# …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation due to ensembling), maximize regret (real dist is lower/better than predicted dist, computed at unroll-time from encountered dst-embeddings) by goals.
+#   (Probably a good idea anyway, since uncertainty-estimation is so slow.)
 #   TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #     (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
-
-# TODO: …Worst-case: need to actually have creativity and establish a fuller baseline of what works, with DDPG and/or search among neighbors and/or even fractal folding…
-
-
-
-
-
-
-
-# …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation), maximize regret (real dist is lower/better than predicted dist, computed at unroll-time from encountered dst-embeddings) by goals.
-#   (Probably a good idea anyway, since uncertainty-estimation is so slow.)
 
 
 
