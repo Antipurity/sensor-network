@@ -215,7 +215,7 @@ pos_histogram.dst_pos = torch.rand(1,2, device=device)
 
 # The main loop, which steps the environment and trains `step`.
 action = torch.randn(batch_size, action_sz, device=device)
-goal = torch.randn(batch_size, embed_sz, device=device)
+goal = torch.randn(batch_size, input_sz, device=device)
 steps_to_goal = torch.rand(batch_size, 1, device=device)
 state, hidden_state = env_init(batch_size=batch_size)
 def maybe_reset_goal(input, input_to_goal_dist):
