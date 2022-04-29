@@ -285,7 +285,7 @@ def replay(reached_vs_timeout):
         def actl(d,D, a,A):
             """Tries to cut off anything not-min-dist, if in lin-space."""
             d = dist_to_steps(d)
-            mult = (d.detach() - D.detach()).clamp(0,15)
+            mult = (d.detach() - D).clamp(0,15)
             mult = mult + (mult > 0).float()
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
