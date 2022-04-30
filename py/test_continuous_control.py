@@ -65,7 +65,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     # force_center = torch.ones(posit.shape[0], 2, device=device)/2
     # force_len = (posit - force_center).square() + 1e-5
     # force = 3e-5 / force_len
-    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor?
+    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor? …Somehow we did; what if we enable it instead, with no other changes? …The arrows look kinda correct?… Though reachability isn't the greatest. Still: progress, I guess?…
     veloc = (veloc + accel) * .99
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
@@ -149,7 +149,7 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
         nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, outs),
     ).to(device)
-dist = net(action_sz + input_sz + input_sz, action_sz + 1)
+dist = net(action_sz + input_sz + input_sz, action_sz + 1) # TODO: Maybe, this should also accept random noise, so that it can generate stochastic policies, and it isn't stuck just moving in one direction? (And the replay buffer should remember that noise for preserving ground-acts, and the noise should be the same for preds & targets everywhere.)
 #   (0|action, src, dst) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 #   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
@@ -236,7 +236,7 @@ def maybe_reset_goal(input):
 
         goal = torch.where(change, dst, goal)
         steps_to_goal = torch.where(change, dist_to_steps(new_dist) + 4, steps_to_goal - 1)
-    reached = 1 - ((old_dist - .01)*10).clamp(0,1) # Smoother.
+    reached = 1 - (old_dist - .01).clamp(0,1) # Smoother. # TODO: …Try a bigger allowance?
     return reached.sum(), out_of_time.float().sum()
 def replay(reached_vs_timeout):
     """Replays samples from the buffer.
@@ -342,9 +342,9 @@ for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         action2, _ = act_dist(no_act, full_state, goal)
-        if iter % 100 < 10: action2 = action*.9 + .1*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
-        if iter % 100 < 50: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.)
-        # TODO: What about a policy that makes the action the difference between state & goal?
+        if iter < 10000:
+            if iter % 100 < 0: action2 = action*.1 + .9*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
+            if iter % 100 < 70: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: Can we reduce its frequency again? (With 50, works after like 12k.)
         action = action2 # TODO:
 
         replay_buffer.append(ReplaySample(
