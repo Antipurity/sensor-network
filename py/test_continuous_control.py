@@ -62,10 +62,10 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     accel = accel.detach()[..., :2]
     accel = accel * 1e-3 / 2
     accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().max(torch.tensor(1., device=device)))
-    force_center = torch.ones(posit.shape[0], 2, device=device)/2
-    force_len = (posit - force_center).square() + 1e-5
-    force = 3e-5 / force_len
-    accel = accel + force * (posit - force_center) / force_len
+    # force_center = torch.ones(posit.shape[0], 2, device=device)/2
+    # force_len = (posit - force_center).square() + 1e-5
+    # force = 3e-5 / force_len
+    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor?
     veloc = (veloc + accel) * .99
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
@@ -144,9 +144,12 @@ def net(ins, outs, hidden=embed_sz):
     return nn.Sequential(
         SkipConnection(nn.Linear(ins, hidden)),
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-dist = net(action_sz + 4*input_sz + 4*input_sz, action_sz + 1)
+dist = net(action_sz + input_sz + input_sz, action_sz + 1)
 #   (0|action, src, dst) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 #   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
@@ -166,8 +169,8 @@ def act_dist(action, src, dst):
     """Returns a tuple `(action, dist)`, having refined the action (possibly `None`) & source & destination."""
     if action is None:
         action = torch.zeros(*src.shape[:-1], action_sz, device=device)
-    ad = dist(cat(action, fold(fold(src)), fold(fold(dst))))
-    return ad[..., :-1], ad[..., -1:]
+    ad = dist(cat(action, (((2*src-1))), (((2*dst-1))))) # TODO:
+    return ad[..., :-1], 2**ad[..., -1:]
 def fold(x):
     """Increase sensitivity to 0…1 actions, doubling the size of the input."""
     return cat(x, 1 - 2*x.abs())
@@ -225,14 +228,16 @@ def maybe_reset_goal(input):
     global goal, steps_to_goal
     with torch.no_grad():
         # dst = replay_buffer.sample_best().state # Not ever choosing `.as_goal` for simplicity.
-        dst = as_goal((input + .3*torch.randn_like(input, device=device)).clamp(0,1)) # TODO: Cheating.
+        dst = as_goal(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating.
+        old_dist = (as_goal(input) - goal).abs().sum(-1, keepdim=True)
         new_dist = act_dist(None, input, dst)[1]
-        reached, out_of_time = (as_goal(input) - goal).abs().sum(-1, keepdim=True) < .01, steps_to_goal < 0
+        reached, out_of_time = old_dist < .01, steps_to_goal < 0
         change = reached | out_of_time
 
         goal = torch.where(change, dst, goal)
         steps_to_goal = torch.where(change, dist_to_steps(new_dist) + 4, steps_to_goal - 1)
-    return reached.float().sum(), out_of_time.float().sum()
+    reached = 1 - ((old_dist - .01)*10).clamp(0,1) # Smoother.
+    return reached.sum(), out_of_time.float().sum()
 def replay(reached_vs_timeout):
     """Replays samples from the buffer.
 
@@ -254,13 +259,14 @@ def replay(reached_vs_timeout):
         aab, dab = act_dist(no_act, sa, sb)
         aac, dac = act_dist(no_act, sa, sc)
         aag, dag = act_dist(no_act, sa, sg)
-        abc, dbc = act_dist(no_act, sb, sc)
-        abg, dbg = act_dist(no_act, sb, sg)
+        # abc, dbc = act_dist(no_act, sb, sc)
+        # abg, dbg = act_dist(no_act, sb, sg)
         # Don't think if what we have is good enough.
-        dist_cond = dab+dbc < k-i
-        dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
-        act_target = torch.where(dist_cond, aab.detach(), a.action)
+        # dist_cond = dab+dbc < k-i
+        # dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
+        # act_target = torch.where(dist_cond, aab.detach(), a.action)
         #   TODO: (If we're doing the min, then should also do the min with `j-i + dbc` & `a.action`, and with `dab + k-j` & `aab.detach()`.)
+        dist_target = k-i
 
         # Learn distances, to be index-differences.
         def dstl(d,D):
@@ -273,12 +279,12 @@ def replay(reached_vs_timeout):
         # Global dists.
         dist_loss = dist_loss + dstl(daA, I-i)
         dist_loss = dist_loss + dstl(dab, j-i)
-        dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
+        # dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
         dist_loss = dist_loss + dstl(dac, dist_target) + dstl(dag, dist_target)
         # Action-dependent dists.
         dist_loss = dist_loss + dstl(act_dist(a.action, sa, sA)[1], I-i)
         dist_loss = dist_loss + dstl(act_dist(a.action, sa, sb)[1], j-i)
-        dist_loss = dist_loss + dstl(act_dist(b.action, sb, sc)[1], k-j) + dstl(act_dist(b.action, sb, sg)[1], k-j)
+        # dist_loss = dist_loss + dstl(act_dist(b.action, sb, sc)[1], k-j) + dstl(act_dist(b.action, sb, sg)[1], k-j)
         dist_loss = dist_loss + dstl(act_dist(a.action, sa, sc)[1], dist_target) + dstl(act_dist(a.action, sa, sg)[1], dist_target)
 
         # Learn ground-actions. And meta-actions to k, to be the dist-min of actions to j.
@@ -297,23 +303,30 @@ def replay(reached_vs_timeout):
         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
         with torch.no_grad():
             Dab = act_dist(a.action, sa, sb)[1].clamp(None, j-i)
-            Dac = act_dist(a.action, sa, sc)[1].clamp(None, k-i)
-            Dag = act_dist(a.action, sa, sg)[1].clamp(None, k-i)
-        action_loss = action_loss + (aab - torch.where(dab < Dab, aab, a.action)).square().sum() # TODO: (…Seems to have exactly the same problem as before: actions collapse…) (Though, after like 7k, there *has* appeared a small dst-dependent area, though kinda far from the dst… Then at 12k, it's bigger… Question is: is it exciting, or just random?)
+            Dac = act_dist(a.action, sa, sc)[1].clamp(None, k-i).min(Dab + k-j)
+            Dag = act_dist(a.action, sa, sg)[1].clamp(None, k-i).min(Dab + k-j)
+        action_loss = action_loss + (aaA - a.action).square().sum()
+        aab_target = torch.where(dab < Dab, aab, a.action)
+        action_loss = action_loss + (aab - aab_target).square().sum() # TODO: (…Seems to have exactly the same problem as before: actions collapse…) (Though, after like 7k, there *has* appeared a small dst-dependent area, though kinda far from the dst… Then at 12k, it's bigger… Question is: is it exciting, or just random?)
         #   …Nope, actions collapsed eventually.
-        action_loss = action_loss + (aac - torch.where(dac < Dac, aac, a.action)).square().sum()
-        action_loss = action_loss + (aag - torch.where(dag < Dag, aag, a.action)).square().sum()
+        action_loss = action_loss + (aac - torch.where(dac < Dac, aac, aab_target)).square().sum()
+        action_loss = action_loss + (aag - torch.where(dag < Dag, aag, aab_target)).square().sum()
+
+        # TODO: …Try commenting out action_loss, and only do DDPG?…
+        #   …Why is distance suddenly refusing to get learned properly?
+        # …The learned dist map actually looks translation-invariant, mostly… Which may actually be correct in a 2D env. Why are acts bad?
 
         # DDPG: a learned loss for globally-min actions.
-        #   TODO: Try running it.
         for p in dist.parameters(): p.requires_grad_(False)
         ddpg_loss = ddpg_loss + act_dist(aab, sa, sb)[1].sum()
         ddpg_loss = ddpg_loss + act_dist(aac, sa, sc)[1].sum()
         ddpg_loss = ddpg_loss + act_dist(aag, sa, sg)[1].sum()
         for p in dist.parameters(): p.requires_grad_(True)
 
-        # TODO: …If it fails, should we make a visualization of per-action dist estimations, maybe as an image where the current-`dst-.5` is the action, or as 8 arrows around each point which show the action-dependent dist (the rest of the action is randomly-initialized) by their length?…
+        # TODO: …If even DDPG fails (it does), should we make a visualization of per-action dist estimations, maybe as an image where the current-`dst-.5` is the action, or as 8 arrows around each point which show the action-dependent dist (the rest of the action is randomly-initialized) by their length?…
 
+    max_dist_loss = 5000*batch_size
+    dist_loss = dist_loss * (dist_loss.clamp(None, max_dist_loss)/dist_loss).detach() # TODO: …Poor man's gradient clipping, implemented because there are spikes.
     (dist_loss + action_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
 
@@ -328,8 +341,11 @@ no_act = torch.zeros(batch_size, action_sz, device=device)
 for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
-        action, _ = act_dist(no_act, full_state, goal)
-        if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.2 # TODO: (Seems to slightly improve dists, maybe?)
+        action2, _ = act_dist(no_act, full_state, goal)
+        if iter % 100 < 10: action2 = action*.9 + .1*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
+        if iter % 100 < 50: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.)
+        # TODO: What about a policy that makes the action the difference between state & goal?
+        action = action2 # TODO:
 
         replay_buffer.append(ReplaySample(
             full_state,
@@ -339,7 +355,7 @@ for iter in range(500000):
         ))
 
         state, hidden_state = env_step(state, hidden_state, action)
-        if random.randint(1,10)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
+        if random.randint(1,1000)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
     replay(maybe_reset_goal(full_state))
 finish()
 
