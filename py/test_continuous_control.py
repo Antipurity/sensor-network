@@ -194,13 +194,13 @@ def pos_histogram(plt, label):
         dst = as_goal(dst_pos.expand(GS*GS, 2))
         plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white', zorder=3)
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
-        x = x.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
-        y = y.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
+        x = x.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
+        y = y.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = cat(x, y, veloc)
         acts, dists = act_dist(None, src, dst)
-        plt.imshow(dists.reshape(GS,GS).t().cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
-        plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).t().cpu(), acts[:,1].reshape(GS,GS).t().cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
+        plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
+        plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
     """When clicking the distance/action plot, set destination and redraw."""
     if event.xdata is not None and event.ydata is not None and 0 < event.xdata < 1 and 0 < event.ydata < 1:
