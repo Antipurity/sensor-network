@@ -143,11 +143,11 @@ replays_per_unroll = 1
 def net(ins, outs, hidden=embed_sz):
     return nn.Sequential(
         SkipConnection(nn.Linear(ins, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
+        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
+        nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, outs),
     ).to(device)
 dist = net(action_sz + input_sz + input_sz, action_sz + 1)
 #   (0|action, src, dst) → (min_action, min_dist)
@@ -355,7 +355,7 @@ for iter in range(500000):
         ))
 
         state, hidden_state = env_step(state, hidden_state, action)
-        if random.randint(1,1000)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
+        # if random.randint(1,1000)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
     replay(maybe_reset_goal(full_state))
 finish()
 
