@@ -236,7 +236,7 @@ def maybe_reset_goal(input):
 
         goal = torch.where(change, dst, goal)
         steps_to_goal = torch.where(change, dist_to_steps(new_dist) + 4, steps_to_goal - 1)
-    reached = 1 - (old_dist - .01).clamp(0,1) # Smoother. # TODO: …Try a bigger allowance?
+    reached = 1 - (old_dist - .01).clamp(0,1) # Smoother.
     return reached.sum(), out_of_time.float().sum()
 def replay(reached_vs_timeout):
     """Replays samples from the buffer.
@@ -248,19 +248,21 @@ def replay(reached_vs_timeout):
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
         i = random.randint(0, L-3)
         I = i + 1
-        j = random.randint(i+1, L-2)
+        # j = random.randint(i+1, L-2)
+        j = random.randint(0, L-2) # TODO:
         k = random.randint(j+1, L-1)
         a,A,b,c = replay_buffer[i], replay_buffer[I], replay_buffer[j], replay_buffer[k]
 
         # All actions & distances.
         no_act = torch.zeros(batch_size, action_sz, device=device)
+        # TODO: …Simplify to just a & g, because there's no way we can actually keep all these comparison-transitivity-based loss-augmenting equivalences in mind…
         sa, sA, sb, sc, sg = a.state, A.state, b.state, c.state, c.as_goal
-        aaA, daA = act_dist(no_act, sa, sA)
-        aab, dab = act_dist(no_act, sa, sb)
-        aac, dac = act_dist(no_act, sa, sc)
-        aag, dag = act_dist(no_act, sa, sg)
+        # aaA, daA = act_dist(no_act, sa, sA)
+        # aab, dab = act_dist(no_act, sa, sb)
+        # aac, dac = act_dist(no_act, sa, sc)
+        # aag, dag = act_dist(no_act, sa, sg)
         # abc, dbc = act_dist(no_act, sb, sc)
-        # abg, dbg = act_dist(no_act, sb, sg)
+        abg, dbg = act_dist(no_act, sb, sg)
         # Don't think if what we have is good enough.
         # dist_cond = dab+dbc < k-i
         # dist_target = torch.where(dist_cond, (dab+dbc).detach(), torch.tensor(float(k-i), device=device))
@@ -271,27 +273,30 @@ def replay(reached_vs_timeout):
         # Learn distances, to be index-differences.
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
-            mult = (dist_to_steps(d.detach()) - D) + 1
-            mult = (mult+1).clamp(.1,15)
-            if isinstance(D, int): D = torch.tensor(float(D), device=device)
-            mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
+            mult = (dist_to_steps(d.detach()) - D + 1).clamp(.3,3) # (…A non-0 lower bound is required for learning, but having that biases the algo… May want to instead construct a sequence of levels, each more min-dist than the last…)
+            # if isinstance(D, int): D = torch.tensor(float(D), device=device)
+            # mult = torch.where(D > 1, mult, torch.tensor(1., device=device)) # Why, PyTorch?
             return (mult * (d - steps_to_dist(D)).square()).sum()
         # Global dists.
-        dist_loss = dist_loss + dstl(daA, I-i)
-        dist_loss = dist_loss + dstl(dab, j-i)
-        # dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
-        dist_loss = dist_loss + dstl(dac, dist_target) + dstl(dag, dist_target)
-        # Action-dependent dists.
-        dist_loss = dist_loss + dstl(act_dist(a.action, sa, sA)[1], I-i)
-        dist_loss = dist_loss + dstl(act_dist(a.action, sa, sb)[1], j-i)
-        # dist_loss = dist_loss + dstl(act_dist(b.action, sb, sc)[1], k-j) + dstl(act_dist(b.action, sb, sg)[1], k-j)
-        dist_loss = dist_loss + dstl(act_dist(a.action, sa, sc)[1], dist_target) + dstl(act_dist(a.action, sa, sg)[1], dist_target)
+        # dist_loss = dist_loss + dstl(daA, I-i) # TODO: …Wait, if our goals are *only* set to be `as_goal` results, then this component doesn't actually do anything for us, right? The only thing that matters is a→g — so, like, 1 component out of 5… TODO: …What if we comment out literally all components of losses except the goal-dependent one?…
+        # dist_loss = dist_loss + dstl(dab, j-i)
+        # # dist_loss = dist_loss + dstl(dbc, k-j) + dstl(dbg, k-j)
+        # dist_loss = dist_loss + dstl(dac, dist_target) + dstl(dag, dist_target)
+        # # Action-dependent dists.
+        # dist_loss = dist_loss + dstl(act_dist(a.action, sa, sA)[1], I-i)
+        # dist_loss = dist_loss + dstl(act_dist(a.action, sa, sb)[1], j-i)
+        # # dist_loss = dist_loss + dstl(act_dist(b.action, sb, sc)[1], k-j) + dstl(act_dist(b.action, sb, sg)[1], k-j)
+        # dist_loss = dist_loss + dstl(act_dist(a.action, sa, sc)[1], dist_target) + dstl(act_dist(a.action, sa, sg)[1], dist_target)
+        # (`as_goal`-repr-learning only.)
+        dist_loss = dist_loss + dstl(dbg, k-j) # TODO:
+        Dbg = act_dist(b.action, sb, sg)[1]
+        dist_loss = dist_loss + dstl(act_dist(b.action, sb, sg)[1], k-j) # TODO:
 
         # Learn ground-actions. And meta-actions to k, to be the dist-min of actions to j.
         def actl(d,D, a,A):
             """Tries to cut off anything not-min-dist, if in lin-space."""
             d = dist_to_steps(d)
-            mult = (d.detach() - D).clamp(0,15)
+            mult = (d.detach() - D).clamp(0,3)
             mult = mult + (mult > 0).float()
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
@@ -301,16 +306,17 @@ def replay(reached_vs_timeout):
         # action_loss = action_loss + actl(dac, dist_target, aag, act_target)
 
         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
-        with torch.no_grad():
-            Dab = act_dist(a.action, sa, sb)[1].clamp(None, j-i)
-            Dac = act_dist(a.action, sa, sc)[1].clamp(None, k-i).min(Dab + k-j)
-            Dag = act_dist(a.action, sa, sg)[1].clamp(None, k-i).min(Dab + k-j)
-        action_loss = action_loss + (aaA - a.action).square().sum()
-        aab_target = torch.where(dab < Dab, aab, a.action)
-        action_loss = action_loss + (aab - aab_target).square().sum() # TODO: (…Seems to have exactly the same problem as before: actions collapse…) (Though, after like 7k, there *has* appeared a small dst-dependent area, though kinda far from the dst… Then at 12k, it's bigger… Question is: is it exciting, or just random?)
-        #   …Nope, actions collapsed eventually.
-        action_loss = action_loss + (aac - torch.where(dac < Dac, aac, aab_target)).square().sum()
-        action_loss = action_loss + (aag - torch.where(dag < Dag, aag, aab_target)).square().sum()
+        # with torch.no_grad():
+        #     Dab = act_dist(a.action, sa, sb)[1].clamp(None, j-i)
+        #     Dac = act_dist(a.action, sa, sc)[1].clamp(None, k-i).min(Dab + k-j)
+        #     Dag = act_dist(a.action, sa, sg)[1].clamp(None, k-i).min(Dab + k-j)
+        # action_loss = action_loss + (aaA - a.action).square().sum() # TODO: …This is *also* not goal-dependent and is therefore useless for us…
+        # aab_target = torch.where(dab < Dab, aab, a.action)
+        # action_loss = action_loss + (aab - aab_target).square().sum() # TODO: (…Seems to have exactly the same problem as before: actions collapse…) (Though, after like 7k, there *has* appeared a small dst-dependent area, though kinda far from the dst… Then at 12k, it's bigger… Question is: is it exciting, or just random?)
+        # #   …Nope, actions collapsed eventually.
+        # action_loss = action_loss + (aac - torch.where(dac < Dac, aac, aab_target)).square().sum()
+        # action_loss = action_loss + (aag - torch.where(dag < Dag, aag, aab_target)).square().sum()
+        action_loss = action_loss + (abg - torch.where(dbg < Dbg.clamp(None, k-j), abg, b.action)).square().sum() # TODO:
 
         # TODO: …Try commenting out action_loss, and only do DDPG?…
         #   …Why is distance suddenly refusing to get learned properly?
@@ -318,15 +324,15 @@ def replay(reached_vs_timeout):
 
         # DDPG: a learned loss for globally-min actions.
         for p in dist.parameters(): p.requires_grad_(False)
-        ddpg_loss = ddpg_loss + act_dist(aab, sa, sb)[1].sum()
-        ddpg_loss = ddpg_loss + act_dist(aac, sa, sc)[1].sum()
-        ddpg_loss = ddpg_loss + act_dist(aag, sa, sg)[1].sum()
+        # ddpg_loss = ddpg_loss + act_dist(aab, sa, sb)[1].sum()
+        # ddpg_loss = ddpg_loss + act_dist(aac, sa, sc)[1].sum()
+        ddpg_loss = ddpg_loss + act_dist(abg, sb, sg)[1].sum()
         for p in dist.parameters(): p.requires_grad_(True)
 
         # TODO: …If even DDPG fails (it does), should we make a visualization of per-action dist estimations, maybe as an image where the current-`dst-.5` is the action, or as 8 arrows around each point which show the action-dependent dist (the rest of the action is randomly-initialized) by their length?…
 
-    max_dist_loss = 5000*batch_size
-    dist_loss = dist_loss * (dist_loss.clamp(None, max_dist_loss)/dist_loss).detach() # TODO: …Poor man's gradient clipping, implemented because there are spikes.
+    # max_dist_loss = 10000*batch_size
+    # dist_loss = dist_loss * (dist_loss.clamp(None, max_dist_loss)/dist_loss).detach() # TODO: …Poor man's gradient clipping, implemented because there are spikes.
     (dist_loss + action_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
 
@@ -342,9 +348,8 @@ for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         action2, _ = act_dist(no_act, full_state, goal)
-        if iter < 10000:
-            if iter % 100 < 0: action2 = action*.1 + .9*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
-            if iter % 100 < 70: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: Can we reduce its frequency again? (With 50, works after like 12k.)
+        # if iter % 100 < 0: action2 = action*.1 + .9*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
+        if iter % 100 < 60: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO:
         action = action2 # TODO:
 
         replay_buffer.append(ReplaySample(
@@ -375,6 +380,12 @@ finish()
 #   (Probably a good idea anyway, since uncertainty-estimation is so slow.)
 #   TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #     (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
+
+# …Could also, similarly to MuZero, handle input-embeddings explicitly: learn either to just predict next-emb given prev-emb and action, or the distance between 2 embeddings (which is technically already done, so, might technically be unneeded). 
+
+
+
+# …Sure, we *can* sample i→j→k triplets, and do all the symbolic-search-tricks of a<b&b<c⇒a<c (pred-targets being the min-dist of everything predicted (dist from `act_dist`) & replayed (index-diff), or making j→k use a real/predicted i→j action, etc). But, just faraway-sampling of i→j seems to be enough in this cont-env.
 
 
 
