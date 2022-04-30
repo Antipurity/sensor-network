@@ -132,7 +132,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 batch_size = 100
-input_sz, embed_sz, action_sz = 4, 64, 64
+input_sz, embed_sz, action_sz = 4, 64, 2
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
@@ -239,7 +239,7 @@ def replay(reached_vs_timeout):
     Picks samples at i<j<k and i+1, and refines min-distances and min-distance actions."""
     L = len(replay_buffer)
     if L < 4: return
-    dist_loss, ground_loss, meta_loss = 0,0,0
+    dist_loss, action_loss, ddpg_loss = 0,0,0
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
         i = random.randint(0, L-3)
         I = i + 1
@@ -290,32 +290,45 @@ def replay(reached_vs_timeout):
             if isinstance(D, int): D = torch.tensor(float(D), device=device)
             mult = torch.where( D>1.5, mult, torch.tensor(1., device=device) )
             return (mult * (a - A).square()).sum()
-        ground_loss = ground_loss + actl(dab, j-i, aab, a.action)
-        meta_loss = meta_loss + actl(dac, dist_target, aac, act_target)
-        meta_loss = meta_loss + actl(dac, dist_target, aag, act_target)
-        #   TODO: Combine into one variable, `act_loss`.
+        # action_loss = action_loss + actl(dab, j-i, aab, a.action)
+        # action_loss = action_loss + actl(dac, dist_target, aac, act_target)
+        # action_loss = action_loss + actl(dac, dist_target, aag, act_target)
 
-        # TODO: Implement DDPG, because self-imitation still doesn't work.
-        #   (`act_dist(aab, sa, sb)[1]` to compute the distance with frozen `dist`, then make that a loss.)
-        #   TODO: …Try completely disabling the action-losses, maybe?…
+        # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
+        with torch.no_grad():
+            Dab = act_dist(a.action, sa, sb)[1].clamp(None, j-i)
+            Dac = act_dist(a.action, sa, sc)[1].clamp(None, k-i)
+            Dag = act_dist(a.action, sa, sg)[1].clamp(None, k-i)
+        action_loss = action_loss + (aab - torch.where(dab < Dab, aab, a.action)).square().sum() # TODO: (…Seems to have exactly the same problem as before: actions collapse…) (Though, after like 7k, there *has* appeared a small dst-dependent area, though kinda far from the dst… Then at 12k, it's bigger… Question is: is it exciting, or just random?)
+        action_loss = action_loss + (aac - torch.where(dac < Dac, aac, a.action)).square().sum()
+        action_loss = action_loss + (aag - torch.where(dag < Dag, aag, a.action)).square().sum()
 
-    (dist_loss + ground_loss + meta_loss).backward()
+        # DDPG: a learned loss for globally-min actions.
+        #   TODO: Try running it.
+        for p in dist.parameters(): p.requires_grad_(False)
+        ddpg_loss = ddpg_loss + act_dist(aab, sa, sb)[1].sum()
+        ddpg_loss = ddpg_loss + act_dist(aac, sa, sc)[1].sum()
+        ddpg_loss = ddpg_loss + act_dist(aag, sa, sg)[1].sum()
+        for p in dist.parameters(): p.requires_grad_(True)
+
+        # TODO: …If it fails, should we make a visualization of per-action dist estimations, maybe as an image where the current-`dst-.5` is the action, or as 8 arrows around each point which show the action-dependent dist (the rest of the action is randomly-initialized) by their length?…
+
+    (dist_loss + action_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
-    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), ground_loss = to_np(ground_loss / batch_size / replays_per_unroll), meta_loss = to_np(meta_loss / batch_size / replays_per_unroll))
+    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), action_loss = to_np(action_loss / batch_size / replays_per_unroll), ddpg_loss = to_np(action_loss / batch_size / replays_per_unroll))
 
 
 
+no_act = torch.zeros(batch_size, action_sz, device=device)
 for iter in range(500000):
     with torch.no_grad():
-        state, hidden_state = env_step(state, hidden_state, action)
         full_state = cat(state, hidden_state)
-        action = torch.zeros(batch_size, action_sz, device=device)
-        action, _ = act_dist(action, full_state, goal)
-        if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.4 # TODO: (Seems to slightly improve dists, maybe?)
+        action, _ = act_dist(no_act, full_state, goal)
+        if iter % 100 < 50: action = action + torch.randn(batch_size, action_sz, device=device)*.2 # TODO: (Seems to slightly improve dists, maybe?)
 
         replay_buffer.append(ReplaySample(
             full_state,
@@ -323,7 +336,9 @@ for iter in range(500000):
             as_goal(full_state),
             #   Want to go to places, not caring about final velocity.
         ))
-        if random.randint(1,100)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
+
+        state, hidden_state = env_step(state, hidden_state, action)
+        if random.randint(1,10)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
     replay(maybe_reset_goal(full_state))
 finish()
 
