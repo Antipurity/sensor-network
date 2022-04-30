@@ -313,7 +313,7 @@ def replay(reached_vs_timeout):
 
         # TODO: …If it fails, should we make a visualization of per-action dist estimations, maybe as an image where the current-`dst-.5` is the action, or as 8 arrows around each point which show the action-dependent dist (the rest of the action is randomly-initialized) by their length?…
 
-    (dist_loss + action_loss + action_loss).backward()
+    (dist_loss + action_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
 
     # Log debugging info.
