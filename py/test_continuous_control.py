@@ -300,6 +300,7 @@ def replay(reached_vs_timeout):
             Dac = act_dist(a.action, sa, sc)[1].clamp(None, k-i)
             Dag = act_dist(a.action, sa, sg)[1].clamp(None, k-i)
         action_loss = action_loss + (aab - torch.where(dab < Dab, aab, a.action)).square().sum() # TODO: (…Seems to have exactly the same problem as before: actions collapse…) (Though, after like 7k, there *has* appeared a small dst-dependent area, though kinda far from the dst… Then at 12k, it's bigger… Question is: is it exciting, or just random?)
+        #   …Nope, actions collapsed eventually.
         action_loss = action_loss + (aac - torch.where(dac < Dac, aac, a.action)).square().sum()
         action_loss = action_loss + (aag - torch.where(dag < Dag, aag, a.action)).square().sum()
 
@@ -319,7 +320,7 @@ def replay(reached_vs_timeout):
     # Log debugging info.
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
-    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), action_loss = to_np(action_loss / batch_size / replays_per_unroll), ddpg_loss = to_np(action_loss / batch_size / replays_per_unroll))
+    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), action_loss = to_np(action_loss / batch_size / replays_per_unroll), ddpg_loss = to_np(ddpg_loss / batch_size / replays_per_unroll))
 
 
 
