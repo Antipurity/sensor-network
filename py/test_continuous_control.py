@@ -17,6 +17,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 from model.log import log, clear, finish
+from model.momentum_copy import MomentumCopy
 
 import random
 
@@ -154,24 +155,27 @@ dist = net(action_sz + input_sz + input_sz + noise_sz, action_sz + 1)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 #   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
 #   Loss-wise:
+#     - (…This was updated since then though…)
 #     - `min_dist` with replayed `action`s is the index-diff;
 #     - `min_dist` with 0 is the index-diff;
 #     - `min_action` with 0 is the replayed `action`.
 #     - (For tighter losses, we sample not just faraway i→j but i→j→k, and make i→k losses also consider i→j + j→k for exponential-combining. Has not been ablated.)
-#     - Potentially, DDPG: generate an action from 0 and estimate it.
+#     - DDPG: generate an action from 0 and estimate it.
 #     - All losses are multiplied by how much the prediction-target improves/lessens the dist.
+
+dist_slow = MomentumCopy(dist, .99) # TODO: Update this on optimizer steps, and use it for the unroll & for DDPG & dist-gating…
 
 optim = torch.optim.Adam([*dist.parameters()], lr=lr)
 
 
 
-def act_dist(action, src, dst, noise=None):
+def act_dist(action, src, dst, noise=None, nn=dist):
     """Returns a tuple `(action, dist)`, having refined the action (possibly `None`) & source & destination."""
     if action is None:
         action = torch.zeros(*src.shape[:-1], action_sz, device=device)
     if noise is None:
         noise = torch.randn(*src.shape[:-1], noise_sz, device=device)
-    ad = dist(cat(action, (((2*src-1))), (((2*dst-1))), noise)) # TODO:
+    ad = nn(cat(action, (((2*src-1))), (((2*dst-1))), noise)) # TODO:
     return ad[..., :-1], 2**ad[..., -1:]
 def fold(x):
     """Increase sensitivity to 0…1 actions, doubling the size of the input."""
@@ -203,7 +207,7 @@ def pos_histogram(plt, label):
         y = y.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = cat(x, y, veloc)
-        acts, dists = act_dist(None, src, dst)
+        acts, dists = act_dist(None, src, dst) # TODO: (Try swapping src & dst, so that we see where a set point can go. In an ideal model, dists are parabolas, and actions point away from the point.)
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
@@ -252,15 +256,14 @@ def replay(reached_vs_timeout):
         i = random.randint(0, L-2)
         j = random.randint(i+1, L-1)
         a,b = replay_buffer[i], replay_buffer[j]
-        sa, sg = a.state, b.as_goal
-        aag, dag = act_dist(None, sa, sg, a.noise)
+        aag, dag = act_dist(None, a.state, b.as_goal, a.noise)
+        Dag = act_dist(a.action, a.state, b.as_goal)[1]
 
         # Learn faraway distances to goal-states, using timestamp-differences.
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
             mult = (dist_to_steps(d.detach()) - D + 1).clamp(.3,3) # (…A non-0 lower bound is required for learning, but having that biases the algo… May want to instead construct a sequence of levels, each more min-dist than the last…)
             return (mult * (d - steps_to_dist(D)).square()).sum()
-        Dag = act_dist(a.action, sa, sg)[1]
         dist_loss = dist_loss + dstl(dag, j-i) # Global-min dist.
         dist_loss = dist_loss + dstl(Dag, j-i) # Local-min dist.
         #   (If commenting this out to learn actions, actions at least don't collapse, mostly.)
@@ -268,22 +271,29 @@ def replay(reached_vs_timeout):
         #   (Without self-imitation: actions first collapse, then un-collapse, then collapse; dists remain incoherent.)
         #   (Without DDPG: actions at least don't collapse, mostly.)
 
-        # TODO: …Should we make the unroll (& DDPG, & gating action_loss) use a momentum-copy of the learned `dist`?…
+        # TODO: …Should we make the unroll (& DDPG, & gating action_loss) use a momentum-copy of the learned `dist` (via giving `nn=dist_slow` to `act_dist`)?…
         #   (Real DDPG does that, after all.)
+        #   TODO: Run.
+
+        # TODO: …Maybe, re-introduce triplets, not for dist-learning, but as the simplest primitive for combining subtasks?… (…Would need to learn everything with non-goal destinations too…)
 
         # TODO: …Do we need to construct a ladder of distances after all?…
+        #   (For triplets too: next-level action only minimizes prev-level dists through midpoints.)
 
         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
-        Dag = Dag.clamp(None, j-i)
+        with torch.no_grad():
+            dag = act_dist(    None, a.state, b.as_goal, nn=dist_slow)[1]
+            Dag = act_dist(a.action, a.state, b.as_goal, nn=dist_slow)[1].clamp(None, j-i)
         action_loss = action_loss + (aag - torch.where(dag < Dag, aag, a.action)).square().sum()
 
         # DDPG: a learned loss for globally-min actions.
         for p in dist.parameters(): p.requires_grad_(False)
-        ddpg_loss = ddpg_loss + act_dist(aag, sa, sg)[1].sum()
+        ddpg_loss = ddpg_loss + act_dist(aag, a.state, b.as_goal, nn=dist_slow)[1].sum()
         for p in dist.parameters(): p.requires_grad_(True)
 
     (dist_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
+    dist_slow.update()
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
@@ -297,7 +307,7 @@ for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_size, noise_sz, device=device)
-        action2, _ = act_dist(no_act, full_state, goal, noise)
+        action2, _ = act_dist(no_act, full_state, goal, noise, nn=dist_slow)
         # if iter % 100 < 0: action2 = action*.1 + .9*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
         if iter % 100 < (70 - iter//1000): action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO:
         action = action2 # TODO:
