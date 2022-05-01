@@ -136,19 +136,18 @@ input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 8
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
-replays_per_unroll = 1
+replays_per_unroll = 4
 
 
 
 def net(ins, outs, hidden=embed_sz):
     return nn.Sequential(
-        # TODO: …Would the old ReLU configuration also work?
         SkipConnection(nn.Linear(ins, hidden)),
-        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, hidden)),
-        nn.LayerNorm(hidden), nn.Softsign(), nn.Linear(hidden, outs),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
+        nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
 dist = net(action_sz + input_sz + input_sz, action_sz + 1) # TODO: Maybe, this should also accept random noise sized `noise_sz`, so that it can generate stochastic policies, and it isn't stuck just moving in one direction? (And the replay buffer should remember that noise for preserving ground-acts, and the noise should be the same for preds & targets everywhere.)
 #   (0|action, src, dst) → (min_action, min_dist)
@@ -292,7 +291,7 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         action2, _ = act_dist(no_act, full_state, goal)
         # if iter % 100 < 0: action2 = action*.1 + .9*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
-        if iter % 100 < 60: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO:
+        if iter % 100 < 70: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO:
         action = action2 # TODO:
 
         replay_buffer.append(ReplaySample(
