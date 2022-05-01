@@ -66,7 +66,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     # force_center = torch.ones(posit.shape[0], 2, device=device)/2
     # force_len = (posit - force_center).square() + 1e-5
     # force = 3e-5 / force_len
-    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor? …Somehow we did; what if we enable it instead, with no other changes? …The arrows look kinda correct?… Though reachability isn't the greatest. Still: progress, I guess?…
+    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor?
     veloc = (veloc + accel) * .99
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
@@ -74,11 +74,11 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplaySample:
-    __slots__ = ('state', 'action', 'as_goal', 'noise')
-    def __init__(self, state, action, as_goal, noise):
-        self.state, self.action, self.as_goal, self.noise = state, action, as_goal, noise
+    __slots__ = ('time', 'state', 'action', 'as_goal', 'noise')
+    def __init__(self, time, state, action, as_goal, noise):
+        self.time, self.state, self.action, self.as_goal, self.noise = time, state, action, as_goal, noise
 class ReplayBuffer:
-    """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`, `rb.sample_best()`."""
+    """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`."""
     def __init__(self, max_len=1024):
         self.head, self.max_len = 0, max_len
         self.buffer = []
@@ -104,20 +104,6 @@ class ReplayBuffer:
         return self.buffer[(self.head + index) % len(self)]
     def __iter__(self):
         for i in range(len(self)): yield self[i]
-    def sample_best(self, samples=16, combine=lambda a,b: a.combine(b)):
-        """A primitive algorithm for sampling likely-best data.
-
-        For picking at-unroll-time goals.
-
-        Args:
-        - `samples=16`: how many samples to choose among. We don't have a precomputed data structure.
-        - `combine = lambda a,b: a.combine(b)`: the actual chooser."""
-        N, result = len(self), None
-        for _ in range(samples):
-            sample = self[random.randrange(N)]
-            result = sample if result is None else combine(result, sample)
-            # (This creates an O(N) chain of computations, though O(log(N)) is possible.)
-        return result
 
 
 
@@ -163,7 +149,7 @@ dist = net(action_sz + input_sz + input_sz + noise_sz, action_sz + 1)
 #     - DDPG: generate an action from 0 and estimate it.
 #     - All losses are multiplied by how much the prediction-target improves/lessens the dist.
 
-dist_slow = MomentumCopy(dist, .99) # TODO: Update this on optimizer steps, and use it for the unroll & for DDPG & dist-gating…
+dist_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
 
 optim = torch.optim.Adam([*dist.parameters()], lr=lr)
 
@@ -207,7 +193,7 @@ def pos_histogram(plt, label):
         y = y.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = cat(x, y, veloc)
-        acts, dists = act_dist(None, src, dst) # TODO: (Try swapping src & dst, so that we see where a set point can go. In an ideal model, dists are parabolas, and actions point away from the point.)
+        acts, dists = act_dist(None, src, dst)
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
@@ -233,8 +219,7 @@ def maybe_reset_goal(input):
     Returns a tuple of how many goals were reached and how many goals have timed out."""
     global goal, steps_to_goal
     with torch.no_grad():
-        # dst = replay_buffer.sample_best().state # Not ever choosing `.as_goal` for simplicity.
-        dst = as_goal(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating.
+        dst = as_goal(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
         old_dist = (as_goal(input) - goal).abs().sum(-1, keepdim=True)
         new_dist = act_dist(None, input, dst)[1]
         reached, out_of_time = old_dist < .01, steps_to_goal < 0
@@ -266,19 +251,11 @@ def replay(reached_vs_timeout):
             return (mult * (d - steps_to_dist(D)).square()).sum()
         dist_loss = dist_loss + dstl(dag, j-i) # Global-min dist.
         dist_loss = dist_loss + dstl(Dag, j-i) # Local-min dist.
-        #   (If commenting this out to learn actions, actions at least don't collapse, mostly.)
-        #   (If commenting actions out to learn dist, actions are more straight but at least don't collapse. And, dist-loss actually manages to become very low, possibly because it's all mostly-straight-line.)
-        #   (Without self-imitation: actions first collapse, then un-collapse, then collapse; dists remain incoherent.)
-        #   (Without DDPG: actions at least don't collapse, mostly.)
-
-        # TODO: …Should we make the unroll (& DDPG, & gating action_loss) use a momentum-copy of the learned `dist` (via giving `nn=dist_slow` to `act_dist`)?…
-        #   (Real DDPG does that, after all.)
-        #   TODO: Run.
-
-        # TODO: …Maybe, re-introduce triplets, not for dist-learning, but as the simplest primitive for combining subtasks?… (…Would need to learn everything with non-goal destinations too…)
 
         # TODO: …Do we need to construct a ladder of distances after all?…
-        #   (For triplets too: next-level action only minimizes prev-level dists through midpoints.)
+
+        # TODO: …Maybe, re-introduce triplets, not for dist-learning, but as the simplest primitive for combining subtasks?… (…Would need to learn everything with non-goal destinations too…)
+        #   (Dist-ladder is for triplets too: next-level action only minimizes prev-level dists through midpoints.)
 
         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
         with torch.no_grad():
@@ -287,9 +264,7 @@ def replay(reached_vs_timeout):
         action_loss = action_loss + (aag - torch.where(dag < Dag, aag, a.action)).square().sum()
 
         # DDPG: a learned loss for globally-min actions.
-        for p in dist.parameters(): p.requires_grad_(False)
         ddpg_loss = ddpg_loss + act_dist(aag, a.state, b.as_goal, nn=dist_slow)[1].sum()
-        for p in dist.parameters(): p.requires_grad_(True)
 
     (dist_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -307,12 +282,15 @@ for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_size, noise_sz, device=device)
-        action2, _ = act_dist(no_act, full_state, goal, noise, nn=dist_slow)
-        # if iter % 100 < 0: action2 = action*.1 + .9*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
-        if iter % 100 < (70 - iter//1000): action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO:
-        action = action2 # TODO:
+        action, _ = act_dist(no_act, full_state, goal, noise, nn=dist_slow)
+        # if iter % 100 < 50: action = torch.rand(batch_size, action_sz, device=device)*2-1 # TODO:
+        if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
+
+        # TODO: …How to compute (or approximate) (expectation of) distance misprediction, so that when we sample new goals, we can maximize the regret: store whenever real dist is lower/better than predicted dist?…
+        #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
 
         replay_buffer.append(ReplaySample(
+            iter,
             full_state,
             action,
             as_goal(full_state),
@@ -321,13 +299,10 @@ for iter in range(500000):
         ))
 
         state, hidden_state = env_step(state, hidden_state, action)
-        # if random.randint(1,1000)==1: state, hidden_state = env_init(batch_size=batch_size) # TODO: Resetting doesn't help…
     replay(maybe_reset_goal(full_state))
 finish()
 
 # TODO: Run & fix.
-#   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out? Why has every attempt at self-imitation-learning failed?
-#   TODO: Why isn't distance learned well?
 
 
 
@@ -335,16 +310,13 @@ finish()
 
 
 
-# …Could also, instead of maximizing uncertainty (which is 2× slower than pure dist estimation due to ensembling), maximize regret (real dist is lower/better than predicted dist, computed at unroll-time from encountered dst-embeddings) by goals.
-#   (Probably a good idea anyway, since uncertainty-estimation is so slow.)
-#   TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
-#     (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
-# …Could also, similarly to MuZero, handle input-embeddings explicitly: learn either to just predict next-emb given prev-emb and action, or the distance between 2 embeddings (which is technically already done, so, might technically be unneeded).
+# …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist).
 
 
 
 # …Sure, we *can* sample i→j→k triplets, and do all the symbolic-search-tricks of a<b&b<c⇒a<c (pred-targets being the min-dist of everything predicted (dist from `act_dist`) & replayed (index-diff), or making j→k use a real/predicted i→j action, etc). But, just faraway-sampling of i→j seems to be enough in this cont-env.
+#   …Except we don't actually converge without a helping hand.
 
 # …Maybe we can actually come up with a framework for sampling any-size faraway trajectory samples, where the further samples use the min-dist subtask of the whole trajectory (for subtask-combining, have to consider *learned* dists & actions), solving a dynamic-programming problem (a bit like learning-time search)… Would it be quadratic-time, or linear-time? What would the problem look like, exactly? We have src & dst, so I'm pretty sure it would be quadratic…
 #   Each intermediate dist/action should be replaced by its pred-target for those after it. This would create a linear-time greedy algorithm. But this wouldn't consider combinations, huh…
@@ -352,14 +324,17 @@ finish()
 #     min[src, src, dst] = dist(src, dst)
 #     min[src, src+1, dst] = dist(src, dst)
 #     min[src, mid+1, dst] = min(min[src, mid, dst], min[src, mid, mid] + min[mid, dst, dst])
-#       (Or is `dist(src, dst)` if `src==mid`.)
 #     min[src, dst, dst] is the sought-after answer.
-#   …So is it possible to simplify these, and *not* go cubic?
-#   If 3:
-#     min[0,2,2] = ?
-#     min[0,0,1] = min[0,1,1] = 0→1, min[0,0,2] = min[0,1,2] = 0→2, min[1,1,2] = min[1,2,2] = 1→2
-#     min[0,2,2] = min(min[0,1,2], min[0,1,1] + min[1,2,2]) = min(0→2, 0→1 + 1→2)
-#       Which is correct.
+#   …So is it possible to simplify these, and *not* go cubic? …Don't really think so…
+#     …But we *can* just shuffle midpoints randomly, and only do one step of that minimization.
+#       Okay, this all suddenly sounds like a very good idea: the ability to make `replays_per_unroll` not just a slowdown-hyperparam but easily make it do good stuff for us.
+#       (Can probably only do this dist-min for actions; dist will probably catch up by seeing what the actions can do, or will correct them if wrongly low.)
+#   …Can we write this down on a sampled batch, which is not necessarily in any order, but for which we do have timestamps (and so can just discard prediction targets for i>=j)? (Like [lifted structural loss](https://lilianweng.github.io/posts/2021-05-31-contrastive/).)
+#     TODO: Write dist-minimization on a minibatch down.
+
+
+
+# (…Might even wrap this in a `model/` framework that manages the replay, with arbitrarily-many possibly-async goal states and everything?…)
 
 
 
@@ -388,28 +363,12 @@ finish()
 
 
 
-# …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement — though not exactly to full-RNN-state invariance/prediction…
-#   …With `embed` dist learning, we're *kinda* doing something similar, making close-in-time images similar and far-in-time images distinct. Though whether this could possibly succeed in learning reprs on MNIST or something is not clear.
-
-# …We only try to improve the reachability of one goal at a time, which is synonymous with "non-scalable". Is there no way to construct representations of exponentially-many goals, and update many goals at once… Can embedding-prediction make similar goals the same and distinct goals different?…
-#   We can `embed` then measure distances in embedding-space rather than with a NN. Benefits are unclear.
-
-# …Also, similarly to Random Network Distillation, the hypothetical teacher (`goal`-proposer) could maximize misprediction (available even at unroll-time): of the distance (should be -1), or with joint-embedding, of the next-state embedding…
-#   This is pretty much what AdaGoal is about.
+# …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement (inputs, in any envs). With `embed` dist learning, we're *kinda* doing something similar, making close-in-time images similar and far-in-time images distinct. Though whether this could possibly succeed in learning reprs on CIFAR10 must be tested.
 
 
 
 
 
-# …We can actually learn to achieve not just states, but arbitrary funcs of states (such as (pos,vel)→pos or state→return), by simply adding transitions from any states to those funcs-of-states to the replay buffer. (Very good: we can actually erase info, don't have to specify everything exactly.)
-#   (…Those funcs can even be human input.)
-#   …So is some goal-framework shaping up, like a func or class that gets called at every step and returns the new goal-state and whether the old one was reached, internally probabilistically keeping track of some recent most-error-on-dist states?…
-
-# …Possibly, log [NAS-WithOut-Training](https://arxiv.org/pdf/2006.04647.pdf) score, where in a batch and in a NN layer, we compute per-example binary codes of ReLU activations (1 when input>0, 0 when input<0), then compute the sum of pairwise abs-differences?
-
-# Usable for GANs, and for synth grad (least-magnitude): …DDPG's trick of "take the min of 2 nets" is really quite clever, since ReLU-nets are piecewise linear functions, so in non-trained regions, the linear pieces would be getting further and further away from data.
-
-# …Simple goal-dependent sparsity (for avoiding catastrophic forgetting) on Transformer cells could be implemented as: (maybe have a neural net from goal to a mask, and) turn its 0-|0+ into 0|1, and multiply a cell's output by that (AKA drop some). If we pass-through the gradient from output's multiplication, then we can even start at all-1 and sparsify exactly as the tasks require; if we randomly turn on 0s, then we can un-sparsify too.
 
 # Best control for `sn` would allow *arbitrary* human data (if limited, then `sn` is hardly an AI-based human-machine interface enabler) to control the goal (if just actions, then human capabilities won't get multiplied, `sn` will just be tiring and weird at best). Max sensitivity to an outcome, but min sensitivity to possible-outcomes: maximize [mutual info](https://en.wikipedia.org/wiki/Mutual_information), AKA channel capacity. (Or [pointwise MI](https://en.wikipedia.org/wiki/Pointwise_mutual_information): `log(p(y|x) / p(y))`.)
 #   Without further grounding, we may only need an SSL method, to make the compressed-history the goal: the simple `leads_to(ev(prev))=sg ev(next)` BYOL-on-RNNs, or maybe even our embed-space dist-learning. Needs further research.
@@ -417,7 +376,3 @@ finish()
 #     (I guess for now, we should refine intent-amplification, and worry about plugging in intent later.)
 #     (If we want a separate channel, then damn, I guess those `import env` one-liners aren't gonna fly with `sn` anymore.)
 #   …However: making the agent learn to 'control' human data, and simply cutting out chunks of how-humans-want-to-be-controlled via reward, *may* create much richer experiences, without the tedious need to make the agent explore & acquire skills manually.
-
-
-
-# …Gotta get back, back to the past: in `test.py`, implement ML pathfinding, and try to not just explore one graph but *learn* to explore `minienv`'s graphs. (I don't think any RL exploration method can *learn* to explore, only explore. So if it works, it's cool.)
