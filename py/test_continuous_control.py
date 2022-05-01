@@ -136,8 +136,8 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-dist = net(action_sz + input_sz + input_sz + noise_sz, action_sz + 1)
-#   (0|action, src, dst) → (min_action, min_dist)
+dist = net(action_sz + input_sz + input_sz + noise_sz + 1, action_sz + 1) # TODO: Remove the noise, since it doesn't help.
+#   (0|action, src, dst, lvl) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 #   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
 #   Loss-wise:
@@ -155,13 +155,14 @@ optim = torch.optim.Adam([*dist.parameters()], lr=lr)
 
 
 
-def act_dist(action, src, dst, noise=None, nn=dist):
+def act_dist(action, src, dst, noise=None, nn=dist, lvl=1.):
     """Returns a tuple `(action, dist)`, having refined the action (possibly `None`) & source & destination."""
     if action is None:
         action = torch.zeros(*src.shape[:-1], action_sz, device=device)
     if noise is None:
         noise = torch.randn(*src.shape[:-1], noise_sz, device=device)
-    ad = nn(cat(action, 2*src-1, 2*dst-1, noise))
+    lvl = torch.full([*src.shape[:-1], 1], lvl, device=device)
+    ad = nn(cat(action, 2*src-1, 2*dst-1, noise, lvl))
     return ad[..., :-1], 2**ad[..., -1:]
 def as_goal(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
 # def dist_to_steps(dist): return 2 ** (dist-1)
@@ -240,21 +241,24 @@ def replay(reached_vs_timeout):
         if i>j: i,j,a,b = j,i,b,a
         if i==j: return
         aag, dag = act_dist(None, a.state, b.as_goal, a.noise)
-        Dag = act_dist(a.action, a.state, b.as_goal)[1]
 
         # Learn faraway distances to goal-states, using timestamp-differences.
         def dstl(d,D):
             """Always nonzero, but fades if dist is too high; prefers lower dists."""
             mult = (dist_to_steps(d.detach()) - D + 1).clamp(.3,3) # (…A non-0 lower bound is required for learning, but having that biases the algo… May want to instead construct a sequence of levels, each more min-dist than the last…)
             return (mult * (d - steps_to_dist(D)).square()).sum()
-        dist_loss = dist_loss + dstl(dag, j-i) # Global-min dist.
-        dist_loss = dist_loss + dstl(Dag, j-i) # Local-min dist.
-
-        # TODO: …Do we need to construct a ladder of distances after all?…
-        #   (`dist` and `act_dist` would have an integer for the distance-level, right? And here, for each level, each next dist-level weighs by prev-level's (or itself for 1st level) dist in `dstl`; action_loss uses the final level.)
+        dag1 = act_dist(    None, a.state, b.as_goal, lvl=-1)[1]
+        Dag1 = act_dist(a.action, a.state, b.as_goal, lvl=-1)[1]
+        dag2 = act_dist(    None, a.state, b.as_goal)[1] # lvl=1
+        Dag2 = act_dist(a.action, a.state, b.as_goal)[1] # lvl=1
+        dist_loss = dist_loss + dstl(dag1, j-i) # Global-min dist.
+        dist_loss = dist_loss + dstl(Dag1, j-i) # Local-min dist.
+        dist_loss = dist_loss + dstl(dag2, dag1.detach()) # Global-min dist.
+        dist_loss = dist_loss + dstl(Dag2, Dag1.detach()) # Local-min dist.
+        # (We have 2 levels, where each filters the prediction-targets to be lower.)
+        #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies.)
 
         # TODO: …Maybe, re-introduce triplets, not for dist-learning, but as the simplest primitive for combining subtasks?… (…Would need to learn everything with non-goal destinations too…)
-        #   (Dist-ladder is for triplets too: next-level action only minimizes prev-level dists through midpoints.)
 
         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
         with torch.no_grad():
@@ -283,7 +287,7 @@ for iter in range(500000):
         noise = torch.randn(batch_size, noise_sz, device=device)
         action, _ = act_dist(no_act, full_state, goal, noise, nn=dist_slow)
         # if iter % 100 < 50: action = torch.rand(batch_size, action_sz, device=device)*2-1 # TODO:
-        if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
+        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
 
         # TODO: …How to compute (or approximate) (expectation of) distance misprediction, so that when we sample new goals, we can maximize the regret: store whenever real dist is lower/better than predicted dist?…
         #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
@@ -311,6 +315,7 @@ finish()
 
 
 # …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist; but in [CLIP](https://arxiv.org/abs/2103.00020), a contrastive objective is 4× more data-efficient than a predictive objective).
+#   (…If src-emb is action-dependent, then we can make single-step embeddings *exactly* equal, solving our "but dist-learning isn't *really* a superset of contrastive learning" conundrum… But to actually imagine trajectories, need `(src_emb, act) → dst_emb`, which is extra…)
 
 
 
