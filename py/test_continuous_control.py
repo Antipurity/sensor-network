@@ -299,7 +299,7 @@ for iter in range(500000):
         noise = torch.randn(batch_size, noise_sz, device=device)
         action2, _ = act_dist(no_act, full_state, goal, noise)
         # if iter % 100 < 0: action2 = action*.1 + .9*(torch.rand(batch_size, action_sz, device=device)*2-1) # TODO:
-        # if iter % 100 < 70: action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO:
+        if iter % 100 < (70 - iter//1000): action2 = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO:
         action = action2 # TODO:
 
         replay_buffer.append(ReplaySample(
@@ -318,8 +318,6 @@ finish()
 # TODO: Run & fix.
 #   TODO: Why can't actions follow the gradient of distance? Why is action diversity getting washed out? Why has every attempt at self-imitation-learning failed?
 #   TODO: Why isn't distance learned well?
-#   (Maybe, try using the `dist` net?   …May actually be a good idea, allowing us to merge dist-net and action-net together (only 1 extra number for `act` to output). Abolish the explicit joint-embedding boundary, and gain in both efficiency and ease-of-use.)
-#     (Gotta be real: `embed`-dists look like an NN gone bad, whereas `dist`-dists look reasonable… Though it does become nicer with enough time. Maybe the `dist` net is the way to go after all?…)
 
 
 
@@ -332,11 +330,26 @@ finish()
 #   TODO: Maybe, also print the unroll-time dist-misprediction from the state at previous goal-setting to the present, since we know how many steps it's supposed to take? (Since the dist loss doesn't look like it improves at all, over 20k epochs.)
 #     (…Would have been so much simpler to implement with merged dist & act, practically automatic…)
 
-# …Could also, similarly to MuZero, handle input-embeddings explicitly: learn either to just predict next-emb given prev-emb and action, or the distance between 2 embeddings (which is technically already done, so, might technically be unneeded). 
+# …Could also, similarly to MuZero, handle input-embeddings explicitly: learn either to just predict next-emb given prev-emb and action, or the distance between 2 embeddings (which is technically already done, so, might technically be unneeded).
 
 
 
 # …Sure, we *can* sample i→j→k triplets, and do all the symbolic-search-tricks of a<b&b<c⇒a<c (pred-targets being the min-dist of everything predicted (dist from `act_dist`) & replayed (index-diff), or making j→k use a real/predicted i→j action, etc). But, just faraway-sampling of i→j seems to be enough in this cont-env.
+
+# …Maybe we can actually come up with a framework for sampling any-size faraway trajectory samples, where the further samples use the min-dist subtask of the whole trajectory (for subtask-combining, have to consider *learned* dists & actions), solving a dynamic-programming problem (a bit like learning-time search)… Would it be quadratic-time, or linear-time? What would the problem look like, exactly? We have src & dst, so I'm pretty sure it would be quadratic…
+#   Each intermediate dist/action should be replaced by its pred-target for those after it. This would create a linear-time greedy algorithm. But this wouldn't consider combinations, huh…
+#   min[src, mid, dst] — cubic? What are the min-equations?
+#     min[src, src, dst] = dist(src, dst)
+#     min[src, src+1, dst] = dist(src, dst)
+#     min[src, mid+1, dst] = min(min[src, mid, dst], min[src, mid, mid] + min[mid, dst, dst])
+#       (Or is `dist(src, dst)` if `src==mid`.)
+#     min[src, dst, dst] is the sought-after answer.
+#   …So is it possible to simplify these, and *not* go cubic?
+#   If 3:
+#     min[0,2,2] = ?
+#     min[0,0,1] = min[0,1,1] = 0→1, min[0,0,2] = min[0,1,2] = 0→2, min[1,1,2] = min[1,2,2] = 1→2
+#     min[0,2,2] = min(min[0,1,2], min[0,1,1] + min[1,2,2]) = min(0→2, 0→1 + 1→2)
+#       Which is correct.
 
 
 
