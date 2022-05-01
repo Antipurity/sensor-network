@@ -136,7 +136,7 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-dist = net(action_sz + input_sz + input_sz + noise_sz + 1, action_sz + 1) # TODO: Remove the noise, since it doesn't help.
+dist = net(action_sz + input_sz + input_sz + noise_sz + 1, action_sz + 1)
 #   (0|action, src, dst, lvl) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 #   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
