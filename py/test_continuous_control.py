@@ -161,11 +161,8 @@ def act_dist(action, src, dst, noise=None, nn=dist):
         action = torch.zeros(*src.shape[:-1], action_sz, device=device)
     if noise is None:
         noise = torch.randn(*src.shape[:-1], noise_sz, device=device)
-    ad = nn(cat(action, (((2*src-1))), (((2*dst-1))), noise)) # TODO:
+    ad = nn(cat(action, 2*src-1, 2*dst-1, noise))
     return ad[..., :-1], 2**ad[..., -1:]
-def fold(x):
-    """Increase sensitivity to 0…1 actions, doubling the size of the input."""
-    return cat(x, 1 - 2*x.abs())
 def as_goal(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
 # def dist_to_steps(dist): return 2 ** (dist-1)
 # def steps_to_dist(step): return 1 + step.log2()
@@ -238,9 +235,10 @@ def replay(reached_vs_timeout):
     dist_loss, action_loss, ddpg_loss = 0,0,0
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
         # Variables.
-        i = random.randint(0, L-2)
-        j = random.randint(i+1, L-1)
-        a,b = replay_buffer[i], replay_buffer[j]
+        a,b = replay_buffer[random.randint(0, L-1)], replay_buffer[random.randint(0, L-1)]
+        i,j = a.time, b.time
+        if i>j: i,j,a,b = j,i,b,a
+        if i==j: return
         aag, dag = act_dist(None, a.state, b.as_goal, a.noise)
         Dag = act_dist(a.action, a.state, b.as_goal)[1]
 
@@ -253,6 +251,7 @@ def replay(reached_vs_timeout):
         dist_loss = dist_loss + dstl(Dag, j-i) # Local-min dist.
 
         # TODO: …Do we need to construct a ladder of distances after all?…
+        #   (`dist` and `act_dist` would have an integer for the distance-level, right? And here, for each level, each next dist-level weighs by prev-level's (or itself for 1st level) dist in `dstl`; action_loss uses the final level.)
 
         # TODO: …Maybe, re-introduce triplets, not for dist-learning, but as the simplest primitive for combining subtasks?… (…Would need to learn everything with non-goal destinations too…)
         #   (Dist-ladder is for triplets too: next-level action only minimizes prev-level dists through midpoints.)
@@ -311,7 +310,7 @@ finish()
 
 
 
-# …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist).
+# …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist; but in [CLIP](https://arxiv.org/abs/2103.00020), a contrastive objective is 4× more data-efficient than a predictive objective).
 
 
 
@@ -329,8 +328,10 @@ finish()
 #     …But we *can* just shuffle midpoints randomly, and only do one step of that minimization.
 #       Okay, this all suddenly sounds like a very good idea: the ability to make `replays_per_unroll` not just a slowdown-hyperparam but easily make it do good stuff for us.
 #       (Can probably only do this dist-min for actions; dist will probably catch up by seeing what the actions can do, or will correct them if wrongly low.)
+#       (…This is pretty much learning-time step-skipping planning, isn't it?)
 #   …Can we write this down on a sampled batch, which is not necessarily in any order, but for which we do have timestamps (and so can just discard prediction targets for i>=j)? (Like [lifted structural loss](https://lilianweng.github.io/posts/2021-05-31-contrastive/).)
 #     TODO: Write dist-minimization on a minibatch down.
+#       (I mean, we basically need a matrix of predicted-distances (`dist_slow` computes it), and compute a matrix of predicted-actions, and refine it with itself by comparing each entry's dist with a sum of through-midpoint dist; the target is predicted-act (replay-acts may be for bottoming-out only) where midpoint gives lower pred-dist, else the replay-act if time-diff is less than pred-dist-diff else no-change. …Too indistinct to write down…)
 
 
 
