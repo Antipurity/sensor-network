@@ -315,28 +315,23 @@ finish()
 
 
 # …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist; but in [CLIP](https://arxiv.org/abs/2103.00020), a contrastive objective is 4× more data-efficient than a predictive objective).
-#   (…If src-emb is action-dependent, then we can make single-step embeddings *exactly* equal, solving our "but dist-learning isn't *really* a superset of contrastive learning" conundrum… But to actually imagine trajectories, need `(src_emb, act) → dst_emb`, which is extra…)
+#   (…If src-emb is action-dependent, then we can make single-step embeddings *exactly* equal, solving our "but dist-learning isn't *really* a superset of contrastive learning" conundrum… But to actually imagine trajectories, need `(src_emb, act) → dst_emb`, which is an explicit addon, like in MuZero…)
+#   (…With faraway-sample batches, this could bring big benefits: `dist(src,dst)` would need `O(N^2)` NN evaluations, but with embeddings, only `O(N)` embeds are needed to have a rich distance-predicting loss, extracting as much info from a trajectory as possible.)
 
 
 
-# …Sure, we *can* sample i→j→k triplets, and do all the symbolic-search-tricks of a<b&b<c⇒a<c (pred-targets being the min-dist of everything predicted (dist from `act_dist`) & replayed (index-diff), or making j→k use a real/predicted i→j action, etc). But, just faraway-sampling of i→j seems to be enough in this cont-env.
-#   …Except we don't actually converge without a helping hand.
 
-# …Maybe we can actually come up with a framework for sampling any-size faraway trajectory samples, where the further samples use the min-dist subtask of the whole trajectory (for subtask-combining, have to consider *learned* dists & actions), solving a dynamic-programming problem (a bit like learning-time search)… Would it be quadratic-time, or linear-time? What would the problem look like, exactly? We have src & dst, so I'm pretty sure it would be quadratic…
-#   Each intermediate dist/action should be replaced by its pred-target for those after it. This would create a linear-time greedy algorithm. But this wouldn't consider combinations, huh…
+# …Maybe we can actually come up with a framework for sampling any-size faraway trajectory samples, where the further samples use the min-dist subtask of the whole trajectory (for subtask-combining, have to consider *learned* dists & actions), solving a dynamic-programming problem (a bit like learning-time search)…
 #   min[src, mid, dst] — cubic? What are the min-equations?
-#     min[src, src, dst] = dist(src, dst)
-#     min[src, src+1, dst] = dist(src, dst)
+#     min[src, src, dst] = min[src, src+1, dst] = dist(src, dst)
 #     min[src, mid+1, dst] = min(min[src, mid, dst], min[src, mid, mid] + min[mid, dst, dst])
 #     min[src, dst, dst] is the sought-after answer.
-#   …So is it possible to simplify these, and *not* go cubic? …Don't really think so…
-#     …But we *can* just shuffle midpoints randomly, and only do one step of that minimization.
-#       Okay, this all suddenly sounds like a very good idea: the ability to make `replays_per_unroll` not just a slowdown-hyperparam but easily make it do good stuff for us.
-#       (Can probably only do this dist-min for actions; dist will probably catch up by seeing what the actions can do, or will correct them if wrongly low.)
-#       (…This is pretty much learning-time step-skipping planning, isn't it?)
+#   …Cubic may be too slow, but we *can* just shuffle midpoints randomly, and only do one step of that minimization.
+#     (…This is pretty much learning-time step-skipping planning. Very good.)
 #   …Can we write this down on a sampled batch, which is not necessarily in any order, but for which we do have timestamps (and so can just discard prediction targets for i>=j)? (Like [lifted structural loss](https://lilianweng.github.io/posts/2021-05-31-contrastive/).)
-#     TODO: Write dist-minimization on a minibatch down.
-#       (I mean, we basically need a matrix of predicted-distances (`dist_slow` computes it), and compute a matrix of predicted-actions, and refine it with itself by comparing each entry's dist with a sum of through-midpoint dist; the target is predicted-act (replay-acts may be for bottoming-out only) where midpoint gives lower pred-dist, else the replay-act if time-diff is less than pred-dist-diff else no-change. …Too indistinct to write down…)
+#   TODO: Write dist-minimization on a minibatch down.
+#     (I mean, we basically need a matrix of predicted-distances (`dist_slow` computes it), and compute a matrix of predicted-actions, and refine it with itself by comparing each entry's dist with a sum of through-midpoint dist; the target is predicted-act (replay-acts may be for bottoming-out only) where midpoint gives lower pred-dist, else the replay-act if time-diff is less than pred-dist-diff else no-change. …Too indistinct to write down…)
+#     TODO: What are the exact variables that we have? And that we compute?
 
 
 
