@@ -317,21 +317,28 @@ finish()
 # …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist; but in [CLIP](https://arxiv.org/abs/2103.00020), a contrastive objective is 4× more data-efficient than a predictive objective).
 #   (…If src-emb is action-dependent, then we can make single-step embeddings *exactly* equal, solving our "but dist-learning isn't *really* a superset of contrastive learning" conundrum… But to actually imagine trajectories, need `(src_emb, act) → dst_emb`, which is an explicit addon, like in MuZero…)
 #   (…With faraway-sample batches, this could bring big benefits: `dist(src,dst)` would need `O(N^2)` NN evaluations, but with embeddings, only `O(N)` embeds are needed to have a rich distance-predicting loss, extracting as much info from a trajectory as possible.)
+#   TODO: …So do we return-to-`embed` first, or do the pathfind-framework with `dist` first?
 
 
 
 
-# …Maybe we can actually come up with a framework for sampling any-size faraway trajectory samples, where the further samples use the min-dist subtask of the whole trajectory (for subtask-combining, have to consider *learned* dists & actions), solving a dynamic-programming problem (a bit like learning-time search)…
-#   min[src, mid, dst] — cubic? What are the min-equations?
+# TODO: Implement the framework for making full use of a sampled minibatch of faraway trajectory samples, for better self-imitation (with exponential-combining of learned-actions, grounded in replayed actions wherever needed), explicitly trying to go through midpoints wherever it's better:
+#   (…This is pretty much learning-time step-skipping planning. Very nice.)
+#     (Similar to [lifted structured embedding](https://arxiv.org/abs/1511.06452), but founded in pathfinding instead of better-loss considerations.)
+#     (Made possible by the ability to instantly know the RL-return (distance) between any 2 samples.)
+#   min[src, mid, dst] — cubic, computable with the Floyd—Warshall algorithm:
+#     min[src, dst, dst] is the sought-after answer.
 #     min[src, src, dst] = min[src, src+1, dst] = dist(src, dst)
 #     min[src, mid+1, dst] = min(min[src, mid, dst], min[src, mid, mid] + min[mid, dst, dst])
-#     min[src, dst, dst] is the sought-after answer.
-#   …Cubic may be too slow, but we *can* just shuffle midpoints randomly, and only do one step of that minimization.
-#     (…This is pretty much learning-time step-skipping planning. Very good.)
-#   …Can we write this down on a sampled batch, which is not necessarily in any order, but for which we do have timestamps (and so can just discard prediction targets for i>=j)? (Like [lifted structural loss](https://lilianweng.github.io/posts/2021-05-31-contrastive/).)
-#   TODO: Write dist-minimization on a minibatch down.
-#     (I mean, we basically need a matrix of predicted-distances (`dist_slow` computes it), and compute a matrix of predicted-actions, and refine it with itself by comparing each entry's dist with a sum of through-midpoint dist; the target is predicted-act (replay-acts may be for bottoming-out only) where midpoint gives lower pred-dist, else the replay-act if time-diff is less than pred-dist-diff else no-change. …Too indistinct to write down…)
-#     TODO: What are the exact variables that we have? And that we compute?
+#     Computable with the Floyd—Warshall algo: `d[i,j] = min(d[i,j], d[i,k] + d[k,j])`, for each k from 1 to n-1. In PyTorch:
+#       def floyd(d,a):
+#         # Finds all-to-all shortest distances & actions.
+#         d,a # Distances and actions, N×N×1 & N×N×k. Probably, i-j & replayed-acts when i<j and i-j<dist(A→B), or dist(A→B) & A→B if our (last-level, `dist_slow`) estimation is better. (The wrong-way-around sample pairs could then still be useful for refinement.)
+#         for k in range(d.shape[0]-2):
+#           d_through_midpoint = d[:, k+1:k+2, :] + d[k+1:k+2, :, :]
+#           cond = d < d_through_midpoint
+#           d = torch.where(cond, d, d_through_midpoint)
+#           a = torch.where(cond, a, a[:, k+1:k+2, :])
 
 
 
