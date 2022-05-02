@@ -172,6 +172,43 @@ def steps_to_dist(step): return step
 
 
 
+def floyd(d, a = None):
+    # TODO: Use `floyd` for the loss.
+    #   TODO: Make the loss learn `.state` destinations and not just `.as_goal` again.
+    #   TODO: No longer care about the exact order of i&j. Instead:
+    #     TODO: Sample `replays_per_unroll` samples;
+    #     TODO: For all dist-levels:
+    #       TODO: Compute ALL pairwise distance predictions (& action preds, if the last level);
+    #       TODO: Replace them with `i-j, A.action` whenever `i<j and i-j<dist(A,B)` (since we know the `.time`s `i` and `j`);
+    #       TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
+    #     TODO: For the last dist-level, compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
+    """
+    Floyd—Warshall algorithm: computes all-to-all shortest distances & actions. Given a one-step adjacency matrix, gives its (differentiable) transitive closure.
+
+    Computes `d[i,j] = min(d[i,j], d[i,k] + d[k,j])` until settled. Needs `O(N**3)` sequential time; `O(N)` GPU commands, for each considered midpoint.
+
+    Inputs:
+    - `d`: distances to minimize, shaped `(..., N, N, 1)`.
+    - `a = None`: first-step actions, shaped `(..., N, N, ?)`.
+
+    Outputs: `(d,a)`
+
+    With this, self-imitation learning can make full use of a sampled minibatch, both using replayed actions and reusing solved subtasks for learning-time search. For this, when considering `i`-time and `j`-time samples `A` & `B`, `d,a` should be: if `i<j and i-j<dist(A,B)`, then `i-j, A→B`, else `dist(A,B), act(A,B)`.
+
+    (Similar to [lifted structured embedding](https://arxiv.org/abs/1511.06452), but founded in pathfinding instead of better-loss considerations.) (Made possible by the ability to instantly know the RL-return (distance) between any 2 samples.)
+    """
+    assert d.shape[-1] == 1
+    assert d.shape[-3] == d.shape[-2]
+    if a is not None: assert d.shape[-2] == a.shape[-3] == a.shape[-2]
+    for k in range(d.shape[0]):
+        d_through_midpoint = d[..., :, k:k+1, :] + d[..., k:k+1, :, :]
+        cond = d < d_through_midpoint
+        d = torch.where(cond, d, d_through_midpoint)
+        if a is not None: a = torch.where(cond, a, a[..., :, k:k+1, :])
+    return d,a
+
+
+
 # For debugging.
 def pos_histogram(plt, label):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram, in addition to arrows indicating which action to take to get from anywhere to a random position."""
@@ -316,29 +353,9 @@ finish()
 
 # …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist; but in [CLIP](https://arxiv.org/abs/2103.00020), a contrastive objective is 4× more data-efficient than a predictive objective).
 #   (…If src-emb is action-dependent, then we can make single-step embeddings *exactly* equal, solving our "but dist-learning isn't *really* a superset of contrastive learning" conundrum… But to actually imagine trajectories, need `(src_emb, act) → dst_emb`, which is an explicit addon, like in MuZero…)
+#     (…Not just a gimmick: it would help with both stochasticity and actions that don't change the state.)
 #   (…With faraway-sample batches, this could bring big benefits: `dist(src,dst)` would need `O(N^2)` NN evaluations, but with embeddings, only `O(N)` embeds are needed to have a rich distance-predicting loss, extracting as much info from a trajectory as possible.)
 #   TODO: …So do we return-to-`embed` first, or do the pathfind-framework with `dist` first?
-
-
-
-
-# TODO: Implement the framework for making full use of a sampled minibatch of faraway trajectory samples, for better self-imitation (with exponential-combining of learned-actions, grounded in replayed actions wherever needed), explicitly trying to go through midpoints wherever it's better:
-#   (…This is pretty much learning-time step-skipping planning. Very nice.)
-#     (Similar to [lifted structured embedding](https://arxiv.org/abs/1511.06452), but founded in pathfinding instead of better-loss considerations.)
-#     (Made possible by the ability to instantly know the RL-return (distance) between any 2 samples.)
-#   min[src, mid, dst] — cubic, computable with the Floyd—Warshall algorithm:
-#     min[src, dst, dst] is the sought-after answer.
-#     min[src, src, dst] = min[src, src+1, dst] = dist(src, dst)
-#     min[src, mid+1, dst] = min(min[src, mid, dst], min[src, mid, mid] + min[mid, dst, dst])
-#     Computable with the Floyd—Warshall algo: `d[i,j] = min(d[i,j], d[i,k] + d[k,j])`, for each k from 1 to n-1. In PyTorch:
-#       def floyd(d,a):
-#         # Finds all-to-all shortest distances & actions.
-#         d,a # Distances and actions, N×N×1 & N×N×k. Probably, i-j & replayed-acts when i<j and i-j<dist(A→B), or dist(A→B) & A→B if our (last-level, `dist_slow`) estimation is better. (The wrong-way-around sample pairs could then still be useful for refinement.)
-#         for k in range(d.shape[0]-2):
-#           d_through_midpoint = d[:, k+1:k+2, :] + d[k+1:k+2, :, :]
-#           cond = d < d_through_midpoint
-#           d = torch.where(cond, d, d_through_midpoint)
-#           a = torch.where(cond, a, a[:, k+1:k+2, :])
 
 
 
