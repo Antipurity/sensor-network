@@ -173,15 +173,6 @@ def steps_to_dist(step): return step
 
 
 def floyd(d, a = None):
-    # TODO: Use `floyd` for the loss.
-    #   TODO: Make the loss learn `.state` destinations and not just `.as_goal` again.
-    #   TODO: No longer care about the exact order of i&j. Instead:
-    #     TODO: Sample `replays_per_unroll` samples;
-    #     TODO: For all dist-levels:
-    #       TODO: Compute ALL pairwise distance predictions (& action preds, if the last level);
-    #       TODO: Replace them with `i-j, A.action` whenever `i<j and i-j<dist(A,B)` (since we know the `.time`s `i` and `j`);
-    #       TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
-    #     TODO: For the last dist-level, compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
     """
     Floyd—Warshall algorithm: computes all-to-all shortest distances & actions. Given a one-step adjacency matrix, gives its (differentiable) transitive closure.
 
@@ -271,6 +262,18 @@ def replay(reached_vs_timeout):
     L = len(replay_buffer)
     if L < 2: return
     dist_loss, action_loss, ddpg_loss = 0,0,0
+    # TODO: Use `floyd` for the loss.
+    #   TODO: …No longer condition *anything* on the action; no longer have DDPG, for now.
+    #     (…Repeating the computation above with action-conditioning is quite expensive, isn't it; so wouldn't it have been better if we had a separate `(prev,act)→next` NN and used THAT for DDPG…)
+    #   TODO: Make the loss learn `.state` destinations and not just `.as_goal` again.
+    #   TODO: No longer care about the exact order of i&j. Instead:
+    #     TODO: Sample `replays_per_unroll` samples;
+    #     TODO: For all dist-levels:
+    #       TODO: Compute ALL pairwise distance predictions (& action preds, if the last level);
+    #       TODO: Replace them with `i-j, A.action` whenever `i<j and i-j<dist(A,B)` (since we know the `.time`s `i` and `j`);
+    #       TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
+    #     TODO: For the last dist-level, compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
+    #   TODO: …Action-dependent dists are learned how, exactly?
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
         # Variables.
         a,b = replay_buffer[random.randint(0, L-1)], replay_buffer[random.randint(0, L-1)]
@@ -295,8 +298,6 @@ def replay(reached_vs_timeout):
         # (We have 2 levels, where each filters the prediction-targets to be lower.)
         #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies.)
 
-        # TODO: …Maybe, re-introduce triplets, not for dist-learning, but as the simplest primitive for combining subtasks?… (…Would need to learn everything with non-goal destinations too…)
-
         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
         with torch.no_grad():
             dag = act_dist(    None, a.state, b.as_goal, nn=dist_slow)[1]
@@ -304,7 +305,7 @@ def replay(reached_vs_timeout):
         action_loss = action_loss + (aag - torch.where(dag < Dag, aag, a.action)).square().sum()
 
         # DDPG: a learned loss for globally-min actions.
-        ddpg_loss = ddpg_loss + act_dist(aag, a.state, b.as_goal, nn=dist_slow)[1].sum()
+        # ddpg_loss = ddpg_loss + act_dist(aag, a.state, b.as_goal, nn=dist_slow)[1].sum()
 
     (dist_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -354,8 +355,10 @@ finish()
 # …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist; but in [CLIP](https://arxiv.org/abs/2103.00020), a contrastive objective is 4× more data-efficient than a predictive objective).
 #   (…If src-emb is action-dependent, then we can make single-step embeddings *exactly* equal, solving our "but dist-learning isn't *really* a superset of contrastive learning" conundrum… But to actually imagine trajectories, need `(src_emb, act) → dst_emb`, which is an explicit addon, like in MuZero…)
 #     (…Not just a gimmick: it would help with both stochasticity and actions that don't change the state.)
+#     (…ALSO: this can be used for DDPG without learning a separate action-dependent dist sub-network like we do now with `dist`.)
 #   (…With faraway-sample batches, this could bring big benefits: `dist(src,dst)` would need `O(N^2)` NN evaluations, but with embeddings, only `O(N)` embeds are needed to have a rich distance-predicting loss, extracting as much info from a trajectory as possible.)
 #   TODO: …So do we return-to-`embed` first, or do the pathfind-framework with `dist` first?
+#     TODO: Definitely transition to embeddings, with next-action emb-prediction.
 
 
 
