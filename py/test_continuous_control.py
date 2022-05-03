@@ -277,17 +277,19 @@ def replay(reached_vs_timeout):
         srcs, dsts, noss = expand(states, 0), expand(states, 1), expand(noises, 0)
         lvl2 = (lvl / (dist_levels-1))*2-1 # -1…1
         a,d = act_dist(srcs, dsts, noss, lvl=lvl2)
+        a0, d0 = a, d
         # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
-        i, j = expand(times, 0), expand(times, 1)
-        cond = i < j & j-i < d
-        d = torch.where(cond, j-i, d)
-        a = torch.where(cond, expand(actions, 0), a)
-        if not last:
-            # TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
-            pass
-        else:
-            # TODO: For the last dist-level, also compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
-            pass
+        with torch.no_grad():
+            i, j = expand(times, 0), expand(times, 1)
+            cond = i < j & j-i < d
+            d = torch.where(cond, j-i, d)
+            if not last: # Use the minibatch fully, by actually computing shortest paths.
+                d,_ = floyd(d)
+            else: # (Actions imitate the last dist level.)
+                a = torch.where(cond, expand(actions, 0), a)
+                d,a = floyd(d,a)
+        dist_loss = dist_loss + (d0 - d.detach()).square().sum()
+        if last: action_loss = action_loss + (a0 - a.detach()).square().sum()
     # TODO: For each `dst.goals[i]`, add to dist/action losses: copy dists & actions from each `src` to each `dst`'s non-`None` goal. (Goal-spaces have less info than the full-space, and thus can't be used as midpoints for `floyd`.)
 
 
