@@ -74,6 +74,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplaySample:
+    """A snapshot of a trajectory's step. `goals` is a tuple, with the first element being the state and the rest being same-shape whatever; the NN would then learn to go to any goal when requested."""
     __slots__ = ('time', 'state', 'action', 'goals', 'noise')
     def __init__(self, time, state, action, goals, noise):
         self.time, self.state, self.action, self.goals, self.noise = time, state, action, goals, noise
@@ -268,29 +269,37 @@ def replay(reached_vs_timeout):
     noises = torch.stack([s.noise for s in samples], 0) # N × batch_sz × noise_sz
 
     dist_loss, action_loss = 0,0
-    def expand(x, is_dst):
-        """N×… to N×N×…."""
-        return x.unsqueeze(is_dst).expand(N, N, batch_sz, x.shape[-1])
+    def expand(x, src_or_dst):
+        """N×… to N×N×…. `src_or_dst` is 0|1, representing which `N` is broadcasted."""
+        return x.unsqueeze(src_or_dst).expand(N, N, batch_sz, x.shape[-1])
+    max_goals = max(len(s.goals) for s in samples)
     for lvl in range(dist_levels):
-        # Predict distances & actions, for all src→dst pairs.
-        last = lvl == dist_levels-1
-        srcs, dsts, noss = expand(states, 0), expand(states, 1), expand(noises, 0)
-        lvl2 = (lvl / (dist_levels-1))*2-1 # -1…1
-        a,d = act_dist(srcs, dsts, noss, lvl=lvl2)
-        a0, d0 = a, d
-        # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
-        with torch.no_grad():
-            i, j = expand(times, 0), expand(times, 1)
-            cond = i < j & j-i < d
-            d = torch.where(cond, j-i, d)
-            if not last: # Use the minibatch fully, by actually computing shortest paths.
-                d,_ = floyd(d)
-            else: # (Actions imitate the last dist level.)
-                a = torch.where(cond, expand(actions, 0), a)
-                d,a = floyd(d,a)
-        dist_loss = dist_loss + (d0 - d.detach()).square().sum()
-        if last: action_loss = action_loss + (a0 - a.detach()).square().sum()
-    # TODO: For each `dst.goals[i]`, add to dist/action losses: copy dists & actions from each `src` to each `dst`'s non-`None` goal. (Goal-spaces have less info than the full-space, and thus can't be used as midpoints for `floyd`.)
+        for g in range(max_goals):
+            # Predict distances & actions, for all src→dst pairs.
+            last = lvl == dist_levels-1
+            goals = torch.stack([s.goals[g] for s in samples], 0)
+            srcs, dsts, noss = expand(states, 0), expand(goals, 1), expand(noises, 0)
+            lvl2 = (lvl / (dist_levels-1))*2-1 # -1…1
+            a,d = act_dist(srcs, dsts, noss, lvl=lvl2)
+            d1, a1 = d, a # Initial predictions, to adjust via loss later.
+            # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
+            with torch.no_grad():
+                i, j = expand(times, 0), expand(times, 1)
+                cond = i < j & j-i < d
+                d = torch.where(cond, j-i, d)
+                if last: a = torch.where(cond, expand(actions, 0), a)
+                # Use the minibatch fully, by actually computing shortest paths.
+                if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
+                    if not last: d,_ = floyd(d)
+                    else: d,a = floyd(d,a)
+                else: # (Goals should take from full-state plans directly.)
+                    cond = d0 < d
+                    d = torch.where(cond, d0, d)
+                    if last: a = torch.where(cond, a0, a)
+            if g == 0: d0, a0 = d, a # Preserve state-info for goals.
+            dist_loss = dist_loss + (d1 - d.detach()).square().sum()
+            if last: action_loss = action_loss + (a1 - a.detach()).square().sum()
+    # TODO: Run & fix.
 
 
 
@@ -349,7 +358,7 @@ for iter in range(500000):
             torch.full((batch_sz, 1), iter, dtype=torch.float32),
             full_state,
             action,
-            (pos_only(full_state),),
+            (full_state, pos_only(full_state)),
             #   Want to go to places, not caring about final velocity.
             noise,
         ))
