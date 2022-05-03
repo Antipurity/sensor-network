@@ -74,9 +74,9 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplaySample:
-    __slots__ = ('time', 'state', 'action', 'as_goal', 'noise')
-    def __init__(self, time, state, action, as_goal, noise): # TODO: Maybe, for future-proofing, `as_goal` should be a proper tuple (possibly even including `state` for convenience), and the loss should actually iterate over all possible goal-states?
-        self.time, self.state, self.action, self.as_goal, self.noise = time, state, action, as_goal, noise
+    __slots__ = ('time', 'state', 'action', 'goals', 'noise')
+    def __init__(self, time, state, action, goals, noise):
+        self.time, self.state, self.action, self.goals, self.noise = time, state, action, goals, noise
 class ReplayBuffer:
     """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`."""
     def __init__(self, max_len=1024):
@@ -162,7 +162,7 @@ def act_dist(src, dst, noise=None, nn=dist, lvl=1.):
     lvl = torch.full([*src.shape[:-1], 1], lvl, device=device)
     ad = nn(cat(2*src-1, 2*dst-1, noise, lvl))
     return ad[..., :-1], 2**ad[..., -1:]
-def as_goal(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
+def pos_only(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
 # def dist_to_steps(dist): return 2 ** (dist-1)
 # def steps_to_dist(step): return 1 + step.log2()
 def dist_to_steps(dist): return dist # Log-space above seems to produce somewhat more accurate maps than this lin-space.
@@ -210,7 +210,7 @@ def pos_histogram(plt, label):
         # Display action-arrows everywhere.
         GS = 16 # grid size
         dst_pos = pos_histogram.dst_pos
-        dst = as_goal(dst_pos.expand(GS*GS, 2))
+        dst = pos_only(dst_pos.expand(GS*GS, 2))
         plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white', zorder=3)
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         x = x.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
@@ -243,8 +243,8 @@ def maybe_reset_goal(input):
     Returns a tuple of how many goals were reached and how many goals have timed out."""
     global goal, steps_to_goal
     with torch.no_grad():
-        dst = as_goal(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
-        old_dist = (as_goal(input) - goal).abs().sum(-1, keepdim=True)
+        dst = pos_only(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
+        old_dist = (pos_only(input) - goal).abs().sum(-1, keepdim=True)
         new_dist = act_dist(input, dst)[1]
         reached, out_of_time = old_dist < .01, steps_to_goal < 0
         change = reached | out_of_time
@@ -260,40 +260,39 @@ def replay(reached_vs_timeout):
     L = len(replay_buffer)
     if L < 2: return
     dist_loss, action_loss, ddpg_loss = 0,0,0
-    # TODO: Use `floyd` for the loss.
-    #   TODO: Make the loss learn `.state` destinations and not just `.as_goal` again.
-    #     …Better to iterate over all goal-possibilities, right?
-    #   TODO: No longer care about the exact order of i&j. Instead:
-    #     TODO: Sample `replays_per_unroll` samples;
-    #     TODO: For all dist-levels:
-    #       TODO: Compute ALL pairwise distance predictions (& action preds, if the last level);
-    #       TODO: Replace them with `i-j, A.action` whenever `i<j and i-j<dist(A,B)` (since we know the `.time`s `i` and `j`);
-    #       TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
-    #     TODO: For the last dist-level, compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
+    # TODO: No longer care about the exact order of i&j. Instead:
+    #   TODO: Sample `replays_per_unroll` samples;
+    #   TODO: For all dist-levels:
+    #     TODO: Compute ALL pairwise distance predictions (& action preds, if the last level);
+    #     TODO: Replace them with `i-j, A.action` whenever `i<j and i-j<dist(A,B)` (since we know the `.time`s `i` and `j`);
+    #     TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
+    #   TODO: For the last dist-level, compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
+    #   TODO: Have separate loss/es for each `dst.goals[i]`, which copies dists & actions from each `src` to each `dst`'s non-`None` goal. (Goal-spaces have less info than the full-space, and thus can't be used as midpoints for `floyd`.)
     for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
         # Variables.
         a,b = replay_buffer[random.randint(0, L-1)], replay_buffer[random.randint(0, L-1)]
-        i,j = a.time, b.time
-        if i>j: i,j,a,b = j,i,b,a
-        if i==j: return
-        aag, dag = act_dist(a.state, b.as_goal, a.noise)
+        for as_goal in b.goals:
+            i,j = a.time, b.time
+            if i>j: i,j,a,b = j,i,b,a
+            if i==j: return
+            aag, dag = act_dist(a.state, as_goal, a.noise)
 
-        # Learn faraway distances to goal-states, using timestamp-differences.
-        def dstl(d,D):
-            """Prediction that prefers lower-dists: always nonzero, but fades if dist is too high."""
-            mult = (dist_to_steps(d.detach()) - D + 1).clamp(.3,3)
-            return (mult * (d - steps_to_dist(D)).square()).sum()
-        dag1 = act_dist(a.state, b.as_goal, lvl=-1)[1]
-        dag2 = act_dist(a.state, b.as_goal)[1] # lvl=1
-        dist_loss = dist_loss + dstl(dag1, j-i)
-        dist_loss = dist_loss + dstl(dag2, dag1.detach())
-        # (We have 2 levels, where each filters the prediction-targets to be lower.)
-        #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies.)
+            # Learn faraway distances to goal-states, using timestamp-differences.
+            def dstl(d,D):
+                """Prediction that prefers lower-dists: always nonzero, but fades if dist is too high."""
+                mult = (dist_to_steps(d.detach()) - D + 1).clamp(.3,3)
+                return (mult * (d - steps_to_dist(D)).square()).sum()
+            dag1 = act_dist(a.state, as_goal, lvl=-1)[1]
+            dag2 = act_dist(a.state, as_goal)[1] # lvl=1
+            dist_loss = dist_loss + dstl(dag1, j-i)
+            dist_loss = dist_loss + dstl(dag2, dag1.detach())
+            # (We have 2 levels, where each filters the prediction-targets to be lower.)
+            #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies.)
 
-        # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
-        with torch.no_grad():
-            dag = act_dist(a.state, b.as_goal, a.noise, nn=dist_slow)[1]
-        action_loss = action_loss + (aag - torch.where(dag < j-i, aag, a.action)).square().sum()
+            # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
+            with torch.no_grad():
+                dag = act_dist(a.state, as_goal, a.noise, nn=dist_slow)[1]
+            action_loss = action_loss + (aag - torch.where(dag < j-i, aag, a.action)).square().sum()
 
     (dist_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -321,7 +320,7 @@ for iter in range(500000):
             iter,
             full_state,
             action,
-            as_goal(full_state),
+            (pos_only(full_state),),
             #   Want to go to places, not caring about final velocity.
             noise,
         ))
