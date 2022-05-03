@@ -125,8 +125,9 @@ lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
 replays_per_step = 4 # How many samples each unroll-step replays with loss. At least 2.
-dist_levels = 2 # Each dist-level filters the predicted distance target, to minimize it without bias at the end.
-#   (Each non-first level also performs a full `floyd` min-distance search (O(N**3)) for better prediction targets.)
+dist_levels = 2 # Each dist-level filters the predicted distance target to reduce it at each level.
+#   (So the more levels we have, the more robust our action-learning will be to non-optimal policies in the replay buffer.)
+#   (Each non-first level also performs a full `floyd` min-distance search (O(N**3)) for getting the best prediction targets.)
 
 
 
@@ -166,10 +167,6 @@ def act_dist(src, dst, noise=None, nn=dist, lvl=1.):
     ad = nn(cat(2*src-1, 2*dst-1, noise, lvl))
     return ad[..., :-1], 2**ad[..., -1:]
 def pos_only(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
-# def dist_to_steps(dist): return 2 ** (dist-1)
-# def steps_to_dist(step): return 1 + step.log2()
-def dist_to_steps(dist): return dist # Log-space above seems to produce somewhat more accurate maps than this lin-space.
-def steps_to_dist(step): return step
 
 
 
@@ -253,13 +250,15 @@ def maybe_reset_goal(input):
         change = reached | out_of_time
 
         goal = torch.where(change, dst, goal)
-        steps_to_goal = torch.where(change, dist_to_steps(new_dist) + 4, steps_to_goal - 1)
+        steps_to_goal = torch.where(change, new_dist + 4, steps_to_goal - 1)
     reached = 1 - (old_dist - .01).clamp(0,1) # Smoother.
     return reached.sum(), out_of_time.float().sum()
 def replay(reached_vs_timeout):
     """Replays samples from the buffer.
 
-    Picks samples at i<j, and refines min-distances (both global and action-dependent) and min-distance actions."""
+    Picks many faraway samples, computes all pairwise distances & actions, and makes the shortest paths on the minibatch's dense graph serve as prediction targets. (Search, to reuse solved subtasks.)
+
+    Also incorporates the buffer's actions where they're closer than predicted ([self-imitation](https://arxiv.org/abs/1806.05635)), and learns to reach non-full-state goals."""
     N = replays_per_step
     if len(replay_buffer) < N: return
     samples = random.choices(replay_buffer, k=N) # Python 3.6+
@@ -268,10 +267,15 @@ def replay(reached_vs_timeout):
     actions = torch.stack([s.action for s in samples], 0) # N × batch_sz × action_sz
     noises = torch.stack([s.noise for s in samples], 0) # N × batch_sz × noise_sz
 
+    # Learn distances & actions.
     dist_loss, action_loss = 0,0
     def expand(x, src_or_dst):
         """N×… to N×N×…. `src_or_dst` is 0|1, representing which `N` is broadcasted."""
         return x.unsqueeze(src_or_dst).expand(N, N, batch_sz, x.shape[-1])
+    def dstl(d,D):
+        """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
+        with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3,3)
+        return (mult * (d - D).square()).sum()
     max_goals = max(len(s.goals) for s in samples)
     for lvl in range(dist_levels):
         for g in range(max_goals):
@@ -279,11 +283,12 @@ def replay(reached_vs_timeout):
             last = lvl == dist_levels-1
             goals = torch.stack([s.goals[g] for s in samples], 0)
             srcs, dsts, noss = expand(states, 0), expand(goals, 1), expand(noises, 0)
-            lvl2 = (lvl / (dist_levels-1))*2-1 # -1…1
-            a,d = act_dist(srcs, dsts, noss, lvl=lvl2)
-            d1, a1 = d, a # Initial predictions, to adjust via loss later.
-            # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
+            lvl2 = (lvl / dist_levels)*2-1 # -1…1: prev level.
+            lvl3 = ((lvl+1) / dist_levels)*2-1 # -1…1: next level.
+            # Compute prediction targets.
             with torch.no_grad():
+                a,d = act_dist(srcs, dsts, noss, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
+                # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 i, j = expand(times, 0), expand(times, 1)
                 cond = i < j & j-i < d
                 d = torch.where(cond, j-i, d)
@@ -297,49 +302,19 @@ def replay(reached_vs_timeout):
                     d = torch.where(cond, d0, d)
                     if last: a = torch.where(cond, a0, a)
             if g == 0: d0, a0 = d, a # Preserve state-info for goals.
-            dist_loss = dist_loss + (d1 - d.detach()).square().sum()
-            if last: action_loss = action_loss + (a1 - a.detach()).square().sum()
+            a1, d1 = act_dist(srcs, dsts, noss, lvl=lvl3)
+            dist_loss = dist_loss + dstl(d1, d)
+            if last: action_loss = action_loss + (a1 - a).square().sum()
     # TODO: Run & fix.
 
-
-
-    # TODO: Adapt/remove the code below.
-    L = len(replay_buffer)
-    dist_loss, action_loss, ddpg_loss = 0,0,0
-    for _ in range(replays_per_step): # Look, concatenation and variable-management are hard.
-        # Variables.
-        a,b = replay_buffer[random.randint(0, L-1)], replay_buffer[random.randint(0, L-1)]
-        for as_goal in b.goals:
-            i,j = a.time, b.time
-            if i>j: i,j,a,b = j,i,b,a
-            if i==j: return
-            aag, dag = act_dist(a.state, as_goal, a.noise)
-
-            # Learn faraway distances to goal-states, using timestamp-differences.
-            def dstl(d,D):
-                """Prediction that prefers lower-dists: always nonzero, but fades if dist is too high."""
-                mult = (dist_to_steps(d.detach()) - D + 1).clamp(.3,3)
-                return (mult * (d - steps_to_dist(D)).square()).sum()
-            dag1 = act_dist(a.state, as_goal, lvl=-1)[1]
-            dag2 = act_dist(a.state, as_goal)[1] # lvl=1
-            dist_loss = dist_loss + dstl(dag1, j-i)
-            dist_loss = dist_loss + dstl(dag2, dag1.detach())
-            # (We have 2 levels, where each filters the prediction-targets to be lower.)
-            #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies.)
-
-            # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
-            with torch.no_grad():
-                dag = act_dist(a.state, as_goal, a.noise, nn=dist_slow)[1]
-            action_loss = action_loss + (aag - torch.where(dag < j-i, aag, a.action)).square().sum()
-
-    (dist_loss + action_loss + ddpg_loss).backward()
+    (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
     dist_slow.update()
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
-    log(2, False, dist_loss = to_np(dist_loss / batch_sz / replays_per_step), action_loss = to_np(action_loss / batch_sz / replays_per_step), ddpg_loss = to_np(ddpg_loss / batch_sz / replays_per_step))
+    log(2, False, dist_loss = to_np(dist_loss / batch_sz / replays_per_step), action_loss = to_np(action_loss / batch_sz / replays_per_step))
 
 
 
