@@ -23,9 +23,9 @@ import random
 
 
 
-def env_init(batch_size): # → state, hidden_state
+def env_init(batch_sz): # → state, hidden_state
     """Generate initial positions & velocities of the agent."""
-    return torch.rand(batch_size, 2, device=device), torch.zeros(batch_size, 2, device=device)
+    return torch.rand(batch_sz, 2, device=device), torch.zeros(batch_sz, 2, device=device)
 def env_step(posit, veloc, accel): # → state, hidden_state
     """`env_step(state, hidden_state, action)`
 
@@ -118,12 +118,14 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_size = 100
+batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 8
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
-replays_per_unroll = 4
+replays_per_step = 4 # How many samples each unroll-step replays with loss. At least 2.
+dist_levels = 2 # Each dist-level filters the predicted distance target, to minimize it without bias at the end.
+#   (Each non-first level also performs a full `floyd` min-distance search (O(N**3)) for better prediction targets.)
 
 
 
@@ -233,10 +235,10 @@ pos_histogram.dst_pos = torch.rand(1,2, device=device)
 
 
 # The main loop, which steps the environment and trains `step`.
-action = torch.randn(batch_size, action_sz, device=device)
-goal = torch.randn(batch_size, input_sz, device=device)
-steps_to_goal = torch.rand(batch_size, 1, device=device)
-state, hidden_state = env_init(batch_size=batch_size)
+action = torch.randn(batch_sz, action_sz, device=device)
+goal = torch.randn(batch_sz, input_sz, device=device)
+steps_to_goal = torch.rand(batch_sz, 1, device=device)
+state, hidden_state = env_init(batch_sz=batch_sz)
 def maybe_reset_goal(input):
     """Changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
 
@@ -257,18 +259,43 @@ def replay(reached_vs_timeout):
     """Replays samples from the buffer.
 
     Picks samples at i<j, and refines min-distances (both global and action-dependent) and min-distance actions."""
+    N = replays_per_step
+    if len(replay_buffer) < N: return
+    samples = random.choices(replay_buffer, k=N) # Python 3.6+
+    times = torch.stack([s.time for s in samples], 0) # N × batch_sz × 1
+    states = torch.stack([s.state for s in samples], 0) # N × batch_sz × input_sz
+    actions = torch.stack([s.action for s in samples], 0) # N × batch_sz × action_sz
+    noises = torch.stack([s.noise for s in samples], 0) # N × batch_sz × noise_sz
+
+    dist_loss, action_loss = 0,0
+    def expand(x, is_dst):
+        """N×… to N×N×…."""
+        return x.unsqueeze(is_dst).expand(N, N, batch_sz, x.shape[-1])
+    for lvl in range(dist_levels):
+        # Predict distances & actions, for all src→dst pairs.
+        last = lvl == dist_levels-1
+        srcs, dsts, noss = expand(states, 0), expand(states, 1), expand(noises, 0)
+        lvl2 = (lvl / (dist_levels-1))*2-1 # -1…1
+        a,d = act_dist(srcs, dsts, noss, lvl=lvl2)
+        # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
+        i, j = expand(times, 0), expand(times, 1)
+        cond = i < j & j-i < d
+        d = torch.where(cond, j-i, d)
+        a = torch.where(cond, expand(actions, 0), a)
+        if not last:
+            # TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
+            pass
+        else:
+            # TODO: For the last dist-level, also compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
+            pass
+    # TODO: For each `dst.goals[i]`, add to dist/action losses: copy dists & actions from each `src` to each `dst`'s non-`None` goal. (Goal-spaces have less info than the full-space, and thus can't be used as midpoints for `floyd`.)
+
+
+
+    # TODO: Adapt/remove the code below.
     L = len(replay_buffer)
-    if L < 2: return
     dist_loss, action_loss, ddpg_loss = 0,0,0
-    # TODO: No longer care about the exact order of i&j. Instead:
-    #   TODO: Sample `replays_per_unroll` samples;
-    #   TODO: For all dist-levels:
-    #     TODO: Compute ALL pairwise distance predictions (& action preds, if the last level);
-    #     TODO: Replace them with `i-j, A.action` whenever `i<j and i-j<dist(A,B)` (since we know the `.time`s `i` and `j`);
-    #     TODO: Update them with `d,_ = floyd(d)` and compute dist_loss with these as prediction targets.
-    #   TODO: For the last dist-level, compute action_loss with the `d,a = floyd(d,a)` lowest-dist actions as targets.
-    #   TODO: Have separate loss/es for each `dst.goals[i]`, which copies dists & actions from each `src` to each `dst`'s non-`None` goal. (Goal-spaces have less info than the full-space, and thus can't be used as midpoints for `floyd`.)
-    for _ in range(replays_per_unroll): # Look, concatenation and variable-management are hard.
+    for _ in range(replays_per_step): # Look, concatenation and variable-management are hard.
         # Variables.
         a,b = replay_buffer[random.randint(0, L-1)], replay_buffer[random.randint(0, L-1)]
         for as_goal in b.goals:
@@ -301,23 +328,23 @@ def replay(reached_vs_timeout):
     # Log debugging info.
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
-    log(2, False, dist_loss = to_np(dist_loss / batch_size / replays_per_unroll), action_loss = to_np(action_loss / batch_size / replays_per_unroll), ddpg_loss = to_np(ddpg_loss / batch_size / replays_per_unroll))
+    log(2, False, dist_loss = to_np(dist_loss / batch_sz / replays_per_step), action_loss = to_np(action_loss / batch_sz / replays_per_step), ddpg_loss = to_np(ddpg_loss / batch_sz / replays_per_step))
 
 
 
 for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
-        noise = torch.randn(batch_size, noise_sz, device=device)
+        noise = torch.randn(batch_sz, noise_sz, device=device)
         action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
-        # if iter % 100 < 50: action = torch.rand(batch_size, action_sz, device=device)*2-1 # TODO:
+        # if iter % 100 < 50: action = torch.rand(batch_sz, action_sz, device=device)*2-1 # TODO:
         # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
 
         # TODO: …How to compute (or approximate) (expectation of) distance misprediction, so that when we sample new goals, we can maximize the regret: store whenever real dist is lower/better than predicted dist?…
         #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
 
         replay_buffer.append(ReplaySample(
-            iter,
+            torch.full((batch_sz, 1), iter, dtype=torch.float32),
             full_state,
             action,
             (pos_only(full_state),),
