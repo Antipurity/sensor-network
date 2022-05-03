@@ -136,10 +136,10 @@ def net(ins, outs, hidden=embed_sz):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
         nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
     ).to(device)
-dist = net(action_sz + input_sz + input_sz + noise_sz + 1, action_sz + 1)
-#   (0|action, src, dst, lvl) → (min_action, min_dist)
+dist = net(input_sz + input_sz + noise_sz + 1, action_sz + 1)
+#   (src, dst, lvl) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
-#   (Usable for both gradient-ascent and self-imitation, and possibly good-embeddings-learning.)
+#   (Usable for self-imitation, and possibly good-embeddings-learning. …"Good embeddings" implies that we can embed a single input in isolation, which we can't, really…)
 #   Loss-wise:
 #     - (…This was updated since then though…)
 #     - `min_dist` with replayed `action`s is the index-diff;
@@ -155,14 +155,12 @@ optim = torch.optim.Adam([*dist.parameters()], lr=lr)
 
 
 
-def act_dist(action, src, dst, noise=None, nn=dist, lvl=1.):
+def act_dist(src, dst, noise=None, nn=dist, lvl=1.):
     """Returns a tuple `(action, dist)`, having refined the action (possibly `None`) & source & destination."""
-    if action is None:
-        action = torch.zeros(*src.shape[:-1], action_sz, device=device)
     if noise is None:
         noise = torch.randn(*src.shape[:-1], noise_sz, device=device)
     lvl = torch.full([*src.shape[:-1], 1], lvl, device=device)
-    ad = nn(cat(action, 2*src-1, 2*dst-1, noise, lvl))
+    ad = nn(cat(2*src-1, 2*dst-1, noise, lvl))
     return ad[..., :-1], 2**ad[..., -1:]
 def as_goal(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
 # def dist_to_steps(dist): return 2 ** (dist-1)
@@ -219,7 +217,7 @@ def pos_histogram(plt, label):
         y = y.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = cat(x, y, veloc)
-        acts, dists = act_dist(None, src, dst)
+        acts, dists = act_dist(src, dst)
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 def onclick(event):
@@ -247,7 +245,7 @@ def maybe_reset_goal(input):
     with torch.no_grad():
         dst = as_goal(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
         old_dist = (as_goal(input) - goal).abs().sum(-1, keepdim=True)
-        new_dist = act_dist(None, input, dst)[1]
+        new_dist = act_dist(input, dst)[1]
         reached, out_of_time = old_dist < .01, steps_to_goal < 0
         change = reached | out_of_time
 
@@ -263,8 +261,8 @@ def replay(reached_vs_timeout):
     if L < 2: return
     dist_loss, action_loss, ddpg_loss = 0,0,0
     # TODO: Use `floyd` for the loss.
-    #   TODO: …No longer condition *anything* on the action; no longer have DDPG, for now.
     #   TODO: Make the loss learn `.state` destinations and not just `.as_goal` again.
+    #     …Better to iterate over all goal-possibilities, right?
     #   TODO: No longer care about the exact order of i&j. Instead:
     #     TODO: Sample `replays_per_unroll` samples;
     #     TODO: For all dist-levels:
@@ -278,15 +276,15 @@ def replay(reached_vs_timeout):
         i,j = a.time, b.time
         if i>j: i,j,a,b = j,i,b,a
         if i==j: return
-        aag, dag = act_dist(None, a.state, b.as_goal, a.noise)
+        aag, dag = act_dist(a.state, b.as_goal, a.noise)
 
         # Learn faraway distances to goal-states, using timestamp-differences.
         def dstl(d,D):
             """Prediction that prefers lower-dists: always nonzero, but fades if dist is too high."""
             mult = (dist_to_steps(d.detach()) - D + 1).clamp(.3,3)
             return (mult * (d - steps_to_dist(D)).square()).sum()
-        dag1 = act_dist(None, a.state, b.as_goal, lvl=-1)[1]
-        dag2 = act_dist(None, a.state, b.as_goal)[1] # lvl=1
+        dag1 = act_dist(a.state, b.as_goal, lvl=-1)[1]
+        dag2 = act_dist(a.state, b.as_goal)[1] # lvl=1
         dist_loss = dist_loss + dstl(dag1, j-i)
         dist_loss = dist_loss + dstl(dag2, dag1.detach())
         # (We have 2 levels, where each filters the prediction-targets to be lower.)
@@ -294,7 +292,7 @@ def replay(reached_vs_timeout):
 
         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
         with torch.no_grad():
-            dag = act_dist(None, a.state, b.as_goal, a.noise, nn=dist_slow)[1]
+            dag = act_dist(a.state, b.as_goal, a.noise, nn=dist_slow)[1]
         action_loss = action_loss + (aag - torch.where(dag < j-i, aag, a.action)).square().sum()
 
     (dist_loss + action_loss + ddpg_loss).backward()
@@ -308,12 +306,11 @@ def replay(reached_vs_timeout):
 
 
 
-no_act = torch.zeros(batch_size, action_sz, device=device)
 for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_size, noise_sz, device=device)
-        action, _ = act_dist(no_act, full_state, goal, noise, nn=dist_slow)
+        action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
         # if iter % 100 < 50: action = torch.rand(batch_size, action_sz, device=device)*2-1 # TODO:
         # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
 
