@@ -272,7 +272,7 @@ def replay(reached_vs_timeout):
     def expand(x, src_or_dst):
         """N×… to N×N×…. `src_or_dst` is 1|2, representing which `N` is broadcasted."""
         return x.unsqueeze(src_or_dst).expand(batch_sz, N, N, x.shape[-1])
-    def dstl(d,D):
+    def l_dist(d,D):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
         with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3,3)
         return (mult * (d - D).square()).sum()
@@ -290,20 +290,21 @@ def replay(reached_vs_timeout):
                 a,d = act_dist(srcs, dsts, noss, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 i, j = expand(times, 1), expand(times, 2)
-                cond = (i < j) & (j-i < d)
+                cond = i < j
+                if lvl>0: cond = cond & (j-i < d) # First dist-level has to not filter sharply.
                 d = torch.where(cond, j-i, d)
                 a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
-                    d,a = floyd(d,a)
+                    if lvl>0: d,a = floyd(d,a)
                 else: # (Goals should take from full-state plans directly.)
                     cond = d0 < d
                     d = torch.where(cond, d0, d)
                     a = torch.where(cond, a0, a)
             if g == 0: d0, a0 = d, a # Preserve state-info for goals.
             a1, d1 = act_dist(srcs, dsts, noss, lvl=lvl3)
-            dist_loss = dist_loss + dstl(d1, d)
-            action_loss = action_loss + (a1 - a).square().sum()
+            dist_loss = dist_loss + l_dist(d1, d)
+            action_loss = action_loss + ((.5+d1 > d).float() * (a1 - a).square()).sum()
     # TODO: Run & fix.
     #   TODO: …Why are the printed losses so low? Isn't it suspicious; shouldn't they be `N` times higher than before, not be 0.2? Are we even learning anything?
 
