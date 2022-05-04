@@ -170,7 +170,7 @@ def pos_only(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2,
 
 
 
-def floyd(d, a = None):
+def floyd(d, *a):
     """
     Floyd—Warshall algorithm: computes all-to-all shortest distances & actions. Given a one-step adjacency matrix, gives its (differentiable) transitive closure.
 
@@ -178,23 +178,22 @@ def floyd(d, a = None):
 
     Inputs:
     - `d`: distances to minimize, shaped `(..., N, N, 1)`.
-    - `a = None`: first-step actions, shaped `(..., N, N, ?)`.
+    - `*a`: first-step actions, shaped `(..., N, N, ?)`.
 
-    Outputs: `(d,a)`
+    Outputs: `(d, *a)`
 
     With this, self-imitation learning can make full use of a sampled minibatch, both using replayed actions and reusing solved subtasks for learning-time search. For this, when considering `i`-time and `j`-time samples `A` & `B`, `d,a` should be: if `i<j and i-j<dist(A,B)`, then `i-j, A→B`, else `dist(A,B), act(A,B)`.
 
     (Similar to [lifted structured embedding](https://arxiv.org/abs/1511.06452), but founded in pathfinding instead of better-loss considerations.) (Made possible by the ability to instantly know the RL-return (distance) between any 2 samples.)
     """
-    assert d.shape[-1] == 1
-    assert d.shape[-3] == d.shape[-2]
-    if a is not None: assert d.shape[-2] == a.shape[-3] == a.shape[-2]
+    assert d.shape[-3] == d.shape[-2] and d.shape[-1] == 1
+    assert all(d.shape[-2] == A.shape[-3] == A.shape[-2] for A in a)
     for k in range(d.shape[-3]):
         d_through_midpoint = d[..., :, k:k+1, :] + d[..., k:k+1, :, :]
         cond = d < d_through_midpoint
         d = torch.where(cond, d, d_through_midpoint)
-        if a is not None: a = torch.where(cond, a, a[..., :, k:k+1, :])
-    return d,a
+        a = [torch.where(cond, A, A[..., :, k:k+1, :]) for A in a]
+    return d, *a
 
 
 
@@ -286,13 +285,13 @@ def replay(reached_vs_timeout):
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
-            srcs, dsts, noss = expand(states, 1), expand(goals, 2), expand(noises, 1)
-            lvl2 = ((lvl-1 if lvl>1 else 0) / (dist_levels-1))*2-1 # -1…1: prev level.
-            #   The first level is grounded in itself.
+            srcs, dsts, n = expand(states, 1), expand(goals, 2), expand(noises, 1)
+            lvl2 = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1: prev level.
             lvl3 = (lvl / (dist_levels-1))*2-1 # -1…1: next level.
+            #   The first dist-level is grounded in itself, others in previous levels.
             # Compute prediction targets.
             with torch.no_grad():
-                a,d = act_dist(srcs, dsts, noss, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
+                a,d = act_dist(srcs, dsts, n, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 i, j = expand(times, 1), expand(times, 2)
                 cond = i < j
@@ -301,22 +300,24 @@ def replay(reached_vs_timeout):
                 a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
-                    if lvl>0: d,a = floyd(d,a)
-                    #   TODO: Maybe, also have `n=noss`, and make `floyd` treat that as an "action"; and when computing a1&d1, use that updated noise? (Then we really won't be averaging actions.)
+                    if lvl>0: d,a,n = floyd(d,a,n)
                 else: # (Goals should take from full-state plans directly.)
                     cond = d0 < d
                     d = torch.where(cond, d0, d)
                     a = torch.where(cond, a0, a)
             if g == 0: d0, a0 = d, a # Preserve state-info for goals.
             # Compute losses.
-            a1, d1 = act_dist(srcs, dsts, noss, lvl=lvl3)
+            a1, d1 = act_dist(srcs, dsts, n, lvl=lvl3)
             act_gating = 1. if lvl>0 else (.5+d1 > d).float()
             dist_loss = dist_loss + l_dist(d1, d)
             action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
     # TODO: Run & fix.
     #   TODO: …Actions either don't converge or converge too slowly…
-    #     …But for some reason, the learned dists somewhat close to optimal, even though arrows often don't match the direction of dist-improvement?…
+    #     …But for some reason, the learned dists somewhat close to optimal, even though arrows often don't match the direction of dist-improvement?… …Maybe we're just running out of data in faraway areas, so dist is low there.
     #   TODO: See whether re-enabling guidance would allow the policy to converge.
+    #     TODO: …Okay, why did we lose the ability to distill that policy? It used to be much better, with the prior simple SIL+DDPG code…
+    #       TODO: …Try disabling `floyd`?… …Doesn't help… What went wrong then?…
+    #       (Is it related to no longer learning dists & acts directly to goals, but only indirectly through full-state…)
 
     (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
