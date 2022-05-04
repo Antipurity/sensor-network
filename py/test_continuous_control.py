@@ -329,11 +329,15 @@ def replay(reached_vs_timeout):
             dist_loss = dist_loss + l_dist(d1, d)
             action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
 
-    # TODO: Have a new loss here (after the dist-levels loop), based on `.goal` and `.goal_timeout`, which ensures that distance-predictions to past-destinations are at least as specified (L1 loss, filtered to only ever push up — or just to maximize distance whenever it's lower than the sample-timeout).
-    #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
-    #   (If destinations are reachable, this should be balanced-away; if we never do, it'll keep growing, so the search will try to reroute harder and harder.)
+    # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
+    #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
+    goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × input_sz
+    goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
+    goal_dists = act_dist(states, goals, noises, lvl=-1)[1]
+    dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts)).abs().sum()
 
-    # TODO: Run & fix. …Not sure if correct but slightly different, or slightly wrong somehow…
+    # TODO: Run & fix.
+
     # TODO: Just go ahead and move to embeddings (& DDPG) anyway, if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge).
 
     # TODO: …Make the code above work at least as well as the code below?…
