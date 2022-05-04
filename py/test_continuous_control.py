@@ -286,12 +286,12 @@ def replay(reached_vs_timeout):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
             srcs, dsts, n = expand(states, 1), expand(goals, 2), expand(noises, 1)
-            lvl2 = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1: prev level.
-            lvl3 = (lvl / (dist_levels-1))*2-1 # -1…1: next level.
-            #   The first dist-level is grounded in itself, others in previous levels.
+            prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
+            next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
+            #   The first dist-level is grounded in itself, others in their previous levels.
             # Compute prediction targets.
             with torch.no_grad():
-                a,d = act_dist(srcs, dsts, n, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
+                a,d = act_dist(srcs, dsts, n, lvl=prev_lvl, nn=dist_slow) # (Slow for stability.)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 i, j = expand(times, 1), expand(times, 2)
                 cond = i < j
@@ -307,17 +307,50 @@ def replay(reached_vs_timeout):
                     a = torch.where(cond, a0, a)
             if g == 0: d0, a0 = d, a # Preserve state-info for goals.
             # Compute losses.
-            a1, d1 = act_dist(srcs, dsts, n, lvl=lvl3)
-            act_gating = 1. if lvl>0 else (.5+d1 > d).float()
+            a1, d1 = act_dist(srcs, dsts, n, lvl=next_lvl)
+            act_gating = 1. if lvl>0 else (.5+d1 > d).float().detach()
             dist_loss = dist_loss + l_dist(d1, d)
             action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
     # TODO: Run & fix.
     #   TODO: …Actions either don't converge or converge too slowly…
-    #     …But for some reason, the learned dists somewhat close to optimal, even though arrows often don't match the direction of dist-improvement?… …Maybe we're just running out of data in faraway areas, so dist is low there.
     #   TODO: See whether re-enabling guidance would allow the policy to converge.
     #     TODO: …Okay, why did we lose the ability to distill that policy? It used to be much better, with the prior simple SIL+DDPG code…
-    #       TODO: …Try disabling `floyd`?… …Doesn't help… What went wrong then?…
-    #       (Is it related to no longer learning dists & acts directly to goals, but only indirectly through full-state…)
+    #       (Disabling `floyd` didn't work.)
+    #       (Having no-hard-filtering `d, a = d0, a0` when `g>0` didn't work.)
+    #       (Is it related to no longer learning dists & acts directly to goals, but only indirectly through full-state… How would we use this hypothesis though…)
+    #       …Why can I not think of anything that can be wrong here…
+    # …Should we just go ahead and move to embeddings anyway, if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge)?…
+
+    # TODO: …Does the code below still work with guidance (or was DDPG the decisive factor here)? If so, then what's the difference from the code above?
+    #   …Dists are learned suspiciously well, even though actions aren't exactly perfect…
+    #   …It can at least copy the policy… …Then again, the quality is not that much better than our quadratic pathfinding, because it's lacking the go-through-edge arrows that once existed… (So maybe DDPG really is a good idea.)
+    #     TODO: …Can we make the quadroloss learn a distance map that's as clean as this, at least?
+    # L = len(replay_buffer)
+    # dist_loss, action_loss = 0,0
+    # for _ in range(replays_per_step): # Look, concatenation and variable-management are hard.
+    #     # Variables.
+    #     a,b = replay_buffer[random.randint(0, L-1)], replay_buffer[random.randint(0, L-1)]
+    #     i,j = a.time, b.time
+    #     if i>j: i,j,a,b = j,i,b,a
+    #     if i==j: continue
+    #     for as_goal in b.goals:
+    #         aag, dag = act_dist(a.state, as_goal, a.noise)
+    #         # Learn faraway distances to goal-states, using timestamp-differences.
+    #         def dstl(d,D):
+    #             """Prediction that prefers lower-dists: always nonzero, but fades if dist is too high."""
+    #             mult = (d.detach() - D + 1).clamp(.3,3)
+    #             return (mult * (d - D).square()).sum()
+    #         dag1 = act_dist(a.state, as_goal, lvl=-1)[1]
+    #         dag2 = act_dist(a.state, as_goal)[1] # lvl=1
+    #         with torch.no_grad():
+    #             dag1_t = act_dist(a.state, as_goal, a.noise, lvl=-1, nn=dist_slow)[1]
+    #         dist_loss = dist_loss + dstl(dag1, j-i)
+    #         dist_loss = dist_loss + dstl(dag2, dag1_t) # …This wasn't slow? Is that why it was unstable?  …With a slow target, it seems either faster or now-learning.
+    #         # (We have 2 levels, where each filters the prediction-targets to be lower.)
+    #         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
+    #         with torch.no_grad():
+    #             dag = act_dist(a.state, as_goal, a.noise, nn=dist_slow)[1]
+    #         action_loss = action_loss + (aag - torch.where(dag < j-i, aag, a.action)).square().sum()
 
     (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -342,7 +375,8 @@ for iter in range(500000):
         #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
 
         replay_buffer.append(ReplaySample(
-            torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device),
+            # torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device), # TODO: With the new loss, instead of `iter` just below.
+            iter,
             full_state,
             action,
             (full_state, pos_only(full_state)),
