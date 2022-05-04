@@ -289,7 +289,7 @@ def replay(reached_vs_timeout):
                 a,d = act_dist(srcs, dsts, noss, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 i, j = expand(times, 0), expand(times, 1)
-                cond = i < j & j-i < d
+                cond = (i < j) & (j-i < d)
                 d = torch.where(cond, j-i, d)
                 a = torch.where(cond, expand(actions, 0), a)
                 # Use the minibatch fully, by actually computing shortest paths.
