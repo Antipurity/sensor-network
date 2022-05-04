@@ -124,7 +124,7 @@ input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
-replays_per_step = 4 # How many samples each unroll-step replays with loss. At least 2.
+replays_per_step = 2 # How many samples each unroll-step replays with loss. At least 2.
 dist_levels = 2 # Each dist-level filters the predicted distance target to reduce it at each level.
 #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies in the replay buffer.)
 #   (Each non-first level also performs a full `floyd` min-distance search (O(N**3)) for getting the best prediction targets.)
@@ -242,7 +242,7 @@ def maybe_reset_goal(input):
     Returns a tuple of how many goals were reached and how many goals have timed out."""
     global goal, steps_to_goal
     with torch.no_grad():
-        dst = pos_only(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
+        dst = pos_only(torch.rand_like(input, device=device)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
         wrap_offsets = torch.tensor([
             [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
             [-1., 0,0,0], [0, 0,0,0], [1, 0,0,0],
@@ -296,7 +296,7 @@ def replay(reached_vs_timeout):
                 i, j = expand(times, 1), expand(times, 2)
                 cond = i < j
                 if lvl>0: cond = cond & (j-i < d) # First dist-level has to not filter sharply.
-                d = torch.where(cond, j-i, d)
+                d = torch.where(cond, j-i, d).clamp(0)
                 a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
@@ -308,23 +308,15 @@ def replay(reached_vs_timeout):
             if g == 0: d0, a0 = d, a # Preserve state-info for goals.
             # Compute losses.
             a1, d1 = act_dist(srcs, dsts, n, lvl=next_lvl)
-            act_gating = 1. if lvl>0 else (.5+d1 > d).float().detach()
+            with torch.no_grad():
+                d_our = act_dist(srcs, dsts, n, lvl=next_lvl, nn=dist_slow)[1]
+            act_gating = 1. if lvl==0 else (d < d_our).float().detach()
             dist_loss = dist_loss + l_dist(d1, d)
             action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
-    # TODO: Run & fix.
-    #   TODO: …Actions either don't converge or converge too slowly…
-    #   TODO: See whether re-enabling guidance would allow the policy to converge.
-    #     TODO: …Okay, why did we lose the ability to distill that policy? It used to be much better, with the prior simple SIL+DDPG code…
-    #       (Disabling `floyd` didn't work.)
-    #       (Having no-hard-filtering `d, a = d0, a0` when `g>0` didn't work.)
-    #       (Is it related to no longer learning dists & acts directly to goals, but only indirectly through full-state… How would we use this hypothesis though…)
-    #       …Why can I not think of anything that can be wrong here…
-    # …Should we just go ahead and move to embeddings anyway, if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge)?…
+    # TODO: Run & fix. …Not sure if correct but slightly different, or slightly wrong somehow…
+    # TODO: Just go ahead and move to embeddings (& DDPG) anyway, if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge).
 
-    # TODO: …Does the code below still work with guidance (or was DDPG the decisive factor here)? If so, then what's the difference from the code above?
-    #   …Dists are learned suspiciously well, even though actions aren't exactly perfect…
-    #   …It can at least copy the policy… …Then again, the quality is not that much better than our quadratic pathfinding, because it's lacking the go-through-edge arrows that once existed… (So maybe DDPG really is a good idea.)
-    #     TODO: …Can we make the quadroloss learn a distance map that's as clean as this, at least?
+    # TODO: …Make the code above work at least as well as the code below?…
     # L = len(replay_buffer)
     # dist_loss, action_loss = 0,0
     # for _ in range(replays_per_step): # Look, concatenation and variable-management are hard.
@@ -375,8 +367,8 @@ for iter in range(500000):
         #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
 
         replay_buffer.append(ReplaySample(
-            # torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device), # TODO: With the new loss, instead of `iter` just below.
-            iter,
+            torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device), # TODO: With the new loss, instead of `iter` just below.
+            # iter,
             full_state,
             action,
             (full_state, pos_only(full_state)),
