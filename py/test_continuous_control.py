@@ -189,7 +189,7 @@ def floyd(d, a = None):
     assert d.shape[-1] == 1
     assert d.shape[-3] == d.shape[-2]
     if a is not None: assert d.shape[-2] == a.shape[-3] == a.shape[-2]
-    for k in range(d.shape[0]):
+    for k in range(d.shape[-3]):
         d_through_midpoint = d[..., :, k:k+1, :] + d[..., k:k+1, :, :]
         cond = d < d_through_midpoint
         d = torch.where(cond, d, d_through_midpoint)
@@ -262,16 +262,16 @@ def replay(reached_vs_timeout):
     N = replays_per_step
     if len(replay_buffer) < N: return
     samples = random.choices(replay_buffer, k=N) # Python 3.6+
-    times = torch.stack([s.time for s in samples], 0) # N × batch_sz × 1
-    states = torch.stack([s.state for s in samples], 0) # N × batch_sz × input_sz
-    actions = torch.stack([s.action for s in samples], 0) # N × batch_sz × action_sz
-    noises = torch.stack([s.noise for s in samples], 0) # N × batch_sz × noise_sz
+    times = torch.stack([s.time for s in samples], 1) # batch_sz × N × 1
+    states = torch.stack([s.state for s in samples], 1) # batch_sz × N × input_sz
+    actions = torch.stack([s.action for s in samples], 1) # batch_sz × N × action_sz
+    noises = torch.stack([s.noise for s in samples], 1) # batch_sz × N × noise_sz
 
     # Learn distances & actions.
     dist_loss, action_loss = 0,0
     def expand(x, src_or_dst):
-        """N×… to N×N×…. `src_or_dst` is 0|1, representing which `N` is broadcasted."""
-        return x.unsqueeze(src_or_dst).expand(N, N, batch_sz, x.shape[-1])
+        """N×… to N×N×…. `src_or_dst` is 1|2, representing which `N` is broadcasted."""
+        return x.unsqueeze(src_or_dst).expand(batch_sz, N, N, x.shape[-1])
     def dstl(d,D):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
         with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3,3)
@@ -280,18 +280,18 @@ def replay(reached_vs_timeout):
     for lvl in range(dist_levels):
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
-            goals = torch.stack([s.goals[g] for s in samples], 0)
-            srcs, dsts, noss = expand(states, 0), expand(goals, 1), expand(noises, 0)
+            goals = torch.stack([s.goals[g] for s in samples], 1)
+            srcs, dsts, noss = expand(states, 1), expand(goals, 2), expand(noises, 1)
             lvl2 = (lvl / dist_levels)*2-1 # -1…1: prev level.
             lvl3 = ((lvl+1) / dist_levels)*2-1 # -1…1: next level.
             # Compute prediction targets.
             with torch.no_grad():
                 a,d = act_dist(srcs, dsts, noss, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
-                i, j = expand(times, 0), expand(times, 1)
+                i, j = expand(times, 1), expand(times, 2)
                 cond = (i < j) & (j-i < d)
                 d = torch.where(cond, j-i, d)
-                a = torch.where(cond, expand(actions, 0), a)
+                a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
                     d,a = floyd(d,a)
