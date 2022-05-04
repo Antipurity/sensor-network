@@ -280,7 +280,6 @@ def replay(reached_vs_timeout):
     for lvl in range(dist_levels):
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
-            last = lvl == dist_levels-1
             goals = torch.stack([s.goals[g] for s in samples], 0)
             srcs, dsts, noss = expand(states, 0), expand(goals, 1), expand(noises, 0)
             lvl2 = (lvl / dist_levels)*2-1 # -1…1: prev level.
@@ -292,19 +291,18 @@ def replay(reached_vs_timeout):
                 i, j = expand(times, 0), expand(times, 1)
                 cond = i < j & j-i < d
                 d = torch.where(cond, j-i, d)
-                if last: a = torch.where(cond, expand(actions, 0), a)
+                a = torch.where(cond, expand(actions, 0), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
-                    if not last: d,_ = floyd(d)
-                    else: d,a = floyd(d,a)
+                    d,a = floyd(d,a)
                 else: # (Goals should take from full-state plans directly.)
                     cond = d0 < d
                     d = torch.where(cond, d0, d)
-                    if last: a = torch.where(cond, a0, a)
+                    a = torch.where(cond, a0, a)
             if g == 0: d0, a0 = d, a # Preserve state-info for goals.
             a1, d1 = act_dist(srcs, dsts, noss, lvl=lvl3)
             dist_loss = dist_loss + dstl(d1, d)
-            if last: action_loss = action_loss + (a1 - a).square().sum()
+            action_loss = action_loss + (a1 - a).square().sum()
     # TODO: Run & fix.
 
     (dist_loss + action_loss).backward()
