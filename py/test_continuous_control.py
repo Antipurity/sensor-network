@@ -62,7 +62,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     ```"""
     accel = accel.detach()[..., :2]
     accel = accel * 1e-3 / 2
-    accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().max(torch.tensor(1., device=device)))
+    accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().clamp(1) + 1e-5)
     # force_center = torch.ones(posit.shape[0], 2, device=device)/2
     # force_len = (posit - force_center).square() + 1e-5
     # force = 3e-5 / force_len
@@ -74,10 +74,17 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
 
 class ReplaySample:
-    """A snapshot of a trajectory's step. `goals` is a tuple, with the first element being the state and the rest being same-shape whatever; the NN would then learn to go to any goal when requested."""
-    __slots__ = ('time', 'state', 'action', 'goals', 'noise')
-    def __init__(self, time, state, action, goals, noise):
-        self.time, self.state, self.action, self.goals, self.noise = time, state, action, goals, noise
+    """A snapshot of a trajectory's step.
+    - `.time`: the iteration index of this step. Differences of these are distances between steps.
+    - `.state`: inputs (position & velocity in this env).
+    - `.action`: outputs (acceleration in this env).
+    - `.goals`: potential goal-spaces that this can be described as; the unrolls can then go to any of those. A tuple, with the first element being the state and the rest being same-shape whatever.
+    - `.noise`: the noise that the `.action` used to get generated. Integrated into prediction targets so that randomness doesn't get averaged out.
+    - `.goal` and `.goal_timeout`: the destination that the unroll was trying to reach, and the estimation of how many steps that would take (see `maybe_reset_goal`). Used for making sure that unreachable goals do eventually get marked as unreachable in `dist`, and stop misleading the `floyd` search into uselessness."""
+    __slots__ = ('time', 'state', 'action', 'noise', 'goals', 'goal', 'goal_timeout')
+    def __init__(self, time, state, action, noise, goals, goal, goal_timeout):
+        s = self
+        s.time, s.state, s.action, s.noise, s.goals, s.goal, s.goal_timeout = time, state, action, noise, goals, goal, goal_timeout
 class ReplayBuffer:
     """Stores the in-order sequence of most-recent events. Needs `max_len=1024`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`."""
     def __init__(self, max_len=1024):
@@ -250,11 +257,6 @@ def maybe_reset_goal(input):
             s = random.choice(replay_buffer)
             dst = s.state[torch.randperm(batch_sz, device=device)]
 
-        # TODO: In the main loop, also save `goal` and `steps_to_goal` (as `.goal_timeout`) with each sample.
-        # TODO: Have a new loss, which ensures that distance-predictions to past-destinations are at least as specified (L1 loss, filtered to only ever push up — or just to maximize distance whenever it's lower than the sample-timeout).
-        #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
-        #   (If destinations are reachable, this should be balanced-away; if we never do, it'll keep growing, so the search will try to reroute harder and harder.)
-
         wrap_offsets = torch.tensor([
             [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
             [-1., 0,0,0], [0, 0,0,0], [1, 0,0,0],
@@ -326,6 +328,11 @@ def replay(reached_vs_timeout):
             act_gating = (d < d_our).float().detach()
             dist_loss = dist_loss + l_dist(d1, d)
             action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
+
+    # TODO: Have a new loss here (after the dist-levels loop), based on `.goal` and `.goal_timeout`, which ensures that distance-predictions to past-destinations are at least as specified (L1 loss, filtered to only ever push up — or just to maximize distance whenever it's lower than the sample-timeout).
+    #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
+    #   (If destinations are reachable, this should be balanced-away; if we never do, it'll keep growing, so the search will try to reroute harder and harder.)
+
     # TODO: Run & fix. …Not sure if correct but slightly different, or slightly wrong somehow…
     # TODO: Just go ahead and move to embeddings (& DDPG) anyway, if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge).
 
@@ -381,9 +388,10 @@ for iter in range(500000):
             # iter,
             full_state,
             action,
-            (full_state, pos_only(full_state)),
-            #   Want to go to places, not caring about final velocity.
             noise,
+            (full_state, pos_only(full_state)),
+            goal,
+            steps_to_goal,
         ))
 
         state, hidden_state = env_step(state, hidden_state, action)
