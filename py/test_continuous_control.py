@@ -119,11 +119,11 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_sz = 100
+batch_sz = 50
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 lr = 1e-3
 
-replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
+replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
 replays_per_step = 2 # How many samples each unroll-step replays with loss. At least 2.
 dist_levels = 2 # Each dist-level filters the predicted distance target to reduce it at each level.
 #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies in the replay buffer.)
@@ -243,6 +243,22 @@ def maybe_reset_goal(input):
     global goal, steps_to_goal
     with torch.no_grad():
         dst = pos_only(torch.rand_like(input, device=device)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
+        #   …Can we use sample-misprediction, meaning, the (upper-bounded) difference between the predicted steps-to-goal and actual steps-to-goal that we've seen when either `reached` or `out_of_time`… Nearly 100% everywhere at first…
+        #     (Or, regret-max, mining for paths that we'd regret not taking: when real index-diff is less than predicted-dist, store it.)
+        #       (And, might want to store post-prediction pre-timeout destinations too, so that the loss can always increase.)
+        #       (Since the exact `goal` is not always reached, better to relabel it: consider every recent sample, and quadratically compare mispredictions.)
+        #       (…Doesn't our `floyd` loss do that, post-sampling? Isn't this just an efficiency improvement, not a fundamental component? Or is efficiency improved that much?)
+        #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
+
+        # (…Though, picking a goal without considering the source could be the reason why we're seeing so many nearly-0-dist regions just past the known 40-dist horizon: we're just exponentially-inefficient at growing our knowledge base.)
+        # TODO: …Is it possible to use non-reached `dst`s as training data for the model too?
+        #   This really *would* make those low-dist unreachable regions actually get marked as unreachable rather than trivial — which would *also* make the search prefer known paths, rather than instantly get thwarted by even a single out-of-distribution midpoint…
+        #   …But how exactly would we implement this? Wouldn't we need to know which goals are unreachable, in the main loop — which is only known AFTER we've stored the sample?…
+        #     Should we really just not care and always make the current-destination have the timeout-dist, AKA prediction plus 4?
+        #       If we reach it, this extra loss-term should be balanced-away; if we never do, it'll gradually get bigger and bigger, so the search will try to reroute harder and harder. Perfect, actually (as long as prediction really can filter it out).
+        #   …Also, wouldn't we want to set non-goal-space goals for this, so that `floyd` would actually see those big dists?
+        #     …We can just pick a sample from the replay buffer in 50% of the cases as the destination, can't we?
+
         wrap_offsets = torch.tensor([
             [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
             [-1., 0,0,0], [0, 0,0,0], [1, 0,0,0],
@@ -360,11 +376,8 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
-        # if iter % 100 < 50: action = torch.rand(batch_sz, action_sz, device=device)*2-1 # TODO:
-        if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
-
-        # TODO: …How to compute (or approximate) (expectation of) distance misprediction, so that when we sample new goals, we can maximize the regret: store whenever real dist is lower/better than predicted dist?…
-        #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
+        if iter % 100 < 50: action = torch.rand(batch_sz, action_sz, device=device)*2-1 # TODO:
+        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
 
         replay_buffer.append(ReplaySample(
             torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device), # TODO: With the new loss, instead of `iter` just below.
@@ -389,13 +402,13 @@ finish()
 
 
 
-# …Could also return to embeddings & locally-isometric maps. This would also allow us to learn MuZero-like embeddings, where prev-frame plus action equals next-frame via prediction (but, not clear if it's better than making src-embedding action-dependent, and learn both local min-dist and global min-dist; but in [CLIP](https://arxiv.org/abs/2103.00020), a contrastive objective is 4× more data-efficient than a predictive objective).
-#   (…If src-emb is action-dependent, then we can make single-step embeddings *exactly* equal, solving our "but dist-learning isn't *really* a superset of contrastive learning" conundrum… But to actually imagine trajectories, need `(src_emb, act) → dst_emb`, which is an explicit addon, like in MuZero…)
-#     (…Not just a gimmick: it would help with both stochasticity and actions that don't change the state.)
-#     (…ALSO: this can be used for DDPG without learning a separate action-dependent dist sub-network like we do now with `dist`. …And this DDPG in a locally-isometric space could actually perform really well, since angles are often already correct and so the optima are very wide…)
-#   (…With faraway-sample batches, this could bring big benefits: `dist(src,dst)` would need `O(N^2)` NN evaluations, but with embeddings, only `O(N)` embeds are needed to have a rich distance-predicting loss, extracting as much info from a trajectory as possible.)
-#   TODO: …So do we return-to-`embed` first, or do the pathfind-framework with `dist` first?
-#     TODO: Definitely transition to embeddings, with next-action emb-prediction.
+# TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually not trivially-cheap in comparison.)
+#   TODO: Have `embed(src|dst, input) → emb` and its `embed_` wrapper and `dist_(src_emb, dst_emb)`.
+#   TODO: …What code do we touch, exactly?…
+#   TODO: Have `next_embed(prev_emb, action) → next_emb`.
+#     (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
+#     TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
+#     TODO: Use this for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
 
 
 
