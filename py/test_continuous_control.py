@@ -47,27 +47,27 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     let x=0, y=0, dx=0, dy=0
     setInterval(() => {
     let mx = mousex-x, my=mousey-y, m = Math.hypot(mx, my)
-    if (m) mx /= m/1e-3, my /= m/1e-3
+    if (m) mx /= m/1e-2, my /= m/1e-2
 
     let flen = ((x-.5)**2 + (y-.5)**2 + 1e-5), f = 3e-5 / flen
     let fx = f * (x-.5)/flen, fy = f * (y-.5)/flen
 
     let ddx = mx+fx, ddy = my+fy
     dx+=ddx, dy+=ddy, x+=dx, y+=dy
-    dx*=.99, dy*=.99, x=(x%1+1)%1, y=(y%1+1)%1
+    dx*=.9, dy*=.9, x=(x%1+1)%1, y=(y%1+1)%1
     target.style.left = (x * innerWidth) + 'px'
     target.style.top = (y * innerHeight) + 'px'
     }, 50) // 20 FPS
     </script>
     ```"""
     accel = accel.detach()[..., :2]
-    accel = accel * 1e-3 / 2
+    accel = accel * 1e-2 / 2
     accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().clamp(1) + 1e-5)
     # force_center = torch.ones(posit.shape[0], 2, device=device)/2
     # force_len = (posit - force_center).square() + 1e-5
     # force = 3e-5 / force_len
     # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor?
-    veloc = (veloc + accel) * .99
+    veloc = (veloc + accel) * .9
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
 
@@ -335,9 +335,8 @@ def replay(reached_rating, reached, timeout, steps_to_goal_err):
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × input_sz
     goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    goal_dists = act_dist(states, goals, noises, lvl=-1)[1]
+    goal_dists = act_dist(states, goals, noises, lvl=1)[1] # TODO: …lvl=-1 is what makes sense…
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
-    #   TODO: …Can't help but notice that we still have an area with .5 distance… WHY? Is `lvl=-1` the reason for higher distance not propagating? Or should we use `.square()` here, since our distances are in the hundreds anyway and we might want to compete more aggressively (especially since only very few samples are actually near where the goal was picked, most should have low `steps_to_goal` and thus not change anything)?
     #     TODO: Try with `.square()`.
     #     TODO: Try with `lvl=1`. (Though I don't think this would be semantically correct.)
 
