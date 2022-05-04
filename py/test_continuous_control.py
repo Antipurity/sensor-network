@@ -248,7 +248,7 @@ def maybe_reset_goal(input):
 
     Possible destinations: a uniformly-random XY position; or a random state from `replay_buffer`. (It is important that the loss learns that unreachable goals are unreachable until proven otherwise, or else the `floyd` search would keep exploiting out-of-distribution "small" ghost-dists and prevent improvement.)
 
-    Returns: a tuple of how many goals were reached and how many goals have timed out."""
+    Returns: some interesting-to-plot values for `replay`."""
     global goal, steps_to_goal
     with torch.no_grad():
         if random.randint(1,2) == 1: # Go to an XY position.
@@ -269,9 +269,11 @@ def maybe_reset_goal(input):
 
         goal = torch.where(change, dst, goal)
         steps_to_goal = torch.where(change, new_dist + 4, steps_to_goal - 1)
-    reached = 1 - (old_dist - .01).clamp(0,1) # Smoother.
-    return reached.sum(), out_of_time.float().sum()
-def replay(reached_vs_timeout):
+
+        reached_rating = 1 - (old_dist - .01).clamp(0,1) # Smoother.
+        steps_to_goal_err = (act_dist(input, goal)[1] - steps_to_goal).abs()
+    return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_err.sum()
+def replay(reached_rating, reached, timeout, steps_to_goal_err):
     """Replays samples from the buffer.
 
     Picks many faraway samples, computes all pairwise distances & actions, and makes the shortest paths on the minibatch's dense graph serve as prediction targets. (Search, to reuse solved subtasks.)
@@ -334,7 +336,10 @@ def replay(reached_vs_timeout):
     goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × input_sz
     goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
     goal_dists = act_dist(states, goals, noises, lvl=-1)[1]
-    dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts)).abs().sum()
+    dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
+    #   TODO: …Can't help but notice that we still have an area with .5 distance… WHY? Is `lvl=-1` the reason for higher distance not propagating? Or should we use `.square()` here, since our distances are in the hundreds anyway and we might want to compete more aggressively (especially since only very few samples are actually near where the goal was picked, most should have low `steps_to_goal` and thus not change anything)?
+    #     TODO: Try with `.square()`.
+    #     TODO: Try with `lvl=1`. (Though I don't think this would be semantically correct.)
 
     # TODO: Run & fix.
 
@@ -374,7 +379,7 @@ def replay(reached_vs_timeout):
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
-    log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
+    log(1, False, reached_rating = to_np(reached_rating), reached = to_np(reached), timeout = to_np(timeout), dist_error = to_np(steps_to_goal_err))
     log(2, False, dist_loss = to_np(dist_loss / batch_sz / N), action_loss = to_np(action_loss / batch_sz / N))
 
 
@@ -385,7 +390,7 @@ for iter in range(500000):
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
         if iter % 100 < 50: action = torch.rand(batch_sz, action_sz, device=device)*2-1 # TODO:
-        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
+        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.)
 
         replay_buffer.append(ReplaySample(
             torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device), # TODO: With the new loss, instead of `iter` just below.
@@ -399,7 +404,7 @@ for iter in range(500000):
         ))
 
         state, hidden_state = env_step(state, hidden_state, action)
-    replay(maybe_reset_goal(full_state))
+    replay(*maybe_reset_goal(full_state))
 finish()
 
 # TODO: Run & fix.
