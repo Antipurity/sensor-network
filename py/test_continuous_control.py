@@ -244,7 +244,12 @@ def maybe_reset_goal(input):
     global goal, steps_to_goal
     with torch.no_grad():
         dst = pos_only(torch.remainder(input + .3*torch.randn_like(input, device=device), 1.)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
-        old_dist = (pos_only(input) - goal).abs().sum(-1, keepdim=True)
+        wrap_offsets = torch.tensor([
+            [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
+            [-1., 0,0,0], [0, 0,0,0], [1, 0,0,0],
+            [-1., 1,0,0], [0, 1,0,0], [1, 1,0,0],
+        ], device=device).unsqueeze(-2)
+        old_dist = (pos_only(input) - (goal + wrap_offsets)).abs().sum(-1, keepdim=True).min(0)[0]
         new_dist = act_dist(input, dst)[1]
         reached, out_of_time = old_dist < .01, steps_to_goal < 0
         change = reached | out_of_time
@@ -297,16 +302,21 @@ def replay(reached_vs_timeout):
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
                     if lvl>0: d,a = floyd(d,a)
+                    #   TODO: Maybe, also have `n=noss`, and make `floyd` treat that as an "action"; and when computing a1&d1, use that updated noise? (Then we really won't be averaging actions.)
                 else: # (Goals should take from full-state plans directly.)
                     cond = d0 < d
                     d = torch.where(cond, d0, d)
                     a = torch.where(cond, a0, a)
             if g == 0: d0, a0 = d, a # Preserve state-info for goals.
+            # Compute losses.
             a1, d1 = act_dist(srcs, dsts, noss, lvl=lvl3)
+            act_gating = 1. if lvl>0 else (.5+d1 > d).float()
             dist_loss = dist_loss + l_dist(d1, d)
-            action_loss = action_loss + ((.5+d1 > d).float() * (a1 - a).square()).sum()
+            action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
     # TODO: Run & fix.
-    #   TODO: …Why are the printed losses so low? Isn't it suspicious; shouldn't they be `N` times higher than before, not be 0.2? Are we even learning anything?
+    #   TODO: …Actions either don't converge or converge too slowly…
+    #     …But for some reason, the learned dists somewhat close to optimal, even though arrows often don't match the direction of dist-improvement?…
+    #   TODO: See whether re-enabling guidance would allow the policy to converge.
 
     (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -325,7 +335,7 @@ for iter in range(500000):
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
         # if iter % 100 < 50: action = torch.rand(batch_sz, action_sz, device=device)*2-1 # TODO:
-        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
+        if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) # TODO: (Can actually hold up for 70k epochs, but when this policy is fully gone, it all breaks.)
 
         # TODO: …How to compute (or approximate) (expectation of) distance misprediction, so that when we sample new goals, we can maximize the regret: store whenever real dist is lower/better than predicted dist?…
         #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
