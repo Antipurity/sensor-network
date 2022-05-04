@@ -237,27 +237,23 @@ goal = torch.randn(batch_sz, input_sz, device=device)
 steps_to_goal = torch.rand(batch_sz, 1, device=device)
 state, hidden_state = env_init(batch_sz=batch_sz)
 def maybe_reset_goal(input):
-    """Changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
+    """Sometimes changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
 
-    Returns a tuple of how many goals were reached and how many goals have timed out."""
+    Possible destinations: a uniformly-random XY position; or a random state from `replay_buffer`. (It is important that the loss learns that unreachable goals are unreachable until proven otherwise, or else the `floyd` search would keep exploiting out-of-distribution "small" ghost-dists and prevent improvement.)
+
+    Returns: a tuple of how many goals were reached and how many goals have timed out."""
     global goal, steps_to_goal
     with torch.no_grad():
-        dst = pos_only(torch.rand_like(input, device=device)) # TODO: Cheating. Would like to select a max-misprediction destination; how?
-        #   …Can we use sample-misprediction, meaning, the (upper-bounded) difference between the predicted steps-to-goal and actual steps-to-goal that we've seen when either `reached` or `out_of_time`… Nearly 100% everywhere at first…
-        #     (Or, regret-max, mining for paths that we'd regret not taking: when real index-diff is less than predicted-dist, store it.)
-        #       (And, might want to store post-prediction pre-timeout destinations too, so that the loss can always increase.)
-        #       (Since the exact `goal` is not always reached, better to relabel it: consider every recent sample, and quadratically compare mispredictions.)
-        #       (…Doesn't our `floyd` loss do that, post-sampling? Isn't this just an efficiency improvement, not a fundamental component? Or is efficiency improved that much?)
-        #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
+        if random.randint(1,2) == 1: # Go to an XY position.
+            dst = pos_only(torch.rand_like(input, device=device))
+        else: # In 50% of cases, revisit a state.
+            s = random.choice(replay_buffer)
+            dst = s.state[torch.randperm(batch_sz, device=device)]
 
-        # (…Though, picking a goal without considering the source could be the reason why we're seeing so many nearly-0-dist regions just past the known 40-dist horizon: we're just exponentially-inefficient at growing our knowledge base.)
-        # TODO: …Is it possible to use non-reached `dst`s as training data for the model too?
-        #   This really *would* make those low-dist unreachable regions actually get marked as unreachable rather than trivial — which would *also* make the search prefer known paths, rather than instantly get thwarted by even a single out-of-distribution midpoint…
-        #   …But how exactly would we implement this? Wouldn't we need to know which goals are unreachable, in the main loop — which is only known AFTER we've stored the sample?…
-        #     Should we really just not care and always make the current-destination have the timeout-dist, AKA prediction plus 4?
-        #       If we reach it, this extra loss-term should be balanced-away; if we never do, it'll gradually get bigger and bigger, so the search will try to reroute harder and harder. Perfect, actually (as long as prediction really can filter it out).
-        #   …Also, wouldn't we want to set non-goal-space goals for this, so that `floyd` would actually see those big dists?
-        #     …We can just pick a sample from the replay buffer in 50% of the cases as the destination, can't we?
+        # TODO: In the main loop, also save `goal` and `steps_to_goal` (as `.goal_timeout`) with each sample.
+        # TODO: Have a new loss, which ensures that distance-predictions to past-destinations are at least as specified (L1 loss, filtered to only ever push up — or just to maximize distance whenever it's lower than the sample-timeout).
+        #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
+        #   (If destinations are reachable, this should be balanced-away; if we never do, it'll keep growing, so the search will try to reroute harder and harder.)
 
         wrap_offsets = torch.tensor([
             [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
@@ -309,6 +305,7 @@ def replay(reached_vs_timeout):
             with torch.no_grad():
                 a,d = act_dist(srcs, dsts, n, lvl=prev_lvl, nn=dist_slow) # (Slow for stability.)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
+                #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
                 i, j = expand(times, 1), expand(times, 2)
                 cond = i < j
                 if lvl>0: cond = cond & (j-i < d) # First dist-level has to not filter sharply.
@@ -326,7 +323,7 @@ def replay(reached_vs_timeout):
             a1, d1 = act_dist(srcs, dsts, n, lvl=next_lvl)
             with torch.no_grad():
                 d_our = act_dist(srcs, dsts, n, lvl=next_lvl, nn=dist_slow)[1]
-            act_gating = 1. if lvl==0 else (d < d_our).float().detach()
+            act_gating = (d < d_our).float().detach()
             dist_loss = dist_loss + l_dist(d1, d)
             action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
     # TODO: Run & fix. …Not sure if correct but slightly different, or slightly wrong somehow…
