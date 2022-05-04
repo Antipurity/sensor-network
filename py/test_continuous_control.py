@@ -328,7 +328,7 @@ for iter in range(500000):
         #   Do we want another class, which maintains several timestamped max-metric samples? To add, the new sample is compared with several others that are removed, and the min-metric (max-regret) sample does not get added back; when replaying, the metric has to be updated…
 
         replay_buffer.append(ReplaySample(
-            torch.full((batch_sz, 1), iter, dtype=torch.float32),
+            torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device),
             full_state,
             action,
             (full_state, pos_only(full_state)),
