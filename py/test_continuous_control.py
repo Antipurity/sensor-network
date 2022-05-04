@@ -120,7 +120,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 batch_sz = 100
-input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 8
+input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=64) # of ReplaySample
@@ -282,8 +282,9 @@ def replay(reached_vs_timeout):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
             srcs, dsts, noss = expand(states, 1), expand(goals, 2), expand(noises, 1)
-            lvl2 = (lvl / dist_levels)*2-1 # -1…1: prev level.
-            lvl3 = ((lvl+1) / dist_levels)*2-1 # -1…1: next level.
+            lvl2 = ((lvl-1 if lvl>1 else 0) / (dist_levels-1))*2-1 # -1…1: prev level.
+            #   The first level is grounded in itself.
+            lvl3 = (lvl / (dist_levels-1))*2-1 # -1…1: next level.
             # Compute prediction targets.
             with torch.no_grad():
                 a,d = act_dist(srcs, dsts, noss, lvl=lvl2, nn=dist_slow) # (Slow for stability.)
@@ -304,6 +305,7 @@ def replay(reached_vs_timeout):
             dist_loss = dist_loss + dstl(d1, d)
             action_loss = action_loss + (a1 - a).square().sum()
     # TODO: Run & fix.
+    #   TODO: …Why are the printed losses so low? Isn't it suspicious; shouldn't they be `N` times higher than before, not be 0.2? Are we even learning anything?
 
     (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -312,7 +314,7 @@ def replay(reached_vs_timeout):
     # Log debugging info.
     log(0, False, pos = pos_histogram)
     log(1, False, reached = to_np(reached_vs_timeout[0]), timeout = to_np(reached_vs_timeout[1]))
-    log(2, False, dist_loss = to_np(dist_loss / batch_sz / replays_per_step), action_loss = to_np(action_loss / batch_sz / replays_per_step))
+    log(2, False, dist_loss = to_np(dist_loss / batch_sz / N), action_loss = to_np(action_loss / batch_sz / N))
 
 
 
