@@ -61,8 +61,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     </script>
     ```"""
     accel = accel.detach()[..., :2]
-    accel = accel * 1e-2 / 2
-    accel = accel / (accel.square().sum(-1, keepdim=True).sqrt().clamp(1) + 1e-5)
+    accel = accel * 1e-2 / 2 / (accel.square().sum(-1, keepdim=True).sqrt().clamp(1) + 1e-5)
     # force_center = torch.ones(posit.shape[0], 2, device=device)/2
     # force_len = (posit - force_center).square() + 1e-5
     # force = 3e-5 / force_len
@@ -246,16 +245,15 @@ state, hidden_state = env_init(batch_sz=batch_sz)
 def maybe_reset_goal(input):
     """Sometimes changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
 
-    Possible destinations: a uniformly-random XY position; or a random state from `replay_buffer`. (It is important that the loss learns that unreachable goals are unreachable until proven otherwise, or else the `floyd` search would keep exploiting out-of-distribution "small" ghost-dists and prevent improvement.)
+    Possible destinations: a random state or a random XY position from `replay_buffer`. (It is important that the loss learns that unreachable goals are unreachable until proven otherwise, or else the `floyd` search would keep exploiting out-of-distribution "small" ghost-dists and prevent improvement.)
 
     Returns: some interesting-to-plot values for `replay`."""
     global goal, steps_to_goal
     with torch.no_grad():
-        if random.randint(1,2) == 1: # Go to an XY position.
-            dst = pos_only(torch.rand_like(input, device=device))
-        else: # In 50% of cases, revisit a state.
-            s = random.choice(replay_buffer)
-            dst = s.state[torch.randperm(batch_sz, device=device)]
+        s = random.choice(replay_buffer)
+        dst = s.state[torch.randperm(batch_sz, device=device)]
+        if random.randint(1,2) == 1: # In 50% of the cases, go to an XY position.
+            dst = pos_only(dst)
 
         wrap_offsets = torch.tensor([
             [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
@@ -335,7 +333,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_err):
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × input_sz
     goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    goal_dists = act_dist(states, goals, noises, lvl=1)[1] # TODO: …lvl=-1 is what makes sense…
+    goal_dists = act_dist(states, goals, noises, lvl=-1)[1]
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
     #     TODO: Try with `.square()`.
     #     TODO: Try with `lvl=1`. (Though I don't think this would be semantically correct.)
@@ -388,8 +386,8 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
-        if iter % 100 < 50: action = torch.rand(batch_sz, action_sz, device=device)*2-1 # TODO:
         # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.)
+        if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
         replay_buffer.append(ReplaySample(
             torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device), # TODO: With the new loss, instead of `iter` just below.
