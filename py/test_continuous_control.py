@@ -61,7 +61,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     </script>
     ```"""
     accel = accel.detach()[..., :2]
-    accel = accel * 1e-2 / 2 / (accel.square().sum(-1, keepdim=True).sqrt().clamp(1) + 1e-5)
+    accel = accel * 1e-2 / (accel.square().sum(-1, keepdim=True).sqrt().clamp(1) + 1e-5)
     # force_center = torch.ones(posit.shape[0], 2, device=device)/2
     # force_len = (posit - force_center).square() + 1e-5
     # force = 3e-5 / force_len
@@ -264,13 +264,13 @@ def maybe_reset_goal(input):
         ], device=device).unsqueeze(-2)
         old_dist = (pos_only(input) - (goal + wrap_offsets)).abs().sum(-1, keepdim=True).min(0)[0]
         new_dist = act_dist(input, dst)[1]
-        reached, out_of_time = old_dist < .01, steps_to_goal < 0
+        reached, out_of_time = old_dist < .05, steps_to_goal < 0
         change = reached | out_of_time
 
         goal = torch.where(change, dst, goal)
         steps_to_goal = torch.where(change, new_dist + 4, steps_to_goal - 1)
 
-        reached_rating = 1 - (old_dist - .01).clamp(0,1) # Smoother.
+        reached_rating = 1 - (old_dist - .05).clamp(0,1) # Smoother.
         steps_to_goal_err = act_dist(input, goal)[1] - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
         steps_to_goal_underperform = steps_to_goal_err.clamp(0) # (How much better that long-ago state is, allegedly.)
@@ -340,7 +340,6 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret, steps_to_goal
     goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
     goal_dists = act_dist(states, goals, noises, lvl=-1)[1]
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
-    #     TODO: Try with `lvl=1`. (Though I don't think this would be semantically correct.)
 
     # TODO: Run & fix.
 
@@ -366,8 +365,7 @@ for iter in range(500000):
         if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
         replay_buffer.append(ReplaySample(
-            torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device), # TODO: With the new loss, instead of `iter` just below.
-            # iter,
+            torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device),
             full_state,
             action,
             noise,
@@ -389,9 +387,13 @@ finish()
 
 
 
-# TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually not trivially-cheap in comparison.)
-#   TODO: Have `embed(src|dst, input) → emb` and its `embed_` wrapper and `dist_(src_emb, dst_emb)`.
-#   TODO: …What code do we touch, exactly?…
+# TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually be not trivially-cheap in comparison.)
+#   TODO: Have `embed(src|dst, input) → emb` and its `embed_` wrapper.
+#     TODO: Have `act(src_emb, dst_emb) → emb` and its `act_` wrapper.
+#     TODO: Have `dist_(src_emb, dst_emb)`.
+#   TODO: Make unrolling and goal-resetting use embeddings.
+#   TODO: Make logging use embeddings.
+#   TODO: Replace all `act_dist` calls with `act_` and `dist_` calls on embeddings. Especially in the loss.
 #   TODO: Have `next_embed(prev_emb, action) → next_emb`.
 #     (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
 #     TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
