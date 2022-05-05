@@ -225,6 +225,8 @@ def pos_histogram(plt, label):
         acts, dists = act_dist(src, dst)
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
+
+        # TODO: …Is it possible to unroll like a 30-step trajectory right here, from a random point, show its position-changes with arrows, and with a dot for the destination? (Really inspect how good/bad the policies are.)
 def onclick(event):
     """When clicking the distance/action plot, set destination and redraw."""
     if event.xdata is not None and event.ydata is not None and 0 < event.xdata < 1 and 0 < event.ydata < 1:
@@ -269,9 +271,11 @@ def maybe_reset_goal(input):
         steps_to_goal = torch.where(change, new_dist + 4, steps_to_goal - 1)
 
         reached_rating = 1 - (old_dist - .01).clamp(0,1) # Smoother.
-        steps_to_goal_err = (act_dist(input, goal)[1] - steps_to_goal).abs()
-    return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_err.sum()
-def replay(reached_rating, reached, timeout, steps_to_goal_err):
+        steps_to_goal_err = act_dist(input, goal)[1] - steps_to_goal
+        steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
+        steps_to_goal_underperform = steps_to_goal_err.clamp(0) # (How much better that long-ago state is, allegedly.)
+    return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_regret.sum(), steps_to_goal_underperform.sum()
+def replay(reached_rating, reached, timeout, steps_to_goal_regret, steps_to_goal_underperform):
     """Replays samples from the buffer.
 
     Picks many faraway samples, computes all pairwise distances & actions, and makes the shortest paths on the minibatch's dense graph serve as prediction targets. (Search, to reuse solved subtasks.)
@@ -311,7 +315,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_err):
                 i, j = expand(times, 1), expand(times, 2)
                 cond = i < j
                 if lvl>0: cond = cond & (j-i < d) # First dist-level has to not filter sharply.
-                d = torch.where(cond, j-i, d).clamp(0)
+                d = torch.where(cond, j-i, d + .2).clamp(0) # Slowly penalize unconnected components.
                 a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
@@ -331,44 +335,16 @@ def replay(reached_rating, reached, timeout, steps_to_goal_err):
 
     # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
+    #   (On-policy penalization of unconnected components.)
     goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × input_sz
     goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
     goal_dists = act_dist(states, goals, noises, lvl=-1)[1]
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
-    #     TODO: Try with `.square()`.
     #     TODO: Try with `lvl=1`. (Though I don't think this would be semantically correct.)
 
     # TODO: Run & fix.
 
-    # TODO: Just go ahead and move to embeddings (& DDPG) anyway, if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge).
-
-    # TODO: …Make the code above work at least as well as the code below?…
-    # L = len(replay_buffer)
-    # dist_loss, action_loss = 0,0
-    # for _ in range(replays_per_step): # Look, concatenation and variable-management are hard.
-    #     # Variables.
-    #     a,b = replay_buffer[random.randint(0, L-1)], replay_buffer[random.randint(0, L-1)]
-    #     i,j = a.time, b.time
-    #     if i>j: i,j,a,b = j,i,b,a
-    #     if i==j: continue
-    #     for as_goal in b.goals:
-    #         aag, dag = act_dist(a.state, as_goal, a.noise)
-    #         # Learn faraway distances to goal-states, using timestamp-differences.
-    #         def dstl(d,D):
-    #             """Prediction that prefers lower-dists: always nonzero, but fades if dist is too high."""
-    #             mult = (d.detach() - D + 1).clamp(.3,3)
-    #             return (mult * (d - D).square()).sum()
-    #         dag1 = act_dist(a.state, as_goal, lvl=-1)[1]
-    #         dag2 = act_dist(a.state, as_goal)[1] # lvl=1
-    #         with torch.no_grad():
-    #             dag1_t = act_dist(a.state, as_goal, a.noise, lvl=-1, nn=dist_slow)[1]
-    #         dist_loss = dist_loss + dstl(dag1, j-i)
-    #         dist_loss = dist_loss + dstl(dag2, dag1_t) # …This wasn't slow? Is that why it was unstable?  …With a slow target, it seems either faster or now-learning.
-    #         # (We have 2 levels, where each filters the prediction-targets to be lower.)
-    #         # Self-imitation: make globally-min-dist actions predict the min-dist actions from the replay.
-    #         with torch.no_grad():
-    #             dag = act_dist(a.state, as_goal, a.noise, nn=dist_slow)[1]
-    #         action_loss = action_loss + (aag - torch.where(dag < j-i, aag, a.action)).square().sum()
+    # TODO: Just go ahead and move to embeddings (& DDPG), if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge).
 
     (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -376,7 +352,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_err):
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
-    log(1, False, reached_rating = to_np(reached_rating), reached = to_np(reached), timeout = to_np(timeout), dist_error = to_np(steps_to_goal_err))
+    log(1, False, reached_rating = to_np(reached_rating), reached = to_np(reached), timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret), dist_underperform = to_np(steps_to_goal_underperform))
     log(2, False, dist_loss = to_np(dist_loss / batch_sz / N), action_loss = to_np(action_loss / batch_sz / N))
 
 
