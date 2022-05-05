@@ -223,23 +223,23 @@ def pos_histogram(plt, label):
         # Display action-arrows everywhere.
         GS = 16 # grid size
         dst_pos = pos_histogram.dst_pos
-        dst = pos_only(dst_pos.expand(GS*GS, 2))
+        dst = embed_(1, pos_only(dst_pos.expand(GS*GS, 2)))
         plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white', zorder=3)
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         x = x.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
         y = y.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
-        src = cat(x, y, veloc)
-        acts, dists = act_dist(src, dst)
+        src = embed_(0, cat(x, y, veloc))
+        acts, dists = act_(src, dst), dist_(src, dst)
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 
         # Unroll a sample trajectory, to visually gauge how well goal-chasing works.
         src = torch.cat((pos_histogram.src_pos, torch.zeros(1,2, device=device)), -1)
-        dst = pos_only(dst_pos)
+        dst = embed_(1, pos_only(dst_pos))
         mid = [src[0, :2]]
         for _ in range(64):
-            action = act_dist(src, dst)[0]
+            action = act_(embed_(0, src), dst)
             state, hidden_state = env_step(src[:, :2], src[:, 2:], action)
             src = torch.cat((state, hidden_state), -1)
             mid.append(src[0, :2])
@@ -417,7 +417,6 @@ finish()
 
 # TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually be not trivially-cheap in comparison.)
 #   TODO: Make unrolling and goal-resetting use embeddings.
-#   TODO: Make logging use embeddings.
 #   TODO: Replace all 9 `act_dist` calls with `act_` and `dist_` calls on embeddings. Especially in the loss.
 # TODO: Have `next_embed(prev_emb, action) → next_emb`.
 #   (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
