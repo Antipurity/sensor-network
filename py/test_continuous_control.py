@@ -144,7 +144,7 @@ def net(ins, outs, hidden=embed_sz, layers=3):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs)),
     ).to(device)
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
-act = net(embed_sz + embed_sz, action_sz, layers=0) # (src, dst) → action
+act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=0) # (src, dst, noise) → action
 
 
 dist = net(input_sz + input_sz + noise_sz + 1, action_sz + 1)
@@ -167,9 +167,11 @@ def embed_(src_or_dst, input, lvl=1, nn=embed):
 def dist_(src_emb, dst_emb):
     """Returns the shortest-path distance from src to dst, so that we can distinguish bad actions."""
     return 2 ** ((src_emb - dst_emb).abs().mean(-1, keepdim=True) + 4)
-def act_(src_emb, dst_emb):
+def act_(src_emb, dst_emb, noise = ...):
     """Returns the shortest-path action from src to dst."""
-    return act(cat(src_emb, dst_emb))
+    if noise is ...:
+        noise = torch.randn(*src_emb.shape[-1], noise_sz, device=device)
+    return act(cat(src_emb, dst_emb, noise))
 
 
 
@@ -318,6 +320,8 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
     actions = torch.stack([s.action for s in samples], 1) # batch_sz × N × action_sz
     noises = torch.stack([s.noise for s in samples], 1) # batch_sz × N × noise_sz
 
+    # TODO: …How to incorporate embeddings into the loss?…
+
     # Learn distances & actions.
     dist_loss, action_loss = 0,0
     def expand(x, src_or_dst):
@@ -325,7 +329,9 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
         return x.unsqueeze(src_or_dst).expand(batch_sz, N, N, x.shape[-1])
     def l_dist(d,D):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
-        with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3,3)
+        with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3,3) # TODO: …Maybe we DO want to be able to pass in another `d` for here, namely, the previous level's distance prediction.
+        # TODO: …Wait: non-first dist levels can just completely discard all distance-targets above the prev-level's. Do so, whenever the alternative `d` is non-`None`.
+        #   TODO: …That current "gated prediction of the prev level" alternative would take a long time to get notified of new low-distances; to squeeze out all efficiency that we can, we should *sharp-filter* the real targets with the prev level…
         return (mult * (d - D).square()).sum()
     max_goals = max(len(s.goals) for s in samples)
     for lvl in range(dist_levels):
@@ -386,11 +392,10 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
 
 
 for iter in range(500000):
-    # TODO: …How to incorporate embeddings here?…
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
-        action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
+        action = act_(embed_(0, full_state), goal, noise)
         # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) (…Somehow, we've reached a state where we don't need this cheating. Maybe remove.)
         if iter % 100 >= 50:
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
@@ -419,8 +424,7 @@ finish()
 
 
 # TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually be not trivially-cheap in comparison.)
-#   TODO: Make unrolling and goal-resetting use embeddings.
-#   TODO: Replace all 9 `act_dist` calls with `act_` and `dist_` calls on embeddings. Especially in the loss.
+#   TODO: Replace all 4 remaining `act_dist` calls with `act_` and `dist_` calls on embeddings. Especially in the loss.
 # TODO: Have `next_embed(prev_emb, action) → next_emb`.
 #   (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
 #   TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
