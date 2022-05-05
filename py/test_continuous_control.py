@@ -280,7 +280,7 @@ def maybe_reset_goal(input):
             [-1., 1,0,0], [0, 1,0,0], [1, 1,0,0],
         ], device=device).unsqueeze(-2)
         old_dist = (pos_only(input) - (goal + wrap_offsets)).abs().sum(-1, keepdim=True).min(0)[0]
-        new_dist = act_dist(input, dst)[1] # TODO: nn=dist_slow, maybe?
+        new_dist = act_dist(input, dst, nn=dist_slow)[1]
         reached, out_of_time = old_dist < .05, steps_to_goal < 0
         change = reached | out_of_time
 
@@ -288,7 +288,7 @@ def maybe_reset_goal(input):
         steps_to_goal = torch.where(change, new_dist + 4, steps_to_goal - 1)
 
         reached_rating = 1 - (old_dist - .05).clamp(0,1) # Smoother.
-        steps_to_goal_err = act_dist(input, goal)[1] - steps_to_goal
+        steps_to_goal_err = act_dist(input, goal, nn=dist_slow)[1] - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
     return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_regret.sum()
 def replay(reached_rating, reached, timeout, steps_to_goal_regret):
