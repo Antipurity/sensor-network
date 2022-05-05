@@ -159,21 +159,21 @@ optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *dist.paramete
 
 
 
-def embed_(src_or_dst, input, lvl=1):
+def embed_(src_or_dst, input, lvl=1, nn=embed):
     """Locally-isometric embeddings: `dist_` between src & dst embeddings is an increasing func of the steps it takes to go."""
     src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
     lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
-    return embed(cat(src_or_dst, input, lvl))
+    return nn(cat(src_or_dst, input, lvl))
 def dist_(src_emb, dst_emb):
     """Returns the shortest-path distance from src to dst, so that we can distinguish bad actions."""
-    return 2 ** (src_emb - dst_emb).abs().mean(-1, keepdim=True)
+    return 2 ** ((src_emb - dst_emb).abs().mean(-1, keepdim=True) + 4)
 def act_(src_emb, dst_emb):
     """Returns the shortest-path action from src to dst."""
     return act(cat(src_emb, dst_emb))
 
 
 
-def act_dist(src, dst, noise=None, nn=dist, lvl=1.):
+def act_dist(src, dst, noise=None, nn=dist, lvl=1.): # TODO: Work toward removing this.
     """Returns a tuple `(action, dist)`, having refined the action (possibly `None`) & source & destination."""
     if noise is None:
         noise = torch.randn(*src.shape[:-1], noise_sz, device=device)
@@ -284,14 +284,16 @@ def maybe_reset_goal(input):
         if random.randint(1,4) == 1: # In 25% of cases, try go to a non-replay-buffer destination.
             dst = pos_only(torch.rand(batch_sz, input_sz, device=device))
             # (Note: this doesn't help make the blobs more expansive. Doesn't do anything of note, except for *maybe* better-looking distances.)
+        dst = embed_(1, dst, nn=dist_slow)
+        src = embed_(0, input, nn=dist_slow)
 
         wrap_offsets = torch.tensor([
             [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
             [-1., 0,0,0], [0, 0,0,0], [1, 0,0,0],
             [-1., 1,0,0], [0, 1,0,0], [1, 1,0,0],
         ], device=device).unsqueeze(-2)
-        old_dist = (pos_only(input) - (goal + wrap_offsets)).abs().sum(-1, keepdim=True).min(0)[0]
-        new_dist = act_dist(input, dst, nn=dist_slow)[1]
+        old_dist = (embed_(0, pos_only(input + wrap_offsets), nn=dist_slow) - goal).abs().sum(-1, keepdim=True).min(0)[0]
+        new_dist = dist_(src, dst)
         reached, out_of_time = old_dist < .05, steps_to_goal < 0
         change = reached | out_of_time
 
@@ -299,7 +301,7 @@ def maybe_reset_goal(input):
         steps_to_goal = torch.where(change, new_dist + 4, steps_to_goal - 1)
 
         reached_rating = 1 - (old_dist - .05).clamp(0,1) # Smoother.
-        steps_to_goal_err = act_dist(input, goal, nn=dist_slow)[1] - steps_to_goal
+        steps_to_goal_err = dist_(src, goal) - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
     return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_regret.sum()
 def replay(reached_rating, reached, timeout, steps_to_goal_regret):
@@ -384,6 +386,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
 
 
 for iter in range(500000):
+    # TODO: …How to incorporate embeddings here?…
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
