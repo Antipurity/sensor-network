@@ -65,7 +65,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     # force_center = torch.ones(posit.shape[0], 2, device=device)/2
     # force_len = (posit - force_center).square() + 1e-5
     # force = 3e-5 / force_len
-    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor?
+    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor? …Now, actually starts being able to often reach the destination by 10k… So maybe re-enable it?… We're having trouble learning anything outside the clusters at the corners.
     veloc = (veloc + accel) * .9
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
@@ -137,31 +137,39 @@ dist_levels = 2 # Each dist-level filters the predicted distance target to reduc
 
 
 
-def net(ins, outs, hidden=embed_sz):
+def net(ins, outs, hidden=embed_sz, layers=3):
     return nn.Sequential(
         SkipConnection(nn.Linear(ins, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)),
-        nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs),
+        *[SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)) for _ in range(layers)],
+        SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs)),
     ).to(device)
+embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
+act = net(embed_sz + embed_sz, action_sz, layers=0) # (src, dst) → action
+
+
 dist = net(input_sz + input_sz + noise_sz + 1, action_sz + 1)
 #   (src, dst, lvl) → (min_action, min_dist)
 #   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
 #   (Usable for self-imitation, and possibly good-embeddings-learning. …"Good embeddings" implies that we can embed a single input in isolation, which we can't, really…)
-#   Loss-wise:
-#     - (…This was updated since then though…)
-#     - `min_dist` with replayed `action`s is the index-diff;
-#     - `min_dist` with 0 is the index-diff;
-#     - `min_action` with 0 is the replayed `action`.
-#     - (For tighter losses, we sample not just faraway i→j but i→j→k, and make i→k losses also consider i→j + j→k for exponential-combining. Has not been ablated.)
-#     - DDPG: generate an action from 0 and estimate it.
-#     - All losses are multiplied by how much the prediction-target improves/lessens the dist.
 
 dist_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
+embed_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
 
-optim = torch.optim.Adam([*dist.parameters()], lr=lr)
+optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *dist.parameters()], lr=lr)
+
+
+
+def embed_(src_or_dst, input, lvl=1):
+    """Locally-isometric embeddings: `dist_` between src & dst embeddings is an increasing func of the steps it takes to go."""
+    src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
+    lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
+    return embed(cat(src_or_dst, input, lvl))
+def dist_(src_emb, dst_emb):
+    """Returns the shortest-path distance from src to dst, so that we can distinguish bad actions."""
+    return 2 ** (src_emb - dst_emb).abs().mean(-1, keepdim=True)
+def act_(src_emb, dst_emb):
+    """Returns the shortest-path action from src to dst."""
+    return act(cat(src_emb, dst_emb))
 
 
 
@@ -235,10 +243,10 @@ def pos_histogram(plt, label):
             state, hidden_state = env_step(src[:, :2], src[:, 2:], action)
             src = torch.cat((state, hidden_state), -1)
             mid.append(src[0, :2])
-        plt.scatter((dst[0,0]+1).cpu(), dst[0,1].cpu(), c='white', zorder=4)
+        plt.scatter((dst[0,0]+1).cpu(), dst[0,1].cpu(), c='white', zorder=5)
         xy = torch.stack(mid,0)
         pre, uv = xy[:-1], xy[1:] - xy[:-1]
-        plt.quiver((pre[:,0]+1).cpu(), pre[:,1].cpu(), uv[:,0].cpu(), uv[:,1].cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=5)
+        plt.quiver((pre[:,0]+1).cpu(), pre[:,1].cpu(), uv[:,0].cpu(), uv[:,1].cpu(), color='white', scale=1, scale_units='xy', angles='xy', units='xy', zorder=4)
 def onclick(event):
     """When clicking the distance/action plot, set destination and redraw."""
     x, y = event.xdata, event.ydata
@@ -273,6 +281,9 @@ def maybe_reset_goal(input):
         dst = s.state[torch.randperm(batch_sz, device=device)]
         if random.randint(1,2) == 1: # In 50% of the cases, go to an XY position.
             dst = pos_only(dst)
+        if random.randint(1,4) == 1: # In 25% of cases, try go to a non-replay-buffer destination.
+            dst = pos_only(torch.rand(batch_sz, input_sz, device=device))
+            # (Note: this doesn't help make the blobs more expansive. Doesn't do anything of note, except for *maybe* better-looking distances.)
 
         wrap_offsets = torch.tensor([
             [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
@@ -363,7 +374,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
 
     (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
-    dist_slow.update()
+    dist_slow.update();  embed_slow.update()
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
@@ -378,7 +389,8 @@ for iter in range(500000):
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
         # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) (…Somehow, we've reached a state where we don't need this cheating. Maybe remove.)
-        if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
+        if iter % 100 >= 50:
+            if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
         replay_buffer.append(ReplaySample(
             torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device),
@@ -404,16 +416,13 @@ finish()
 
 
 # TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually be not trivially-cheap in comparison.)
-#   TODO: Have `embed(src|dst, input, lvl=1) → emb` and its `embed_` wrapper. And `embed_slow`.
-#     TODO: Have `act(src_emb, dst_emb) → emb` and its `act_` wrapper. (No dist-level.)
-#     TODO: Have `dist_(src_emb, dst_emb)`.
 #   TODO: Make unrolling and goal-resetting use embeddings.
 #   TODO: Make logging use embeddings.
-#   TODO: Replace all `act_dist` calls with `act_` and `dist_` calls on embeddings. Especially in the loss.
-#   TODO: Have `next_embed(prev_emb, action) → next_emb`.
-#     (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
-#     TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
-#     TODO: Use this for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
+#   TODO: Replace all 9 `act_dist` calls with `act_` and `dist_` calls on embeddings. Especially in the loss.
+# TODO: Have `next_embed(prev_emb, action) → next_emb`.
+#   (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
+#   TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
+#   TODO: Use this for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
 
 
 
