@@ -31,9 +31,9 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
     Add acceleration to velocity, and add velocity to position.
 
-    Max action-acceleration is `1e-3`.
+    Max action-acceleration is `1e-2`.
 
-    There's a repulsor at `(.5, .5)` that adds a force proportional to `3e-5 / (pos - (.5, .5)).square()` to acceleration, to make exploration not as trivial. There's friction that multiplies velocity (hidden state) by `0.99` each step.
+    There's a repulsor at `(.5, .5)` that adds a force proportional to `3e-5 / (pos - (.5, .5)).square()` to acceleration, to make exploration not as trivial. There's friction that multiplies velocity (hidden state) by `0.9` each step.
 
     If you must know how it feels, use this simple HTML page:
 
@@ -226,16 +226,33 @@ def pos_histogram(plt, label):
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 
-        # TODO: …Is it possible to unroll like a 30-step trajectory right here, from a random point, show its position-changes with arrows, and with a dot for the destination? (Really inspect how good/bad the policies are.)
+        # Unroll a sample trajectory, to visually gauge how well goal-chasing works.
+        src = torch.cat((pos_histogram.src_pos, torch.zeros(1,2, device=device)), -1)
+        dst = pos_only(dst_pos)
+        mid = [src[0, :2]]
+        for _ in range(64):
+            action = act_dist(src, dst)[0]
+            state, hidden_state = env_step(src[:, :2], src[:, 2:], action)
+            src = torch.cat((state, hidden_state), -1)
+            mid.append(src[0, :2])
+        plt.scatter((dst[0,0]+1).cpu(), dst[0,1].cpu(), c='white', zorder=4)
+        xy = torch.stack(mid,0)
+        pre, uv = xy[:-1], xy[1:] - xy[:-1]
+        plt.quiver((pre[:,0]+1).cpu(), pre[:,1].cpu(), uv[:,0].cpu(), uv[:,1].cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=5)
 def onclick(event):
     """When clicking the distance/action plot, set destination and redraw."""
-    if event.xdata is not None and event.ydata is not None and 0 < event.xdata < 1 and 0 < event.ydata < 1:
-        pos_histogram.dst_pos = torch.tensor([[float(event.xdata), float(event.ydata)]], device=device)
+    x, y = event.xdata, event.ydata
+    if x is not None and y is not None and 0 < x < 2 and 0 < y < 1:
+        if x < 1:
+            pos_histogram.dst_pos = torch.tensor([[float(x), float(y)]], device=device)
+        else:
+            pos_histogram.src_pos = torch.tensor([[float(x)-1, float(y)]], device=device)
         try: finish(False)
         except RuntimeError: pass # If an error, we're already in a `finish`.
 import matplotlib
 matplotlib.pyplot.subplots()[0].canvas.mpl_connect('button_press_event', onclick)
-pos_histogram.dst_pos = torch.rand(1,2, device=device)
+pos_histogram.dst_pos = torch.ones(1,2, device=device)/2
+pos_histogram.src_pos = torch.rand(1,2, device=device)
 
 
 
@@ -263,7 +280,7 @@ def maybe_reset_goal(input):
             [-1., 1,0,0], [0, 1,0,0], [1, 1,0,0],
         ], device=device).unsqueeze(-2)
         old_dist = (pos_only(input) - (goal + wrap_offsets)).abs().sum(-1, keepdim=True).min(0)[0]
-        new_dist = act_dist(input, dst)[1]
+        new_dist = act_dist(input, dst)[1] # TODO: nn=dist_slow, maybe?
         reached, out_of_time = old_dist < .05, steps_to_goal < 0
         change = reached | out_of_time
 
@@ -273,9 +290,8 @@ def maybe_reset_goal(input):
         reached_rating = 1 - (old_dist - .05).clamp(0,1) # Smoother.
         steps_to_goal_err = act_dist(input, goal)[1] - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
-        steps_to_goal_underperform = steps_to_goal_err.clamp(0) # (How much better that long-ago state is, allegedly.)
-    return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_regret.sum(), steps_to_goal_underperform.sum()
-def replay(reached_rating, reached, timeout, steps_to_goal_regret, steps_to_goal_underperform):
+    return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_regret.sum()
+def replay(reached_rating, reached, timeout, steps_to_goal_regret):
     """Replays samples from the buffer.
 
     Picks many faraway samples, computes all pairwise distances & actions, and makes the shortest paths on the minibatch's dense graph serve as prediction targets. (Search, to reuse solved subtasks.)
@@ -315,7 +331,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret, steps_to_goal
                 i, j = expand(times, 1), expand(times, 2)
                 cond = i < j
                 if lvl>0: cond = cond & (j-i < d) # First dist-level has to not filter sharply.
-                d = torch.where(cond, j-i, d + .2).clamp(0) # Slowly penalize unconnected components.
+                d = torch.where(cond, j-i, d + 1).clamp(0) # Slowly penalize unconnected components.
                 a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
@@ -351,7 +367,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret, steps_to_goal
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
-    log(1, False, reached_rating = to_np(reached_rating), reached = to_np(reached), timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret), dist_underperform = to_np(steps_to_goal_underperform))
+    log(1, False, reached_rating = to_np(reached_rating), reached = to_np(reached), timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret))
     log(2, False, dist_loss = to_np(dist_loss / batch_sz / N), action_loss = to_np(action_loss / batch_sz / N))
 
 
@@ -361,7 +377,7 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action, _ = act_dist(full_state, goal, noise, nn=dist_slow)
-        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.)
+        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) (…Somehow, we've reached a state where we don't need this cheating. Maybe remove.)
         if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
         replay_buffer.append(ReplaySample(
@@ -388,8 +404,8 @@ finish()
 
 
 # TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually be not trivially-cheap in comparison.)
-#   TODO: Have `embed(src|dst, input) → emb` and its `embed_` wrapper.
-#     TODO: Have `act(src_emb, dst_emb) → emb` and its `act_` wrapper.
+#   TODO: Have `embed(src|dst, input, lvl=1) → emb` and its `embed_` wrapper. And `embed_slow`.
+#     TODO: Have `act(src_emb, dst_emb) → emb` and its `act_` wrapper. (No dist-level.)
 #     TODO: Have `dist_(src_emb, dst_emb)`.
 #   TODO: Make unrolling and goal-resetting use embeddings.
 #   TODO: Make logging use embeddings.
