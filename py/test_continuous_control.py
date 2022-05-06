@@ -164,6 +164,7 @@ optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *next.paramete
 
 def embed_(src_or_dst, input, lvl=1, nn=embed):
     """Locally-isometric embeddings: `dist_` between src & dst embeddings is an increasing func of the steps it takes to go."""
+    assert input.shape[-1] == input_sz # TODO:
     src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
     lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
     return nn(cat(src_or_dst, input, lvl))
@@ -378,10 +379,10 @@ def replay(timeout, steps_to_goal_regret):
     # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     #   (On-policy penalization of unconnected components.)
-    goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × input_sz
+    goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
     goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    states_e, goals_e = embed_(0, states, lvl=-1), embed_(1, goals, lvl=-1)
-    goal_dists = dist_(states_e, goals_e)
+    states_e = embed_(0, states, lvl=-1)
+    goal_dists = dist_(states_e, goals)
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
 
     # Action-consequence prediction.
