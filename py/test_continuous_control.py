@@ -146,16 +146,9 @@ def net(ins, outs, hidden=embed_sz, layers=3):
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
 act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=0) # (src, dst, noise) → action
 
+embed_slow = MomentumCopy(embed, .999) # Stabilize targets to prevent collapse.
 
-dist = net(input_sz + input_sz + noise_sz + 1, action_sz + 1)
-#   (src, dst, lvl) → (min_action, min_dist)
-#   (Learns min-dist spanning trees that go to a destination, and that min-dist for tree-selection.)
-#   (Usable for self-imitation, and possibly good-embeddings-learning. …"Good embeddings" implies that we can embed a single input in isolation, which we can't, really…)
-
-dist_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
-embed_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
-
-optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *dist.parameters()], lr=lr)
+optim = torch.optim.Adam([*embed.parameters(), *act.parameters()], lr=lr)
 
 
 
@@ -175,13 +168,6 @@ def act_(src_emb, dst_emb, noise = ...):
 
 
 
-def act_dist(src, dst, noise=None, nn=dist, lvl=1.): # TODO: Work toward removing this.
-    """Returns a tuple `(action, dist)`, having refined the action (possibly `None`) & source & destination."""
-    if noise is None:
-        noise = torch.randn(*src.shape[:-1], noise_sz, device=device)
-    lvl = torch.full([*src.shape[:-1], 1], lvl, device=device)
-    ad = nn(cat(2*src-1, 2*dst-1, noise, lvl))
-    return ad[..., :-1], 2**ad[..., -1:]
 def pos_only(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2, device=device))
 
 
@@ -321,7 +307,6 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
     noises = torch.stack([s.noise for s in samples], 1) # batch_sz × N × noise_sz
 
     # Learn distances & actions.
-    dist_loss, action_loss = 0,0
     def expand(x, src_or_dst):
         """N×… to N×N×…. `src_or_dst` is 1|2, representing which `N` is broadcasted."""
         return x.unsqueeze(src_or_dst).expand(batch_sz, N, N, x.shape[-1])
@@ -331,7 +316,9 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
         # TODO: …Wait: non-first dist levels can just completely discard all distance-targets above the prev-level's. Do so, whenever the alternative `d` is non-`None`.
         #   TODO: …That current "gated prediction of the prev level" alternative would take a long time to get notified of new low-distances; to squeeze out all efficiency that we can, we should *sharp-filter* the real targets with the prev level…
         return (mult * (d - D).square()).sum()
+    dist_loss, action_loss = 0,0
     max_goals = max(len(s.goals) for s in samples)
+    noss = expand(noises, 1)
     for lvl in range(dist_levels):
         last = lvl == dist_levels-1
         prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
@@ -340,7 +327,6 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
         states_e = embed_(0, states, lvl=prev_lvl, nn=embed_slow) # Target.
         states_e1 = embed_(0, states, lvl=next_lvl) # Prediction.
         srcs, srcs1 = expand(states_e, 1), expand(states_e1, 1)
-        noss = expand(noises, 1)
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
@@ -378,7 +364,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
             dist_loss = dist_loss + l_dist(d1, d)
             if last:
                 a1 = act_(srcs1, dsts1, n)
-                act_gating = (d < d1).float().detach()
+                act_gating = (d < d1+1).float().detach() # +1 to mirror `d`'s.
                 action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
                 #   (No momentum slowing for `d1` is less correct but easier to implement.)
 
@@ -387,16 +373,21 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
     #   (On-policy penalization of unconnected components.)
     goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × input_sz
     goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    goal_dists = act_dist(states, goals, noises, lvl=-1)[1] # TODO: …Should we just use `dist_` here?… …Do we need to re-embed `states` and `goals` right here just for this?…
+    states_e, goals_e = embed_(0, states, lvl=-1), embed_(1, goals, lvl=-1)
+    goal_dists = dist_(states_e, goals_e)
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
 
-    # TODO: Just go ahead and move to embeddings (& DDPG), if only so that the compute-cost is substantially lower (and, diversity of actions should no longer be affected by distances being overly-huge).
+    # TODO: Implement DDPG too.
+    # TODO: Have `next_embed(prev_emb, action) → next_emb`.
+    #   (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
+    #   TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
+    #   TODO: Use this for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
 
     # TODO: Run & fix.
 
     (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
-    dist_slow.update();  embed_slow.update()
+    embed_slow.update()
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
@@ -437,12 +428,6 @@ finish()
 
 
 
-# TODO: Return to locally-isometric embeddings. (With faraway-sample batches, brings big benefits: NN calls go from `O(N*N)` to `O(N)`, so that `floyd` can actually be not trivially-cheap in comparison.)
-#   TODO: Replace all 4 remaining `act_dist` calls with `act_` and `dist_` calls on embeddings. Especially in the loss.
-# TODO: Have `next_embed(prev_emb, action) → next_emb`.
-#   (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
-#   TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
-#   TODO: Use this for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
 
 
 
@@ -488,3 +473,4 @@ finish()
 #     (I guess for now, we should refine intent-amplification, and worry about plugging in intent later.)
 #     (If we want a separate channel, then damn, I guess those `import env` one-liners aren't gonna fly with `sn` anymore.)
 #   …However: making the agent learn to 'control' human data, and simply cutting out chunks of how-humans-want-to-be-controlled via reward, *may* create much richer experiences, without the tedious need to make the agent explore & acquire skills manually.
+#     …Meaning, is neural pathfinding the best thing we can do for `sn` then?…
