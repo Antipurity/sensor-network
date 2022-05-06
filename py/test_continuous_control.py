@@ -173,7 +173,7 @@ def dist_(src_emb, dst_emb):
 def act_(src_emb, dst_emb, noise = ...):
     """Returns the shortest-path action from src to dst."""
     if noise is ...:
-        noise = torch.randn(*src_emb.shape[-1], noise_sz, device=device)
+        noise = torch.randn(*src_emb.shape[:-1], noise_sz, device=device)
     return act(cat(src_emb, dst_emb, noise))
 
 
