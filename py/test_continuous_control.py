@@ -312,9 +312,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
         return x.unsqueeze(src_or_dst).expand(batch_sz, N, N, x.shape[-1])
     def l_dist(d,D):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
-        with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3,3) # TODO: …Maybe we DO want to be able to pass in another `d` for here, namely, the previous level's distance prediction.
-        # TODO: …Wait: non-first dist levels can just completely discard all distance-targets above the prev-level's. Do so, whenever the alternative `d` is non-`None`.
-        #   TODO: …That current "gated prediction of the prev level" alternative would take a long time to get notified of new low-distances; to squeeze out all efficiency that we can, we should *sharp-filter* the real targets with the prev level…
+        with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3, 3)
         return (mult * (d - D).square()).sum()
     dist_loss, action_loss = 0,0
     max_goals = max(len(s.goals) for s in samples)
