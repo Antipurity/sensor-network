@@ -145,10 +145,12 @@ def net(ins, outs, hidden=embed_sz, layers=3):
     ).to(device)
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
 act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=0) # (src, dst, noise) → action
+next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
+#   (`next` is not just a gimmick: it allows DDPG and helps with stochasticity.)
 
 embed_slow = MomentumCopy(embed, .999) # Stabilize targets to prevent collapse.
 
-optim = torch.optim.Adam([*embed.parameters(), *act.parameters()], lr=lr)
+optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *next.parameters()], lr=lr)
 
 
 
@@ -258,7 +260,9 @@ goal = torch.randn(batch_sz, input_sz, device=device)
 steps_to_goal = torch.rand(batch_sz, 1, device=device)
 state, hidden_state = env_init(batch_sz=batch_sz)
 def maybe_reset_goal(input):
-    """Sometimes changes the unroll's goal, when the previous one either gets reached or doesn't seem to be getting anywhere, to a goal that may be hard to predict (so that we may learn it).
+    """Sometimes changes the unroll's goal, when the previous path runs longer than predicted, to a goal that may be hard to predict (so that we may learn it).
+
+    (Exact reachability is kinda impossible in continuous envs with func approximation, so we only change on timeout.)
 
     Possible destinations: a random state or a random XY position from `replay_buffer`. (It is important that the loss learns that unreachable goals are unreachable until proven otherwise, or else the `floyd` search would keep exploiting out-of-distribution "small" ghost-dists and prevent improvement.)
 
@@ -275,24 +279,14 @@ def maybe_reset_goal(input):
         dst = embed_(1, dst, nn=embed_slow)
         src = embed_(0, input, nn=embed_slow)
 
-        wrap_offsets = torch.tensor([
-            [-1.,-1,0,0], [0,-1,0,0], [1,-1,0,0],
-            [-1., 0,0,0], [0, 0,0,0], [1, 0,0,0],
-            [-1., 1,0,0], [0, 1,0,0], [1, 1,0,0],
-        ], device=device).unsqueeze(-2)
-        old_dist = (embed_(0, pos_only(input + wrap_offsets), nn=embed_slow) - goal).abs().sum(-1, keepdim=True).min(0)[0]
-        new_dist = dist_(src, dst)
-        reached, out_of_time = old_dist < .05, steps_to_goal < 0
-        change = reached | out_of_time
+        out_of_time = steps_to_goal < 0
+        goal = torch.where(out_of_time, dst, goal)
+        steps_to_goal = torch.where(out_of_time, dist_(src, dst) + 4, steps_to_goal - 1)
 
-        goal = torch.where(change, dst, goal)
-        steps_to_goal = torch.where(change, new_dist + 4, steps_to_goal - 1)
-
-        reached_rating = 1 - (old_dist - .05).clamp(0,1) # Smoother.
         steps_to_goal_err = dist_(src, goal) - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
-    return reached_rating.sum(), reached.float().sum(), out_of_time.float().sum(), steps_to_goal_regret.sum()
-def replay(reached_rating, reached, timeout, steps_to_goal_regret):
+    return out_of_time.float().sum(), steps_to_goal_regret.sum()
+def replay(timeout, steps_to_goal_regret):
     """Replays samples from the buffer.
 
     Picks many faraway samples, computes all pairwise distances & actions, and makes the shortest paths on the minibatch's dense graph serve as prediction targets. (Search, to reuse solved subtasks.)
@@ -301,6 +295,8 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
     N = replays_per_step
     if len(replay_buffer) < N: return
     samples = random.choices(replay_buffer, k=N) # Python 3.6+
+    #   TODO: …Maybe we want to preserve indices, AND add 1 to each index for our `next` training?
+    #     TODO: How exactly to do this?
     times = torch.stack([s.time for s in samples], 1) # batch_sz × N × 1
     states = torch.stack([s.state for s in samples], 1) # batch_sz × N × input_sz
     actions = torch.stack([s.action for s in samples], 1) # batch_sz × N × action_sz
@@ -375,11 +371,10 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
     goal_dists = dist_(states_e, goals_e)
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
 
-    # TODO: Implement DDPG too.
-    # TODO: Have `next_embed(prev_emb, action) → next_emb`.
-    #   (Not just a gimmick: helps with stochasticity, DDPG, and possibly actions that don't change state if we're not lazy in rewriting the dist-loss.)
-    #   TODO: Have a loss that trains it with consecutive samples. (Literally BYOL. Or MuZero.)
-    #   TODO: Use this for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
+    # DDPG, to augment self-imitation's "pick a prior action" with gradient-based dist-min.
+    #   (With locally-isometric embeddings, with angles probably preserved, grad-min might have an easy job.)
+    # TODO: Have a loss that trains `next` with consecutive samples. (Literally BYOL. Or MuZero.)
+    # TODO: Use `next` for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
 
     # TODO: Run & fix.
 
@@ -389,7 +384,7 @@ def replay(reached_rating, reached, timeout, steps_to_goal_regret):
 
     # Log debugging info.
     log(0, False, pos = pos_histogram)
-    log(1, False, reached_rating = to_np(reached_rating), reached = to_np(reached), timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret))
+    log(1, False, timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret))
     log(2, False, dist_loss = to_np(dist_loss / batch_sz / N), action_loss = to_np(action_loss / batch_sz / N))
 
 
