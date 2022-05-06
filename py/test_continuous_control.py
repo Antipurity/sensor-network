@@ -130,7 +130,7 @@ input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
-replays_per_step = 2 # How many samples each unroll-step replays with loss. At least 2.
+replays_per_step = 9 # How many samples each unroll-step replays with loss. At least 2.
 dist_levels = 2 # Each dist-level filters the predicted distance target to reduce it at each level.
 #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies in the replay buffer.)
 #   (Each non-first level also performs a full `floyd` min-distance search (O(N**3)) for getting the best prediction targets.)
@@ -144,9 +144,17 @@ def net(ins, outs, hidden=embed_sz, layers=3):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs)),
     ).to(device)
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
+#   (Locally-isometric map.)
 act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=0) # (src, dst, noise) → action
+#   (Min-dist action.)
 next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
-#   (`next` is not just a gimmick: it allows DDPG and helps with stochasticity.)
+#   (Neighborhoods in the map.)
+#   (The loss for learning this is literally BYOL.)
+#   (`next` is not just a gimmick: it allows DDPG and helps with stochasticity. And repr-learning.)
+# Analogy to [MuZero](https://arxiv.org/abs/1911.08265): `act` & `dist_` are the prediction func, `embed` is the representation func, `next` is the dynamics func.
+#   We don't support learning state through time (partially-observed envs), neither does MuZero (beyond what's directly given to its repr func, which is non-scalable O(N)).
+#     But maybe we could, if `next` was our RNN and `embed` was just the input-embedding and not the whole RNN state, and we had another NN from next-state to input-embedding, and unrolling used the RNN. (Planning (no-real-input unrolling) could feed the next-input-embedding-prediction to `next`.)
+#       TODO: …So should we implement this for completeness's sake?…
 
 embed_slow = MomentumCopy(embed, .999) # Stabilize targets to prevent collapse.
 
@@ -294,9 +302,8 @@ def replay(timeout, steps_to_goal_regret):
     Also incorporates the buffer's actions where they're closer than predicted ([self-imitation](https://arxiv.org/abs/1806.05635)), and learns to reach non-full-state goals."""
     N = replays_per_step
     if len(replay_buffer) < N: return
-    samples = random.choices(replay_buffer, k=N) # Python 3.6+
-    #   TODO: …Maybe we want to preserve indices, AND add 1 to each index for our `next` training?
-    #     TODO: How exactly to do this?
+    indices = [random.randrange(len(replay_buffer)-1) for _ in range(N)]
+    samples = [replay_buffer[i] for i in indices]
     times = torch.stack([s.time for s in samples], 1) # batch_sz × N × 1
     states = torch.stack([s.state for s in samples], 1) # batch_sz × N × input_sz
     actions = torch.stack([s.action for s in samples], 1) # batch_sz × N × action_sz
@@ -310,7 +317,7 @@ def replay(timeout, steps_to_goal_regret):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
         with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3, 3)
         return (mult * (d - D).square()).sum()
-    dist_loss, action_loss = 0,0
+    dist_loss, action_loss, next_loss, ddpg_loss = 0,0,0,0
     max_goals = max(len(s.goals) for s in samples)
     noss = expand(noises, 1)
     for lvl in range(dist_levels):
@@ -353,14 +360,20 @@ def replay(timeout, steps_to_goal_regret):
             if g == 0: # Preserve state-info of full-state for goals.
                 if not last: d0 = d
                 else: d0, a0, n0 = d, a, n
-            # Compute losses.
+            # Compute losses: distance, imitated action, DDPG.
             d1 = dist_(srcs1, dsts1)
             dist_loss = dist_loss + l_dist(d1, d)
             if last:
                 a1 = act_(srcs1, dsts1, n)
-                act_gating = (d < d1+1).float().detach() # +1 to mirror `d`'s.
+                act_gating = (d < d1+1).float().detach() # +1 to mirror `d`'s +1.
                 action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
                 #   (No momentum slowing for `d1` is less correct but easier to implement.)
+                # DDPG: minimize post-action distance with gradient descent too.
+                #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
+                #   (With locally-isometric embeddings, with angles probably preserved, grad-min might have an easy job.)
+                for p in next.parameters(): p.requires_grad_(False)
+                ddpg_loss = ddpg_loss + dist_(next(cat(srcs1, a1)), dsts1.detach()).sum()
+                for p in next.parameters(): p.requires_grad_(True)
 
     # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
@@ -371,21 +384,26 @@ def replay(timeout, steps_to_goal_regret):
     goal_dists = dist_(states_e, goals_e)
     dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
 
-    # DDPG, to augment self-imitation's "pick a prior action" with gradient-based dist-min.
-    #   (With locally-isometric embeddings, with angles probably preserved, grad-min might have an easy job.)
-    # TODO: Have a loss that trains `next` with consecutive samples. (Literally BYOL. Or MuZero.)
-    # TODO: Use `next` for DDPG: grad-min the distance of post-action embeddings. (If embs are locally-isometric and kinda preserve angles, then the loss should be very smooth in `post_emb` space, so if action-space is also smooth, learning should be very quick.)
+    # Action-consequence prediction.
+    with torch.no_grad():
+        next_samples = [replay_buffer[i+1] for i in indices]
+        next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
+        next_states_e = embed_(0, next_states, nn=embed_slow)
+        #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
+    states_e = embed_(0, states)
+    next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
 
     # TODO: Run & fix.
 
-    (dist_loss + action_loss).backward()
+    (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
     embed_slow.update()
 
     # Log debugging info.
+    M = batch_sz * N
     log(0, False, pos = pos_histogram)
     log(1, False, timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret))
-    log(2, False, dist_loss = to_np(dist_loss / batch_sz / N), action_loss = to_np(action_loss / batch_sz / N))
+    log(2, False, dist_loss = to_np(dist_loss / M), action_loss = to_np(action_loss / M), next_loss = to_np(next_loss / M), ddpg_loss = to_np(ddpg_loss / M))
 
 
 
@@ -411,8 +429,6 @@ for iter in range(500000):
         state, hidden_state = env_step(state, hidden_state, action)
     replay(*maybe_reset_goal(full_state))
 finish()
-
-# TODO: Run & fix.
 
 
 
