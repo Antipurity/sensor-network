@@ -130,7 +130,7 @@ input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
-replays_per_step = 9 # How many samples each unroll-step replays with loss. At least 2.
+replays_per_step = 2 # How many samples each unroll-step replays with loss. At least 2.
 dist_levels = 2 # Each dist-level filters the predicted distance target to reduce it at each level.
 #   (So the more levels we have, the more robust our action-learning will be to non-optimal policies in the replay buffer.)
 #   (Each non-first level also performs a full `floyd` min-distance search (O(N**3)) for getting the best prediction targets.)
@@ -149,8 +149,8 @@ act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=0) # (src, dst, nois
 #   (Min-dist action.)
 next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
 #   (Neighborhoods in the map.)
-#   (The loss for learning this is literally BYOL.)
-#   (`next` is not just a gimmick: it allows DDPG and helps with stochasticity. And repr-learning.)
+#   (The loss for learning this is literally BYOL with RNN-steps instead of img-augmentations.)
+#   (Useful for repr-learning & env-stochasticity, DDPG, planning, and safe exploration (when proposing a random action, don't make its distance to a 'safe' goal too much higher than the min-path distance).)
 # Analogy to [MuZero](https://arxiv.org/abs/1911.08265): `act` & `dist_` are the prediction func, `embed` is the representation func, `next` is the dynamics func.
 #   We don't support learning state through time (partially-observed envs), neither does MuZero (beyond what's directly given to its repr func, which is non-scalable O(N)).
 #     But maybe we could, if `next` was our RNN and `embed` was just the input-embedding and not the whole RNN state, and we had another NN from next-state to input-embedding, and unrolling used the RNN. (Planning (no-real-input unrolling) could feed the next-input-embedding-prediction to `next`.)
@@ -164,7 +164,6 @@ optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *next.paramete
 
 def embed_(src_or_dst, input, lvl=1, nn=embed):
     """Locally-isometric embeddings: `dist_` between src & dst embeddings is an increasing func of the steps it takes to go."""
-    assert input.shape[-1] == input_sz # TODO:
     src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
     lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
     return nn(cat(src_or_dst, input, lvl))
@@ -242,7 +241,7 @@ def pos_histogram(plt, label):
             state, hidden_state = env_step(src[:, :2], src[:, 2:], action)
             src = torch.cat((state, hidden_state), -1)
             mid.append(src[0, :2])
-        plt.scatter((dst[0,0]+1).cpu(), dst[0,1].cpu(), c='white', zorder=5)
+        plt.scatter((dst_pos[0,0]+1).cpu(), dst_pos[0,1].cpu(), c='white', zorder=5)
         xy = torch.stack(mid,0)
         pre, uv = xy[:-1], xy[1:] - xy[:-1]
         plt.quiver((pre[:,0]+1).cpu(), pre[:,1].cpu(), uv[:,0].cpu(), uv[:,1].cpu(), color='white', scale=1, scale_units='xy', angles='xy', units='xy', zorder=4)
@@ -372,29 +371,42 @@ def replay(timeout, steps_to_goal_regret):
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
                 #   (With locally-isometric embeddings, with angles probably preserved, grad-min might have an easy job.)
-                for p in next.parameters(): p.requires_grad_(False)
-                ddpg_loss = ddpg_loss + dist_(next(cat(srcs1, a1)), dsts1.detach()).sum()
-                for p in next.parameters(): p.requires_grad_(True)
+                # for p in next.parameters(): p.requires_grad_(False)
+                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs1, a1)), dsts1.detach()).sum()
+                # for p in next.parameters(): p.requires_grad_(True)
+                #   TODO: Okay, still collapsing act-diversity. So our mistake must be somewhere else.
+                #     (Do my eyes deceive me, or are actions actually tring to point toward bigger distance?)
+                #     …Though, wait, it's not entirely collapsed at 10k…
 
     # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     #   (On-policy penalization of unconnected components.)
-    goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
-    goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    states_e = embed_(0, states, lvl=-1)
-    goal_dists = dist_(states_e, goals)
-    dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
+    # goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
+    # goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
+    # states_e = embed_(0, states, lvl=-1)
+    # goal_dists = dist_(states_e, goals)
+    # dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
+    #   TODO:
 
     # Action-consequence prediction.
-    with torch.no_grad():
-        next_samples = [replay_buffer[i+1] for i in indices]
-        next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
-        next_states_e = embed_(0, next_states, nn=embed_slow)
-        #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
-    states_e = embed_(0, states)
-    next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
+    # with torch.no_grad():
+    #     next_samples = [replay_buffer[i+1] for i in indices]
+    #     next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
+    #     next_states_e = embed_(0, next_states, nn=embed_slow)
+    #     #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
+    # states_e = embed_(0, states)
+    # next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
+    #   TODO: Disabling this doesn't fix distances either; so the bug must be elsewhere.
 
     # TODO: Run & fix.
+    #   TODO: …Why are actions collapsing again? Why is loss getting to 400k? Why is distance like 27k, then 100k? Okay, things are real, real bad.
+    #   TODO: …How can we possibly debug this?…
+    #   …Distances seem to be very bad now, hardly destination-dependent at all; also slowly increases without end after 14k. Are embedding-dists a bad idea after all? (Can we find some other problem before we have to implement a separate `dist` shallow NN for embedding?)
+    #   TODO: …What changed since dist-NN, apart from embedding?
+    #     `act_gating` gained +1.
+    #     Actions are now learned only at the last dist-level, not all.
+    #     Goal-embeddings in unreachability loss no longer get updated. (But disabling that loss changes nothing.)
+    #     `dist_` is like `2 ** (diff+.25)`, and `diff` uses `abs` and not `square` or anything.
 
     (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
