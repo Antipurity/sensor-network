@@ -1,11 +1,17 @@
 """
-Can RL be done not via approximating the loss (discounted sum of future distances here, AKA return), but via BPTT? Mathematically, sure, but what are the obstacles to doing it practically?
+`sensornet` requires a good way for humans to control what their computers do with their sensor data.
 
-This 2D env has 1 spaceship and a repulsor in the middle; the actions control acceleration. All smooth, so grad-min should be able to find best actions. Effective exploration would be able to cover a lot of the torus.
+- Keyboard? Tedious.
+- Webcam and body movements? Not only even more tedious, but also forces each user to create a whole new language for control, which effectively means only having a couple of predefined gestures. Learning that 'language' by maximizing mutual info AKA channel capacity might as well be impossible without Internet-scale data (like large language models use), due to how clean and snappy (and zero-shot) the users expect their interactions to be.
+- Any BMI readings? Same caveats as the webcam point above, though less physically tiring.
 
----
+The core issue is that humans need to specify every action one-by-one. But they only care about goals. And so, we must learn to reach any goal from anywhere, as we do here.
 
-We implement an RNN that minimizes the distance between goal-conditioned paths and goals, sampling goals from the recent past, predicting the next-frame, and minimizing its distance to the goal.
+Empower users, don't burden them.
+
+# Neural pathfinding
+
+TODO:
 """
 
 
@@ -170,9 +176,7 @@ def embed_(src_or_dst, input, lvl=1, nn=embed):
     return nn(cat(src_or_dst, input, lvl))
 def dist_(src_emb, dst_emb):
     """Returns (a function of) the shortest-path distance from src to dst, so that we can distinguish bad actions."""
-    return 2 ** dist(cat(src_emb, dst_emb)) # TODO:
-    # return (src_emb - dst_emb).square().mean(-1, keepdim=True) # TODO:
-    # return 2 ** ((src_emb - dst_emb).abs().mean(-1, keepdim=True) + .25) # TODO:
+    return dist(cat(src_emb, dst_emb))
 def act_(src_emb, dst_emb, noise = ...):
     """Returns the shortest-path action from src to dst."""
     if noise is ...:
@@ -367,52 +371,47 @@ def replay(timeout, steps_to_goal_regret):
             d1 = dist_(srcs1, dsts1)
             dist_loss = dist_loss + l_dist(d1, d)
             if last:
+                # TODO: …If we'll have `next` anyway, then instead of distance-gated self-imitation, can't we compute the distance for the successor and change the action whenever *action-dep* dist is lower?…
+                #   (…No longer too little to work with, now too much, and we're running into redundant paths…)
                 a1 = act_(srcs1, dsts1, n)
+                #   TODO: …Should this really use fast embeddings, or do slow embeddings make more sense?
                 act_gating = (d1 - d + 1).detach().clamp(0,15)
+                #   TODO: …Do we instead want `torch.where( D>1.1, (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )` like in the board env?
                 action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
                 #   (No momentum slowing for `d1` is less correct but easier to implement.)
+                #     TODO: …Since we're underperforming, maybe we *should* slow down `d1`?
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
                 #   (With locally-isometric embeddings, with angles probably preserved, grad-min might have an easy job.)
                 # for p in next.parameters(): p.requires_grad_(False)
-                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs1, a1)), dsts1.detach()).sum()
+                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs1.detach(), a1)), dsts1.detach()).sum()
                 # for p in next.parameters(): p.requires_grad_(True)
-                #   TODO:
+                #   TODO: …Is DDPG tanking our performance, making all dists <0?
 
     # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     #   (On-policy penalization of unconnected components.)
-    # goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
-    # goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    # states_e = embed_(0, states, lvl=-1)
-    # goal_dists = dist_(states_e, goals)
-    # dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
+    goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
+    goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
+    states_e = embed_(0, states, lvl=-1)
+    goal_dists = dist_(states_e, goals)
+    dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
     #   TODO:
 
     # Action-consequence prediction.
-    # with torch.no_grad():
-    #     next_samples = [replay_buffer[i+1] for i in indices]
-    #     next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
-    #     next_states_e = embed_(0, next_states, nn=embed_slow)
-    #     #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
-    # states_e = embed_(0, states)
-    # next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
-    #   TODO: Disabling this doesn't fix distances either; so the bug must be elsewhere.
+    with torch.no_grad():
+        next_samples = [replay_buffer[i+1] for i in indices]
+        next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
+        next_states_e = embed_(0, next_states, nn=embed_slow)
+        #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
+    states_e = embed_(0, states)
+    next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
+    #   TODO:
+
+    # TODO: …Do we want a prev→next action prediction loss, for grounding?
+    # TODO: …Do we want a cheating-loss that would randomly sample a few actions, and predict the min-distance action? (Though might not even be that good if we compare sample-actions anyway.)
 
     # TODO: Run & fix.
-    #   TODO: …Why are actions collapsing again? Why is loss getting to 400k? Why is distance like 27k, then 100k? Okay, things are real, real bad.
-    #   TODO: …How can we possibly debug this?…
-    #   …Actions are now not learned, actually. In fact, seem to become destination-independent. Why?
-    #   TODO: …What changed since dist-NN, apart from embedding?
-    #     `act_gating` gained +1. (Removing it changes nothing.)
-    #     Actions are now learned only at the last dist-level, not all.
-    #       TODO: …Try having an explicit `dist` NN which `dist_` uses, and try to match pre-loc-isomet-emb performance (reasonable paths at ≈10k).
-    #         (If we can't, the bug is elsewhere. If we can, loc-isomet-embs are dumb; but with `next`, it's not like we need them to be a superset of BYOL.)
-    #           We can't. The bug is elsewhere. But where?
-    #       TODO: …Should we try adding `lvl` to `act_` and learn at every level once again (`last` is `True`, and we pass in the level to `act_`, that's it)?… To really remove all differences that we can think of?…
-    #     Goal-embeddings in unreachability loss no longer get updated. (But disabling that loss changes nothing.)
-    #     `dist_` is like `2 ** (diff+.25)`, and `diff` uses `abs` and not `square` or anything. (But when it's `(x-y).square().mean(-1,)`, we can still hardly learn anything of use.)
-    #     …Wasn't another difference that we now have (or don't have?) slow prediction targets, somewhere?
 
     (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
@@ -431,7 +430,6 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action = act_(embed_(0, full_state), goal, noise)
-        # if iter % 100 < (70 - iter//1000): action = goal[..., :2] - state # TODO: (Literally very much cheating, suggesting trajectories that go toward the goals.) (…Somehow, we've reached a state where we don't need this cheating. Maybe remove.)
         if iter % 100 >= 50:
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
@@ -453,6 +451,30 @@ finish()
 
 
 
+
+# TODO: …Compare DDPG's usual "action-dependent distance" and our "successor-dependent distance with a successor function" approaches.
+#   …Can act-dep distance generate "unrealistic" successor states? …Its learning will happen with all actions, so it's unlikely.
+#   …Not hard to compare: act-dep dist can only support DDPG, while successor-learning also supports BYOL and planning (and more accurate rollouts than MuZero, pretty sure, since its dynamics func doesn't take input).
+#     Maybe THIS is the BYOL generalization that we've been looking for?… No need for "multiscale BYOL" if we learn a separate distance net…
+
+# TODO: Assume a full env(prev,act)→next, AKA env(state,act)→state.
+#   Then we have obs(state)→input for what our NN sees.
+#   And we have goal(state)→dst for what our NN wants (after all, all trajectories end up *somewhere*, so might as well label and learn destinations explicitly).
+#   THIS is the real structure that NNs learn, isn't it?
+#   Of relevance are dists between all states & goals, and effects of actions. That's all that agents are.
+#   Agents had better learn a full model of the world, and thus "become" the world. Fot that, these NNs need:
+#     - dist(src,dst)→1 (`src` is the RNN state, `dst` is a function of some RNN state).
+#     - env_update(src,input_emb)→src2, because the NN is not blind.
+#       - embed(input)→input_emb, to overcome the smearing that non-determinism of `input` introduces (BYOL).
+#     - min_dist_act(src2,dst)→act.
+#     - env_step(src2,act)→src3.
+#     - Possibly `goal` network/s for `dst`, but probably unnecessary in practice.
+#     - TODO: …Is it possible to put everything into a single NN here, for simplicity?…
+#   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-change):
+#     - TODO: Which, exactly?
+
+# TODO: (With `floyd`, assuming that the NNs have already converged and we're only looking to incorporate new data, the most 'valuable' (meaning the most likely to be used in shortest paths) steps are those where sample-dist is much less than predicted-dist, meaning, high regret of not taking the sampled path. Damn, we really do need some way to filter the replay buffer!)
+#   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
 
 
 
@@ -489,16 +511,5 @@ finish()
 
 
 # …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement (inputs, in any envs). With `embed` dist learning, we're *kinda* doing something similar, making close-in-time images similar and far-in-time images distinct. Though whether this could possibly succeed in learning reprs on CIFAR10 must be tested.
-
-
-
-
-
-
-# Best control for `sn` would allow *arbitrary* human data (if limited, then `sn` is hardly an AI-based human-machine interface enabler) to control the goal (if just actions, then human capabilities won't get multiplied, `sn` will just be tiring and weird at best). Max sensitivity to an outcome, but min sensitivity to possible-outcomes: maximize [mutual info](https://en.wikipedia.org/wiki/Mutual_information), AKA channel capacity. (Or [pointwise MI](https://en.wikipedia.org/wiki/Pointwise_mutual_information): `log(p(y|x) / p(y))`.)
-#   Without further grounding, we may only need an SSL method, to make the compressed-history the goal: the simple `leads_to(ev(prev))=sg ev(next)` BYOL-on-RNNs, or maybe even our embed-space dist-learning. Needs further research.
-#   Do we want a separate channel for human actions, or would mixing them with all other data suffice?
-#     (I guess for now, we should refine intent-amplification, and worry about plugging in intent later.)
-#     (If we want a separate channel, then damn, I guess those `import env` one-liners aren't gonna fly with `sn` anymore.)
-#   …However: making the agent learn to 'control' human data, and simply cutting out chunks of how-humans-want-to-be-controlled via reward, *may* create much richer experiences, without the tedious need to make the agent explore & acquire skills manually.
-#     …Meaning, is neural pathfinding the best thing we can do for `sn` then?…
+#   …Locally-isometric embeddings perform worse.
+#   …With `next`, our loss would literally include BYOL, so even tests are unnecessary…
