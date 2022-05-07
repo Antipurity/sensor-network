@@ -331,8 +331,8 @@ def replay(timeout, steps_to_goal_regret):
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
-            goals_e = embed_(1, states, lvl=prev_lvl, nn=embed_slow) # Target.
-            goals_e1 = embed_(1, states, lvl=next_lvl) # Prediction.
+            goals_e = embed_(1, goals, lvl=prev_lvl, nn=embed_slow) # Target.
+            goals_e1 = embed_(1, goals, lvl=next_lvl) # Prediction.
             dsts, dsts1 = expand(goals_e, 2), expand(goals_e1, 2)
             n = noss
             # Compute prediction targets.
@@ -407,6 +407,7 @@ def replay(timeout, steps_to_goal_regret):
     #     Actions are now learned only at the last dist-level, not all.
     #     Goal-embeddings in unreachability loss no longer get updated. (But disabling that loss changes nothing.)
     #     `dist_` is like `2 ** (diff+.25)`, and `diff` uses `abs` and not `square` or anything.
+    #       TODO: Try making it not add `.25` (the final layer has a bias anyway, come on), and use `.square()`. And in fact, not even have `2**`.
 
     (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
