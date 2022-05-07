@@ -320,10 +320,10 @@ def replay(timeout, steps_to_goal_regret):
     def expand(x, src_or_dst):
         """N×… to N×N×…. `src_or_dst` is 1|2, representing which `N` is broadcasted."""
         return x.unsqueeze(src_or_dst).expand(batch_sz, N, N, x.shape[-1])
-    def l_dist(d,D):
+    def l_dist(d1, d):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
-        with torch.no_grad(): mult = (d.detach() - D + 1).clamp(.3, 3)
-        return (mult * (d - D).square()).sum()
+        with torch.no_grad(): mult = (d1.detach() - d + 1).clamp(.3, 3)
+        return (mult * (d1 - d).square()).sum()
     dist_loss, action_loss, next_loss, ddpg_loss = 0,0,0,0
     max_goals = max(len(s.goals) for s in samples)
     noss = expand(noises, 1)
@@ -376,7 +376,6 @@ def replay(timeout, steps_to_goal_regret):
                 a1 = act_(srcs1, dsts1, n)
                 #   TODO: …Should this really use fast embeddings, or do slow embeddings make more sense?
                 act_gating = (d1 - d + 1).detach().clamp(0,15)
-                #   TODO: …Do we instead want `torch.where( D>1.1, (d.detach() - D + 1).clamp(0,15), torch.tensor(1., device=device) )` like in the board env?
                 action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
                 #   (No momentum slowing for `d1` is less correct but easier to implement.)
                 #     TODO: …Since we're underperforming, maybe we *should* slow down `d1`?
@@ -452,26 +451,29 @@ finish()
 
 
 
-# TODO: …Compare DDPG's usual "action-dependent distance" and our "successor-dependent distance with a successor function" approaches.
-#   …Can act-dep distance generate "unrealistic" successor states? …Its learning will happen with all actions, so it's unlikely.
-#   …Not hard to compare: act-dep dist can only support DDPG, while successor-learning also supports BYOL and planning (and more accurate rollouts than MuZero, pretty sure, since its dynamics func doesn't take input).
-#     Maybe THIS is the BYOL generalization that we've been looking for?… No need for "multiscale BYOL" if we learn a separate distance net…
 
-# TODO: Assume a full env(prev,act)→next, AKA env(state,act)→state.
-#   Then we have obs(state)→input for what our NN sees.
-#   And we have goal(state)→dst for what our NN wants (after all, all trajectories end up *somewhere*, so might as well label and learn destinations explicitly).
+# TODO: Assume a full env with bidirectional obs/act communication with our agent (any possible universe can be described as one-step updates): `env(prev,act)→(next,obs)`, where `prev` and `next`s are hidden `state`s.
+#   And we have goal(state)→dst for what `act`s want. (After all, all trajectories end up *somewhere*, so might as well label and learn destinations explicitly.) (This description is complete, and with precise-enough goals, no further intervention on trajectories is needed, so we can just find the shortest path.)
 #   THIS is the real structure that NNs learn, isn't it?
-#   Of relevance are dists between all states & goals, and effects of actions. That's all that agents are.
-#   Agents had better learn a full model of the world, and thus "become" the world. Fot that, these NNs need:
-#     - dist(src,dst)→1 (`src` is the RNN state, `dst` is a function of some RNN state).
-#     - env_update(src,input_emb)→src2, because the NN is not blind.
-#       - embed(input)→input_emb, to overcome the smearing that non-determinism of `input` introduces (BYOL).
-#     - min_dist_act(src2,dst)→act.
-#     - env_step(src2,act)→src3.
-#     - Possibly `goal` network/s for `dst`, but probably unnecessary in practice.
-#     - TODO: …Is it possible to put everything into a single NN here, for simplicity?…
-#   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-change):
-#     - TODO: Which, exactly?
+#   The env forms an infinite graph, and we'd like to find all-to-all paths in it. That's all that agents are.
+#   Agents had better learn a full model of the world, and thus "become" the world. For that, these NNs need:
+#     - `dist(src,dst) → 1` (`src` is the RNN state, `dst` is a function of some RNN state).
+#     - Theoretically, the inverted env `(state, obs) → (state, act)`, but it should be split to better model `env`'s exact inputs/outputs, and to allow tampering with inputs/actions/goals:
+#       - `update(history, input_emb) → src`, because the NN is not blind.
+#         - `embed(input) → input_emb`, to overcome the smearing that predicting the non-determinism of `input` introduces (BYOL loss).
+#       - `min_dist_act(src, dst)` → act.
+#       - `env(src, act) → (history, input_emb)`, as the RNN that predicts its input.
+#       - Possibly `goal(src) → dst` network/s, but probably unnecessary in practice (unless human input is sparse enough that prediction would help).
+#   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
+#     - Generalized BYOL: env(embed(history), action).input_emb = sg embed(next)
+#     - dist(src, dst) = min(dist(src, dst), dist(src, mid) + dist(mid, dst) + eps, j-i if there's a real i→j path)
+#       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so it needs `eps` and other tricks to overcome func-approx.)
+#       - Min-dist actions:
+#         - Gradient, DDPG: post-action (`env`) post-`update` (for src) `dist` is minimal.
+#         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts).
+#           - Min-gating ladder for unbiased approximation of the seen `dist` minimum.
+#           - Replay-buffer prioritization of max-regret samples for fastest spreading of the influence of discovered largest shortcuts. (Also good for unroll-time goals, getting more data in most-promising areas.)
+#       - Penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
 
 # TODO: (With `floyd`, assuming that the NNs have already converged and we're only looking to incorporate new data, the most 'valuable' (meaning the most likely to be used in shortest paths) steps are those where sample-dist is much less than predicted-dist, meaning, high regret of not taking the sampled path. Damn, we really do need some way to filter the replay buffer!)
 #   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
@@ -481,35 +483,11 @@ finish()
 
 
 
+
+
+
+
+
+
 # (…Might even wrap this in a `model/` framework that manages the replay, with arbitrarily-many possibly-async goal states and everything?…)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# …Augmentating images in computer vision to make NN representations invariant to them, is equivalent to doing that for consecutive RNN steps with body/eye movement (inputs, in any envs). With `embed` dist learning, we're *kinda* doing something similar, making close-in-time images similar and far-in-time images distinct. Though whether this could possibly succeed in learning reprs on CIFAR10 must be tested.
-#   …Locally-isometric embeddings perform worse.
-#   …With `next`, our loss would literally include BYOL, so even tests are unnecessary…
+#   (…In fact, since we're getting close to the final model, maybe just package it with `sn` support?)
