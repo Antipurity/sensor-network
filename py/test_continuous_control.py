@@ -145,6 +145,7 @@ def net(ins, outs, hidden=embed_sz, layers=3):
     ).to(device)
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
 #   (Locally-isometric map.)
+dist = net(embed_sz + embed_sz, 1, layers=0) # TODO:
 act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=0) # (src, dst, noise) → action
 #   (Min-dist action.)
 next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
@@ -158,7 +159,7 @@ next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
 
 embed_slow = MomentumCopy(embed, .999) # Stabilize targets to prevent collapse.
 
-optim = torch.optim.Adam([*embed.parameters(), *act.parameters(), *next.parameters()], lr=lr)
+optim = torch.optim.Adam([*embed.parameters(), *dist.parameters(), *act.parameters(), *next.parameters()], lr=lr)
 
 
 
@@ -168,8 +169,10 @@ def embed_(src_or_dst, input, lvl=1, nn=embed):
     lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
     return nn(cat(src_or_dst, input, lvl))
 def dist_(src_emb, dst_emb):
-    """Returns the shortest-path distance from src to dst, so that we can distinguish bad actions."""
-    return 2 ** ((src_emb - dst_emb).abs().mean(-1, keepdim=True) + .25)
+    """Returns (a function of) the shortest-path distance from src to dst, so that we can distinguish bad actions."""
+    return 2 ** dist(cat(src_emb, dst_emb)) # TODO:
+    # return (src_emb - dst_emb).square().mean(-1, keepdim=True) # TODO:
+    # return 2 ** ((src_emb - dst_emb).abs().mean(-1, keepdim=True) + .25) # TODO:
 def act_(src_emb, dst_emb, noise = ...):
     """Returns the shortest-path action from src to dst."""
     if noise is ...:
@@ -365,7 +368,7 @@ def replay(timeout, steps_to_goal_regret):
             dist_loss = dist_loss + l_dist(d1, d)
             if last:
                 a1 = act_(srcs1, dsts1, n)
-                act_gating = (d < d1+1).float().detach() # +1 to mirror `d`'s +1.
+                act_gating = (d1 - d + 1).detach().clamp(0,15)
                 action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
                 #   (No momentum slowing for `d1` is less correct but easier to implement.)
                 # DDPG: minimize post-action distance with gradient descent too.
@@ -374,9 +377,7 @@ def replay(timeout, steps_to_goal_regret):
                 # for p in next.parameters(): p.requires_grad_(False)
                 # ddpg_loss = ddpg_loss + dist_(next(cat(srcs1, a1)), dsts1.detach()).sum()
                 # for p in next.parameters(): p.requires_grad_(True)
-                #   TODO: Okay, still collapsing act-diversity. So our mistake must be somewhere else.
-                #     (Do my eyes deceive me, or are actions actually tring to point toward bigger distance?)
-                #     …Though, wait, it's not entirely collapsed at 10k…
+                #   TODO:
 
     # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
@@ -401,13 +402,17 @@ def replay(timeout, steps_to_goal_regret):
     # TODO: Run & fix.
     #   TODO: …Why are actions collapsing again? Why is loss getting to 400k? Why is distance like 27k, then 100k? Okay, things are real, real bad.
     #   TODO: …How can we possibly debug this?…
-    #   …Distances seem to be very bad now, hardly destination-dependent at all; also slowly increases without end after 14k. Are embedding-dists a bad idea after all? (Can we find some other problem before we have to implement a separate `dist` shallow NN for embedding?)
+    #   …Actions are now not learned, actually. In fact, seem to become destination-independent. Why?
     #   TODO: …What changed since dist-NN, apart from embedding?
-    #     `act_gating` gained +1.
+    #     `act_gating` gained +1. (Removing it changes nothing.)
     #     Actions are now learned only at the last dist-level, not all.
+    #       TODO: …Try having an explicit `dist` NN which `dist_` uses, and try to match pre-loc-isomet-emb performance (reasonable paths at ≈10k).
+    #         (If we can't, the bug is elsewhere. If we can, loc-isomet-embs are dumb; but with `next`, it's not like we need them to be a superset of BYOL.)
+    #           We can't. The bug is elsewhere. But where?
+    #       TODO: …Should we try adding `lvl` to `act_` and learn at every level once again (`last` is `True`, and we pass in the level to `act_`, that's it)?… To really remove all differences that we can think of?…
     #     Goal-embeddings in unreachability loss no longer get updated. (But disabling that loss changes nothing.)
-    #     `dist_` is like `2 ** (diff+.25)`, and `diff` uses `abs` and not `square` or anything.
-    #       TODO: Try making it not add `.25` (the final layer has a bias anyway, come on), and use `.square()`. And in fact, not even have `2**`.
+    #     `dist_` is like `2 ** (diff+.25)`, and `diff` uses `abs` and not `square` or anything. (But when it's `(x-y).square().mean(-1,)`, we can still hardly learn anything of use.)
+    #     …Wasn't another difference that we now have (or don't have?) slow prediction targets, somewhere?
 
     (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
