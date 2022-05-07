@@ -333,7 +333,10 @@ def replay(timeout, steps_to_goal_regret):
         next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
         #   The first dist-level is grounded in itself, others in their previous levels.
         states_e = embed_(0, states, lvl=prev_lvl, nn=embed_slow) # Target.
+        #   TODO: Shouldn't all slow embeddings not need grad?
+        #   TODO: Since these embs are only used to be expanded, make `expand` call `embed_`, or have another func for this.
         states_e1 = embed_(0, states, lvl=next_lvl) # Prediction.
+        #   TODO: …Can we get saner names than x1 for prediction and x for target… At least x_p and x_t…
         srcs, srcs1 = expand(states_e, 1), expand(states_e1, 1)
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
@@ -352,6 +355,7 @@ def replay(timeout, steps_to_goal_regret):
                 cond = i < j
                 if lvl>0: cond = cond & (j-i < d) # First dist-level has to not filter sharply.
                 d = torch.where(cond, j-i, d + 1).clamp(0) # Slowly penalize unconnected components.
+                #   TODO: +.2? Was it important?
                 if last: a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
@@ -379,9 +383,10 @@ def replay(timeout, steps_to_goal_regret):
                 action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
                 #   (No momentum slowing for `d1` is less correct but easier to implement.)
                 #     TODO: …Since we're underperforming, maybe we *should* slow down `d1`?
+                #       (Not like I have any other ideas on how to make arrows perform well again. Apart from restoring the old code and comparing it.)
+                #       …Meaning that we need alternative no-grad srcs1/dsts1 and thus states_e2/goals_e2…
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
-                #   (With locally-isometric embeddings, with angles probably preserved, grad-min might have an easy job.)
                 # for p in next.parameters(): p.requires_grad_(False)
                 # ddpg_loss = ddpg_loss + dist_(next(cat(srcs1.detach(), a1)), dsts1.detach()).sum()
                 # for p in next.parameters(): p.requires_grad_(True)
@@ -462,7 +467,7 @@ finish()
 #       - `update(history, input_emb) → src`, because the NN is not blind.
 #         - `embed(input) → input_emb`, to overcome the smearing that predicting the non-determinism of `input` introduces (BYOL loss).
 #       - `min_dist_act(src, dst)` → act.
-#       - `env(src, act) → (history, input_emb)`, as the RNN that predicts its input.
+#       - `env(src, act) → (history, input_emb)`, as the RNN that predicts its next input.
 #       - Possibly `goal(src) → dst` network/s, but probably unnecessary in practice (unless human input is sparse enough that prediction would help).
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
 #     - Generalized BYOL: env(embed(history), action).input_emb = sg embed(next)
