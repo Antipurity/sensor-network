@@ -150,9 +150,9 @@ def net(ins, outs, hidden=embed_sz, layers=3):
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs)),
     ).to(device)
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
-#   (Locally-isometric map.)
-dist = net(embed_sz + embed_sz + 1, 1, layers=3) # TODO:
-act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
+#   (Locally-isometric map.) TODO: Not so isometric anymore, now that we'll definitely have `dist`.
+dist = net(input_sz + input_sz + 1, 1, layers=3) # TODO:
+act = net(input_sz + input_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
 #   (Min-dist action.)
 next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
 #   (Neighborhoods in the map.)
@@ -173,6 +173,7 @@ optim = torch.optim.Adam([*embed.parameters(), *dist.parameters(), *act.paramete
 
 def embed_(src_or_dst, input, lvl=1, nn=embed):
     """The `embed` wrapper, for inputs."""
+    return input # TODO:
     src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
     lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
     return nn(cat(src_or_dst, input, lvl))
@@ -275,7 +276,7 @@ pos_histogram.src_pos = torch.rand(1,2, device=device)
 
 # The main loop, which steps the environment and trains `step`.
 action = torch.randn(batch_sz, action_sz, device=device)
-goal = torch.randn(batch_sz, embed_sz, device=device)
+goal = torch.randn(batch_sz, input_sz, device=device)
 steps_to_goal = torch.rand(batch_sz, 1, device=device)
 state, hidden_state = env_init(batch_sz=batch_sz)
 def maybe_reset_goal(input):
@@ -386,7 +387,10 @@ def replay(timeout, steps_to_goal_regret):
                 #   TODO: …Underperforming…
                 #     - …Removing gradient updates shows that actions really do look boring: just a 90° turn over the whole field, no loops or much noise or anything. Maybe, the real cause for emb-underperformance is poor initialization?…
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
-                #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
+                #       - …The init is instantly so much better…
+                #       - Even though actions have a lot of difficulty getting learned.
+                #       - I recognize the distance map, I've seen it in the old code. Very good. Won't need to resurrect *that*.
+                #     - TODO: …Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
 
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
@@ -465,14 +469,12 @@ finish()
 #   THIS is the real structure that NNs learn, isn't it?
 #   The env forms an infinite graph, and we'd like to find all-to-all paths in it. That's all that agents are.
 #   Agents had better learn a full model of the world, and thus "become" the world. For that, these NNs need:
-#     - `dist(src,dst) → 1` (`src` is the RNN state, `dst` is a function of some RNN state).
 #     - Theoretically, the inverted env `(state, obs) → (state, act)`, but it should be split to better model `env`'s exact inputs/outputs, and to allow tampering with inputs/actions/goals:
-#       - `update(history, input_emb) → src`, because the NN is not blind.
-#         - `embed(input) → input_emb`, to overcome the smearing that predicting the non-determinism of `input` introduces (BYOL loss).
-#       - `min_dist_act(src, dst)` → act.
-#         - TODO: …Maybe, unite `dist` and this `act` into a single NN after all, to have 1 less momentum-copy to keep track of? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
-#       - `env(src, act) → (history, input_emb)`, as the RNN that predicts its next input.
-#       - Possibly `goal(src) → dst` network/s, but probably unnecessary in practice (unless human input is sparse enough that prediction would help).
+#       - `dist_act(src, dst) → (dist, act)` (min-dist, and the min-dist action).
+#         - `update(history, input_emb) → src`, because the NN is not blind.
+#           - `embed(input) → input_emb`, to overcome the smearing that predicting the non-determinism of `input` introduces (BYOL loss).
+#         - `env(src, act) → (history, input_emb)`, as the RNN that predicts its next input.
+#         - Possibly `goal(src) → dst` network/s, but probably unnecessary in practice (unless human input is sparse enough that prediction would help).
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
 #     - Generalized BYOL: env(embed(history), action).input_emb = sg embed(next)
 #     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst), j-i if there's a real i→j path)
@@ -488,7 +490,7 @@ finish()
 #   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
 
 # TODO: …If each step's RNN state is the exact sum of all previous RNN states (a neural network outputs how much to adjust that by), then if we sample 2 faraway steps *with no regard for what comes between*, then can't we just teleport gradient from the future into the past to perform correct gradient descent? …What the fuck. Too easy; this can't be true…?
-#   (Skip connections in RNNs are good: https://cs224d.stanford.edu/reports/mmongia.pdf — though the quality of this 'paper' is bad.)
+#   (Skip connections in RNNs are good, possibly LSTM-quality: https://cs224d.stanford.edu/reports/mmongia.pdf — the best paper on this, though the quality of this 'paper' is bad.)
 
 
 
