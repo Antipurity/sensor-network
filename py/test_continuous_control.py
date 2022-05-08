@@ -389,7 +389,7 @@ def replay(timeout, steps_to_goal_regret):
                 #   (Using srcs_n and dsts_n here destabilizes the action loss.)
                 #   TODO: …Why ARE actions seemingly largely destination-independent?… Isn't this a bit suspicious, just like distances used to be?…
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
-                #   TODO: …Underperforming…
+                #   TODO: …Underperforming… Why does the action-loss keep increasing even as actions remain destination-independent? This is the opposite of what's supposed to happen.
                 #     - `(d_p-d_t+1).clamp(0,15)`: bad, all rather one-directional at 25k.
                 #     - `(d_p-d_t+1).clamp(1,15)`: TODO:.
                 #     - `(d_i-d_t+1).clamp(0,15)`: bad too.
@@ -397,6 +397,7 @@ def replay(timeout, steps_to_goal_regret):
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)`: bad too.
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
                 #     - TODO: …Make `act` and `dist` NNs have 3 layers?…
+                #     - TODO: Make `dist_` actually give the lvl to `dist`.
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
                 #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
@@ -497,6 +498,8 @@ finish()
 
 # TODO: (With `floyd`, assuming that the NNs have already converged and we're only looking to incorporate new data, the most 'valuable' (meaning the most likely to be used in shortest paths) steps are those where sample-dist is much less than predicted-dist, meaning, high regret of not taking the sampled path. Damn, we really do need some way to filter the replay buffer!)
 #   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
+
+# TODO: …If each step's RNN state is the exact sum of all previous RNN states (a neural network outputs how much to adjust that by), then if we sample 2 faraway steps *with no regard for what comes between*, then can't we just teleport gradient from the future into the past to perform correct gradient descent? …What the fuck. Too easy; this can't be true…?
 
 
 
