@@ -347,21 +347,22 @@ def replay(timeout, steps_to_goal_regret):
             n = noss
             # Compute prediction targets.
             with torch.no_grad():
-                d = dist_(srcs, dsts)
+                d_i = dist_(srcs, dsts) # Initial pairwise distances.
                 if last: a = act_(srcs, dsts, n)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
                 i, j = expand(times, 1), expand(times, 2)
                 cond = i < j
-                if lvl>0: cond = cond & (j-i < d) # First dist-level has to not filter sharply.
-                d = torch.where(cond, j-i, d + 1).clamp(0) # Slowly penalize unconnected components.
-                #   TODO: +.2? Was it important?
+                if lvl>0: cond = cond & (j-i < d_i) # First dist-level has to not filter sharply.
+                d = torch.where(cond, j-i, d_i).clamp(1)
                 if last: a = torch.where(cond, expand(actions, 1), a)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
                     if lvl>0:
                         if not last: d = floyd(d)
                         else: d,a,n = floyd(d,a,n)
+                    d = torch.where((d_i == d).all(-1, keepdim=True), d+1, d)
+                    #   (Slowly penalize unconnected components, by adding `eps` if ungrounded.)
                 else: # (Goals should take from full-state plans directly.)
                     cond = d0 < d
                     d = torch.where(cond, d0, d)
@@ -385,6 +386,8 @@ def replay(timeout, steps_to_goal_regret):
                 #     TODO: …Since we're underperforming, maybe we *should* slow down `d1`?
                 #       (Not like I have any other ideas on how to make arrows perform well again. Apart from restoring the old code and comparing it.)
                 #       …Meaning that we need alternative no-grad srcs1/dsts1 and thus states_e2/goals_e2…
+                #       …Or can we just use the initial `d` for comparison, AKA `d_i`?…
+
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
                 # for p in next.parameters(): p.requires_grad_(False)
@@ -471,8 +474,8 @@ finish()
 #       - Possibly `goal(src) → dst` network/s, but probably unnecessary in practice (unless human input is sparse enough that prediction would help).
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
 #     - Generalized BYOL: env(embed(history), action).input_emb = sg embed(next)
-#     - dist(src, dst) = min(dist(src, dst), dist(src, mid) + dist(mid, dst) + eps, j-i if there's a real i→j path)
-#       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so it needs `eps` and other tricks to overcome func-approx.)
+#     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst), j-i if there's a real i→j path)
+#       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so `+eps` ensures that ungrounded assumptions don't persist for long.)
 #       - Min-dist actions:
 #         - Gradient, DDPG: post-action (`env`) post-`update` (for src) `dist` is minimal.
 #         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts).
