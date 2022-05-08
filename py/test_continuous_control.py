@@ -388,14 +388,15 @@ def replay(timeout, steps_to_goal_regret):
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming… Why does the action-loss keep increasing even as actions remain destination-independent? This is the opposite of what's supposed to happen.
                 #     - `(d_p-d_t+1).clamp(0,15)`: bad, all rather one-directional at 25k.
+                #       - (Now, still bad, even at 20k. action_loss is like 60, so maybe it's not learning anything.)
                 #     - `(d_p-d_t+1).clamp(1,15)`: TODO:.
                 #     - `(d_i-d_t+1).clamp(0,15)`: bad too.
+                #       - (Now much better at 40k, though not perfect. action_loss rises to 500.)
+                #       - (…But re-running it, it's bad again, at 25k. action_loss is like 5. …But at 30k, the trend starts to reverse… Still, though: 3× slower that it used to be! How is this acceptable?)
                 #     - `(d_i-d_t+1).clamp(1,15)`: TODO:.
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)`: bad too.
+                #       - (Now, action_loss is like 5. Suspiciously bad, even at 35k. Was that one `d_i` run just luck?)
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
-                #     - TODO: …Make `act` and `dist` NNs have 3 layers?…
-                #       - …Doesn't look terrible, at least at 40k?
-                #       - …So, wait, is *this* the solution that we've been looking for?
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
                 #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
@@ -481,6 +482,7 @@ finish()
 #       - `update(history, input_emb) → src`, because the NN is not blind.
 #         - `embed(input) → input_emb`, to overcome the smearing that predicting the non-determinism of `input` introduces (BYOL loss).
 #       - `min_dist_act(src, dst)` → act.
+#         - TODO: …Maybe, unite `dist` and this `act` into a single NN after all, to have 1 less momentum-copy to keep track of? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
 #       - `env(src, act) → (history, input_emb)`, as the RNN that predicts its next input.
 #       - Possibly `goal(src) → dst` network/s, but probably unnecessary in practice (unless human input is sparse enough that prediction would help).
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
