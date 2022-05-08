@@ -152,7 +152,7 @@ def net(ins, outs, hidden=embed_sz, layers=3):
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
 #   (Locally-isometric map.)
 dist = net(embed_sz + embed_sz + 1, 1, layers=3) # TODO:
-act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
+act = net(embed_sz + embed_sz + noise_sz + 1, action_sz, layers=3) # (src, dst, noise) → action
 #   (Min-dist action.)
 next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
 #   (Neighborhoods in the map.)
@@ -181,11 +181,12 @@ def dist_(src_emb, dst_emb, lvl=1, nn=dist):
     assert src_emb.shape == dst_emb.shape
     lvl = torch.full((*src_emb.shape[:-1], 1), lvl, device=device)
     return nn(cat(src_emb, dst_emb, lvl))
-def act_(src_emb, dst_emb, noise = ..., nn=act):
+def act_(src_emb, dst_emb, noise = ..., lvl=1, nn=act):
     """Returns the shortest-path action from src to dst."""
     if noise is ...:
         noise = torch.randn(*src_emb.shape[:-1], noise_sz, device=device)
-    return nn(cat(src_emb, dst_emb, noise))
+    lvl = torch.full((*src_emb.shape[:-1], 1), lvl, device=device)
+    return nn(cat(src_emb, dst_emb, noise, lvl))
 
 
 
@@ -334,7 +335,7 @@ def replay(timeout, steps_to_goal_regret):
     max_goals = max(len(s.goals) for s in samples)
     noss = expand(0, noises)
     for lvl in range(dist_levels):
-        last = lvl == dist_levels-1
+        last = True # lvl == dist_levels-1 # TODO:
         prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
         next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
         #   The first dist-level is grounded in itself, others in their previous levels.
@@ -349,7 +350,7 @@ def replay(timeout, steps_to_goal_regret):
             # Compute prediction targets.
             with torch.no_grad():
                 d_i = dist_(srcs_t, dsts_t, lvl=prev_lvl, nn=dist_slow) # Initial pairwise distances.
-                if last: a_t = act_(srcs_t, dsts_t, n, nn=act_slow)
+                if last: a_t = act_(srcs_t, dsts_t, n, lvl=prev_lvl, nn=act_slow)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
                 i, j = expand(0, times), expand(1, times)
@@ -383,7 +384,7 @@ def replay(timeout, steps_to_goal_regret):
                     # srcs_n = embed_expand(0, states, lvl=next_lvl, nn=embed_slow)
                     # dsts_n = embed_expand(1, goals, lvl=next_lvl, nn=embed_slow)
                     # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0,15)
-                a_p = act_(srcs_p, dsts_p, n)
+                a_p = act_(srcs_p, dsts_p, n, lvl=next_lvl)
                 #   (Using srcs_n and dsts_n here destabilizes the action loss.)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming… Why does the action-loss keep increasing even as actions remain destination-independent? This is the opposite of what's supposed to happen.
@@ -398,6 +399,12 @@ def replay(timeout, steps_to_goal_regret):
                 #       - (Now, action_loss is like 5. Suspiciously bad, even at 35k. Was that one `d_i` run just luck?)
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
+                #     - …Make `act` accept the lvl, and train it at every level, to remove the last discrepancy?…
+                #       - (Without the lvl and with double-updates, still boring at 10k: just the valleys, with one-directional arrows with not much corralling/vorticing.)
+                #       - (With the lvl passed, still boring at 10k, all valleys.)
+                #       - (…Can't say that dists aren't learned correctly, but acts definitely are too slow to learn…)
+                #       - TODO: Remove. (Did it have valleys at 10k, again?…)
+                #     - TODO: …Try removing gradient updates; do actions have diversity? (Why is everything collapsed?)
                 #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
                 # DDPG: minimize post-action distance with gradient descent too.
@@ -500,6 +507,7 @@ finish()
 #   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
 
 # TODO: …If each step's RNN state is the exact sum of all previous RNN states (a neural network outputs how much to adjust that by), then if we sample 2 faraway steps *with no regard for what comes between*, then can't we just teleport gradient from the future into the past to perform correct gradient descent? …What the fuck. Too easy; this can't be true…?
+#   (Skip connections in RNNs are good: https://cs224d.stanford.edu/reports/mmongia.pdf — though the quality of this 'paper' is bad.)
 
 
 
