@@ -152,7 +152,7 @@ def net(ins, outs, hidden=embed_sz, layers=3):
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
 #   (Locally-isometric map.)
 dist = net(embed_sz + embed_sz + 1, 1, layers=3) # TODO:
-act = net(embed_sz + embed_sz + noise_sz + 1, action_sz, layers=3) # (src, dst, noise) → action
+act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
 #   (Min-dist action.)
 next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
 #   (Neighborhoods in the map.)
@@ -185,8 +185,7 @@ def act_(src_emb, dst_emb, noise = ..., lvl=1, nn=act):
     """Returns the shortest-path action from src to dst."""
     if noise is ...:
         noise = torch.randn(*src_emb.shape[:-1], noise_sz, device=device)
-    lvl = torch.full((*src_emb.shape[:-1], 1), lvl, device=device)
-    return nn(cat(src_emb, dst_emb, noise, lvl))
+    return nn(cat(src_emb, dst_emb, noise))
 
 
 
@@ -335,7 +334,7 @@ def replay(timeout, steps_to_goal_regret):
     max_goals = max(len(s.goals) for s in samples)
     noss = expand(0, noises)
     for lvl in range(dist_levels):
-        last = True # lvl == dist_levels-1 # TODO:
+        last = lvl == dist_levels-1
         prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
         next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
         #   The first dist-level is grounded in itself, others in their previous levels.
@@ -379,32 +378,14 @@ def replay(timeout, steps_to_goal_regret):
             dist_loss = dist_loss + l_dist(d_p, d_t)
             if last:
                 with torch.no_grad(): # Next-level target embeddings.
-                    # act_gating = (d_p - d_t + 1).clamp(0,15)
-                    act_gating = (d_i - d_t + 1).clamp(0,15)
-                    # srcs_n = embed_expand(0, states, lvl=next_lvl, nn=embed_slow)
-                    # dsts_n = embed_expand(1, goals, lvl=next_lvl, nn=embed_slow)
-                    # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0,15)
+                    # Learn actions wherever we found a better path.
+                    #   (Since d_t is d_i+1 whenever they're exactly equal, this only learns better-path actions.)
+                    act_gating = (d_i - d_t + 1).clamp(0,10)
                 a_p = act_(srcs_p, dsts_p, n, lvl=next_lvl)
-                #   (Using srcs_n and dsts_n here destabilizes the action loss.)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
-                #   TODO: …Underperforming… Why does the action-loss keep increasing even as actions remain destination-independent? This is the opposite of what's supposed to happen.
-                #     - `(d_p-d_t+1).clamp(0,15)`: bad, all rather one-directional at 25k.
-                #       - (Now, still bad, even at 20k. action_loss is like 60, so maybe it's not learning anything.)
-                #     - `(d_p-d_t+1).clamp(1,15)`: TODO:.
-                #     - `(d_i-d_t+1).clamp(0,15)`: bad too.
-                #       - (Now much better at 40k, though not perfect. action_loss rises to 500.)
-                #       - (…But re-running it, it's bad again, at 25k. action_loss is like 5. …But at 30k, the trend starts to reverse… Still, though: 3× slower that it used to be! How is this acceptable?)
-                #     - `(d_i-d_t+1).clamp(1,15)`: TODO:.
-                #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)`: bad too.
-                #       - (Now, action_loss is like 5. Suspiciously bad, even at 35k. Was that one `d_i` run just luck?)
-                #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
+                #   TODO: …Underperforming…
+                #     - …Removing gradient updates shows that actions really do look boring: just a 90° turn over the whole field, no loops or much noise or anything. Maybe, the real cause for emb-underperformance is poor initialization?…
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
-                #     - …Make `act` accept the lvl, and train it at every level, to remove the last discrepancy?…
-                #       - (Without the lvl and with double-updates, still boring at 10k: just the valleys, with one-directional arrows with not much corralling/vorticing.)
-                #       - (With the lvl passed, still boring at 10k, all valleys.)
-                #       - (…Can't say that dists aren't learned correctly, but acts definitely are too slow to learn…)
-                #       - TODO: Remove. (Did it have valleys at 10k, again?…)
-                #     - TODO: …Try removing gradient updates; do actions have diversity? (Why is everything collapsed?)
                 #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
                 # DDPG: minimize post-action distance with gradient descent too.
@@ -412,7 +393,7 @@ def replay(timeout, steps_to_goal_regret):
                 # for p in next.parameters(): p.requires_grad_(False)
                 # ddpg_loss = ddpg_loss + dist_(next(cat(srcs_p.detach(), a_p)), dsts_p.detach(), lvl=next_lvl, nn=dist_slow).sum()
                 # for p in next.parameters(): p.requires_grad_(True)
-                #   TODO: …Why is DDPG tanking our performance, making all dists <0?
+                #   TODO: …Why was DDPG tanking our performance, making all dists <0?
 
     # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
