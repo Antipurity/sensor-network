@@ -131,7 +131,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_sz = 50
+batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 lr = 1e-3
 
@@ -170,12 +170,14 @@ optim = torch.optim.Adam([*embed.parameters(), *dist.parameters(), *act.paramete
 
 
 def embed_(src_or_dst, input, lvl=1, nn=embed):
-    """Locally-isometric embeddings: `dist_` between src & dst embeddings is an increasing func of the steps it takes to go."""
+    """The `embed` wrapper, for inputs."""
     src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
     lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
     return nn(cat(src_or_dst, input, lvl))
 def dist_(src_emb, dst_emb):
     """Returns (a function of) the shortest-path distance from src to dst, so that we can distinguish bad actions."""
+    # TODO: …Wait: now that we've returned to `dist`, we should have `nn=dist`, and `dist_slow`, right?
+    #   (This could have been the reason for underperformance, after all.)
     return dist(cat(src_emb, dst_emb))
 def act_(src_emb, dst_emb, noise = ...):
     """Returns the shortest-path action from src to dst."""
@@ -375,23 +377,33 @@ def replay(timeout, steps_to_goal_regret):
             if last:
                 # TODO: …If we'll have `next` anyway, then instead of distance-gated self-imitation, can't we compute the distance for the successor and change the action whenever *action-dep* dist is lower?…
                 #   (…No longer too little to work with, now too much, and we're running into redundant paths…)
+                with torch.no_grad(): # Next-level target embeddings.
+                    # act_gating = (d_p - d_t + 1).clamp(0,15)
+                    act_gating = (d_i - d_t + 1).clamp(0,15)
+                    # srcs_n = embed_expand(0, states, lvl=next_lvl, nn=embed_slow)
+                    # dsts_n = embed_expand(1, goals, lvl=next_lvl, nn=embed_slow)
+                    # act_gating = (dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)
                 a_p = act_(srcs_p, dsts_p, n)
-                #   TODO: …Should this really use fast embeddings, or do slow embeddings make more sense?
-                act_gating = (d_p - d_t + 1).detach().clamp(0,15)
+                #   (Using srcs_n and dsts_n here destabilizes the action loss.)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
-                #   (No momentum slowing for `d_p` is less correct but easier to implement.)
-                #     TODO: …Since we're underperforming, maybe we *should* slow down `d_p`?
-                #       (Not like I have any other ideas on how to make arrows perform well again. Apart from restoring the old code and comparing it.)
-                #       …Meaning that we need alternative no-grad srcs_p/dsts_p and thus states_e2/goals_e2…
-                #       …Or can we just use the initial `d_t` for comparison, AKA `d_i`?…
-                #       - `(d_p-d_t+1).clamp(0,15)`: bad.
+                #   TODO: …Underperforming…
+                #     - `(d_p-d_t+1).clamp(0,15)`: bad, all rather one-directional at 25k.
+                #     - `(d_p-d_t+1).clamp(1,15)`: TODO:.
+                #     - `(d_i-d_t+1).clamp(0,15)`: bad too.
+                #     - `(d_i-d_t+1).clamp(1,15)`: TODO:.
+                #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)`: bad too.
+                #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
+                #     - TODO: …Maybe also without `dst`-unreachability and action-consequence losses?…
+                #     - TODO: …Maybe make `dist_` actually have a slow version?…
+                #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
+                #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
                 # for p in next.parameters(): p.requires_grad_(False)
                 # ddpg_loss = ddpg_loss + dist_(next(cat(srcs_p.detach(), a_p)), dsts_p.detach()).sum()
                 # for p in next.parameters(): p.requires_grad_(True)
-                #   TODO: …Is DDPG tanking our performance, making all dists <0?
+                #   TODO: …Why is DDPG tanking our performance, making all dists <0?
 
     # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
@@ -479,7 +491,7 @@ finish()
 #         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts).
 #           - Min-gating ladder for unbiased approximation of the seen `dist` minimum.
 #           - Replay-buffer prioritization of max-regret samples for fastest spreading of the influence of discovered largest shortcuts. (Also good for unroll-time goals, getting more data in most-promising areas.)
-#       - Penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
+#       - If `dst`s are not sampled from a replay buffer, penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
 
 # TODO: (With `floyd`, assuming that the NNs have already converged and we're only looking to incorporate new data, the most 'valuable' (meaning the most likely to be used in shortest paths) steps are those where sample-dist is much less than predicted-dist, meaning, high regret of not taking the sampled path. Damn, we really do need some way to filter the replay buffer!)
 #   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
