@@ -164,6 +164,8 @@ next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
 #       TODO: …So should we implement this for completeness's sake?…
 
 embed_slow = MomentumCopy(embed, .999) # Stabilize targets to prevent collapse.
+dist_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
+act_slow = MomentumCopy(act, .999) # Stabilize targets to prevent collapse.
 
 optim = torch.optim.Adam([*embed.parameters(), *dist.parameters(), *act.parameters(), *next.parameters()], lr=lr)
 
@@ -174,16 +176,15 @@ def embed_(src_or_dst, input, lvl=1, nn=embed):
     src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
     lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
     return nn(cat(src_or_dst, input, lvl))
-def dist_(src_emb, dst_emb):
+def dist_(src_emb, dst_emb, lvl=1, nn=dist):
     """Returns (a function of) the shortest-path distance from src to dst, so that we can distinguish bad actions."""
-    # TODO: …Wait: now that we've returned to `dist`, we should have `nn=dist`, and `dist_slow`, right?
-    #   (This could have been the reason for underperformance, after all.)
-    return dist(cat(src_emb, dst_emb))
-def act_(src_emb, dst_emb, noise = ...):
+    assert src_emb.shape == dst_emb.shape
+    return nn(cat(src_emb, dst_emb))
+def act_(src_emb, dst_emb, noise = ..., nn=act):
     """Returns the shortest-path action from src to dst."""
     if noise is ...:
         noise = torch.randn(*src_emb.shape[:-1], noise_sz, device=device)
-    return act(cat(src_emb, dst_emb, noise))
+    return nn(cat(src_emb, dst_emb, noise))
 
 
 
@@ -298,9 +299,9 @@ def maybe_reset_goal(input):
 
         out_of_time = steps_to_goal < 0
         goal = torch.where(out_of_time, dst, goal)
-        steps_to_goal = torch.where(out_of_time, dist_(src, dst) + 4, steps_to_goal - 1)
+        steps_to_goal = torch.where(out_of_time, dist_(src, dst, nn=dist_slow) + 4, steps_to_goal - 1)
 
-        steps_to_goal_err = dist_(src, goal) - steps_to_goal
+        steps_to_goal_err = dist_(src, goal, nn=dist_slow) - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
     return out_of_time.float().sum(), steps_to_goal_regret.sum()
 def replay(timeout, steps_to_goal_regret):
@@ -346,8 +347,8 @@ def replay(timeout, steps_to_goal_regret):
             n = noss
             # Compute prediction targets.
             with torch.no_grad():
-                d_i = dist_(srcs_t, dsts_t) # Initial pairwise distances.
-                if last: a_t = act_(srcs_t, dsts_t, n)
+                d_i = dist_(srcs_t, dsts_t, lvl=prev_lvl, nn=dist_slow) # Initial pairwise distances.
+                if last: a_t = act_(srcs_t, dsts_t, n, nn=act_slow)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
                 i, j = expand(0, times), expand(1, times)
@@ -372,19 +373,21 @@ def replay(timeout, steps_to_goal_regret):
                 if not last: d0 = d_t
                 else: d0, a0, n0 = d_t, a_t, n
             # Compute losses: distance, imitated action, DDPG.
-            d_p = dist_(srcs_p, dsts_p)
+            d_p = dist_(srcs_p, dsts_p, lvl=next_lvl)
             dist_loss = dist_loss + l_dist(d_p, d_t)
             if last:
                 # TODO: …If we'll have `next` anyway, then instead of distance-gated self-imitation, can't we compute the distance for the successor and change the action whenever *action-dep* dist is lower?…
                 #   (…No longer too little to work with, now too much, and we're running into redundant paths…)
+                #   Going from direct sample-dist to predicted-dist?… Less direct and thus inefficient, isn't it?
                 with torch.no_grad(): # Next-level target embeddings.
                     # act_gating = (d_p - d_t + 1).clamp(0,15)
                     act_gating = (d_i - d_t + 1).clamp(0,15)
                     # srcs_n = embed_expand(0, states, lvl=next_lvl, nn=embed_slow)
                     # dsts_n = embed_expand(1, goals, lvl=next_lvl, nn=embed_slow)
-                    # act_gating = (dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)
+                    # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0,15)
                 a_p = act_(srcs_p, dsts_p, n)
                 #   (Using srcs_n and dsts_n here destabilizes the action loss.)
+                #   TODO: …Why ARE actions seemingly largely destination-independent?… Isn't this a bit suspicious, just like distances used to be?…
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming…
                 #     - `(d_p-d_t+1).clamp(0,15)`: bad, all rather one-directional at 25k.
@@ -394,25 +397,24 @@ def replay(timeout, steps_to_goal_regret):
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)`: bad too.
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
                 #     - TODO: …Maybe also without `dst`-unreachability and action-consequence losses?…
-                #     - TODO: …Maybe make `dist_` actually have a slow version?…
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
                 #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
                 # for p in next.parameters(): p.requires_grad_(False)
-                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs_p.detach(), a_p)), dsts_p.detach()).sum()
+                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs_p.detach(), a_p)), dsts_p.detach(), lvl=next_lvl, nn=dist_slow).sum()
                 # for p in next.parameters(): p.requires_grad_(True)
                 #   TODO: …Why is DDPG tanking our performance, making all dists <0?
 
     # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     #   (On-policy penalization of unconnected components.)
-    goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
-    goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    states_e = embed_(0, states, lvl=-1)
-    goal_dists = dist_(states_e, goals)
-    dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
+    # goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
+    # goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
+    # states_e = embed_(0, states, lvl=-1)
+    # goal_dists = dist_(states_e, goals, lvl=-1)
+    # dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
     #   TODO:
 
     # Action-consequence prediction.
@@ -432,7 +434,7 @@ def replay(timeout, steps_to_goal_regret):
 
     (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
-    embed_slow.update()
+    embed_slow.update();  dist_slow.update();  act_slow.update()
 
     # Log debugging info.
     M = batch_sz * N
