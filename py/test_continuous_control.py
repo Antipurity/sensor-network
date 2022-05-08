@@ -396,7 +396,7 @@ def replay(timeout, steps_to_goal_regret):
                 #     - `(d_i-d_t+1).clamp(1,15)`: TODO:.
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)`: bad too.
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
-                #     - TODO: …Maybe also without `dst`-unreachability and action-consequence losses?…
+                #     - TODO: …Make `act` and `dist` NNs have 3 layers?…
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
                 #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
@@ -418,13 +418,13 @@ def replay(timeout, steps_to_goal_regret):
     #   TODO:
 
     # Action-consequence prediction.
-    with torch.no_grad():
-        next_samples = [replay_buffer[i+1] for i in indices]
-        next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
-        next_states_e = embed_(0, next_states, nn=embed_slow)
-        #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
-    states_e = embed_(0, states)
-    next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
+    # with torch.no_grad():
+    #     next_samples = [replay_buffer[i+1] for i in indices]
+    #     next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
+    #     next_states_e = embed_(0, next_states, nn=embed_slow)
+    #     #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
+    # states_e = embed_(0, states)
+    # next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
     #   TODO:
 
     # TODO: …Do we want a prev→next action prediction loss, for grounding?
