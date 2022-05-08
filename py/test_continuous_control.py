@@ -151,8 +151,8 @@ def net(ins, outs, hidden=embed_sz, layers=3):
     ).to(device)
 embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
 #   (Locally-isometric map.)
-dist = net(embed_sz + embed_sz, 1, layers=0) # TODO:
-act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=0) # (src, dst, noise) → action
+dist = net(embed_sz + embed_sz + 1, 1, layers=3) # TODO:
+act = net(embed_sz + embed_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
 #   (Min-dist action.)
 next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
 #   (Neighborhoods in the map.)
@@ -179,7 +179,8 @@ def embed_(src_or_dst, input, lvl=1, nn=embed):
 def dist_(src_emb, dst_emb, lvl=1, nn=dist):
     """Returns (a function of) the shortest-path distance from src to dst, so that we can distinguish bad actions."""
     assert src_emb.shape == dst_emb.shape
-    return nn(cat(src_emb, dst_emb))
+    lvl = torch.full((*src_emb.shape[:-1], 1), lvl, device=device)
+    return nn(cat(src_emb, dst_emb, lvl))
 def act_(src_emb, dst_emb, noise = ..., nn=act):
     """Returns the shortest-path action from src to dst."""
     if noise is ...:
@@ -376,9 +377,6 @@ def replay(timeout, steps_to_goal_regret):
             d_p = dist_(srcs_p, dsts_p, lvl=next_lvl)
             dist_loss = dist_loss + l_dist(d_p, d_t)
             if last:
-                # TODO: …If we'll have `next` anyway, then instead of distance-gated self-imitation, can't we compute the distance for the successor and change the action whenever *action-dep* dist is lower?…
-                #   (…No longer too little to work with, now too much, and we're running into redundant paths…)
-                #   Going from direct sample-dist to predicted-dist?… Less direct and thus inefficient, isn't it?
                 with torch.no_grad(): # Next-level target embeddings.
                     # act_gating = (d_p - d_t + 1).clamp(0,15)
                     act_gating = (d_i - d_t + 1).clamp(0,15)
@@ -387,7 +385,6 @@ def replay(timeout, steps_to_goal_regret):
                     # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0,15)
                 a_p = act_(srcs_p, dsts_p, n)
                 #   (Using srcs_n and dsts_n here destabilizes the action loss.)
-                #   TODO: …Why ARE actions seemingly largely destination-independent?… Isn't this a bit suspicious, just like distances used to be?…
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming… Why does the action-loss keep increasing even as actions remain destination-independent? This is the opposite of what's supposed to happen.
                 #     - `(d_p-d_t+1).clamp(0,15)`: bad, all rather one-directional at 25k.
@@ -397,7 +394,8 @@ def replay(timeout, steps_to_goal_regret):
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(0,15)`: bad too.
                 #     - `(dist_(srcs_n, dsts_n) - d_t + 1).clamp(1,15)`: TODO:.
                 #     - TODO: …Make `act` and `dist` NNs have 3 layers?…
-                #     - TODO: Make `dist_` actually give the lvl to `dist`.
+                #       - …Doesn't look terrible, at least at 40k?
+                #       - …So, wait, is *this* the solution that we've been looking for?
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
                 #     - TODO: …Resurrect the old code, and compare to see where ours goes wrong?…
 
