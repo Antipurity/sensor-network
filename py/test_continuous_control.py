@@ -317,85 +317,83 @@ def replay(timeout, steps_to_goal_regret):
     noises = torch.stack([s.noise for s in samples], 1) # batch_sz × N × noise_sz
 
     # Learn distances & actions.
-    def expand(x, src_or_dst):
-        """N×… to N×N×…. `src_or_dst` is 1|2, representing which `N` is broadcasted."""
-        return x.unsqueeze(src_or_dst).expand(batch_sz, N, N, x.shape[-1])
-    def l_dist(d1, d):
+    def expand(src_or_dst, x):
+        """_×N×… to _×N×N×…. `src_or_dst` is 0|1, representing which `N` is broadcasted."""
+        return x.unsqueeze(src_or_dst+1).expand(batch_sz, N, N, x.shape[-1])
+    def embed_expand(src_or_dst, x, **kw):
+        return expand(src_or_dst, embed_(src_or_dst, x, **kw))
+    def l_dist(d_p, d_t):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
-        with torch.no_grad(): mult = (d1.detach() - d + 1).clamp(.3, 3)
-        return (mult * (d1 - d).square()).sum()
+        with torch.no_grad(): mult = (d_p.detach() - d_t + 1).clamp(.3, 3)
+        return (mult * (d_p - d_t).square()).sum()
     dist_loss, action_loss, next_loss, ddpg_loss = 0,0,0,0
     max_goals = max(len(s.goals) for s in samples)
-    noss = expand(noises, 1)
+    noss = expand(0, noises)
     for lvl in range(dist_levels):
         last = lvl == dist_levels-1
         prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
         next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
         #   The first dist-level is grounded in itself, others in their previous levels.
-        states_e = embed_(0, states, lvl=prev_lvl, nn=embed_slow) # Target.
-        #   TODO: Shouldn't all slow embeddings not need grad?
-        #   TODO: Since these embs are only used to be expanded, make `expand` call `embed_`, or have another func for this.
-        states_e1 = embed_(0, states, lvl=next_lvl) # Prediction.
-        #   TODO: …Can we get saner names than x1 for prediction and x for target… At least x_p and x_t…
-        srcs, srcs1 = expand(states_e, 1), expand(states_e1, 1)
+        with torch.no_grad(): srcs_t = embed_expand(0, states, lvl=prev_lvl, nn=embed_slow)
+        srcs_p = embed_expand(0, states, lvl=next_lvl)
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
-            goals_e = embed_(1, goals, lvl=prev_lvl, nn=embed_slow) # Target.
-            goals_e1 = embed_(1, goals, lvl=next_lvl) # Prediction.
-            dsts, dsts1 = expand(goals_e, 2), expand(goals_e1, 2)
+            with torch.no_grad(): dsts_t = embed_expand(1, goals, lvl=prev_lvl, nn=embed_slow)
+            dsts_p = embed_expand(1, goals, lvl=next_lvl)
             n = noss
             # Compute prediction targets.
             with torch.no_grad():
-                d_i = dist_(srcs, dsts) # Initial pairwise distances.
-                if last: a = act_(srcs, dsts, n)
+                d_i = dist_(srcs_t, dsts_t) # Initial pairwise distances.
+                if last: a_t = act_(srcs_t, dsts_t, n)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
-                i, j = expand(times, 1), expand(times, 2)
+                i, j = expand(0, times), expand(1, times)
                 cond = i < j
                 if lvl>0: cond = cond & (j-i < d_i) # First dist-level has to not filter sharply.
-                d = torch.where(cond, j-i, d_i).clamp(1)
-                if last: a = torch.where(cond, expand(actions, 1), a)
+                d_t = torch.where(cond, j-i, d_i).clamp(1)
+                if last: a_t = torch.where(cond, expand(0, actions), a_t)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
                     if lvl>0:
-                        if not last: d = floyd(d)
-                        else: d,a,n = floyd(d,a,n)
-                    d = torch.where((d_i == d).all(-1, keepdim=True), d+1, d)
+                        if not last: d_t = floyd(d_t)
+                        else: d_t,a_t,n = floyd(d_t,a_t,n)
+                    d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t)
                     #   (Slowly penalize unconnected components, by adding `eps` if ungrounded.)
                 else: # (Goals should take from full-state plans directly.)
-                    cond = d0 < d
-                    d = torch.where(cond, d0, d)
+                    cond = d0 < d_t
+                    d_t = torch.where(cond, d0, d_t)
                     if last:
-                        a = torch.where(cond, a0, a)
+                        a_t = torch.where(cond, a0, a_t)
                         n = torch.where(cond, n0, n)
             if g == 0: # Preserve state-info of full-state for goals.
-                if not last: d0 = d
-                else: d0, a0, n0 = d, a, n
+                if not last: d0 = d_t
+                else: d0, a0, n0 = d_t, a_t, n
             # Compute losses: distance, imitated action, DDPG.
-            d1 = dist_(srcs1, dsts1)
-            dist_loss = dist_loss + l_dist(d1, d)
+            d_p = dist_(srcs_p, dsts_p)
+            dist_loss = dist_loss + l_dist(d_p, d_t)
             if last:
                 # TODO: …If we'll have `next` anyway, then instead of distance-gated self-imitation, can't we compute the distance for the successor and change the action whenever *action-dep* dist is lower?…
                 #   (…No longer too little to work with, now too much, and we're running into redundant paths…)
-                a1 = act_(srcs1, dsts1, n)
+                a_p = act_(srcs_p, dsts_p, n)
                 #   TODO: …Should this really use fast embeddings, or do slow embeddings make more sense?
-                act_gating = (d1 - d + 1).detach().clamp(0,15)
-                action_loss = action_loss + (act_gating * (a1 - a).square()).sum()
-                #   (No momentum slowing for `d1` is less correct but easier to implement.)
-                #     TODO: …Since we're underperforming, maybe we *should* slow down `d1`?
+                act_gating = (d_p - d_t + 1).detach().clamp(0,15)
+                action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
+                #   (No momentum slowing for `d_p` is less correct but easier to implement.)
+                #     TODO: …Since we're underperforming, maybe we *should* slow down `d_p`?
                 #       (Not like I have any other ideas on how to make arrows perform well again. Apart from restoring the old code and comparing it.)
-                #       …Meaning that we need alternative no-grad srcs1/dsts1 and thus states_e2/goals_e2…
-                #       …Or can we just use the initial `d` for comparison, AKA `d_i`?…
+                #       …Meaning that we need alternative no-grad srcs_p/dsts_p and thus states_e2/goals_e2…
+                #       …Or can we just use the initial `d_t` for comparison, AKA `d_i`?…
+                #       - `(d_p-d_t+1).clamp(0,15)`: bad.
 
                 # DDPG: minimize post-action distance with gradient descent too.
                 #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
                 # for p in next.parameters(): p.requires_grad_(False)
-                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs1.detach(), a1)), dsts1.detach()).sum()
+                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs_p.detach(), a_p)), dsts_p.detach()).sum()
                 # for p in next.parameters(): p.requires_grad_(True)
                 #   TODO: …Is DDPG tanking our performance, making all dists <0?
 
-    # Unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
+    # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     #   (On-policy penalization of unconnected components.)
     goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
