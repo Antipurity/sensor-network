@@ -358,17 +358,12 @@ def replay(timeout, steps_to_goal_regret):
             if last:
                 with torch.no_grad(): # Next-level target embeddings.
                     # Learn actions wherever we found a better path.
-                    #   (Since d_t is d_i+1 whenever they're exactly equal, this only learns better-path actions.)
-                    # act_gating = (d_p - d_t + 1).clamp(0,10) # TODO:
-                    #   …Looking kinda 1D but still diverse. At 20k, definitely seeing shovelhead vortices. We're on the right track, maybe?
-                    # act_gating = (d_i - d_t + 1).clamp(0,10) # TODO:
-                    #   …Unable to learn actions…
-                    act_gating = (dist_(srcs, dsts, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10) # TODO:
-                    #   …Initially looked like it would fail again, but at ≈20k, actually looks better than `d_p`: not somewhat-one-directional, but at least (seeming to) begin to converge to proper-ish values. Or maybe it's just wider.
+                    act_gating = (dist_(srcs, dsts, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10)
                 a_p = act_(srcs, dsts, n, lvl=next_lvl)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
-                #   TODO: …Underperforming…
-                #     - TODO: …Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
+                # TODO: Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter. (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
+                #   (It'll be exactly as if we've never even attempted embeddings.)
+                # TODO: …Try increasing `replays_per_step` for once…
 
     # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
@@ -398,7 +393,7 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action = act_(full_state, goal, noise)
-        if iter % 100 >= 50: # TODO: Double-check that we actually need this, and `noise_sz` can't bail us out.
+        if iter % 100 >= 50:
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
         replay_buffer.append(ReplaySample(
