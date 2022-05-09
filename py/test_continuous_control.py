@@ -149,8 +149,7 @@ def net(ins, outs, hidden=embed_sz, layers=3):
         *[SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)) for _ in range(layers)],
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs)),
     ).to(device)
-embed = net(1 + input_sz + 1, embed_sz) # (src_or_dst, input, lvl) → emb
-#   (Locally-isometric map.) TODO: Not so isometric anymore, now that we'll definitely have `dist`.
+embed = net(1 + input_sz + 1, embed_sz, layers=0) # (src_or_dst, input, lvl) → emb
 dist = net(input_sz + input_sz + 1, 1, layers=3) # TODO:
 act = net(input_sz + input_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
 #   (Min-dist action.)
@@ -390,6 +389,8 @@ def replay(timeout, steps_to_goal_regret):
                 #       - …The init is instantly so much better…
                 #       - Even though actions have a lot of difficulty getting learned.
                 #       - I recognize the distance map, I've seen it in the old code. Very good. Won't need to resurrect *that*.
+                #       - (`embed` can't be rescued by simply putting LayerNorm at its output.) (`layers=0` is a bit better at init-time.) (I guess in general, next-embedding prediction would make them properly sensitive to inputs — but no one has time for that.)
+                #       - TODO: Remove `embed` fully. I guess it was a mistake.
                 #     - TODO: …Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
 
                 # DDPG: minimize post-action distance with gradient descent too.
