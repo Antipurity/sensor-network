@@ -170,7 +170,7 @@ optim = torch.optim.Adam([*embed.parameters(), *dist.parameters(), *act.paramete
 
 
 
-def embed_(src_or_dst, input, lvl=1, nn=embed):
+def embed_(src_or_dst, input, lvl=1, nn=embed): # TODO: Kill.
     """The `embed` wrapper, for inputs."""
     return input # TODO:
     src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
@@ -380,11 +380,16 @@ def replay(timeout, steps_to_goal_regret):
                 with torch.no_grad(): # Next-level target embeddings.
                     # Learn actions wherever we found a better path.
                     #   (Since d_t is d_i+1 whenever they're exactly equal, this only learns better-path actions.)
+                    # act_gating = (d_p - d_t + 1).clamp(0,10) # TODO:
                     act_gating = (d_i - d_t + 1).clamp(0,10)
+                    # srcs_n = embed_expand(0, states, lvl=next_lvl, nn=embed_slow)
+                    # dsts_n = embed_expand(1, goals, lvl=next_lvl, nn=embed_slow)
+                    # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10) # TODO:
                 a_p = act_(srcs_p, dsts_p, n, lvl=next_lvl)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming…
                 #     - …Removing gradient updates shows that actions really do look boring: just a 90° turn over the whole field, no loops or much noise or anything. Maybe, the real cause for emb-underperformance is poor initialization?…
+                #     - …Now that everything else is working fine (`embed` at init was just not diverse enough to be OK), actions are just refusing to get learned (even if we re-enable learning a new action at each dist-level)… Why?
                 #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
                 #       - …The init is instantly so much better…
                 #       - Even though actions have a lot of difficulty getting learned.
@@ -472,12 +477,13 @@ finish()
 #   Agents had better learn a full model of the world, and thus "become" the world. For that, these NNs need:
 #     - Theoretically, the inverted env `(state, obs) → (state, act)`, but it should be split to better model `env`'s exact inputs/outputs, and to allow tampering with inputs/actions/goals:
 #       - `dist_act(src, dst) → (dist, act)` (min-dist, and the min-dist action).
-#         - `update(history, input_emb) → src`, because the NN is not blind.
-#           - `embed(input) → input_emb`, to overcome the smearing that predicting the non-determinism of `input` introduces (BYOL loss).
-#         - `env(src, act) → (history, input_emb)`, as the RNN that predicts its next input.
-#         - Possibly `goal(src) → dst` network/s, but probably unnecessary in practice (unless human input is sparse enough that prediction would help).
+#         - `update(history, obs) → src`, because the NN is not blind.
+#         - `env(src, act) → history`, to round out the RNN.
+#         - (`dst`s of `src`s should be provided when storing samples in the replay buffer. No NNs for these unless MuZero-like planning is really required. Probably zero-out and/or defer the storage if not available immediately.)
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
-#     - Generalized BYOL: env(embed(history), action).input_emb = sg embed(next)
+#     - Generalized BYOL for RNNs, contrasting `src` with itself: `update(env(update(history, obs), act), next_obs) = sg update.momentum_copy(next_history, next_obs)`
+#       - (Not predicting `obs` directly because its non-determinism leads to smearing. BYOL works better for images, so it'll work better for us too.)
+#       - (MuZero-like no-`obs` planning can be achieved via an extra loss which is like this but with 0s for `obs`. But, such planning would average-out all info-gain, and make learning any exploration strategies impossible.)
 #     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst), j-i if there's a real i→j path)
 #       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so `+eps` ensures that ungrounded assumptions don't persist for long.)
 #       - Min-dist actions:
