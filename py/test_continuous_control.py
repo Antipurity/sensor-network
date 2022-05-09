@@ -319,18 +319,16 @@ def replay(timeout, steps_to_goal_regret):
         prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
         next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
         #   The first dist-level is grounded in itself, others in their previous levels.
-        with torch.no_grad(): srcs_t = expand(0, states)
-        srcs_p = expand(0, states)
+        srcs = expand(0, states)
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
-            with torch.no_grad(): dsts_t = expand(1, goals)
-            dsts_p = expand(1, goals)
+            dsts = expand(1, goals)
             n = noss
             # Compute prediction targets.
             with torch.no_grad():
-                d_i = dist_(srcs_t, dsts_t, lvl=prev_lvl, nn=dist_slow) # Initial pairwise distances.
-                if last: a_t = act_(srcs_t, dsts_t, n, lvl=prev_lvl, nn=act_slow)
+                d_i = dist_(srcs, dsts, lvl=prev_lvl, nn=dist_slow) # Initial pairwise distances.
+                if last: a_t = act_(srcs, dsts, n, lvl=prev_lvl, nn=act_slow)
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
                 i, j = expand(0, times), expand(1, times)
@@ -355,23 +353,21 @@ def replay(timeout, steps_to_goal_regret):
                 if not last: d0 = d_t
                 else: d0, a0, n0 = d_t, a_t, n
             # Compute losses: distance, imitated action, DDPG.
-            d_p = dist_(srcs_p, dsts_p, lvl=next_lvl)
+            d_p = dist_(srcs, dsts, lvl=next_lvl)
             dist_loss = dist_loss + l_dist(d_p, d_t)
             if last:
                 with torch.no_grad(): # Next-level target embeddings.
                     # Learn actions wherever we found a better path.
                     #   (Since d_t is d_i+1 whenever they're exactly equal, this only learns better-path actions.)
-                    act_gating = (d_p - d_t + 1).clamp(0,10) # TODO:
+                    # act_gating = (d_p - d_t + 1).clamp(0,10) # TODO:
                     #   …Looking kinda 1D but still diverse. At 20k, definitely seeing shovelhead vortices. We're on the right track, maybe?
-                    # act_gating = (d_i - d_t + 1).clamp(0,10)
-                    # srcs_n = expand(0, states)
-                    # dsts_n = expand(1, goals)
-                    # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10) # TODO:
-                a_p = act_(srcs_p, dsts_p, n, lvl=next_lvl)
+                    # act_gating = (d_i - d_t + 1).clamp(0,10) # TODO:
+                    #   …Unable to learn actions…
+                    act_gating = (dist_(srcs, dsts, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10) # TODO:
+                    #   …Initially looked like it would fail again, but at ≈20k, actually looks better than `d_p`: not somewhat-one-directional, but at least (seeming to) begin to converge to proper-ish values. Or maybe it's just wider.
+                a_p = act_(srcs, dsts, n, lvl=next_lvl)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming…
-                #     - …Now that everything else is working fine, actions are just refusing to get learned (even if we re-enable learning a new action at each dist-level)… Why?
-                #     - TODO: Try the other gating schemes again, now that we don't `embed` again?…
                 #     - TODO: …Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
 
     # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
