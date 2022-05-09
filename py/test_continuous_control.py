@@ -361,15 +361,15 @@ def replay(timeout, steps_to_goal_regret):
                 with torch.no_grad(): # Next-level target embeddings.
                     # Learn actions wherever we found a better path.
                     #   (Since d_t is d_i+1 whenever they're exactly equal, this only learns better-path actions.)
-                    # act_gating = (d_p - d_t + 1).clamp(0,10) # TODO:
-                    act_gating = (d_i - d_t + 1).clamp(0,10)
+                    act_gating = (d_p - d_t + 1).clamp(0,10) # TODO:
+                    #   …Looking kinda 1D but still diverse. At 20k, definitely seeing shovelhead vortices. We're on the right track, maybe?
+                    # act_gating = (d_i - d_t + 1).clamp(0,10)
                     # srcs_n = expand(0, states)
                     # dsts_n = expand(1, goals)
                     # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10) # TODO:
                 a_p = act_(srcs_p, dsts_p, n, lvl=next_lvl)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming…
-                #     - …Removing gradient updates shows that actions really do look boring: just a 90° turn over the whole field, no loops or much noise or anything. Maybe, the real cause for emb-underperformance is poor initialization?…
                 #     - …Now that everything else is working fine, actions are just refusing to get learned (even if we re-enable learning a new action at each dist-level)… Why?
                 #     - TODO: Try the other gating schemes again, now that we don't `embed` again?…
                 #     - TODO: …Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
@@ -402,7 +402,7 @@ for iter in range(500000):
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action = act_(full_state, goal, noise)
-        if iter % 100 >= 50:
+        if iter % 100 >= 50: # TODO: Double-check that we actually need this, and `noise_sz` can't bail us out.
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
         replay_buffer.append(ReplaySample(
@@ -447,7 +447,12 @@ finish()
 #           - Min-gating ladder for unbiased approximation of the seen `dist` minimum.
 #           - Replay-buffer prioritization of max-regret samples for fastest spreading of the influence of discovered largest shortcuts. (Also good for unroll-time goals, getting more data in most-promising areas.)
 #       - If `dst`s are not sampled from a replay buffer, penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
-#     - Faraway gradient teleportation: if the RNN always *adds* to history (skip-connections yo), then the gradient of future steps (the initial `history`) should always be added to the gradient of past steps (the post-`env` `history`). Probably implemented across batches, to not hurt performance: by looking at `.grad` and saving that and timestamps, and on the next batch, adding that gradient whenever the timestamp is lower. Should also ensure that RNN states don't get too huge, by resetting big values (`.abs()>1000`) to 0 and keeping track of the reset-timestamp, and only allowing grad-tp when reset-timestamps match.
+#     - Faraway gradient teleportation: if the RNN always *adds* to history (skip-connections yo), then the gradient of future steps (the initial `history`) should always be added to the gradient of past steps (the post-`env` `history`).
+#       - Should also ensure that RNN states don't get too huge, by resetting big values (`.abs()>1000`) to 0 and keeping track of the reset-timestamp, and only allowing grad-tp when reset-timestamps match.
+#       - Probably implemented across minibatches, to not hurt performance: by looking at `.grad` and saving that and timestamps, and on the next batch, incorporating old-grad to output-RNN-state, AKA adding that gradient whenever our timestamp is lower. Needs a quadratic loop to incorporate.
+#         - To change `O(B**2)` to `O(B log(B))`, sort: when remembering grad, `.sort()` by timestamps and and calc cumsum of all this-and-above-our-timestamp gradients; when incorporating, pick from here at `.searchsorted(…, side='right')` indices.
+#         - To trade off staleness for lower variance, could actually incorporate old-grad into new-grad (with a multiplier like `.95`) in the same way as it's incorporated into a replay-step.
+#       - …Whole big technique here, huh. Definitely need a `model/` file with thorough tests.
 
 # TODO: (With `floyd`, assuming that the NNs have already converged and we're only looking to incorporate new data, the most 'valuable' (meaning the most likely to be used in shortest paths) steps are those where sample-dist is much less than predicted-dist, meaning, high regret of not taking the sampled path. Damn, we really do need some way to filter the replay buffer!)
 #   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
