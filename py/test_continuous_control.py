@@ -149,33 +149,17 @@ def net(ins, outs, hidden=embed_sz, layers=3):
         *[SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)) for _ in range(layers)],
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs)),
     ).to(device)
-embed = net(1 + input_sz + 1, embed_sz, layers=0) # (src_or_dst, input, lvl) → emb
 dist = net(input_sz + input_sz + 1, 1, layers=3) # TODO:
 act = net(input_sz + input_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
 #   (Min-dist action.)
-next = net(embed_sz + action_sz, embed_sz, layers=0) # (prev, action) → next
-#   (Neighborhoods in the map.)
-#   (The loss for learning this is literally BYOL with RNN-steps instead of img-augmentations.)
-#   (Useful for repr-learning & env-stochasticity, DDPG, planning, and safe exploration (when proposing a random action, don't make its distance to a 'safe' goal too much higher than the min-path distance).)
-# Analogy to [MuZero](https://arxiv.org/abs/1911.08265): `act` & `dist_` are the prediction func, `embed` is the representation func, `next` is the dynamics func.
-#   We don't support learning state through time (partially-observed envs), neither does MuZero (beyond what's directly given to its repr func, which is non-scalable O(N)).
-#     But maybe we could, if `next` was our RNN and `embed` was just the input-embedding and not the whole RNN state, and we had another NN from next-state to input-embedding, and unrolling used the RNN. (Planning (no-real-input unrolling) could feed the next-input-embedding-prediction to `next`.)
-#       TODO: …So should we implement this for completeness's sake?…
 
-embed_slow = MomentumCopy(embed, .999) # Stabilize targets to prevent collapse.
 dist_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
 act_slow = MomentumCopy(act, .999) # Stabilize targets to prevent collapse.
 
-optim = torch.optim.Adam([*embed.parameters(), *dist.parameters(), *act.parameters(), *next.parameters()], lr=lr)
+optim = torch.optim.Adam([*dist.parameters(), *act.parameters()], lr=lr)
 
 
 
-def embed_(src_or_dst, input, lvl=1, nn=embed): # TODO: Kill.
-    """The `embed` wrapper, for inputs."""
-    return input # TODO:
-    src_or_dst = torch.full((*input.shape[:-1], 1), src_or_dst, device=device)
-    lvl = torch.full((*input.shape[:-1], 1), lvl, device=device)
-    return nn(cat(src_or_dst, input, lvl))
 def dist_(src_emb, dst_emb, lvl=1, nn=dist):
     """Returns (a function of) the shortest-path distance from src to dst, so that we can distinguish bad actions."""
     assert src_emb.shape == dst_emb.shape
@@ -232,23 +216,23 @@ def pos_histogram(plt, label):
         # Display action-arrows everywhere.
         GS = 16 # grid size
         dst_pos = pos_histogram.dst_pos
-        dst = embed_(1, pos_only(dst_pos.expand(GS*GS, 2)))
+        dst = pos_only(dst_pos.expand(GS*GS, 2))
         plt.scatter(dst_pos[0,0].cpu(), dst_pos[0,1].cpu(), c='white', zorder=3)
         x, y = torch.linspace(0.,1.,GS, device=device), torch.linspace(0.,1.,GS, device=device)
         x = x.reshape(1,GS,1).expand(GS,GS,1).reshape(GS*GS,1)
         y = y.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
-        src = embed_(0, cat(x, y, veloc))
+        src = cat(x, y, veloc)
         acts, dists = act_(src, dst), dist_(src, dst)
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 
         # Unroll a sample trajectory, to visually gauge how well goal-chasing works.
         src = torch.cat((pos_histogram.src_pos, torch.zeros(1,2, device=device)), -1)
-        dst = embed_(1, pos_only(dst_pos))
+        dst = pos_only(dst_pos)
         mid = [src[0, :2]]
         for _ in range(64):
-            action = act_(embed_(0, src), dst)
+            action = act_(src, dst)
             state, hidden_state = env_step(src[:, :2], src[:, 2:], action)
             src = torch.cat((state, hidden_state), -1)
             mid.append(src[0, :2])
@@ -295,8 +279,7 @@ def maybe_reset_goal(input):
         if random.randint(1,4) == 1: # In 25% of cases, try go to a non-replay-buffer destination.
             dst = pos_only(torch.rand(batch_sz, input_sz, device=device))
             # (Note: this doesn't help make the blobs more expansive. Doesn't do anything of note, except for *maybe* better-looking distances.)
-        dst = embed_(1, dst, nn=embed_slow)
-        src = embed_(0, input, nn=embed_slow)
+        src = input
 
         out_of_time = steps_to_goal < 0
         goal = torch.where(out_of_time, dst, goal)
@@ -324,8 +307,6 @@ def replay(timeout, steps_to_goal_regret):
     def expand(src_or_dst, x):
         """_×N×… to _×N×N×…. `src_or_dst` is 0|1, representing which `N` is broadcasted."""
         return x.unsqueeze(src_or_dst+1).expand(batch_sz, N, N, x.shape[-1])
-    def embed_expand(src_or_dst, x, **kw):
-        return expand(src_or_dst, embed_(src_or_dst, x, **kw))
     def l_dist(d_p, d_t):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
         with torch.no_grad(): mult = (d_p.detach() - d_t + 1).clamp(.3, 3)
@@ -338,13 +319,13 @@ def replay(timeout, steps_to_goal_regret):
         prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
         next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
         #   The first dist-level is grounded in itself, others in their previous levels.
-        with torch.no_grad(): srcs_t = embed_expand(0, states, lvl=prev_lvl, nn=embed_slow)
-        srcs_p = embed_expand(0, states, lvl=next_lvl)
+        with torch.no_grad(): srcs_t = expand(0, states)
+        srcs_p = expand(0, states)
         for g in range(max_goals):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
-            with torch.no_grad(): dsts_t = embed_expand(1, goals, lvl=prev_lvl, nn=embed_slow)
-            dsts_p = embed_expand(1, goals, lvl=next_lvl)
+            with torch.no_grad(): dsts_t = expand(1, goals)
+            dsts_p = expand(1, goals)
             n = noss
             # Compute prediction targets.
             with torch.no_grad():
@@ -382,57 +363,31 @@ def replay(timeout, steps_to_goal_regret):
                     #   (Since d_t is d_i+1 whenever they're exactly equal, this only learns better-path actions.)
                     # act_gating = (d_p - d_t + 1).clamp(0,10) # TODO:
                     act_gating = (d_i - d_t + 1).clamp(0,10)
-                    # srcs_n = embed_expand(0, states, lvl=next_lvl, nn=embed_slow)
-                    # dsts_n = embed_expand(1, goals, lvl=next_lvl, nn=embed_slow)
+                    # srcs_n = expand(0, states)
+                    # dsts_n = expand(1, goals)
                     # act_gating = (dist_(srcs_n, dsts_n, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10) # TODO:
                 a_p = act_(srcs_p, dsts_p, n, lvl=next_lvl)
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
                 #   TODO: …Underperforming…
                 #     - …Removing gradient updates shows that actions really do look boring: just a 90° turn over the whole field, no loops or much noise or anything. Maybe, the real cause for emb-underperformance is poor initialization?…
-                #     - …Now that everything else is working fine (`embed` at init was just not diverse enough to be OK), actions are just refusing to get learned (even if we re-enable learning a new action at each dist-level)… Why?
-                #     - TODO: …Make `embed_` an identity func, and make `dist_` do all the work, just like the old times?…
-                #       - …The init is instantly so much better…
-                #       - Even though actions have a lot of difficulty getting learned.
-                #       - I recognize the distance map, I've seen it in the old code. Very good. Won't need to resurrect *that*.
-                #       - (`embed` can't be rescued by simply putting LayerNorm at its output.) (`layers=0` is a bit better at init-time.) (I guess in general, next-embedding prediction would make them properly sensitive to inputs — but no one has time for that.)
-                #       - TODO: Remove `embed` fully. I guess it was a mistake.
+                #     - …Now that everything else is working fine, actions are just refusing to get learned (even if we re-enable learning a new action at each dist-level)… Why?
+                #     - TODO: Try the other gating schemes again, now that we don't `embed` again?…
                 #     - TODO: …Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter? (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
-
-                # DDPG: minimize post-action distance with gradient descent too.
-                #   (Augments `action_loss`'s global-but-slow optimizer with a local-but-fast one.)
-                # for p in next.parameters(): p.requires_grad_(False)
-                # ddpg_loss = ddpg_loss + dist_(next(cat(srcs_p.detach(), a_p)), dsts_p.detach(), lvl=next_lvl, nn=dist_slow).sum()
-                # for p in next.parameters(): p.requires_grad_(True)
-                #   TODO: …Why was DDPG tanking our performance, making all dists <0?
 
     # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
     #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
     #   (On-policy penalization of unconnected components.)
     # goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
     # goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    # states_e = embed_(0, states, lvl=-1)
-    # goal_dists = dist_(states_e, goals, lvl=-1)
+    # goal_dists = dist_(states, goals, lvl=-1)
     # dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
     #   TODO:
-
-    # Action-consequence prediction.
-    # with torch.no_grad():
-    #     next_samples = [replay_buffer[i+1] for i in indices]
-    #     next_states = torch.stack([s.state for s in next_samples], 1) # batch_sz × N × input_sz
-    #     next_states_e = embed_(0, next_states, nn=embed_slow)
-    #     #   (Next *src* emb, not next dst emb. This is essential for estimating distances.)
-    # states_e = embed_(0, states)
-    # next_loss = next_loss + (next(cat(states_e, actions)) - next_states_e).square().sum()
-    #   TODO:
-
-    # TODO: …Do we want a prev→next action prediction loss, for grounding?
-    # TODO: …Do we want a cheating-loss that would randomly sample a few actions, and predict the min-distance action? (Though might not even be that good if we compare sample-actions anyway.)
 
     # TODO: Run & fix.
 
     (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
-    embed_slow.update();  dist_slow.update();  act_slow.update()
+    dist_slow.update();  act_slow.update()
 
     # Log debugging info.
     M = batch_sz * N
@@ -446,7 +401,7 @@ for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
-        action = act_(embed_(0, full_state), goal, noise)
+        action = act_(full_state, goal, noise)
         if iter % 100 >= 50:
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
@@ -479,19 +434,20 @@ finish()
 #       - `dist_act(src, dst) → (dist, act)` (min-dist, and the min-dist action).
 #         - `update(history, obs) → src`, because the NN is not blind.
 #         - `env(src, act) → history`, to round out the RNN.
-#         - (`dst`s of `src`s should be provided when storing samples in the replay buffer. No NNs for these unless MuZero-like planning is really required. Probably zero-out and/or defer the storage if not available immediately.)
+#         - (`dst`s of `src`s should be provided when storing samples in the replay buffer. Probably zero-out and/or defer the storage if not available immediately.)
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
 #     - Generalized BYOL for RNNs, contrasting `src` with itself: `update(env(update(history, obs), act), next_obs) = sg update.momentum_copy(next_history, next_obs)`
 #       - (Not predicting `obs` directly because its non-determinism leads to smearing. BYOL works better for images, so it'll work better for us too.)
-#       - (MuZero-like no-`obs` planning can be achieved via an extra loss which is like this but with 0s for `obs`. But, such planning would average-out all info-gain, and make learning any exploration strategies impossible.)
+#       - ([MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning can be achieved via an extra loss which is like this but with 0s for `obs`, and with `src → dst` NNs. But, such planning would average-out all info-gain, and make learning any exploration strategies impossible. BUT, it would allow safe exploration, AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases significantly.)
 #     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst), j-i if there's a real i→j path)
 #       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so `+eps` ensures that ungrounded assumptions don't persist for long.)
 #       - Min-dist actions:
-#         - Gradient, DDPG: post-action (`env`) post-`update` (for src) `dist` is minimal.
+#         - Gradient, DDPG: train `act`ions to minimize post-step `dist`ance: `min dist_act.frozen(update(env(src, *act*), next_obs), dst).dist`.
 #         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts).
 #           - Min-gating ladder for unbiased approximation of the seen `dist` minimum.
 #           - Replay-buffer prioritization of max-regret samples for fastest spreading of the influence of discovered largest shortcuts. (Also good for unroll-time goals, getting more data in most-promising areas.)
 #       - If `dst`s are not sampled from a replay buffer, penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
+#     - Faraway gradient teleportation: if the RNN always *adds* to history (skip-connections yo), then the gradient of future steps (the initial `history`) should always be added to the gradient of past steps (the post-`env` `history`). Probably implemented across batches, to not hurt performance: by looking at `.grad` and saving that and timestamps, and on the next batch, adding that gradient whenever the timestamp is lower. Should also ensure that RNN states don't get too huge, by resetting big values (`.abs()>1000`) to 0 and keeping track of the reset-timestamp, and only allowing grad-tp when reset-timestamps match.
 
 # TODO: (With `floyd`, assuming that the NNs have already converged and we're only looking to incorporate new data, the most 'valuable' (meaning the most likely to be used in shortest paths) steps are those where sample-dist is much less than predicted-dist, meaning, high regret of not taking the sampled path. Damn, we really do need some way to filter the replay buffer!)
 #   (Maybe at replay-time, we should always use the most-recent sample, and *write* back the sorted-by-decreasing-regret samples sans the last one; and have not a ring buffer but one that always replaces the last sample when capacity is full?…)
