@@ -149,27 +149,23 @@ def net(ins, outs, hidden=embed_sz, layers=3):
         *[SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, hidden)) for _ in range(layers)],
         SkipConnection(nn.ReLU(), nn.LayerNorm(hidden), nn.Linear(hidden, outs)),
     ).to(device)
-dist = net(input_sz + input_sz + 1, 1, layers=3) # TODO:
-act = net(input_sz + input_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → action
-#   (Min-dist action.)
+dist_act = net(input_sz + input_sz + 1 + noise_sz, 1 + action_sz, layers=3) # (src, dst, noise) → (dist, act)
+#   (Min-dist and min-dist action.)
 
-dist_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
-act_slow = MomentumCopy(act, .999) # Stabilize targets to prevent collapse.
+dist_act_slow = MomentumCopy(dist_act, .999) # Stabilize targets to prevent collapse.
 
-optim = torch.optim.Adam([*dist.parameters(), *act.parameters()], lr=lr)
+optim = torch.optim.Adam([*dist_act.parameters()], lr=lr)
 
 
 
-def dist_(src_emb, dst_emb, lvl=1, nn=dist):
-    """Returns (a function of) the shortest-path distance from src to dst, so that we can distinguish bad actions."""
-    assert src_emb.shape == dst_emb.shape
-    lvl = torch.full((*src_emb.shape[:-1], 1), lvl, device=device)
-    return nn(cat(src_emb, dst_emb, lvl))
-def act_(src_emb, dst_emb, noise = ..., lvl=1, nn=act):
-    """Returns the shortest-path action from src to dst."""
+def dist_act_(src, dst, noise=..., lvl=1, nn=dist_act):
+    """Returns a tuple of shortest-path distance from src to dst and the action that follows that shortest-distance path."""
+    assert src.shape == dst.shape
     if noise is ...:
-        noise = torch.randn(*src_emb.shape[:-1], noise_sz, device=device)
-    return nn(cat(src_emb, dst_emb, noise))
+        noise = torch.randn(*src.shape[:-1], noise_sz, device=device)
+    lvl = torch.full((*src.shape[:-1], 1), lvl, device=device)
+    da = nn(cat(src, dst, lvl, noise))
+    return 2 ** da[..., :1], da[..., 1:]
 
 
 
@@ -223,7 +219,7 @@ def pos_histogram(plt, label):
         y = y.reshape(GS,1,1).expand(GS,GS,1).reshape(GS*GS,1)
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = cat(x, y, veloc)
-        acts, dists = act_(src, dst), dist_(src, dst)
+        dists, acts = dist_act_(src, dst)
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 
@@ -232,7 +228,7 @@ def pos_histogram(plt, label):
         dst = pos_only(dst_pos)
         mid = [src[0, :2]]
         for _ in range(64):
-            action = act_(src, dst)
+            action = dist_act_(src, dst)[1]
             state, hidden_state = env_step(src[:, :2], src[:, 2:], action)
             src = torch.cat((state, hidden_state), -1)
             mid.append(src[0, :2])
@@ -283,9 +279,9 @@ def maybe_reset_goal(input):
 
         out_of_time = steps_to_goal < 0
         goal = torch.where(out_of_time, dst, goal)
-        steps_to_goal = torch.where(out_of_time, dist_(src, dst, nn=dist_slow) + 4, steps_to_goal - 1)
+        steps_to_goal = torch.where(out_of_time, dist_act_(src, dst, nn=dist_act_slow)[0] + 4, steps_to_goal - 1)
 
-        steps_to_goal_err = dist_(src, goal, nn=dist_slow) - steps_to_goal
+        steps_to_goal_err = dist_act_(src, goal, nn=dist_act_slow)[0] - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
     return out_of_time.float().sum(), steps_to_goal_regret.sum()
 def replay(timeout, steps_to_goal_regret):
@@ -324,45 +320,51 @@ def replay(timeout, steps_to_goal_regret):
             # Predict distances & actions, for all src→dst pairs.
             goals = torch.stack([s.goals[g] for s in samples], 1)
             dsts = expand(1, goals)
+            #   TODO: …Is it possible to somehow exclude src==dst from the pairs, for 1/N efficiency gains?… Just `expand` can handle this, without inconsistencies, right? Is it possible without manually constructing the indices to gather from, just removing the main diagonal and moving everything below it one place up?… Yeah, it's possible. Implement it.
+            #     https://discuss.pytorch.org/t/keep-off-diagonal-elements-only-from-square-matrix/54379
             n = noss
             # Compute prediction targets.
             with torch.no_grad():
-                d_i = dist_(srcs, dsts, lvl=prev_lvl, nn=dist_slow) # Initial pairwise distances.
-                if last: a_t = act_(srcs, dsts, n, lvl=prev_lvl, nn=act_slow)
+                d_i, a_i = dist_act_(srcs, dsts, n, lvl=prev_lvl, nn=dist_act_slow) # Initial pairwise dists/acts.
                 # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
                 #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
                 i, j = expand(0, times), expand(1, times)
                 cond = i < j
                 if lvl>0: cond = cond & (j-i < d_i) # First dist-level has to not filter sharply.
-                d_t = torch.where(cond, j-i, d_i).clamp(1)
-                if last: a_t = torch.where(cond, expand(0, actions), a_t)
+                d_t = torch.where(cond, j-i, d_i+1).clamp(1) # TODO: +1 in the old code… Is it better?…
+                a_t = torch.where(cond, expand(0, actions), a_i)
                 # Use the minibatch fully, by actually computing shortest paths.
                 if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
-                    if lvl>0:
-                        if not last: d_t = floyd(d_t)
-                        else: d_t,a_t,n = floyd(d_t,a_t,n)
-                    d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t)
-                    #   (Slowly penalize unconnected components, by adding `eps` if ungrounded.)
+                    if lvl>0: # TODO: Can we remove this check, to better match dist-levels-at-output behavior?
+                        d_t, a_t, n = floyd(d_t, a_t, n)
+                    # d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t) # TODO:
+                    #   (Slowly penalize unconnected components, by adding `eps=1` if ungrounded.)
                 else: # (Goals should take from full-state plans directly.)
                     cond = d0 < d_t
                     d_t = torch.where(cond, d0, d_t)
-                    if last:
-                        a_t = torch.where(cond, a0, a_t)
-                        n = torch.where(cond, n0, n)
+                    a_t = torch.where(cond, a0, a_t)
+                    # n = torch.where(cond, n0, n) # TODO: …The old code doesn't have this?… Is it better not to have it?
             if g == 0: # Preserve state-info of full-state for goals.
-                if not last: d0 = d_t
-                else: d0, a0, n0 = d_t, a_t, n
+                d0, a0, n0 = d_t, a_t, n
             # Compute losses: distance, imitated action, DDPG.
-            d_p = dist_(srcs, dsts, lvl=next_lvl)
+            d_p, a_p = dist_act_(srcs, dsts, n, lvl=next_lvl)
             dist_loss = dist_loss + l_dist(d_p, d_t)
-            if last:
+            if True: # last: # TODO: …Should we just always do this like in the old code?… …Can't help but notice that it actually *did* form the all-directional vortices I wanted at 20k… Why is it only the one branch incompatible with dist-levels-at-output that did this?…
                 with torch.no_grad(): # Next-level target embeddings.
                     # Learn actions wherever we found a better path.
-                    act_gating = (dist_(srcs, dsts, lvl=next_lvl, nn=dist_slow) - d_t + 1).clamp(0, 10)
-                a_p = act_(srcs, dsts, n, lvl=next_lvl)
+                    d_our = dist_act_(srcs, dsts, n, lvl=next_lvl, nn=dist_act_slow)[0]
+                    # d_our = dist_act_(srcs, dsts, n, lvl=1, nn=dist_act_slow)[0] # TODO: Was it just a matter of learning rate? …No… Then how can we possibly remove per-dist-level actions while maintaining acceptable performance…
+                    #   …Though it's actually learning *a few* opposite-direction arrows at 25k, so maybe not *all* hope is lost… …Might actually be acceptable, even…
+                    #   TODO: …`lvl=-1`?
+                    # act_gating = (d_our - d_t + 1).clamp(0, 10)
+                    act_gating = (d_t < d_our).float() # TODO: Is the old way better? …Apparently; but only if every single dist-level learns its own action…
+                    #   TODO: …`d_t < d_our+1`?
                 action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
-                # TODO: Unite `dist` and `act` into one `dist_act`, which would at least reduce clutter. (Not like it's much more expensive to output N+1 numbers instead of 1 when we're learning just the distance.)
-                #   (It'll be exactly as if we've never even attempted embeddings.)
+                # TODO: …Figure out which parts of the old code were terrible…
+                # TODO: …We're clearly seeing a big regret of not taking the real trajectory, so why *can't* we bring that regret down to 0 with loss? Doesn't make sense…
+                # TODO: …Wait, isn't distributional RL better-grounded — in this case, isn't it better to make `dist_act` ALWAYS output `dist_level` numbers, and make it correct via loss? (Then we can easily have as many dist-levels as we want; though might want to make `floyd` copy actions by the highest-level distance, while making paths through each level in parallel.) (It's not just our shitty idea then, it's a well-respected idea instead.)
+                #   …And maybe each level should predict the target whenever that target is exactly lower than the prev level plus eps (eps=1) (first level always predicts). (Seem to remember failing to implement this for `l_dist`.)
+                #   (Worst comes to worst, we can always just return not just 1 action but `dist_levels` actions.)
                 # TODO: …Try increasing `replays_per_step` for once…
 
     # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
@@ -370,7 +372,7 @@ def replay(timeout, steps_to_goal_regret):
     #   (On-policy penalization of unconnected components.)
     # goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
     # goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    # goal_dists = dist_(states, goals, lvl=-1)
+    # goal_dists = dist_act_(states, goals, lvl=-1)[0]
     # dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
     #   TODO:
 
@@ -378,7 +380,7 @@ def replay(timeout, steps_to_goal_regret):
 
     (dist_loss + action_loss + next_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
-    dist_slow.update();  act_slow.update()
+    dist_act_slow.update()
 
     # Log debugging info.
     M = batch_sz * N
@@ -392,8 +394,8 @@ for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
-        action = act_(full_state, goal, noise)
-        if iter % 100 >= 50:
+        action = dist_act_(full_state, goal, noise, nn=dist_act_slow)[1]
+        if iter % 100 < 50: # TODO: …Triple check that this is still required…
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
 
         replay_buffer.append(ReplaySample(
@@ -427,8 +429,9 @@ finish()
 #         - `env(src, act) → history`, to round out the RNN.
 #         - (`dst`s of `src`s should be provided when storing samples in the replay buffer. Probably zero-out and/or defer the storage if not available immediately.)
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
-#     - Generalized BYOL for RNNs, learning to predict consequences-of-`next_obs` while contrasting `src` with itself: `update(h, 0) = sg update.copy(hc, next_obs)   h: env(update(history, obs), act)  hc: env.copy(update.copy(history, obs), act)`
+#     - Generalized BYOL for RNNs, learning to predict consequences-of-`next_obs` while contrasting `history` with itself to extract mutual info: `env(update(history, 0), act) = sg env.copy(update.copy(history, obs), act)`.
 #       - (Not predicting `obs` directly because its non-determinism leads to smearing. BYOL works better for images, so it'll work better for us too.)
+#       - (The BYOL analogy is: image-augmentation = adding next-step info (`obs` in the target); embedder = history (should adapt to its gradient); predictor = next-step (env-of-update-of-history without `obs`).)
 #       - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too much.)
 #     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst), j-i if there's a real i→j path)
 #       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so `+eps` ensures that ungrounded assumptions don't persist for long.)
