@@ -427,9 +427,9 @@ finish()
 #         - `env(src, act) → history`, to round out the RNN.
 #         - (`dst`s of `src`s should be provided when storing samples in the replay buffer. Probably zero-out and/or defer the storage if not available immediately.)
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
-#     - Generalized BYOL for RNNs, contrasting `src` with itself: `update(env(update(history, obs), act), next_obs) = sg update.momentum_copy(next_history, next_obs)`
+#     - Generalized BYOL for RNNs, learning to predict consequences-of-`next_obs` while contrasting `src` with itself: `update(h, 0) = sg update.copy(hc, next_obs)   h: env(update(history, obs), act)  hc: env.copy(update.copy(history, obs), act)`
 #       - (Not predicting `obs` directly because its non-determinism leads to smearing. BYOL works better for images, so it'll work better for us too.)
-#       - ([MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning can be achieved via an extra loss which is like this but with 0s for `obs`, and with `src → dst` NNs. But, such planning would average-out all info-gain, and make learning any exploration strategies impossible. BUT, it would allow safe exploration, AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases significantly.)
+#       - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too much.)
 #     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst), j-i if there's a real i→j path)
 #       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so `+eps` ensures that ungrounded assumptions don't persist for long.)
 #       - Min-dist actions:
