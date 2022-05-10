@@ -177,6 +177,19 @@ def pos_only(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2,
 
 
 
+def undiag(x):
+    """Removes the main diagonal from a `(..., N, N, ?)` tensor, making it `(..., N, N-1, ?)`-shaped."""
+    # https://discuss.pytorch.org/t/keep-off-diagonal-elements-only-from-square-matrix/54379
+    assert x.shape[-3] == x.shape[-2]
+    pre, N, K = x.shape[:-3], x.shape[-3], x.shape[-1]
+    no_diag = torch.flatten(x, -3, -2)[..., 1:, :].view(*pre, N-1, N+1, K)[..., :-1, :]
+    return no_diag.reshape(*pre, N, N-1, K)
+def diag(x):
+    """Adds the main diagonal back after an `undiag` call, filled with 0."""
+    assert x.shape[-3] == x.shape[-2]+1
+    pre, N, K = x.shape[:-3], x.shape[-3], x.shape[-1]
+    with_diag = torch.cat((x.reshape(*pre, N-1, N, K), torch.zeros(*pre, N-1, 1, K, device=x.device)), -2)
+    return torch.cat((torch.zeros(*pre, 1, K), torch.flatten(with_diag, -3, -2)), -2).view(*pre, N, N, K)
 def floyd(d, *a):
     """
     Floyd—Warshall algorithm: computes all-to-all shortest distances & actions. Given a one-step adjacency matrix, gives its (differentiable) transitive closure.
@@ -308,10 +321,8 @@ def replay(timeout, steps_to_goal_regret):
     # Learn distances & actions.
     def expand(src_or_dst, x):
         """_×N×… to _×N×N×…. `src_or_dst` is 0|1, representing which `N` is broadcasted."""
-        #   TODO: …Is it possible to exclude src==dst from the pairs, for 1/N efficiency gains (AKA here, make it 2× faster)?… Is it possible to easily remove the main diagonal and move everything below it one index up?… Yeah, it's possible. Implement it.
-        #     https://discuss.pytorch.org/t/keep-off-diagonal-elements-only-from-square-matrix/54379
-        #     (Should also, after NN calls, fill the diagonal with some large values, so that `floyd` can work properly.)
-        return x.unsqueeze(src_or_dst+1).expand(batch_sz, N, N, x.shape[-1])
+        # (For `1/N` gain in efficiency, use `undiag`, tricking `floyd` into thinking that we never do.)
+        return undiag(x.unsqueeze(src_or_dst+1).expand(batch_sz, N, N, x.shape[-1]))
     def l_dist(d_p, d_t):
         """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
         with torch.no_grad(): mult = (d_p.detach() - d_t + 1).clamp(.3, 3)
@@ -336,7 +347,8 @@ def replay(timeout, steps_to_goal_regret):
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths.
             if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
-                d_t, a_t, n = floyd(d_j, a_j, n)
+                d_t, a_t, n = floyd(diag(d_j), diag(a_j), diag(n))
+                d_t, a_t, n = undiag(d_t), undiag(a_t), undiag(n)
                 d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t)
                 #   (Slowly penalize unconnected components, by adding `eps=1` if ungrounded.)
             else: # (Goals incorporate full-state plans directly.)
