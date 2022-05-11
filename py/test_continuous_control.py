@@ -135,6 +135,7 @@ batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 dist_levels = 2 # For quantile regression.
 #   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer. But, the min is slower to learn than the average.)
+#   (Hard to learn, so here, we've basically disabled it.)
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
@@ -328,30 +329,11 @@ def replay(timeout, steps_to_goal_regret):
         """A prediction loss that extracts min-dists, by making each next dist-level only predict the target if it's less than the prev dist-level (plus eps=1 for getting around func-approx)."""
         assert d_t.shape[-1] == 1
         with torch.no_grad():
-            # TODO: Why isn't the distance learned well?
-
-            # The target is `d_t`, filtered by the prev level (so that target→prediction arrows bottom out in real values, not recursion).
-            # limit = torch.cat((d_t, d_p[..., :-1]), -1)
-            # mult = (limit - d_t + 1).clamp(0,1)
-            # p = .5 ** torch.arange(0, dist_levels, device=d_p.device)
-            # mult = mult.min(1-p).max(p)
-            # target = d_t
-
-            # The target is the prev level.
-            # target = torch.cat((d_t, d_p[..., :-1]), -1).min(d_t).clamp(1)
-            # mult = (d_p - target + 1).clamp(.3,1.)
-
             # Quantile regression.
-            #   …Not amazing either, actually…
-            # p = .5 ** (torch.arange(0, dist_levels, device=d_p.device) + 1)
-            p = 1. / (torch.arange(0, dist_levels, device=d_p.device) + 2) # …Even this 1/5 self-filter on the output is performing quite poorly…
-            mult = torch.where(d_p < d_t, p / (1-p), (1-p) / (1-p)) # TODO: Is this better?
-            target = d_t
-            #   TODO: Maybe, before QR, try always the same multiplier for higher-than-prev-level? …But, it would still be lower-bounded by some value, right…
-            #   TODO: Maybe try making the target not `d_t` but the prev level (or min of that and d_t), with a constant multiplier always. (Last one before QR.)
-            #     …Works even worse.
-        return (mult * (d_p - target).square()).sum()
-        #   (Quantile regression does need `.abs()` instead of `.square()`, but that takes too long to learn.)
+            p = 1. / (torch.arange(0, dist_levels, device=d_p.device) + 2)
+            mult = torch.where(d_p < d_t, p, 1-p)
+        return (mult * (d_p - d_t).square()).sum()
+        #   (Proper quantile regression does need `.abs()` instead of `.square()`, but that takes too long to learn.)
     dist_loss, action_loss = 0,0
     noss = expand(0, noises)
     srcs = expand(0, states)
@@ -393,8 +375,6 @@ def replay(timeout, steps_to_goal_regret):
         action_loss = action_loss + (regret.detach().clamp(0, 15) * (a_p - a_t).square()).sum()
         dist_loss = dist_loss + 1e-2 * regret.square().sum()
 
-    # TODO: Quantile regression for dists.
-    #   TODO: …Increase `dist_levels` again…
     # TODO: Disable cheating; try to reach the same performance level (OK at 10k).
     #   TODO: …Try increasing `replays_per_step` for once…
 
@@ -521,7 +501,7 @@ finish()
 #       - Min-dist actions:
 #         - Gradient, DDPG, where we train `act`ions to minimize post-step `dist`ance: `min dist.copy(src, act(src, dst), dst)`.
 #         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts). Floyd-Warshall [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), so to speak.
-#           - Learn not the distribution mean/median but its min, via a distributional-RL-like method: `dist` outputs many numbers/levels, and the first level learns directly, and each next level learns only if the target is less than the prev level. (Mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.)
+#           - Learn not dist mean/median but its min, likely via quantile regression (tilted L1 loss). (Use distributional RL to mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.)
 #           - Replay-buffer prioritization of max-regret samples for fastest spreading of the influence of discovered largest shortcuts. (Also good for unroll-time goals, getting more data in most-promising areas.)
 #       - If `dst`s are not sampled from a replay buffer, penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
 #     - Faraway gradient teleportation: if the RNN always *adds* to history (skip-connections yo), then the gradient of future steps (the initial `history`) should always be added to the gradient of past steps (the post-`env` `history`).
