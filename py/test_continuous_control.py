@@ -133,8 +133,8 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
-dist_levels = 4 # Each dist-level filters the predicted distance target to reduce it at each level, maximizing risk.
-#   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer.)
+dist_levels = 2 # For quantile regression.
+#   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer. But, the min is slower to learn than the average.)
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
@@ -329,10 +329,29 @@ def replay(timeout, steps_to_goal_regret):
         assert d_t.shape[-1] == 1
         with torch.no_grad():
             # TODO: Why isn't the distance learned well?
-            over_limit_mult = .5 ** torch.arange(0, dist_levels, device=d_p.device)
-            limit = torch.cat((d_t, d_p[..., :-1]), -1)
-            mult = (limit - d_t + 1).clamp(0,1).max(over_limit_mult)
-        return (mult * (d_p - d_t).square()).sum() # TODO: Try doing proper quantile regression, by using (tilted) .abs() and comparing with itself.
+
+            # The target is `d_t`, filtered by the prev level (so that target→prediction arrows bottom out in real values, not recursion).
+            # limit = torch.cat((d_t, d_p[..., :-1]), -1)
+            # mult = (limit - d_t + 1).clamp(0,1)
+            # p = .5 ** torch.arange(0, dist_levels, device=d_p.device)
+            # mult = mult.min(1-p).max(p)
+            # target = d_t
+
+            # The target is the prev level.
+            # target = torch.cat((d_t, d_p[..., :-1]), -1).min(d_t).clamp(1)
+            # mult = (d_p - target + 1).clamp(.3,1.)
+
+            # Quantile regression.
+            #   …Not amazing either, actually…
+            # p = .5 ** (torch.arange(0, dist_levels, device=d_p.device) + 1)
+            p = 1. / (torch.arange(0, dist_levels, device=d_p.device) + 2) # …Even this 1/5 self-filter on the output is performing quite poorly…
+            mult = torch.where(d_p < d_t, p / (1-p), (1-p) / (1-p)) # TODO: Is this better?
+            target = d_t
+            #   TODO: Maybe, before QR, try always the same multiplier for higher-than-prev-level? …But, it would still be lower-bounded by some value, right…
+            #   TODO: Maybe try making the target not `d_t` but the prev level (or min of that and d_t), with a constant multiplier always. (Last one before QR.)
+            #     …Works even worse.
+        return (mult * (d_p - target).square()).sum()
+        #   (Quantile regression does need `.abs()` instead of `.square()`, but that takes too long to learn.)
     dist_loss, action_loss = 0,0
     noss = expand(0, noises)
     srcs = expand(0, states)
@@ -348,8 +367,7 @@ def replay(timeout, steps_to_goal_regret):
             # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
-            unmask = torch.rand(*d_i.shape, device=device) < .5 # *Almost* doesn't degrade performance.
-            cond = (i < j) & (unmask | (j-i < d_i))
+            cond = (i < j) # No `& (j-i < d_i)` because we already have the i>j side to combine tasks in anyway.
             d_j = torch.where(cond, j-i, d_i+1) # `+1` *slowly* penalizes unconnected components.
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths, but only for full states.
