@@ -133,7 +133,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
-dist_levels = 1 # Each dist-level filters the predicted distance target to reduce it at each level, maximizing risk.
+dist_levels = 4 # Each dist-level filters the predicted distance target to reduce it at each level, maximizing risk.
 #   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer.)
 lr = 1e-3
 
@@ -333,7 +333,7 @@ def replay(timeout, steps_to_goal_regret):
             limit = torch.cat((d_t, d_p[..., :-1]), -1)
             mult = (limit - d_t + 1).clamp(0,1).max(over_limit_mult)
         return (mult * (d_p - d_t).square()).sum() # TODO: Try doing proper quantile regression, by using (tilted) .abs() and comparing with itself.
-    dist_loss, action_loss, ddpg_loss = 0,0,0
+    dist_loss, action_loss = 0,0
     noss = expand(0, noises)
     srcs = expand(0, states)
     for g in range(max(len(s.goals) for s in samples)):
@@ -344,23 +344,18 @@ def replay(timeout, steps_to_goal_regret):
         # Compute prediction targets.
         with torch.no_grad():
             a_i = act_(srcs, dsts, n, nn=act_slow) # Initial.
-            d_i = dist_(srcs, a_i, dsts, nn=dist_slow)[..., -1:] # Initial min-dist.
+            d_i = dist_(srcs, a_i, dsts, nn=dist_slow)[..., -1:].clamp(1) # Initial min-dist.
             # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
-            cond = (i < j) #& (j-i < d_i) # TODO: (…Maybe we *should* do this, but balance it with aggressive impossible-path pruning, so that clusters right near goals are learned first…)
-            #   …So what exactly do we do?
-            #   TODO: First try just always checking.
-            #   TODO: Then try `(…) | random`: masking by a random bool-tensor.
-            #   TODO: Then should try giving the non-min dist to first-dist-level and min dist to the rest, MAYBE, somehow (quantile regression won't have a "first level" though)…
-            d_j = torch.where(cond, j-i, d_i).clamp(1)
+            unmask = torch.rand(*d_i.shape, device=device) < .5 # *Almost* doesn't degrade performance.
+            cond = (i < j) & (unmask | (j-i < d_i))
+            d_j = torch.where(cond, j-i, d_i+1) # `+1` *slowly* penalizes unconnected components.
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths, but only for full states.
             if g == 0: # (Only full states can act as midpoints for pathfinding.)
                 d_t, a_t, n = floyd(diag(d_j), diag(a_j), diag(n))
                 d_t, a_t, n = undiag(d_t), undiag(a_t), undiag(n)
-                d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t)
-                #   (Slowly penalize unconnected components, by adding `eps=1` if ungrounded.)
                 d0, a0, n0 = d_t, a_t, n # Preserve state-info of full-state for goals.
             else: # (Goals incorporate full-state plans directly.)
                 cond = d0 < d_j
@@ -441,17 +436,7 @@ def replay(timeout, steps_to_goal_regret):
 
 
 
-
-    # Sampled-`dst`-unreachability loss: after having tried and failed to reach goals, must remember that we failed, so that `floyd` doesn't keep thinking that distance is small.
-    #   (Safe to use the estimated-once ever-decreasing `steps_to_goal` as the lower bound on dists because if any midpoint did know a path to `goal`, it would have taken it, so midpoints' timeout-distances are accurate too.)
-    #   (On-policy penalization of unconnected components.)
-    # goals = torch.stack([s.goal for s in samples], 1) # batch_sz × N × embed_sz
-    # goal_timeouts = torch.stack([s.goal_timeout for s in samples], 1) # batch_sz × N × 1
-    # goal_dists = dist_(states, actions, goals)
-    # dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
-    #   TODO:
-
-    (dist_loss + action_loss + ddpg_loss).backward()
+    (dist_loss + action_loss).backward()
     optim.step();  optim.zero_grad(True)
     act_slow.update();  dist_slow.update()
 
@@ -459,7 +444,7 @@ def replay(timeout, steps_to_goal_regret):
     M = batch_sz * N
     log(0, False, pos = pos_histogram)
     log(1, False, timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret))
-    log(2, False, dist_loss = to_np(dist_loss / M), action_loss = to_np(action_loss / M), ddpg_loss = to_np(ddpg_loss / M))
+    log(2, False, dist_loss = to_np(dist_loss / M), action_loss = to_np(action_loss / M))
 
 
 
@@ -513,7 +498,7 @@ finish()
 #     - Learning to predict consequences-of-`next_obs` while extracting mutual info (directly, the result of `update`): `history = sg update.copy(history, obs)`.
 #       - (Not predicting `obs` directly because its non-determinism leads to smearing.) (No need for another NN for `history`, because the prior `env` call could take care of obs-independent time-keeping.)
 #       - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too egregiously.)
-#     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst), j-i if there's a real i→j path)
+#     - dist(src, dst) = min(dist(src, dst) + eps, dist(src, mid) + dist(mid, dst) + 2*eps, j-i if there's a real i→j path)
 #       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so `+eps` ensures that ungrounded assumptions don't persist for long.)
 #       - Min-dist actions:
 #         - Gradient, DDPG, where we train `act`ions to minimize post-step `dist`ance: `min dist.copy(src, act(src, dst), dst)`.
