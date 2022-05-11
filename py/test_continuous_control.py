@@ -133,7 +133,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
-dist_levels = 16 # Each dist-level filters the predicted distance target to reduce it at each level.
+dist_levels = 2 # Each dist-level filters the predicted distance target to reduce it at each level.
 #   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer.)
 lr = 1e-3
 
@@ -179,12 +179,14 @@ def pos_only(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2,
 def undiag(x):
     """Removes the main diagonal from a `(..., N, N, ?)` tensor, making it `(..., N, N-1, ?)`-shaped."""
     # https://discuss.pytorch.org/t/keep-off-diagonal-elements-only-from-square-matrix/54379
+    return x # TODO:
     assert x.shape[-3] == x.shape[-2]
     pre, N, K = x.shape[:-3], x.shape[-3], x.shape[-1]
     no_diag = torch.flatten(x, -3, -2)[..., 1:, :].view(*pre, N-1, N+1, K)[..., :-1, :]
     return no_diag.reshape(*pre, N, N-1, K)
 def diag(x):
     """Adds the main diagonal back after an `undiag` call, filled with 0."""
+    return x # TODO: …Wait, why does uncommenting this seem to make distances not have valleys anymore, even though dist-regret is lower than it's ever been?… (Maybe `floyd` is at fault, and so `diag` should accept the value to fill the diagonal with.)
     assert x.shape[-3] == x.shape[-2]+1
     pre, N, K = x.shape[:-3], x.shape[-3], x.shape[-1]
     with_diag = torch.cat((x.reshape(*pre, N-1, N, K), torch.zeros(*pre, N-1, 1, K, device=x.device)), -2)
@@ -326,10 +328,14 @@ def replay(timeout, steps_to_goal_regret):
         """A prediction loss that extracts min-dists, by making each next dist-level only predict the target if it's less than the prev dist-level (plus eps=1 for getting around func-approx)."""
         assert d_t.shape[-1] == 1
         with torch.no_grad():
-            # TODO: Why isn't the distance learned? …AH: self-imitation should be incorporated ALWAYS on the 0th level, for correct prediction, right? (Otherwise, we're just ignoring pretty much everything at init.)
-            #   TODO: …But we've made the decision to only do `floyd` on the final distance… Was it the wrong one?…
+            # TODO: Why isn't the distance learned?
             limit = torch.cat((d_t, d_p[..., :-1]), -1)
             mult = (limit - d_t + 1).clamp(0,1)
+            # mult = 1 # TODO: …Try disabling it?… TODO: Try enabling `mult` again? Distance is practically impossible to learn… Maybe we should try having less dist-levels? Like 4 instead of 16, so that probabilities of letting in an update are reasonable?
+            #   …Even having just 2 distance levels seems to be extremely inefficient, and even at 10k, the distances don't look right, too noisy…
+            # TODO: …Or maybe, we should be making targets that aren't let in still slowly affect the prediction, very slowly making it larger?
+            #   How exactly do we do this?
+        # print(limit[0,0,0], d_t[0,0,0]) # TODO:
         return (mult * (d_p - d_t).square()).sum()
     dist_loss, action_loss, ddpg_loss = 0,0,0
     noss = expand(0, noises)
@@ -346,12 +352,16 @@ def replay(timeout, steps_to_goal_regret):
             # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
-            cond = (i < j) & (j-i < d_i)
+            cond = (i < j) #& (j-i < d_i)
             #   TODO: …How to not perform that second check on the first dist-level (or override it with `| True` there)…
+            #   TODO: …Or should we maybe even never perform the min-check, and let dist-levels filter stuff?… …Dist-loss is properly high now, and even goes down a bit, but the actual learned distance is still 0…
+            #     So is our min-dist filtering method wrong?…
+            #     …If we disable the multiplier, the distance is still near-0 even though the dist-loss is 16× higher… The bug *has* to be somewhere else…
+            #       TODO: …Try making `undiag` and `diag` no-ops?… …Actually helped, gah…
             d_j = torch.where(cond, j-i, d_i).clamp(1)
             a_j = torch.where(cond, expand(0, actions), a_i)
-            # Use the minibatch fully, by actually computing shortest paths.
-            if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
+            # Use the minibatch fully, by actually computing shortest paths, but only for full states.
+            if g == 0: # (Only full states can act as midpoints for pathfinding.)
                 d_t, a_t, n = floyd(diag(d_j), diag(a_j), diag(n))
                 d_t, a_t, n = undiag(d_t), undiag(a_t), undiag(n)
                 d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t)
@@ -374,10 +384,12 @@ def replay(timeout, steps_to_goal_regret):
         action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
 
         # DDPG, so that we don't always have to actually try a path to guess that it's better.
-        ddpg_loss = ddpg_loss + d_p.sum()
+        # ddpg_loss = ddpg_loss + d_p.sum()
+        #   TODO: …Disabling this actually helped a lot…
 
     # TODO: Run & fix.
     #   TODO: Why can't we learn the distance, currently (loss is near-0 and so is the distance)? Did we screw up our distributional-RL idea?
+    # TODO: …Increase `dist_levels` again…
     # TODO: …Try increasing `replays_per_step` for once…
 
 
