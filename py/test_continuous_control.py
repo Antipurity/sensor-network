@@ -236,7 +236,7 @@ def pos_histogram(plt, label):
         veloc = torch.zeros(GS*GS, 2, device=device)
         src = cat(x, y, veloc)
         acts = act_(src, dst)
-        dists = dist_(src, acts, dst)
+        dists = dist_(src, acts, dst)[..., -1:]
         plt.imshow(dists.reshape(GS,GS).cpu(), extent=(0,1,0,1), origin='lower', cmap='brg', zorder=1)
         plt.quiver(x.cpu(), y.cpu(), acts[:,0].reshape(GS,GS).cpu(), acts[:,1].reshape(GS,GS).cpu(), color='white', scale_units='xy', angles='xy', units='xy', zorder=2)
 
