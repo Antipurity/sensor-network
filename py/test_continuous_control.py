@@ -344,7 +344,7 @@ def replay(timeout, steps_to_goal_regret):
             # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
-            cond = i < j & (j-i < d_i)
+            cond = (i < j) & (j-i < d_i)
             d_j = torch.where(cond, j-i, d_i).clamp(1)
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths.
