@@ -133,7 +133,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
-dist_levels = 2 # Each dist-level filters the predicted distance target to reduce it at each level.
+dist_levels = 1 # Each dist-level filters the predicted distance target to reduce it at each level, maximizing risk.
 #   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer.)
 lr = 1e-3
 
@@ -328,15 +328,11 @@ def replay(timeout, steps_to_goal_regret):
         """A prediction loss that extracts min-dists, by making each next dist-level only predict the target if it's less than the prev dist-level (plus eps=1 for getting around func-approx)."""
         assert d_t.shape[-1] == 1
         with torch.no_grad():
-            # TODO: Why isn't the distance learned?
+            # TODO: Why isn't the distance learned well?
+            over_limit_mult = .5 ** torch.arange(0, dist_levels, device=d_p.device)
             limit = torch.cat((d_t, d_p[..., :-1]), -1)
-            mult = (limit - d_t + 1).clamp(0,1)
-            # mult = 1 # TODO: …Try disabling it?… TODO: Try enabling `mult` again? Distance is practically impossible to learn… Maybe we should try having less dist-levels? Like 4 instead of 16, so that probabilities of letting in an update are reasonable?
-            #   …Even having just 2 distance levels seems to be extremely inefficient, and even at 10k, the distances don't look right, too noisy…
-            # TODO: …Or maybe, we should be making targets that aren't let in still slowly affect the prediction, very slowly making it larger?
-            #   How exactly do we do this?
-        # print(limit[0,0,0], d_t[0,0,0]) # TODO:
-        return (mult * (d_p - d_t).square()).sum()
+            mult = (limit - d_t + 1).clamp(0,1).max(over_limit_mult)
+        return (mult * (d_p - d_t).square()).sum() # TODO: Try doing proper quantile regression, by using (tilted) .abs() and comparing with itself.
     dist_loss, action_loss, ddpg_loss = 0,0,0
     noss = expand(0, noises)
     srcs = expand(0, states)
@@ -352,12 +348,8 @@ def replay(timeout, steps_to_goal_regret):
             # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
-            cond = (i < j) #& (j-i < d_i)
-            #   TODO: …How to not perform that second check on the first dist-level (or override it with `| True` there)…
-            #   TODO: …Or should we maybe even never perform the min-check, and let dist-levels filter stuff?… …Dist-loss is properly high now, and even goes down a bit, but the actual learned distance is still 0…
-            #     So is our min-dist filtering method wrong?…
-            #     …If we disable the multiplier, the distance is still near-0 even though the dist-loss is 16× higher… The bug *has* to be somewhere else…
-            #       TODO: …Try making `undiag` and `diag` no-ops?… …Actually helped, gah…
+            cond = (i < j) #& (j-i < d_i) # TODO: (…Maybe we *should* do this, but balance it with aggressive impossible-path pruning, so that clusters right near goals are learned first…)
+            #   …So what exactly do we do?
             d_j = torch.where(cond, j-i, d_i).clamp(1)
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths, but only for full states.
@@ -366,31 +358,30 @@ def replay(timeout, steps_to_goal_regret):
                 d_t, a_t, n = undiag(d_t), undiag(a_t), undiag(n)
                 d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t)
                 #   (Slowly penalize unconnected components, by adding `eps=1` if ungrounded.)
+                d0, a0, n0 = d_t, a_t, n # Preserve state-info of full-state for goals.
             else: # (Goals incorporate full-state plans directly.)
                 cond = d0 < d_j
                 d_t = torch.where(cond, d0, d_j)
                 a_t = torch.where(cond, a0, a_j)
                 n = torch.where(cond, n0, n)
-        if g == 0: # Preserve state-info of full-state for goals.
-            d0, a0, n0 = d_t, a_t, n
 
         # Learn the max-regret distance, to compare policy-action distances with.
         dist_loss = dist_loss + l_dist(dist_(srcs, a_t, dsts), d_t)
 
         # Imitate actions wherever we found a better path, to minimize regret.
+        #   SIL: https://arxiv.org/pdf/1806.05635.pdf
+        #   (Differences: `floyd`; upper-bounding the `regret`.)
         a_p = act_(srcs, dsts, n) # Prediction.
-        d_p = dist_(srcs, a_p, dsts, nn=dist_slow)[..., -1:]
-        act_gating = (d_t < d_p).float()
-        action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
+        d_p = dist_(srcs, a_p.detach(), dsts)[..., -1:]
+        regret = (d_p - d_t).clamp(0)
+        action_loss = action_loss + (regret.detach().clamp(0, 15) * (a_p - a_t).square()).sum()
+        dist_loss = dist_loss + 1e-2 * regret.square().sum()
 
-        # DDPG, so that we don't always have to actually try a path to guess that it's better.
-        # ddpg_loss = ddpg_loss + d_p.sum()
-        #   TODO: …Disabling this actually helped a lot…
-
-    # TODO: Run & fix.
-    #   TODO: Why can't we learn the distance, currently (loss is near-0 and so is the distance)? Did we screw up our distributional-RL idea?
-    # TODO: …Increase `dist_levels` again…
-    # TODO: …Try increasing `replays_per_step` for once…
+    # TODO: Try re-enabling `undiag` and `diag`. (And figure out why they're underperforming.)
+    # TODO: Quantile regression for dists.
+    #   TODO: …Increase `dist_levels` again…
+    # TODO: Disable cheating; try to reach the same performance level (OK at 10k).
+    #   TODO: …Try increasing `replays_per_step` for once…
 
 
 
@@ -470,13 +461,21 @@ def replay(timeout, steps_to_goal_regret):
 
 
 
+def cheat(act, action, D): # TODO: (Unroll-time search, to debug whether learning-time learns OK distance but bad actions.) …It's SO good: practically solved at 8k already.
+    d = dist_(full_state, act, goal)[..., -1:]
+    c = d < D
+    return torch.where(c, act, action), torch.where(c, d, D)
 for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
         action = act_(full_state, goal, noise, nn=act_slow)
-        if iter % 100 < 50:
+        if iter % 100 < 50: # TODO: Do we even need this with cheating? …Actually not bad, only ≈2k epochs slower to converge to a really good solution.
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
+        D = dist_(full_state, action, goal)[..., -1:] # TODO:
+        action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
+        action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
+        action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
 
         replay_buffer.append(ReplaySample(
             torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device),
@@ -516,7 +515,7 @@ finish()
 #       - (Since we're interested in min dist and not in avg dist, the rules are a bit different than for supervised learning, and learning dynamics are more important than their fixed point; so `+eps` ensures that ungrounded assumptions don't persist for long.)
 #       - Min-dist actions:
 #         - Gradient, DDPG, where we train `act`ions to minimize post-step `dist`ance: `min dist.copy(src, act(src, dst), dst)`.
-#         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts).
+#         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts). Floyd-Warshall [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), so to speak.
 #           - Learn not the distribution mean/median but its min, via a distributional-RL-like method: `dist` outputs many numbers/levels, and the first level learns directly, and each next level learns only if the target is less than the prev level. (Mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.)
 #           - Replay-buffer prioritization of max-regret samples for fastest spreading of the influence of discovered largest shortcuts. (Also good for unroll-time goals, getting more data in most-promising areas.)
 #       - If `dst`s are not sampled from a replay buffer, penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
