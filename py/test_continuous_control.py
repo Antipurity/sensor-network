@@ -188,7 +188,7 @@ def diag(x):
     assert x.shape[-3] == x.shape[-2]+1
     pre, N, K = x.shape[:-3], x.shape[-3], x.shape[-1]
     with_diag = torch.cat((x.reshape(*pre, N-1, N, K), torch.zeros(*pre, N-1, 1, K, device=x.device)), -2)
-    return torch.cat((torch.zeros(*pre, 1, K), torch.flatten(with_diag, -3, -2)), -2).view(*pre, N, N, K)
+    return torch.cat((torch.zeros(*pre, 1, K, device=x.device), torch.flatten(with_diag, -3, -2)), -2).view(*pre, N, N, K)
 def floyd(d, *a):
     """
     Floyd—Warshall algorithm: computes all-to-all shortest distances & actions. Given a one-step adjacency matrix, gives its (differentiable) transitive closure.
@@ -367,7 +367,7 @@ def replay(timeout, steps_to_goal_regret):
 
         # Imitate actions wherever we found a better path, to minimize regret.
         a_p = act_(srcs, dsts, n) # Prediction.
-        d_p = dist_(srcs, a_p, dsts, nn=dist_slow)[..., -1:] # (Not *guaranteed* to have a prediction target if off-policy.)
+        d_p = dist_(srcs, a_p, dsts, nn=dist_slow)[..., -1:]
         act_gating = (d_t < d_p).float()
         action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
 
