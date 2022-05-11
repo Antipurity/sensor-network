@@ -177,20 +177,20 @@ def pos_only(input): return cat(input[..., :2], torch.ones(*input.shape[:-1], 2,
 
 
 def undiag(x):
+    return x # Disabled because it slows convergence somewhat.
     """Removes the main diagonal from a `(..., N, N, ?)` tensor, making it `(..., N, N-1, ?)`-shaped."""
     # https://discuss.pytorch.org/t/keep-off-diagonal-elements-only-from-square-matrix/54379
-    return x # TODO:
     assert x.shape[-3] == x.shape[-2]
     pre, N, K = x.shape[:-3], x.shape[-3], x.shape[-1]
     no_diag = torch.flatten(x, -3, -2)[..., 1:, :].view(*pre, N-1, N+1, K)[..., :-1, :]
     return no_diag.reshape(*pre, N, N-1, K)
-def diag(x):
+def diag(x, v = 1000000.):
+    return x # Disabled because it slows convergence somewhat.
     """Adds the main diagonal back after an `undiag` call, filled with 0."""
-    return x # TODO: …Wait, why does uncommenting this seem to make distances not have valleys anymore, even though dist-regret is lower than it's ever been?… (Maybe `floyd` is at fault, and so `diag` should accept the value to fill the diagonal with.)
     assert x.shape[-3] == x.shape[-2]+1
     pre, N, K = x.shape[:-3], x.shape[-3], x.shape[-1]
-    with_diag = torch.cat((x.reshape(*pre, N-1, N, K), torch.zeros(*pre, N-1, 1, K, device=x.device)), -2)
-    return torch.cat((torch.zeros(*pre, 1, K, device=x.device), torch.flatten(with_diag, -3, -2)), -2).view(*pre, N, N, K)
+    with_diag = torch.cat((x.reshape(*pre, N-1, N, K), torch.full((*pre, N-1, 1, K), v, device=x.device)), -2)
+    return torch.cat((torch.full([*pre, 1, K], v, device=x.device), torch.flatten(with_diag, -3, -2)), -2).view(*pre, N, N, K)
 def floyd(d, *a):
     """
     Floyd—Warshall algorithm: computes all-to-all shortest distances & actions. Given a one-step adjacency matrix, gives its (differentiable) transitive closure.
@@ -350,6 +350,9 @@ def replay(timeout, steps_to_goal_regret):
             i, j = expand(0, times), expand(1, times)
             cond = (i < j) #& (j-i < d_i) # TODO: (…Maybe we *should* do this, but balance it with aggressive impossible-path pruning, so that clusters right near goals are learned first…)
             #   …So what exactly do we do?
+            #   TODO: First try just always checking.
+            #   TODO: Then try `(…) | random`: masking by a random bool-tensor.
+            #   TODO: Then should try giving the non-min dist to first-dist-level and min dist to the rest, MAYBE, somehow (quantile regression won't have a "first level" though)…
             d_j = torch.where(cond, j-i, d_i).clamp(1)
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths, but only for full states.
@@ -370,14 +373,13 @@ def replay(timeout, steps_to_goal_regret):
 
         # Imitate actions wherever we found a better path, to minimize regret.
         #   SIL: https://arxiv.org/pdf/1806.05635.pdf
-        #   (Differences: `floyd`; upper-bounding the `regret`.)
+        #   (Differences: no explicit probabilities; `floyd`; upper-bounding the `regret`.)
         a_p = act_(srcs, dsts, n) # Prediction.
         d_p = dist_(srcs, a_p.detach(), dsts)[..., -1:]
         regret = (d_p - d_t).clamp(0)
         action_loss = action_loss + (regret.detach().clamp(0, 15) * (a_p - a_t).square()).sum()
         dist_loss = dist_loss + 1e-2 * regret.square().sum()
 
-    # TODO: Try re-enabling `undiag` and `diag`. (And figure out why they're underperforming.)
     # TODO: Quantile regression for dists.
     #   TODO: …Increase `dist_levels` again…
     # TODO: Disable cheating; try to reach the same performance level (OK at 10k).
