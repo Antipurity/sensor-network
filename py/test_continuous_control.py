@@ -150,7 +150,7 @@ def net(ins, outs, hidden=embed_sz, layers=3):
     ).to(device)
 #   (Min-dist and min-dist action.)
 act = net(input_sz + input_sz + noise_sz, action_sz, layers=3) # (src, dst, noise) → act
-dist = net(input_sz + action_sz + input_sz + noise_sz, dist_levels, layers=3) # (src, act, dst) → dist
+dist = net(input_sz + action_sz + input_sz, dist_levels, layers=3) # (src, act, dst) → dist
 
 act_slow = MomentumCopy(act, .999) # Stabilize targets to prevent collapse.
 dist_slow = MomentumCopy(dist, .999) # Stabilize targets to prevent collapse.
