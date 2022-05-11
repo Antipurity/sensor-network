@@ -326,8 +326,10 @@ def replay(timeout, steps_to_goal_regret):
         """A prediction loss that extracts min-dists, by making each next dist-level only predict the target if it's less than the prev dist-level (plus eps=1 for getting around func-approx)."""
         assert d_t.shape[-1] == 1
         with torch.no_grad():
+            # TODO: Why isn't the distance learned? …AH: self-imitation should be incorporated ALWAYS on the 0th level, for correct prediction, right? (Otherwise, we're just ignoring pretty much everything at init.)
+            #   TODO: …But we've made the decision to only do `floyd` on the final distance… Was it the wrong one?…
             limit = torch.cat((d_t, d_p[..., :-1]), -1)
-            mult = (d_t - limit + 1).clamp(0,1)
+            mult = (limit - d_t + 1).clamp(0,1)
         return (mult * (d_p - d_t).square()).sum()
     dist_loss, action_loss, ddpg_loss = 0,0,0
     noss = expand(0, noises)
@@ -345,6 +347,7 @@ def replay(timeout, steps_to_goal_regret):
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
             cond = (i < j) & (j-i < d_i)
+            #   TODO: …How to not perform that second check on the first dist-level (or override it with `| True` there)…
             d_j = torch.where(cond, j-i, d_i).clamp(1)
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths.
@@ -362,8 +365,7 @@ def replay(timeout, steps_to_goal_regret):
             d0, a0, n0 = d_t, a_t, n
 
         # Learn the max-regret distance, to compare policy-action distances with.
-        d_t_p = dist_(srcs, a_t, dsts)
-        dist_loss = dist_loss + l_dist(d_t_p, d_t)
+        dist_loss = dist_loss + l_dist(dist_(srcs, a_t, dsts), d_t)
 
         # Imitate actions wherever we found a better path, to minimize regret.
         a_p = act_(srcs, dsts, n) # Prediction.
@@ -373,6 +375,10 @@ def replay(timeout, steps_to_goal_regret):
 
         # DDPG, so that we don't always have to actually try a path to guess that it's better.
         ddpg_loss = ddpg_loss + d_p.sum()
+
+    # TODO: Run & fix.
+    #   TODO: Why can't we learn the distance, currently (loss is near-0 and so is the distance)? Did we screw up our distributional-RL idea?
+    # TODO: …Try increasing `replays_per_step` for once…
 
 
 
@@ -439,9 +445,6 @@ def replay(timeout, steps_to_goal_regret):
     # goal_dists = dist_(states, actions, goals)
     # dist_loss = dist_loss + (goal_dists - goal_dists.max(goal_timeouts).detach()).square().sum()
     #   TODO:
-
-    # TODO: Run & fix.
-    # TODO: …Try increasing `replays_per_step` for once…
 
     (dist_loss + action_loss + ddpg_loss).backward()
     optim.step();  optim.zero_grad(True)
