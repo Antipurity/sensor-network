@@ -448,6 +448,18 @@ finish()
 
 
 # TODO: …Make a `model/` file with code for a skip-connection RNN with gradient teleportation…
+#   (For the grad-tp, need 2 methods: one which assumes that all inputs (past-RNN-state, computed first) come-before, and returns the first arg (future-RNN-state) as-is but with gradient directly linked to inputs; and the other, which knows the timestamps of inputs and accumulates gradients and everything.)
+#   (And need to ensure that we reset individual values when they get too high (getting reset-timestamps associated with every single RNN-state, inconveniently); and not grad-teleport if reset-timestamps don't match.)
+
+# TODO: From the Python `sensornet`, remove that per-cell-reward nonsense. (Too prescriptive. Gradient descent should be able to trivially learn to sum up per-cell predictions if needed. Per-cell goal-conditioning can still be implemented without learning that through reward, if we can receive those goals properly.)
+# TODO: While we're at it, make the user-facing error sane, adding/subtracting 1 ourselves (we won't *die* from that overhead).
+# TODO: Have a mechanism for pattern-matching a name and retrieving the sent data. (After all, this is how things like rewards or CLIP-embeddings goals would be communicated, without restricting to a particular goal-space nor duplication.) (Also, good for debugging/'spying'.)
+#   (Handle funcs in names via `nan`s in numeric patterns. Results are sorted by name lexicographically, preferably.)
+#   TODO: Have an iterable class `Unnamer` that 'contains' all name→func pairs; possibly based on `dict`.
+#     TODO: Calls to `Unnamer` instances with values & errors should pattern-match (in a single NumPy op) and call all relevant funcs, returning a string-in-name → func-result dist.
+#     TODO: Have not just `sn.sensors[i](sn)` but also `sn.listeners[i](data, data_error)` (into which `Unnamer`s could be put), called at the end of `sn._take_data()`.
+#     TODO: Make the constructor of `Handler`s able to receive `sensors` and `listeners`.
+# TODO: Ensure 100% test-coverage again, and retest.
 
 # TODO: …Move these comments to `test.py`, probably.
 
@@ -490,3 +502,4 @@ finish()
 # TODO: The simplest 'sparsity' ensurance (to make different tasks not interfere, thus enabling lifelong learning) *could* be the top-k nonlinearity: a layer that either zeroes-out non-top-k (by .abs()) activations, or zeroes out their gradient. (Out-of-distribution data is likely to have a different top-k pattern, after all.)
 #   Prior art is sparse. Activation-sparsity at least does decrease the chances of collision (Fig3 Left): https://arxiv.org/abs/1903.11257
 #     Top-k but with a separate per-task context (which is cheating): https://arxiv.org/pdf/2201.00042.pdf
+#       …If it's "similar enough", then can't we just *wait* and see a paper that describes this technique come out, assuming that the technique is good?
