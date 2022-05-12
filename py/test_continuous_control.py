@@ -11,7 +11,7 @@ Empower users, don't burden them.
 
 # Neural pathfinding
 
-Everything is conditioned on a user-specified goal (an input: anything, such as reward or actual-inputs or [CLIP](https://github.com/openai/CLIP) embeddings); the metric to learn & minimize is how many steps it takes to get there.
+Everything is conditioned on a user-specified goal (an input: anything, such as reward or actual-inputs or [te](https://cliport.github.io/)[xt](https://github.com/openai/CLIP)); the metric to learn & minimize is how many steps it takes to get there.
 
 It's not complicated.
 
@@ -79,12 +79,11 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     ```"""
     accel = accel.detach()[..., :2]
     accel = accel * 1e-2 / (accel.square().sum(-1, keepdim=True).sqrt().clamp(1) + 1e-5)
-    # force_center = torch.ones(posit.shape[0], 2, device=device)/2
-    # force_len = (posit - force_center).square() + 1e-5
-    # force = 3e-5 / force_len
-    # accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor? …Now, actually starts being able to often reach the destination by 10k… So maybe re-enable it?… We're having trouble learning anything outside the clusters at the corners.
-    #   TODO: WHY DOES THE ATTRACTOR NOW CAUSE NANS OR SOMETHING
-    veloc = (veloc + accel) * .9
+    force_center = torch.ones(posit.shape[0], 2, device=device)/2
+    force_len = (posit - force_center).square() + 1e-5
+    force = 3e-5 / force_len
+    accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor? …Now, actually starts being able to often reach the destination by 10k… So maybe re-enable it?… We're having trouble learning anything outside the clusters at the corners.
+    veloc = (veloc + accel).clamp(-2,2) * .9
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
 
@@ -483,19 +482,5 @@ finish()
 #   (Skip connections in RNNs are good, possibly LSTM-quality: https://cs224d.stanford.edu/reports/mmongia.pdf — the best paper on this, though the quality of this 'paper' is bad.)
 
 # TODO: The simplest 'sparsity' ensurance (to make different tasks not interfere, thus enabling lifelong learning) *could* be: a layer that either zeroes-out non-top-k (by .abs()) activations, or zeroes out their gradient. (Out-of-distribution data is likely to have a different top-k pattern, after all.)
-#   https://openreview.net/forum?id=B1gi0TEFDB
-#   https://arxiv.org/abs/2106.03517
-
-
-
-
-
-
-
-
-
-
-
-
-# (…Might even wrap this in a `model/` framework that manages the replay, with arbitrarily-many possibly-async goal states and everything?…)
-#   (…In fact, since we're getting close to the final model, maybe just package it with `sn` support?)
+#   Prior art is sparse. Activation-sparsity at least does decrease the chances of collision (Fig3 Left): https://arxiv.org/abs/1903.11257
+#   (Not clear how it's different from ReLU.)
