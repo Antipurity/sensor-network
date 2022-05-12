@@ -131,7 +131,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_sz = 10
+batch_sz = 100
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 dist_levels = 2 # For quantile regression.
 #   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer. But, the min is slower to learn than the average.)
@@ -139,7 +139,9 @@ dist_levels = 2 # For quantile regression.
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
-replays_per_step = 5 # How many samples each unroll-step replays with loss. At least 2.
+replays_per_step = 2 # How many samples each unroll-step replays with loss. At least 2.
+#   (If more than 2, `floyd` does more than nothing.)
+#   (Experiments seem to indicate no benefit to using `floyd`.)
 
 
 
@@ -350,7 +352,9 @@ def replay(timeout, steps_to_goal_regret):
             # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
-            cond = (i < j) # No `& (j-i < d_i)` because we already have the i>j side to combine tasks in anyway.
+            unmask = torch.rand_like(d_i) < .5 # For combining. Can't leave it to i>j since undoing a transition can take a LOT of extra work.
+            #   (…However, it makes performance terrible…)
+            cond = (i < j) & (unmask | (j-i < d_i))
             d_j = torch.where(cond, j-i, d_i+1) # `+1` *slowly* penalizes unconnected components.
             a_j = torch.where(cond, expand(0, actions), a_i)
             # Use the minibatch fully, by actually computing shortest paths, but only for full states.
@@ -372,10 +376,12 @@ def replay(timeout, steps_to_goal_regret):
         #   (Differences: no explicit probabilities; `floyd`; upper-bounding the `regret`; no `dist_loss += 1e-2 * regret.square().sum()`.)
         a_p = act_(srcs, dsts, n) # Prediction.
         with torch.no_grad():
+            # (With N=5, `nn=dist_slow` performs better than `nn=dist`.)
             d_p = dist_(srcs, a_p, dsts, nn=dist_slow)[..., -1:]
-            #   (With N=5, this performs better than `nn=dist`.)
             regret = (d_p - d_t).clamp(0)
         action_loss = action_loss + (regret.detach().clamp(0, 15) * (a_p - a_t).square()).sum()
+
+        # TODO: …Try cheating with `a_t,d_t` here, not at unroll-time?
 
     # TODO: Disable cheating; try to reach the same performance level (OK at 10k).
     #   TODO: …Try increasing `replays_per_step=N` for once…
@@ -386,60 +392,15 @@ def replay(timeout, steps_to_goal_regret):
     #       N=5: 10 self-imitations. (Finally, a nice round number, where we can have `batch_size=10`.)
     #         …Now, with cheating, performs only slightly worse than N=2…
     #           TODO: What about without cheating?
+    #             N=5: …1D arrows at 20k. Wow.
+    #             N=2: 1D vortices at 20k, at least.
+    #             TODO: With nn=act at unroll instead of nn=act_slow:
+    #               N=5: …kinda solved at 25k? Not sure what happened at 20k though; regret mostly only started rising after 20k…
+    #               N=2: 1D vortices at 20k. …Re-running, the picture seems to be the same as for N=5.
 
-
-
-    # TODO: …Old code, preserved so that we can have a hope of restoring prior performance after breaking this code:
-    # def l_dist(d_p, d_t):
-    #     """Prediction-loss that prefers lower-dists: always nonzero, but fades a bit if dist is too high."""
-    #     with torch.no_grad(): mult = (d_p.detach() - d_t + 1).clamp(.3, 3)
-    #     return (mult * (d_p - d_t).square()).sum()
-    # dist_loss, action_loss = 0,0
-    # noss = expand(0, noises)
-    # srcs = expand(0, states)
-    # for lvl in range(dist_levels):
-    #     last = lvl == dist_levels-1
-    #     prev_lvl = ((lvl-1 if lvl>0 else 0) / (dist_levels-1))*2-1 # -1…1
-    #     next_lvl = (lvl / (dist_levels-1))*2-1 # -1…1
-    #     #   The first dist-level is grounded in itself, others in their previous levels.
-    #     srcs = expand(0, states)
-    #     for g in range(max_goals):
-    #         # Predict distances & actions, for all src→dst pairs.
-    #         goals = torch.stack([s.goals[g] for s in samples], 1)
-    #         dsts = expand(1, goals)
-    #         n = noss
-    #         # Compute prediction targets.
-    #         with torch.no_grad():
-    #             d_i, a_i = dist_act_(srcs, dsts, n, lvl=prev_lvl, nn=dist_act_slow) # Initial pairwise dists/acts.
-    #             # Incorporate self-imitation knowledge: when a path is shorter than predicted, use it.
-    #             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
-    #             i, j = expand(0, times), expand(1, times)
-    #             cond = i < j
-    #             if lvl>0: cond = cond & (j-i < d_i) # First dist-level has to not filter sharply.
-    #             d_t = torch.where(cond, j-i, d_i).clamp(1)
-    #             a_t = torch.where(cond, expand(0, actions), a_i)
-    #             # Use the minibatch fully, by actually computing shortest paths.
-    #             if g == 0: # (Only full states can act as midpoints for pathfinding, since goal-spaces have less info than the full-space.)
-    #                 if lvl>0:
-    #                     d_t, a_t, n = floyd(d_t, a_t, n)
-    #                 d_t = torch.where((d_i == d_t).all(-1, keepdim=True), d_t+1, d_t)
-    #                 #   (Slowly penalize unconnected components, by adding `eps=1` if ungrounded.)
-    #             else: # (Goals should take from full-state plans directly.)
-    #                 cond = d0 < d_t
-    #                 d_t = torch.where(cond, d0, d_t)
-    #                 a_t = torch.where(cond, a0, a_t)
-    #                 n = torch.where(cond, n0, n)
-    #         if g == 0: # Preserve state-info of full-state for goals.
-    #             d0, a0, n0 = d_t, a_t, n
-    #         # Compute losses: distance, imitated action, DDPG.
-    #         d_p, a_p = dist_act_(srcs, dsts, n, lvl=next_lvl)
-    #         dist_loss = dist_loss + l_dist(d_p, d_t)
-    #         if True: # last:
-    #             with torch.no_grad(): # Next-level target embeddings.
-    #                 # Learn actions wherever we found a better path.
-    #                 d_our = dist_act_(srcs, dsts, n, lvl=next_lvl, nn=dist_act_slow)[0]
-    #                 act_gating = (d_t < d_our).float()
-    #             action_loss = action_loss + (act_gating * (a_p - a_t).square()).sum()
+    # TODO: …One particularly weak spot of `floyd` is whether we take from the buffer or from our own predictions… What if we instead ensure that each path always has 1 replay-action (probably the first in every path) and 0-or-more predictions-actions (somehow)?
+    #   TODO: How do we implement this (without doubling the graph-node count)?
+    #   …Also, should *all* non-first actions be predictions?
 
 
 
@@ -455,21 +416,21 @@ def replay(timeout, steps_to_goal_regret):
 
 
 
-def cheat(act, action, D): # TODO: (Unroll-time search, to debug whether learning-time learns OK distance but bad actions.) …It's SO good: practically solved at 8k already.
-    d = dist_(full_state, act, goal)[..., -1:] # TODO: Use nn=dist_slow here too.
+def cheat(act, action, D, nn=dist): # TODO: (Unroll-time search, to debug whether learning-time learns OK distance but bad actions.) …It's SO good: practically solved at 8k already.
+    d = dist_(full_state, act, goal, nn=nn)[..., -1:]
     c = d < D
     return torch.where(c, act, action), torch.where(c, d, D)
 for iter in range(500000):
     with torch.no_grad():
         full_state = cat(state, hidden_state)
         noise = torch.randn(batch_sz, noise_sz, device=device)
-        action = act_(full_state, goal, noise, nn=act_slow)
+        action = act_(full_state, goal, noise, nn=act) # TODO: Use the fast net. …No difference.
         if iter % 100 < 50: # TODO: Do we even need this with cheating? …Actually not bad, only ≈2k epochs slower to converge to a really good solution.
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
-        D = dist_(full_state, action, goal)[..., -1:] # TODO:
-        action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
-        action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
-        action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
+        # D = dist_(full_state, action, goal)[..., -1:] # TODO:
+        # action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
+        # action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
+        # action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
 
         replay_buffer.append(ReplaySample(
             torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device),
@@ -525,6 +486,8 @@ finish()
 
 # TODO: …If each step's RNN state is the exact sum of all previous RNN states (a neural network outputs how much to adjust that by), then if we sample 2 faraway steps *with no regard for what comes between*, then can't we just teleport gradient from the future into the past to perform correct gradient descent? …What the fuck. Too easy; this can't be true…?
 #   (Skip connections in RNNs are good, possibly LSTM-quality: https://cs224d.stanford.edu/reports/mmongia.pdf — the best paper on this, though the quality of this 'paper' is bad.)
+
+# TODO: The simplest 'sparsity' ensurance (to make different tasks not interfere, thus enabling lifelong learning) *could* be: a layer that either zeroes-out non-top-k (by .abs()) activations, or zeroes out their gradient. (Out-of-distribution data is likely to have a different top-k pattern, after all.)
 
 
 
