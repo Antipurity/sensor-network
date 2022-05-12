@@ -48,9 +48,9 @@ def env_step(posit, veloc, accel): # → state, hidden_state
 
     Add acceleration to velocity, and add velocity to position.
 
-    Max action-acceleration is `1e-2`.
+    Max action-acceleration is `1e-2`. There's friction that multiplies velocity (hidden state) by `0.9` each step.
 
-    There's a repulsor at `(.5, .5)` that adds a force proportional to `3e-5 / (pos - (.5, .5)).square()` to acceleration, to make exploration not as trivial. There's friction that multiplies velocity (hidden state) by `0.9` each step.
+    (There used to be a repulsor at `(.5, .5)` that would add a force proportional to `3e-5 / (pos - (.5, .5)).square()` to acceleration, to make exploration not as trivial. But it wasn't very interesting, and just annoying for visualizations. A proper maze would have been much better.)
 
     If you must know how it feels, use this simple HTML page:
 
@@ -69,7 +69,7 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     let flen = ((x-.5)**2 + (y-.5)**2 + 1e-5), f = 3e-5 / flen
     let fx = f * (x-.5)/flen, fy = f * (y-.5)/flen
 
-    let ddx = mx+fx, ddy = my+fy
+    let ddx = mx+0*fx, ddy = my+0*fy // No repulsor.
     dx+=ddx, dy+=ddy, x+=dx, y+=dy
     dx*=.9, dy*=.9, x=(x%1+1)%1, y=(y%1+1)%1
     target.style.left = (x * innerWidth) + 'px'
@@ -82,7 +82,9 @@ def env_step(posit, veloc, accel): # → state, hidden_state
     force_center = torch.ones(posit.shape[0], 2, device=device)/2
     force_len = (posit - force_center).square() + 1e-5
     force = 3e-5 / force_len
-    accel = accel + force * (posit - force_center) / force_len # TODO: Can we learn anything if we disable the attractor? …Now, actually starts being able to often reach the destination by 10k… So maybe re-enable it?… We're having trouble learning anything outside the clusters at the corners.
+    accel = accel + force * (posit - force_center) / force_len
+    #   (The repulsor doesn't really add interesting dynamics, nor a challenge.)
+    #     (Hardly a big exploration challenge that it was originally envisioned as. A maze would have been so much better.)
     veloc = (veloc + accel).clamp(-2,2) * .9
     posit = torch.remainder(posit + veloc, 1.)
     return posit, veloc
@@ -445,6 +447,10 @@ finish()
 
 
 
+# TODO: …Make a `model/` file with code for a skip-connection RNN with gradient teleportation…
+
+# TODO: …Move these comments to `test.py`, probably.
+
 # TODO: Assume a full env with bidirectional obs/act communication with our agent (any possible universe can be described as one-step updates): `env(prev,act)→(next,obs)`, where `prev` and `next`s are hidden `state`s.
 #   And we have goal(state)→dst for what `act`s want. (After all, all trajectories end up *somewhere*, so might as well label and learn destinations explicitly.) (This description is complete, and with precise-enough goals, no further intervention on trajectories is needed, so we can just find the shortest path.)
 #   THIS is the real structure that NNs learn, isn't it?
@@ -481,6 +487,6 @@ finish()
 # TODO: …If each step's RNN state is the exact sum of all previous RNN states (a neural network outputs how much to adjust that by), then if we sample 2 faraway steps *with no regard for what comes between*, then can't we just teleport gradient from the future into the past to perform correct gradient descent? …What the fuck. Too easy; this can't be true…?
 #   (Skip connections in RNNs are good, possibly LSTM-quality: https://cs224d.stanford.edu/reports/mmongia.pdf — the best paper on this, though the quality of this 'paper' is bad.)
 
-# TODO: The simplest 'sparsity' ensurance (to make different tasks not interfere, thus enabling lifelong learning) *could* be: a layer that either zeroes-out non-top-k (by .abs()) activations, or zeroes out their gradient. (Out-of-distribution data is likely to have a different top-k pattern, after all.)
+# TODO: The simplest 'sparsity' ensurance (to make different tasks not interfere, thus enabling lifelong learning) *could* be the top-k nonlinearity: a layer that either zeroes-out non-top-k (by .abs()) activations, or zeroes out their gradient. (Out-of-distribution data is likely to have a different top-k pattern, after all.)
 #   Prior art is sparse. Activation-sparsity at least does decrease the chances of collision (Fig3 Left): https://arxiv.org/abs/1903.11257
-#   (Not clear how it's different from ReLU.)
+#     Top-k but with a separate per-task context (which is cheating): https://arxiv.org/pdf/2201.00042.pdf
