@@ -131,7 +131,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_sz = 100
+batch_sz = 10
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 dist_levels = 2 # For quantile regression.
 #   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer. But, the min is slower to learn than the average.)
@@ -139,7 +139,7 @@ dist_levels = 2 # For quantile regression.
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
-replays_per_step = 2 # How many samples each unroll-step replays with loss. At least 2.
+replays_per_step = 5 # How many samples each unroll-step replays with loss. At least 2.
 
 
 
@@ -304,6 +304,7 @@ def maybe_reset_goal(input):
 
         steps_to_goal_err = dist_(src, act, goal, nn=dist_slow)[..., -1:] - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
+        #   TODO: Try logging the opposite sign too, just in case we're thinking about regret wrong here.
     return out_of_time.float().sum(), steps_to_goal_regret.sum()
 def replay(timeout, steps_to_goal_regret):
     """Replays samples from the buffer.
@@ -368,15 +369,23 @@ def replay(timeout, steps_to_goal_regret):
 
         # Imitate actions wherever we found a better path, to minimize regret.
         #   SIL: https://arxiv.org/pdf/1806.05635.pdf
-        #   (Differences: no explicit probabilities; `floyd`; upper-bounding the `regret`.)
+        #   (Differences: no explicit probabilities; `floyd`; upper-bounding the `regret`; no `dist_loss += 1e-2 * regret.square().sum()`.)
         a_p = act_(srcs, dsts, n) # Prediction.
-        d_p = dist_(srcs, a_p.detach(), dsts)[..., -1:]
-        regret = (d_p - d_t).clamp(0)
+        with torch.no_grad():
+            d_p = dist_(srcs, a_p, dsts, nn=dist_slow)[..., -1:]
+            #   (With N=5, this performs better than `nn=dist`.)
+            regret = (d_p - d_t).clamp(0)
         action_loss = action_loss + (regret.detach().clamp(0, 15) * (a_p - a_t).square()).sum()
-        dist_loss = dist_loss + 1e-2 * regret.square().sum()
 
     # TODO: Disable cheating; try to reach the same performance level (OK at 10k).
-    #   TODO: …Try increasing `replays_per_step` for once…
+    #   TODO: …Try increasing `replays_per_step=N` for once…
+    #     Do we also try to make the number of updates-of-distance the same?
+    #       N=2: 1 self-imitation (i<j).
+    #       N=3: 3 self-imitations.
+    #       N=4: 6 self-imitations.
+    #       N=5: 10 self-imitations. (Finally, a nice round number, where we can have `batch_size=10`.)
+    #         …Now, with cheating, performs only slightly worse than N=2…
+    #           TODO: What about without cheating?
 
 
 
@@ -447,7 +456,7 @@ def replay(timeout, steps_to_goal_regret):
 
 
 def cheat(act, action, D): # TODO: (Unroll-time search, to debug whether learning-time learns OK distance but bad actions.) …It's SO good: practically solved at 8k already.
-    d = dist_(full_state, act, goal)[..., -1:]
+    d = dist_(full_state, act, goal)[..., -1:] # TODO: Use nn=dist_slow here too.
     c = d < D
     return torch.where(c, act, action), torch.where(c, d, D)
 for iter in range(500000):
