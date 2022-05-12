@@ -131,7 +131,7 @@ def cat(*a, dim=-1): return torch.cat(a, dim)
 
 
 
-batch_sz = 100
+batch_sz = 10
 input_sz, embed_sz, action_sz, noise_sz = 4, 64, 2, 4
 dist_levels = 2 # For quantile regression.
 #   (If an action leads to a plan that only rarely leads to a good result, then min-extraction would work on refining that plan as soon as possible. It also gives robustness to non-optimal policies in the replay buffer. But, the min is slower to learn than the average.)
@@ -139,7 +139,7 @@ dist_levels = 2 # For quantile regression.
 lr = 1e-3
 
 replay_buffer = ReplayBuffer(max_len=128) # of ReplaySample
-replays_per_step = 2 # How many samples each unroll-step replays with loss. At least 2.
+replays_per_step = 5 # How many samples each unroll-step replays with loss. At least 2.
 #   (If more than 2, `floyd` does more than nothing.)
 #   (Experiments seem to indicate no benefit to using `floyd`.)
 
@@ -206,7 +206,7 @@ def floyd(d, *a):
 
     Outputs: `(d, *a)`
 
-    With this, self-imitation learning can make full use of a sampled minibatch, both using replayed actions and reusing solved subtasks for learning-time search. For this, when considering `i`-time and `j`-time samples `A` & `B`, `d,a` should be: if `i<j and i-j<dist(A,B)`, then `j-i, A→B`, else `dist(A,B), act(A,B)`.
+    With this, self-imitation learning can make full use of a sampled minibatch, both using replayed actions and reusing solved subtasks for learning-time search. (Though in practice, we can't get good performance.)
 
     (Similar to [lifted structured embedding](https://arxiv.org/abs/1511.06452), but founded in pathfinding instead of better-loss considerations.) (Made possible by the ability to instantly know the RL-return (distance) between any 2 samples.)
     """
@@ -214,9 +214,9 @@ def floyd(d, *a):
     assert all(d.shape[:-1] == A.shape[:-1] for A in a)
     for k in range(d.shape[-3]):
         d_through_midpoint = d[..., :, k:k+1, :] + d[..., k:k+1, :, :]
-        cond = d < d_through_midpoint
-        d = torch.where(cond, d, d_through_midpoint)
-        a = [torch.where(cond, A, A[..., :, k:k+1, :]) for A in a]
+        disallow = d < d_through_midpoint
+        d = torch.where(disallow, d, d_through_midpoint)
+        a = [torch.where(disallow, A, A[..., :, k:k+1, :]) for A in a]
     return d, *a
 
 
@@ -306,9 +306,10 @@ def maybe_reset_goal(input):
 
         steps_to_goal_err = dist_(src, act, goal, nn=dist_slow)[..., -1:] - steps_to_goal
         steps_to_goal_regret = -steps_to_goal_err.clamp(None, 0) # (The regret of that long-ago state that `steps_to_goal` was evaluated at, compared to on-policy eval.)
+        steps_to_goal_antiregret = steps_to_goal_err.clamp(0)
         #   TODO: Try logging the opposite sign too, just in case we're thinking about regret wrong here.
-    return out_of_time.float().sum(), steps_to_goal_regret.sum()
-def replay(timeout, steps_to_goal_regret):
+    return out_of_time.float().sum(), steps_to_goal_regret.sum(), steps_to_goal_antiregret.sum()
+def replay(timeout, steps_to_goal_regret, steps_to_goal_antiregret):
     """Replays samples from the buffer.
 
     Picks many faraway samples, computes all pairwise distances & actions, and makes the shortest paths on the minibatch's dense graph serve as prediction targets. (Search, to reuse solved subtasks.)
@@ -353,7 +354,8 @@ def replay(timeout, steps_to_goal_regret):
             #   (Maximize the regret by mining for paths that we'd regret not taking, then minimize it by taking them.)
             i, j = expand(0, times), expand(1, times)
             unmask = torch.rand_like(d_i) < .5 # For combining. Can't leave it to i>j since undoing a transition can take a LOT of extra work.
-            #   (…However, it makes performance terrible…)
+            #   (But it doesn't help.)
+            #   (And, while this masking is a glaring weak spot, attempts to ensure that each path always includes at least 1 from-replay action only hurt performance, a lot.)
             cond = (i < j) & (unmask | (j-i < d_i))
             d_j = torch.where(cond, j-i, d_i+1) # `+1` *slowly* penalizes unconnected components.
             a_j = torch.where(cond, expand(0, actions), a_i)
@@ -382,6 +384,7 @@ def replay(timeout, steps_to_goal_regret):
         action_loss = action_loss + (regret.detach().clamp(0, 15) * (a_p - a_t).square()).sum()
 
         # TODO: …Try cheating with `a_t,d_t` here, not at unroll-time?
+        #   No matter where we cheat here, it makes distances pretty much impossible to learn.
 
     # TODO: Disable cheating; try to reach the same performance level (OK at 10k).
     #   TODO: …Try increasing `replays_per_step=N` for once…
@@ -398,10 +401,6 @@ def replay(timeout, steps_to_goal_regret):
     #               N=5: …kinda solved at 25k? Not sure what happened at 20k though; regret mostly only started rising after 20k…
     #               N=2: 1D vortices at 20k. …Re-running, the picture seems to be the same as for N=5.
 
-    # TODO: …One particularly weak spot of `floyd` is whether we take from the buffer or from our own predictions… What if we instead ensure that each path always has 1 replay-action (probably the first in every path) and 0-or-more predictions-actions (somehow)?
-    #   TODO: How do we implement this (without doubling the graph-node count)?
-    #   …Also, should *all* non-first actions be predictions?
-
 
 
     (dist_loss + action_loss).backward()
@@ -411,13 +410,13 @@ def replay(timeout, steps_to_goal_regret):
     # Log debugging info.
     M = batch_sz * N
     log(0, False, pos = pos_histogram)
-    log(1, False, timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret))
+    log(1, False, timeout = to_np(timeout), dist_regret = to_np(steps_to_goal_regret), dist_antiregret = to_np(steps_to_goal_antiregret))
     log(2, False, dist_loss = to_np(dist_loss / M), action_loss = to_np(action_loss / M))
 
 
 
-def cheat(act, action, D, nn=dist): # TODO: (Unroll-time search, to debug whether learning-time learns OK distance but bad actions.) …It's SO good: practically solved at 8k already.
-    d = dist_(full_state, act, goal, nn=nn)[..., -1:]
+def cheat(src, act, dst, action, D, nn=dist): # TODO: (Unroll-time search, to debug whether learning-time learns OK distance but bad actions.) …It's SO good: practically solved at 8k already.
+    d = dist_(src, act, dst, nn=nn)[..., -1:]
     c = d < D
     return torch.where(c, act, action), torch.where(c, d, D)
 for iter in range(500000):
@@ -428,9 +427,9 @@ for iter in range(500000):
         if iter % 100 < 50: # TODO: Do we even need this with cheating? …Actually not bad, only ≈2k epochs slower to converge to a really good solution.
             if random.randint(1,2)==1: action = torch.randn(batch_sz, action_sz, device=device)
         # D = dist_(full_state, action, goal)[..., -1:] # TODO:
-        # action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
-        # action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
-        # action, D = cheat(torch.randn(batch_sz, action_sz, device=device), action, D) # TODO:
+        # action, D = cheat(full_state, torch.randn(batch_sz, action_sz, device=device), goal, action, D) # TODO:
+        # action, D = cheat(full_state, torch.randn(batch_sz, action_sz, device=device), goal, action, D) # TODO:
+        # action, D = cheat(full_state, torch.randn(batch_sz, action_sz, device=device), goal, action, D) # TODO:
 
         replay_buffer.append(ReplaySample(
             torch.full((batch_sz, 1), iter, dtype=torch.float32, device=device),
@@ -472,6 +471,7 @@ finish()
 #         - Gradient, DDPG, where we train `act`ions to minimize post-step `dist`ance: `min dist.copy(src, act(src, dst), dst)`.
 #         - Sampling from real paths: when goal-space is identity and we have a minibatch, incorporate sample-paths where shorter and use `floyd` to find shortest distances, then use those as min-gated prediction targets (for both dists & acts). Floyd-Warshall [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), so to speak.
 #           - Learn not dist mean/median but its min, likely via quantile regression (tilted L1 loss). (Use distributional RL to mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.)
+#             - (An alternative didn't work well in a trivial 2D env: gating each next dist-level by either its prev dist-level (dropping targets if more than that) or nothing, so that each is lower. Possibly because that env is a mad chase to first-correctish-dist-map.)
 #           - Replay-buffer prioritization of max-regret samples for fastest spreading of the influence of discovered largest shortcuts. (Also good for unroll-time goals, getting more data in most-promising areas.)
 #       - If `dst`s are not sampled from a replay buffer, penalize probably-unconnected components (which could mislead optimization if left untreated): `src`s with sampled `dst`s and old dist-predictions probably have `dist`s of at least that much. This loss must be weaker than dist-learning loss.
 #     - Faraway gradient teleportation: if the RNN always *adds* to history (skip-connections yo), then the gradient of future steps (the initial `history`) should always be added to the gradient of past steps (the post-`env` `history`).
