@@ -40,6 +40,7 @@ class SkipConnection(nn.Module):
         return x + p - p.detach()
 
     # TODO: Also have the index-aware method…
+    #   …Looks like even `came_from` is too poor-performing to learn even a single step back. Useless, isn't it?
     # TODO: Also add support for cutting-off too-large values…
 
 
@@ -64,7 +65,12 @@ if __name__ == '__main__': # pragma: no cover
         SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
         SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
     )
-    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    correct = SkipConnection(
+        SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
+    )
+    opt = torch.optim.Adam([*net.parameters(), *correct.parameters()], lr=1e-3)
 
     replay_buffer = []
     max_replay_samples = 256
@@ -73,9 +79,11 @@ if __name__ == '__main__': # pragma: no cover
     sum_so_far = torch.zeros(batch_sz, 1)
     for _ in range(50000):
         # Acknowledge that prior RNN steps existed.
-        if len(replay_buffer) > 8:
-            past = [net(random.choice(replay_buffer)) for _ in range(8)]
-            state = net.came_from(state, *past)
+        # if len(replay_buffer) > 8:
+        #     # TODO: No replay-buffer I guess.
+        #     past = [net(random.choice(replay_buffer)) for _ in range(8)]
+        #     state = net.came_from(state, *past)
+        state = correct(state) # TODO:
 
         # Env: most values are ignored, some must be remembered in a sum, and some must output & reset that sum.
         #   The input is the marker (0|1|-1) and the value.
@@ -83,7 +91,7 @@ if __name__ == '__main__': # pragma: no cover
         is_ignore, is_store, is_report = (p < .9), (p >= .9) & (p < .9666666), (p >= .9666666)
         marker = torch.where(is_ignore, torch.zeros_like(p), torch.where(is_store, torch.ones_like(p), -torch.ones_like(p)))
         value = torch.rand(batch_sz, 1)
-        sum_so_far = torch.where(is_store, sum_so_far + value, sum_so_far).clamp(-3, 3)
+        sum_so_far = torch.where(is_store, sum_so_far + value, sum_so_far).clamp(-10, 10)
 
         # Inputs to `net` must be stored in the `replay_buffer`.
         net_input = cat((state, marker, value))
@@ -100,7 +108,9 @@ if __name__ == '__main__': # pragma: no cover
         # target = torch.where(is_report, sum_so_far, pred) # This is the correct one, not the one below.
         target = sum_so_far # TODO:
         loss = (pred - target).square().sum()
-        loss = loss + pred.abs().clamp(3).sum() # Keep within -3…3.
+        loss = loss + pred.abs().clamp(10).sum() # Keep within -10…10.
+        loss = loss + (state - correct(state).detach()).abs().sum() # TODO: …Why are we growing without end now… What's so wrong about this loss?
+        #   I guess sum_so_far-prediction requests bigger post-correction states, then actual states chase those post-correction states, creating a feedback loop…
         sum_so_far = torch.where(is_report, torch.zeros_like(p), sum_so_far)
         log(0, False, L1 = (pred - target).abs().mean().detach().cpu().numpy(), pred=pred.detach()[0].cpu().numpy(), sum=sum_so_far.detach()[0].cpu().numpy())
 
@@ -110,14 +120,17 @@ if __name__ == '__main__': # pragma: no cover
         state = state.detach()
 
         # …First impressions: not encouraging…
+        #   In fact, `.came_from` performs no better than the trivial single-step gradients.
 
 
         # TODO: Also have to limit `state` to make it never contain ridiculously-big values.
         #   …Are there really no consequences to just doing this without any gradient-filtering…
-        state = torch.where(state.abs()>10, torch.zeros_like(state), state)
+        state = torch.where(state.abs()>100, torch.zeros_like(state), state)
     finish()
 
 
     # TODO: …Last chance could be: have the "RNN-state corrector" NN, applied on `.detach()`ed-prev-state before it's sent through `net`; the loss should make next-state predict corrected-next-state.
     #   (Like synthetic gradient, but without intervening on actual gradients. More stable, maybe.)
-    #   …Intuitively, how would this method help with learning to ignore inputs? A "request for a bigger result" is slowly learned and propagated, intermediate steps get bigger output for no reason, and not
+    #   …Intuitively, how would this method help with learning to ignore inputs? A "request for a bigger result" is slowly learned and propagated, intermediate steps get bigger output but MAYBE those changes are averaged-away, whereas the steps that can derive that biggening from their inputs actually grow…
+    #     Won't know unless we try, I guess.
+    #     …Tried. Was worse than anything.
