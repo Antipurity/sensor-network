@@ -56,13 +56,13 @@ class SkipConnection(nn.Module):
 
 if __name__ == '__main__': # pragma: no cover
     import random
+    from log import log, finish
     batch_sz, state_sz = 64, 32
     net = SkipConnection(
         nn.Linear(state_sz + 2, state_sz),
-        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
-        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
-        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
-        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz)),
     )
     opt = torch.optim.Adam(net.parameters(), lr=1e-3)
 
@@ -82,8 +82,8 @@ if __name__ == '__main__': # pragma: no cover
         p = torch.rand(batch_sz, 1)
         is_ignore, is_store, is_report = (p < .9), (p >= .9) & (p < .9666666), (p >= .9666666)
         marker = torch.where(is_ignore, torch.zeros_like(p), torch.where(is_store, torch.ones_like(p), -torch.ones_like(p)))
-        value = torch.randn(batch_sz, 1)
-        sum_so_far = torch.where(is_store, sum_so_far + value, sum_so_far)
+        value = torch.rand(batch_sz, 1)
+        sum_so_far = torch.where(is_store, sum_so_far + value, sum_so_far).clamp(-10, 10)
 
         # Inputs to `net` must be stored in the `replay_buffer`.
         net_input = cat((state, marker, value))
@@ -97,17 +97,27 @@ if __name__ == '__main__': # pragma: no cover
 
         # Predict the sum in the correct places.
         pred = state[..., :1]
-        target = torch.where(is_report, sum_so_far, pred)
+        # target = torch.where(is_report, sum_so_far, pred) # This is the correct one, not the one below.
+        target = sum_so_far # TODO:
         loss = (pred - target).square().sum()
+        loss = pred.abs().clamp(10).sum() # Keep within -10…10.
         sum_so_far = torch.where(is_report, torch.zeros_like(p), sum_so_far)
-        print('L2', loss.detach().cpu().numpy())
+        log(0, False, L1 = (pred - target).abs().mean().detach().cpu().numpy(), pred=pred.detach()[0].cpu().numpy(), sum=sum_so_far.detach()[0].cpu().numpy())
 
         loss.backward()
         opt.step();  opt.zero_grad(True)
 
         state = state.detach()
 
-        # …Not encouraging… Why is the loss like 100k?
+        # …First impressions: not encouraging…
 
 
         # TODO: Also have to limit `state` to make it never contain ridiculously-big values.
+        #   …Are there really no consequences to just doing this without any gradient-filtering…
+        state = torch.where(state.abs()>100, torch.zeros_like(state), state)
+    finish()
+
+
+    # TODO: …Last chance could be: have the "RNN-state corrector" NN, applied on `.detach()`ed-prev-state before it's sent through `net`; the loss should make next-state predict corrected-next-state.
+    #   (Like synthetic gradient, but without intervening on actual gradients. More stable, maybe.)
+    #   …Intuitively, how would this method help with learning to ignore inputs? A "request for a bigger result" is slowly learned and propagated, intermediate steps get bigger output for no reason, and not
