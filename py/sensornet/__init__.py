@@ -120,7 +120,7 @@ class Handler:
             - If a `Namer`, it is used.
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
         - `data`: a NumPy array of numbers, preferably -1…1.
-        - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. Preferably -1…1.
+        - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
         """
         if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
         elif isinstance(name, str): name = Namer(name)
@@ -137,7 +137,7 @@ class Handler:
             data = name.name(data, data.shape[0], self.cell_shape, self.part_size, None)
             if error is not None:
                 if len(error.shape) != 1: error = error.flatten()
-                error = name.name(error, error.shape[0], self.cell_shape, self.part_size, -1.)
+                error = name.name(error, error.shape[0], self.cell_shape, self.part_size, 0.)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
         self._data.append(data)
         self._data_error.append(error)
@@ -232,8 +232,8 @@ class Handler:
         This returns `(data, query, data_error, query_error)`, or an `await`able promise of that.
         - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
         - `query`: same, but sized `M×name_size` (only the name).
-        - `data_error`, `query_error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`.
-            - A usage example: `if data_error is not None: data = numpy.clip(data + (data_error+1) * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
+        - `data_error`, `query_error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
+            - A usage example: `if data_error is not None: data = numpy.clip(data + data_error * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
         """
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.ensure_future(prev_feedback)
