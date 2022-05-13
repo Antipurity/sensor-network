@@ -30,8 +30,17 @@ class SkipConnection(nn.Module):
         if x_sz == y_sz: return x + y
         if x_sz > y_sz: return x[..., :y_sz] + y
         return cat(x, torch.zeros(*x.shape[:-1], y_sz - x_sz, dtype=x.dtype, device=x.device)) + y
-    # TODO: Have these 2 grad-tp methods, right?
-    #   …What are they, exactly…
+    def came_from(self, x, *past):
+        """Marks `x` as having been computed from `past` states, teleporting the gradient.
+
+        `past` can be sampled arbitrarily, without the need for an unbroken chain of history.
+
+        The result's value is `x`, but its gradient will be received by each `past` (since addition gives gradient to all its arguments, and each RNN state is the sum of all past states). Note that if the NN parameters have changed in the meantime, that gradient is stale, especially if pasts are from very long ago."""
+        p = sum(past)
+        return x + p - p.detach()
+
+    # TODO: Also have the index-aware method…
+    # TODO: Also add support for cutting-off too-large values…
 
 
 
@@ -46,7 +55,8 @@ class SkipConnection(nn.Module):
 #         - To trade off staleness for lower variance, could actually incorporate old-grad into new-grad (with a multiplier like `.95`) in the same way as it's incorporated into a replay-step.
 
 
-
-# TODO: How to test this?
-#   Have to test the simplest all-in-the-past case first, to make sure that learning *can* actually happen.
-#     (Should: the concept is basically `f(y[n]) = f(x + sum(… f(y[i]).detach() …))`.)
+if __name__ == '__main__': # pragma: no cover
+    pass
+    # TODO: How to test this?
+    #   Have to test the simplest all-in-the-past case first, to make sure that learning *can* actually happen.
+    #     (Should: the concept is basically `f(y[n]) = f(x + sum(… f(y[i]).detach() …))`. …Though, if the network changed in the meantime, then the gradient is stale.)
