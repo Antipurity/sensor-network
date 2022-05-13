@@ -45,7 +45,6 @@ class SkipConnection(nn.Module):
 
 
 # TODO: …Make a `model/grad_teleport_rnn.py` file with code for a skip-connection RNN with gradient teleportation…
-#   (For the grad-tp, need 2 methods: one which assumes that all inputs (past-RNN-state, computed first) come-before, and returns the first arg (future-RNN-state) as-is but with gradient directly linked to inputs; and the other, which knows the timestamps of inputs and accumulates gradients and everything.)
 #   (And need to ensure that we reset individual values when they get too high (getting reset-timestamps associated with every single RNN-state, inconveniently); and not grad-teleport if reset-timestamps don't match.)
 #     TODO: …How do we implement this resetting exactly, especially considering that the forward-pass should still function like a regular skip-connection…
 #     - Faraway gradient teleportation: if the RNN always *adds* to history (skip-connections yo), then the gradient of future steps (the initial `history`) should always be added to the gradient of past steps (the post-`env` `history`).
@@ -56,7 +55,59 @@ class SkipConnection(nn.Module):
 
 
 if __name__ == '__main__': # pragma: no cover
-    pass
-    # TODO: How to test this?
-    #   Have to test the simplest all-in-the-past case first, to make sure that learning *can* actually happen.
-    #     (Should: the concept is basically `f(y[n]) = f(x + sum(… f(y[i]).detach() …))`. …Though, if the network changed in the meantime, then the gradient is stale.)
+    import random
+    batch_sz, state_sz = 64, 32
+    net = SkipConnection(
+        nn.Linear(state_sz + 2, state_sz),
+        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
+        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
+        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
+        nn.ReLU(), nn.LayerNorm(state_sz), nn.Linear(state_sz, state_sz),
+    )
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+
+    replay_buffer = []
+    max_replay_samples = 256
+
+    state = torch.randn(batch_sz, state_sz)
+    sum_so_far = torch.zeros(batch_sz, 1)
+    for _ in range(50000):
+        # Acknowledge that prior RNN steps existed.
+        if len(replay_buffer) > 8:
+            past = [net(random.choice(replay_buffer)) for _ in range(8)]
+            state = net.came_from(state, *past)
+
+        # Env: most values are ignored, some must be remembered in a sum, and some must output & reset that sum.
+        #   The input is the marker (0|1|-1) and the value.
+        p = torch.rand(batch_sz, 1)
+        is_ignore, is_store, is_report = (p < .9), (p >= .9) & (p < .9666666), (p >= .9666666)
+        marker = torch.where(is_ignore, torch.zeros_like(p), torch.where(is_store, torch.ones_like(p), -torch.ones_like(p)))
+        value = torch.randn(batch_sz, 1)
+        sum_so_far = torch.where(is_store, sum_so_far + value, sum_so_far)
+
+        # Inputs to `net` must be stored in the `replay_buffer`.
+        net_input = cat((state, marker, value))
+        replay_buffer.append(net_input.detach())
+        if len(replay_buffer) > max_replay_samples:
+            random.shuffle(replay_buffer)
+            replay_buffer = replay_buffer[-(max_replay_samples//2):]
+
+        # RNN step.
+        state = net(net_input)
+
+        # Predict the sum in the correct places.
+        pred = state[..., :1]
+        target = torch.where(is_report, sum_so_far, pred)
+        loss = (pred - target).square().sum()
+        sum_so_far = torch.where(is_report, torch.zeros_like(p), sum_so_far)
+        print('L2', loss.detach().cpu().numpy())
+
+        loss.backward()
+        opt.step();  opt.zero_grad(True)
+
+        state = state.detach()
+
+        # …Not encouraging… Why is the loss like 100k?
+
+
+        # TODO: Also have to limit `state` to make it never contain ridiculously-big values.
