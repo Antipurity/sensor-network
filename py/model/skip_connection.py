@@ -83,7 +83,7 @@ if __name__ == '__main__': # pragma: no cover
         is_ignore, is_store, is_report = (p < .9), (p >= .9) & (p < .9666666), (p >= .9666666)
         marker = torch.where(is_ignore, torch.zeros_like(p), torch.where(is_store, torch.ones_like(p), -torch.ones_like(p)))
         value = torch.rand(batch_sz, 1)
-        sum_so_far = torch.where(is_store, sum_so_far + value, sum_so_far).clamp(-10, 10)
+        sum_so_far = torch.where(is_store, sum_so_far + value, sum_so_far).clamp(-3, 3)
 
         # Inputs to `net` must be stored in the `replay_buffer`.
         net_input = cat((state, marker, value))
@@ -100,7 +100,7 @@ if __name__ == '__main__': # pragma: no cover
         # target = torch.where(is_report, sum_so_far, pred) # This is the correct one, not the one below.
         target = sum_so_far # TODO:
         loss = (pred - target).square().sum()
-        loss = pred.abs().clamp(10).sum() # Keep within -10…10.
+        loss = loss + pred.abs().clamp(3).sum() # Keep within -3…3.
         sum_so_far = torch.where(is_report, torch.zeros_like(p), sum_so_far)
         log(0, False, L1 = (pred - target).abs().mean().detach().cpu().numpy(), pred=pred.detach()[0].cpu().numpy(), sum=sum_so_far.detach()[0].cpu().numpy())
 
@@ -114,7 +114,7 @@ if __name__ == '__main__': # pragma: no cover
 
         # TODO: Also have to limit `state` to make it never contain ridiculously-big values.
         #   …Are there really no consequences to just doing this without any gradient-filtering…
-        state = torch.where(state.abs()>100, torch.zeros_like(state), state)
+        state = torch.where(state.abs()>10, torch.zeros_like(state), state)
     finish()
 
 
