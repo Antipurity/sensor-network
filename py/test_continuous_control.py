@@ -450,14 +450,6 @@ finish()
 
 
 
-# TODO: Have a mechanism for pattern-matching a name and retrieving the sent data. (After all, this is how things like rewards or CLIP-embeddings goals would be communicated, without restricting to a particular goal-space nor duplication.) (Also, good for debugging/'spying'.)
-#   (Handle funcs in names via `nan`s in numeric patterns. Results are sorted by name lexicographically, preferably.)
-#   TODO: Have an iterable class `Unnamer` that 'contains' all name→func pairs; possibly based on `dict`.
-#     TODO: Calls to `Unnamer` instances with values & errors should pattern-match (in a single NumPy op) and call all relevant funcs, returning a string-in-name → func-result dist.
-#     TODO: Have not just `sn.sensors[i](sn)` but also `sn.listeners[i](data, data_error)` (into which `Unnamer`s could be put), called at the end of `sn._take_data()`.
-#     TODO: Make the constructor of `Handler`s able to receive `sensors` and `listeners`.
-# TODO: Ensure 100% test-coverage again, and retest.
-# TODO: Bump the minor version.
 
 # TODO: …Move these comments to `test.py`, probably.
 

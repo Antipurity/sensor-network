@@ -66,19 +66,25 @@ import asyncio
 
 class Handler:
     """
-    `Handler(cell_shape=None, part_size=None)`
+    ```python
+    Handler().shape((8, 24, 64), 8)
+    Handler((8, 24, 64), 8)
+    Handler(cell_shape=None, part_size=None, sensors=None, listeners=None)
+    ```
 
-    A differentiable sensor network: gathers numeric data from anywhere, and in a loop, handles it (and sends feedback back if requested).
+    A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
 
     All data is split into fixed-size cells, each of which has a numeric name and a part of data. Handlers (AI models) should be position-invariant.
 
-    Either pass in `cell_shape` (such as `(8, 24, 64)`: the last one is how many data-numbers there are per cell, the rest are the name's sizes) and `part_size` (such as `8`; sent name is split into parts; for example, each string in a name would take up 1 part), or call `.shape(cell_shape, part_size)`.
+    Inputs:
+    - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, the second-last is the name's size, and the rest is padding for any extra data.
+    - `part_size`: the sent name is split into parts of this size. In particular, each string in a name would take up 1 part.
+    - `sensors`: function/s that take this handler, to prepare data to handle.
+    - `listeners`: function/s that take data & error, when data is ready to handle.
 
-    To gather data automatically, do `handler.sensors.append(lambda handler: ...)`.
-
-    If needed, read `.cell_shape` or `.part_size` or `.cell_size` wherever the object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size` or `.part_size` or `.sensors` or `.listeners` wherever the object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, cell_shape=None, part_size=None):
+    def __init__(self, cell_shape=None, part_size=None, sensors, listeners):
         self._query_cell = 0
         self._data = []
         self._query = []
@@ -87,7 +93,10 @@ class Handler:
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, part_size, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self._wait_for_requests = None # asyncio.Future()
-        self.sensors = [] # Called by `.handle(…)`.
+        x = sensors
+        self.sensors = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
+        x = listeners
+        self.listeners = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
         self.cell_shape = ()
         self.part_size = 0
         self.cell_size = 0
@@ -101,12 +110,13 @@ class Handler:
         Recommendation: leave space for about 3 name parts, meaning, `name_size = part_size*3`. Also leave some space in `padding`, in case some transforms want to leave their mark such as the source IP."""
         _shape_ok(cell_shape, part_size)
         if self.cell_shape == cell_shape and self.part_size == part_size:
-            return
+            return self
         self.discard()
         self.cell_shape = cell_shape
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
+        return self
     def data(self, name=None, data=None, error=None):
         """
         `sn.data(name, data, error=None)`
@@ -240,7 +250,7 @@ class Handler:
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
         assert max_simultaneous_steps is None or isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         # Collect sensor data.
-        for s in self.sensors: s(self)
+        if self.sensors is not None: for s in self.sensors: s(self)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback
@@ -302,6 +312,7 @@ class Handler:
         self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
+        if self.listeners is not None: for l in self.listeners: l(data, data_error)
         return data, query, data_error, query_error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
         """
@@ -441,6 +452,18 @@ class Namer:
         self.cell_size = sum(cell_shape)
         self.last_cells, self.last_name = None, None
         return self.name_parts
+
+
+
+class Unnamer:
+    """TODO:"""
+    pass # TODO: …What do we implement here, exactly? How to make it act like a callable(data, data_error) pattern-matching dictionary?
+# TODO: Have a mechanism for pattern-matching a name and retrieving the sent data. (After all, this is how things like rewards or CLIP-embeddings goals would be communicated, without restricting to a particular goal-space nor duplication.) (Also, good for debugging/'spying'.)
+#   (Handle funcs in names via `nan`s in numeric patterns. Results are sorted by name lexicographically, preferably.)
+#   TODO: Have an iterable class `Unnamer` that 'contains' all name→func pairs; possibly based on `dict`.
+#     TODO: Calls to `Unnamer` instances with values & errors should pattern-match (in a single NumPy op) and call all relevant funcs, returning a string-in-name → func-result dist.
+# TODO: Ensure 100% test-coverage again, and retest.
+# TODO: Bump the minor version.
 
 
 
