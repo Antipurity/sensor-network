@@ -20,9 +20,11 @@ It's so not-complicated that classical RL techniques (learn the real dists, and 
 - `floyd`, where we take a minibatch and do all distance-predictions and find shortest paths there? Only hurts.
   - Removing the i==j diagonal from pairwise prediction matrices ([as implemented here](https://discuss.pytorch.org/t/keep-off-diagonal-elements-only-from-square-matrix/54379)) for efficiency. Decreases performance.
 
-- Distance levels, where each next dist-level filters its prediction-targets to make them lower than prev dist-level? Slows down dist-learning too much.
+- Distance levels, where each next dist-level filters its prediction-targets to make them lower than prev dist-level? They slow down dist-learning too much.
 
 - Action-independent distance? No, easy cheating by considering several actions at unroll-time is at least twice as fast.
+
+(…Also, the inverse-RL equivalent with goal-conditioning is easy, because we don't need to learn the value function, only find a goal for which the trajectory always decreases its distance-to-goal appropriately.)
 """
 
 
@@ -447,9 +449,6 @@ finish()
 
 
 
-# TODO: …Make a `model/` file with code for a skip-connection RNN with gradient teleportation…
-#   (For the grad-tp, need 2 methods: one which assumes that all inputs (past-RNN-state, computed first) come-before, and returns the first arg (future-RNN-state) as-is but with gradient directly linked to inputs; and the other, which knows the timestamps of inputs and accumulates gradients and everything.)
-#   (And need to ensure that we reset individual values when they get too high (getting reset-timestamps associated with every single RNN-state, inconveniently); and not grad-teleport if reset-timestamps don't match.)
 
 # TODO: From the Python `sensornet`, remove that per-cell-reward nonsense. (Too prescriptive. Gradient descent should be able to trivially learn to sum up per-cell predictions if needed. Per-cell goal-conditioning can still be implemented without learning that through reward, if we can receive those goals properly.)
 # TODO: While we're at it, make the user-facing error sane, adding/subtracting 1 ourselves (we won't *die* from that overhead).
@@ -498,8 +497,3 @@ finish()
 
 # TODO: …If each step's RNN state is the exact sum of all previous RNN states (a neural network outputs how much to adjust that by), then if we sample 2 faraway steps *with no regard for what comes between*, then can't we just teleport gradient from the future into the past to perform correct gradient descent? …What the fuck. Too easy; this can't be true…?
 #   (Skip connections in RNNs are good, possibly LSTM-quality: https://cs224d.stanford.edu/reports/mmongia.pdf — the best paper on this, though the quality of this 'paper' is bad.)
-
-# TODO: The simplest 'sparsity' ensurance (to make different tasks not interfere, thus enabling lifelong learning) *could* be the top-k nonlinearity: a layer that either zeroes-out non-top-k (by .abs()) activations, or zeroes out their gradient. (Out-of-distribution data is likely to have a different top-k pattern, after all.)
-#   Prior art is sparse. Activation-sparsity at least does decrease the chances of collision (Fig3 Left): https://arxiv.org/abs/1903.11257
-#     Top-k but with a separate per-task context (which is cheating): https://arxiv.org/pdf/2201.00042.pdf
-#       …If it's "similar enough", then can't we just *wait* and see a paper that describes this technique come out, assuming that the technique is good?

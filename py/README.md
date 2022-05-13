@@ -18,9 +18,9 @@ Here, in `py`, we test candidates:
 
 - `test_joint_embedding.py`: …why is it still here? Was testing a hypothesis in a limited way. Not useful.
 
-- `test_board_revisit.py`: really, really tried to not have to learn `(source, destination) → dist` quadratically-many distances. Ended up learning locally-isometric maps (embed `source` and `destination`, and make the L2 distance as required), and combining solved subtasks wherever going through a midpoint is faster.
+- `test_board_revisit.py`: really, really tried to not have to learn `(source, destination) → dist` quadratically-many distances. Ended up learning locally-[isometric](https://en.wikipedia.org/wiki/Isomap)[ maps](https://en.wikipedia.org/wiki/Johnson%E2%80%93Lindenstrauss_lemma) (embed `source` and `destination`, and make the L2 distance as required), and using faraway timestamp-aware sampling, and combining solved subtasks wherever going through a midpoint is faster.
 
-- `test_continuous_control.py`: after much testing, basic well-known RL techniques have proved their superiority to tricks, or at least that these environments are too trivial.
+- `test_continuous_control.py`: after much testing, basic well-known RL techniques have proved their superiority, or at least that these environments are too trivial. Neural-pathfinding is still better than single-number rewards, though: a [zero-shot human-](https://github.com/openai/CLIP)[enabled interface](https://cliport.github.io/), richer data due to goal relabeling, much easier inverse-'RL', and [actual RL is a special case anyway.](https://arxiv.org/abs/1912.02875)
 
 - …
 
