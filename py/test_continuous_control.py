@@ -450,7 +450,6 @@ finish()
 
 
 
-# TODO: From the Python `sensornet`, remove that per-cell-reward nonsense. (Too prescriptive. Gradient descent should be able to trivially learn to sum up per-cell predictions if needed. Per-cell goal-conditioning can still be implemented without learning that through reward, if we can receive those goals properly.)
 # TODO: While we're at it, make the user-facing error sane, adding/subtracting 1 ourselves (we won't *die* from that overhead).
 # TODO: Have a mechanism for pattern-matching a name and retrieving the sent data. (After all, this is how things like rewards or CLIP-embeddings goals would be communicated, without restricting to a particular goal-space nor duplication.) (Also, good for debugging/'spying'.)
 #   (Handle funcs in names via `nan`s in numeric patterns. Results are sorted by name lexicographically, preferably.)

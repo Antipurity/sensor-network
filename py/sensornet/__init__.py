@@ -107,9 +107,9 @@ class Handler:
         self.part_size = part_size
         self.cell_size = sum(cell_shape)
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
-    def data(self, name=None, data=None, error=None, reward=0.):
+    def data(self, name=None, data=None, error=None):
         """
-        `sn.data(name, data, error=None, reward=0.)`
+        `sn.data(name, data, error=None)`
 
         Sends named data to the handler. Receives nothing; see `.query`.
 
@@ -121,7 +121,6 @@ class Handler:
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
         - `data`: a NumPy array of numbers, preferably -1…1.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`. Preferably -1…1.
-        - `reward = 0.`: rates prior performance of these cells with -1…1, for reinforcement learning. In a handler, extract with `data[:, 0]`. Pass in `None` to not overwrite the first number.
         """
         if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
         elif isinstance(name, str): name = Namer(name)
@@ -140,26 +139,25 @@ class Handler:
                 if len(error.shape) != 1: error = error.flatten()
                 error = name.name(error, error.shape[0], self.cell_shape, self.part_size, -1.)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
-        if reward is not None: data[:, 0] = reward
         self._data.append(data)
         self._data_error.append(error)
         if self._wait_for_requests is not None:
             self._wait_for_requests.set_result(None)
             self._wait_for_requests = None
-    def query(self, name=None, query=None, error=None, reward=0., callback=None):
+    def query(self, name=None, query=None, error=None, callback=None):
         """
         ```python
-        await sn.query(name, query: int|tuple, *, reward=0.)
-        sn.query(name, query: int|tuple, *, reward=0., callback = lambda feedback, sn: ...)
+        await sn.query(name, query: int|tuple)
+        sn.query(name, query: int|tuple, *, callback = lambda feedback, sn: ...)
         ```
 
         From the handler, asks for a NumPy array, or `None` (usually on transmission errors).
 
         Args:
+        - `name`: see `.data`.
         - `query`: the shape of the feedback that you want to receive.
         - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
-        - `name`, `reward`: see `.data`.
         """
         if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
         elif isinstance(name, str): name = Namer(name)
@@ -188,7 +186,6 @@ class Handler:
             query = name.name(None, length, self.cell_shape, self.part_size, None)
         assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
         assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
-        if reward is not None: query[:, 0] = reward
         self._query.append(query)
         self._query_error.append(error)
         cells = query.shape[0]
@@ -209,16 +206,16 @@ class Handler:
         """
         self.data(None, data, data_error, None)
         return self.query(None, query, query_error, None, callback)
-    async def get(self, name, query, error=None, reward=0.):
+    async def get(self, name, query, error=None):
         """
-        `await sn.get(name, query, *, reward=0.)`
+        `await sn.get(name, query)`
 
         Gets feedback, guaranteed.
 
         Never returns `None`, instead re-querying until a numeric result is available.
         """
         while True:
-            fb = await self.query(name, query, error, reward)
+            fb = await self.query(name, query, error)
             if fb is not None: return fb
     def handle(self, prev_feedback=None, max_simultaneous_steps=16):
         """
@@ -237,7 +234,6 @@ class Handler:
         - `query`: same, but sized `M×name_size` (only the name).
         - `data_error`, `query_error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data) - 1`.
             - A usage example: `if data_error is not None: data = numpy.clip(data + (data_error+1) * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
-        - (To extract rewards: `data[:, 0]` and/or `query[:, 0]`.)
         """
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.ensure_future(prev_feedback)
