@@ -454,6 +454,22 @@ finish()
 # TODO: …Move these comments to `test.py`, probably.
 
 # TODO: …What exactly do we implement, then? Do we not need any new `model/` files, and should just transfer cont-control lessons to `test.py`?
+#   …Do we really still want to do the RNN-of-Transformer architecture…
+#     TODO: …Maybe we should use fast weight programmers instead?
+#       Maybe even a [self-referential weight matrix](https://arxiv.org/pdf/2202.05780.pdf)? TODO: Yes. A `model/` file.
+#         (This self-attention-like layer would store its initial & current matrices, and allow explicitly changing them. Initial-matrix requires grad.)
+#         (To not access layers one-by-one to do replays: need a ctx-manager that resets current-weights to initial, and on exit, restores them.)
+#         (Updates are additive, so replays can skip huge timespans: faraway-sample and sort-by-timestamp and update in sequence.)
+#         TODO: …What would happen if we updated the 'initial' matrix toward the final matrix (a bit like Reptile)?… …How is the initial matrix constructed anyway? Isn't *this* the most important part?
+#           …Can we do a 'slow reset', where the 'initial' matrix is a slowly-updated 'final' matrix — without any hard-resetting (which the original paper has shown to work poorly) nor NN-based gating?… …But what is gradient descent conducted on? Why do we have 2 sources of updates now (SGD and polyak-avg)? …Should we reverse the updating-direction: current matrix is slowly updated toward the initial matrix (which is itself the best-adapting matrix, possibly with that polyak-avg too)? …Could work.
+#           TODO: …Even if intermediate matrices managed to predict intermediate steps, do we have any guarantee that when the initial is replaced with the final, that predictions would still improve? Don't we need to arrange training to encourage that explicitly?
+#         …Is it even possible to train this through a replay buffer?… We have no weights except for the initial ones, after all… Are we supposed to train this by inputting the same matrix during training, and unrolling for dozens of steps?… But how would this learn any long-horizon dependencies…
+#           …If we had a history→w0 NN, then we could train *that*, right?… But would that be helpful… I guess it could first learn to ignore history then use correlations?…
+#   …Do we really still want to do RNN+synthgrad… Why not, say, [Reptile](https://openai.com/blog/reptile/)?
+#     TODO: How would Reptile for RNNs be formulated? Can we really perform single-step updates from the replay buffer, or do we need a few consecutive steps? …It does train on single steps, but its adaptation isn't an application of an RNN, it's the training of that RNN for a few steps…
+#       Can/should Reptile be combined with BPTT? (A meta-ML task is 'given a few training examples, predict the correct output'; BPTT provides those few training examples as history.)
+# TODO: …Will we still want to have separate embedders for data & queries, or not? …Why *not* have them, thin if needed?
+#   TODO: What NNs do we want, exactly?
 
 # TODO: Assume a full env with bidirectional obs/act communication with our agent (any possible universe can be described as one-step updates): `env(prev,act)→(next,obs)`, where `prev` and `next`s are hidden `state`s.
 #   And we have goal(state)→dst for what `act`s want. (After all, all trajectories end up *somewhere*, so might as well label and learn destinations explicitly.) (This description is complete, and with precise-enough goals, no further intervention on trajectories is needed, so we can just find the shortest path.)
@@ -466,9 +482,10 @@ finish()
 #         - `env(src, act) → history`, to round out the RNN.
 #         - (`dst`s of `src`s should be provided when storing samples in the replay buffer. Probably zero-out and/or defer the storage if not available immediately.)
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
-#     - Learning to predict consequences-of-`next_obs` while extracting mutual info (directly, the result of `update`): `history = sg update.copy(history, obs)`.
+#     - Learning to predict consequences-of-`next_obs` while extracting mutual info (directly, the result of `update`): `history = sg update.copy(history, obs)`, possibly for `next_history` and `next_obs`.
 #       - (Not predicting `obs` directly because its non-determinism leads to smearing.) (No need for another NN for `history`, because the prior `env` call could take care of obs-independent time-keeping.)
 #       - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too egregiously.)
+#     - *Maybe*, backward-prediction too, so that single-step updates can still sense the past despite gradient-descent being unconnected: the autoencoder `reverse_update(obscure(history), obs) = sg history`, possibly reversing `prev_act` and `prev_obs` too.
 #     - Min-dist actions:
 #       - …The standard methods have proven superior: dist-prediction along real trajectories, [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), possibly DDPG, and a discrete search among actions at unroll-time. And synthetic-gradient for simple learning-through-time.
 #         - Learn not dist mean/median but its min, likely via quantile regression (tilted L1 loss). (Use distributional RL to mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.) (Downside: learning the 1/1000th median is 1000 times slower. Which we'll need, in episodic envs with lots of uselessly-big sampled dists.)

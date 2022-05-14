@@ -7,6 +7,8 @@ Testing how far we can push "compression = exploration": compression reduces red
 
 Let's not mistake ambition for wisdom. So if we want to proceed, we'd better make sure that we have an idea of what we're doing. Let's try the Feynman technique: creation by teaching, useful because in good teaching, concepts must be as simple as possible.
 
+# TODO: Re-read. Figure out what went wrong, if anything.
+
 # Unsupervised RL: state is the goal
 
 In Reinforcement Learning without reinforcement, all we have is an environment that gives observations to our agent and receives actions.
@@ -75,15 +77,6 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 # TODO: Abandon all hatred. Spread love. No ill-considered approaches like before. Only the well-founded URL. Inspect and support its every step on the way.
 """
 
-# TODO: Our loss appears to be trash, at least in the online setting.
-#   TODO: So, create an on-disk dataset of no-loss experiences, then try training on it.
-#   TODO: First train sg-on-right, then let it run.
-#   TODO: Then train sg-on-left, then let it run; if our loss doesn't collapse actions when trained properly, this should explore more than the random policy.
-#   (Don't know why our loss would just collapse action diversity.)
-#   TODO: We clearly didn't learn the lessons about exploration that needed to be learned, so go off to non-`sn` environments again.
-#     ...What env, exactly? Should we make our metaphor of learning a map from anywhere to anywhere very explicit, by having an env of an 8x8 board (positions being 1-hot-encoded) and 1 agent that can go to any of the 4 neighboring cells (x+-1, y+-1), computed in-batch on GPU, and do like 256 iterations per gradient update, possibly even with a random policy with teacher forcing? (Then, as tests-of-working, could fix a cell and pick initial states/goals randomly and visualize the distribution (at least cross-correlation, and/or mean & stddev) (we'd have to implement similarity-matching-of-embeddings-by-2D ourselves though) (a uniform distribution means OK, though we don't actually ensure output-uniformity-wrt-input in any way, so it would be a surprise), and fixing a cell and varying goals and seeing where we end up (a uniform distribution means OK, else either targets are uneven with respect to our sampling (then, may need to train another net from cell to a distribution of goals that reach it), or we're incompetent at reaching goals), and a matrix of how often one cell goes to another, and of avg-path-length; and only learning plans by forcing goals to be target-cells and the RNN to only output the action, and gradually introducing more self-sufficiency while ensuring that it still works, and only learning eventual-goals of a fixed policy. ...This is way richer than minienv, and actually contains steps that we can actually deploy techniques on to get past.)
-#     (...You know, URL was because we wanted to turn one-goal-chasing into exponentially-many-goals-chasing. And, learning from single data points at a time kinda suffers from the same problem. Is there some way to, I dunno, turn several data points into fewer at runtime such that all loss is still ok; or replace datapoints with their clustered features...?... Aren't these just compression though?)
-
 
 
 import asyncio
@@ -93,18 +86,20 @@ import torch.nn as nn
 
 import sensornet as sn
 import minienv
-from model.rnn import RNN
-from model.loss import CrossCorrelationLoss
+from model.rnn import RNN # TODO: …Do we even want *this*? Aren't we kinda tired of BPTT? (And even if we aren't, isn't this trivial to implement?)
+from model.loss import CrossCorrelationLoss # TODO: No; don't do this.
 from model.log import log, clear
 
 
 
-cell_shape, part_size = (8, 24, 64), 8
-sn.shape(cell_shape, part_size)
-state_sz, goal_sz = 96, 96
+cell_shape = (8,8,8,8, 64)
+sn.shape(*cell_shape)
+
+state_sz, goal_sz = 256, 256
 max_state_cells = 256
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
+#   TODO: Should at least make `minienv` work not globally but in a class.
 
 
 
@@ -112,7 +107,7 @@ class SkipConnection(nn.Module):
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
     def forward(self, x):
         y = self.fn(x)
-        return y + x if x.shape == y.shape else y
+        return y + x if x.shape == y.shape else y # TODO: Why not slicing if too-big?
 class SelfAttention(nn.Module):
     def __init__(self, *args, **kwargs): super().__init__();  self.fn = nn.MultiheadAttention(*args, **kwargs)
     def forward(self, x):
@@ -120,6 +115,7 @@ class SelfAttention(nn.Module):
         y, _ = self.fn(x, x, x, need_weights=False)
         return torch.squeeze(y, -2)
 def f(in_sz = state_sz, out_sz = state_sz): # A per-cell transform.
+    # TODO: …Why not a one-liner?
     return SkipConnection(
         nn.LayerNorm(in_sz),
         nn.ReLU(),
@@ -137,7 +133,7 @@ def norm(x, axis=None, eps=1e-5):
         return (x - x.mean(axis, True)) / (x.std(axis, keepdim=True) + eps)
     else:
         return (x - x.mean()) / (x.std() + eps)
-class Next(nn.Module):
+class Next(nn.Module): # TODO: …If we don't use `RNN`, then we don't need `Next` either…
     """Incorporate observations & queries, and transition the state. Take feedback directly from the resulting state.
 
     (For stability, would be a good idea to split `data` & `query` if their concatenation is too long and transition for each chunk, to not forget too much of our internal state: let the RNN learn time-dynamics, Transformer is just a reach-extension mechanism for better optimization. Currently not implemented.)"""
@@ -156,17 +152,6 @@ class Next(nn.Module):
         state = self.condition_state_on_goal(torch.cat((state, self.goal(state)), 1))
         state = self.transition(state)
         return state
-class NormalSamples(nn.Module):
-    """The [reparameterization trick](https://arxiv.org/abs/1312.6114v10) for sampling values from Gaussian distributions with learned mean & stddev.
-
-    The input vector must be twice as big as the output. And, normalize it, since we don't impose a loss-based regularization on mean & stddev here like VAEs do."""
-    def __init__(self): super().__init__()
-    def forward(self, mean_std):
-        mean, std = mean_std.split(int(mean_std.shape[-1]) // 2, -1)
-        mean, std = norm(mean), norm(std) + 1 # TODO: Does this help anything? ...Maybe? Can't tell...
-        #   TODO: ...Can we apply actual regularization, not just normalization?
-        noise = torch.randn_like(mean)
-        return mean + noise # TODO: *std
 
 
 
@@ -179,10 +164,9 @@ embed_query = nn.Sequential( # query → state (to concat at the end)
     nn.Linear(sum(cell_shape) - cell_shape[-1], state_sz),
     f(state_sz),
 ).to(device)
-condition_state_on_goal = h(state_sz + goal_sz, state_sz).to(device)
+condition_state_on_goal = h(state_sz + goal_sz, state_sz).to(device) # TODO: Why does this exist?
 transition = nn.Sequential( # state → state; the differentiable part of the RNN transition.
-    h(state_sz, 2*state_sz),
-    NormalSamples(),
+    h(state_sz, state_sz),
     h(state_sz, state_sz),
 ).to(device)
 ev = nn.Sequential( # state → goal.
@@ -190,19 +174,19 @@ ev = nn.Sequential( # state → goal.
     h(goal_sz, goal_sz),
 ).to(device)
 next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
-number_loss = CrossCorrelationLoss(
+number_loss = CrossCorrelationLoss( # TODO: No.
     axis=-2,
     decorrelation_strength=.00,
     shuffle_invariant=False, # TODO: ...Wait, why is shuffle-invariance like the magic sauce? ...Is it because it makes optimization impossible... Yep. All our results were complete bullshit.
     also_return_l2=True,
 )
-cell_loss = CrossCorrelationLoss(
+cell_loss = CrossCorrelationLoss( # TODO: No.
     axis=-1,
     decorrelation_strength=1,
     also_return_l2=True,
 )
 CCL_was, L2_was = 0., 0.
-def loss_func(prev_state, next_state, *_):
+def loss_func(prev_state, next_state, *_): # TODO: No.
     global CCL_was, L2_was
     A, B = norm(ev(prev_state)), norm(ev(next_state))
     A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
@@ -223,6 +207,7 @@ state = torch.randn(max_state_cells, state_sz, device=device)
 feedback = None
 exploration_peaks = [0.]
 async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
+    # TODO: …We should make `log` be able to use this `sn.torch` directly, so that we avoid the awkwardness of having to manually await each item…
     CCL, L2 = sn.torch(torch, CCL, True), sn.torch(torch, L2, True)
     CCL, L2 = await CCL, await L2
     explored = round(explored*100, 2)
