@@ -82,7 +82,7 @@ class Handler:
     - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
     - `backend`: TODO:
 
-    If needed, read `.cell_shape` or `.cell_size`, or read/write `.sensors` or `.listeners`, wherever the object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/write `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
     def __init__(self, *cell_shape, sensors=None, listeners=None, backend=np):
         self._query_cell = 0
@@ -129,8 +129,8 @@ class Handler:
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
         """
         np = self.backend
-        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
-        elif isinstance(name, str): name = Namer(name)
+        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name, backend=np)
+        elif isinstance(name, str): name = Namer(name, backend=np)
         if isinstance(error, float): error = np.full_like(data, error)
 
         assert name is None or isinstance(name, Namer)
@@ -167,8 +167,8 @@ class Handler:
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         """
         np = self.backend
-        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name)
-        elif isinstance(name, str): name = Namer(name)
+        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name, backend=np)
+        elif isinstance(name, str): name = Namer(name, backend=np)
         if callback is None: callback = asyncio.Future()
 
         assert name is None or isinstance(name, Namer)
@@ -392,18 +392,20 @@ class Namer:
         cells = -(-length // data_size)
         total = cells * data_size
         if data is not None:
-            data = _pad(data, total, 0, np=np)
+            data = _pad(data, total, np=np)
             data = np.reshape(data, (cells, data_size))
         # Finalize the name, then concat it before `data`.
         if fill is not None:
             name = np.full((cells, name_size), fill)
             return np.concatenate((name, data), 1)
-        start = np.expand_dims(np.arange(0, total, data_size), -1)
-        end = np.minimum(start + data_size, length)
-        if self.last_cells != cells:
+        if self.last_cells != cells: # Cache.
             # Do what `_name_template` implies: use template, fill func-indices, and `_fill` parts.
             template, func_indices, part_sizes = self.templ
-            name = np.expand_dims(template, 0).repeat(cells, 0)
+            name = np.repeat(np.expand_dims(template, 0), cells, 0)
+            #   (Not using NumPy's x.repeat(…) is a mild slowdown, but we care about compatibility with PyTorch more.)
+            start = np.expand_dims(np.arange(0, total, data_size, dtype=np.float32), -1)
+            end = np.minimum(start + data_size, length)
+            #   (`np.clip(↑, length, None)` is much slower.)
             if len(func_indices):
                 for at, fn in func_indices:
                     name[:, at:at+1] = fn(start, end, total)
@@ -411,12 +413,12 @@ class Namer:
                 for i, part in enumerate(part_sizes):
                     sz = cell_shape[i]
                     if part != sz:
-                        name[:, at : at+sz] = _fill(name[:, at : at+part], sz, -1, np=np)
+                        name[:, at : at+sz] = _fill(name[:, at : at+part], sz, np=np)
                     at += sz
             self.last_name, self.last_cells = name, cells
         else:
             name = self.last_name
-        name = _fill(name, name_size, 1, np=np)
+        name = _fill(name, name_size, np=np)
         return np.concatenate((name, data), 1) if data is not None else name
     def unname(self, feedback, length, cell_shape):
         """
@@ -426,7 +428,7 @@ class Namer:
         np = self.backend
         assert len(feedback.shape) == 2 and feedback.shape[-1] == sum(cell_shape)
         feedback = feedback[:, -cell_shape[-1]:]
-        return _pad(feedback.flatten(), length, 0, np=np)
+        return _pad(feedback.flatten(), length, np=np)
 
 
 
@@ -464,7 +466,43 @@ class Filter:
         if data.size > 0:
             return self.func(data, error, cell_shape)
 
+
+
 # TODO: Implement a PyTorch backend, just for making those benchmark numbers go up due to its multi-threaded-ness (hopefully).
+class Torch:
+    """TODO:"""
+    __slots__ = ('torch', 'nan', 'ndarray')
+    def __init__(self):
+        import torch
+        self.torch = torch
+        self.nan = float('nan')
+        self.ndarray = torch.Tensor
+    def __getattr__(self, name):
+        return object.__getattribute__(self.torch, name)
+    def repeat(self, x, repeats, axis):
+        # Even though `torch.repeat_interleave`'s interface exactly matches, this is more efficient.
+        assert axis == 0
+        return x.expand(repeats, *x.shape[1:])
+    def array(self, x, dtype):
+        return self.torch.tensor(x, dtype=dtype) if not isinstance(x, self.torch.Tensor) else x.to(dtype)
+    def expand_dims(self, x, axis):
+        return self.torch.unsqueeze(x, axis)
+    def concatenate(self, tensors, axis):
+        return self.torch.cat(tensors, axis)
+    def frombuffer(self, x, dtype):
+        if hasattr(self.torch, 'frombuffer'): return self.torch.frombuffer(x, dtype)
+        assert dtype is self.torch.uint8
+        return self.torch.tensor(np.frombuffer(x, np.uint8), dtype=dtype)
+    def lexsort(self, x):
+        # https://discuss.pytorch.org/t/numpy-lexsort-equivalent-in-pytorch/47850/3
+        assert len(x.shape) == 2
+        inv = self.torch.unique(x.flip(0), dim=-1, sorted=True, return_inverse=True)[1]
+        return self.torch.argsort(inv)
+    def minimum(self, x1, x2):
+        # `x2` is always a number here, and `torch.minimum` doesn't support that.
+        return self.torch.clamp(x1, x2)
+    # TODO: Use this backend in the benchmark.
+    #   TODO: …Why so slow? Is it because of computed attribute accesses?
 
 
 
@@ -474,33 +512,32 @@ def _shape_ok(cell_shape: tuple):
     assert cell_shape[-1] > 0
 def _str_to_floats(string: str, np):
     hash = hashlib.md5(string.encode('utf-8')).digest()
-    return np.frombuffer(hash, dtype=np.uint8).astype(np.float32)/255.*2. - 1.
-def _pad(x, size, axis=0, np=...): # → y
-    """Ensures that an `axis` of a NumPy array `x` has the appropriate `size` by slicing or zero-padding, returning `y`. Can undo itself."""
-    if x.shape[axis] == size: return x
-    if x.shape[axis] > size: return np.take(x, range(0,size), axis)
-    shape = list(x.shape)
-    shape[axis] = size - x.shape[axis]
-    z = np.zeros(shape, dtype=np.float32)
-    return np.concatenate((x, z), axis)
-def _fill(x, size, axis=0, np=...): # → y
+    return np.array(np.frombuffer(hash, dtype=np.uint8), np.float32)/255.*2. - 1.
+def _pad(x, size, np=...): # → y
+    """Ensures that the 1D NumPy array `x` has the appropriate `size` by slicing or zero-padding, returning `y`. Can undo itself."""
+    assert len(x.shape) == 1
+    if x.shape[0] == size: return x
+    if x.shape[0] > size: return x[:size]
+    z = np.zeros((size - x.shape[0],), dtype=np.float32)
+    return np.concatenate((x, z), 0)
+def _fill(x, size, np=...): # → y
     """
-    Ensures that an `axis` of a NumPy array `x` has the appropriate `size`, returning `y`.
+    Ensures that the last axis of a NumPy array `x` has the appropriate `size`, returning `y`.
 
     If it's too small, fractally folds `x` via repeated `x → 1 - 2*abs(x)` to increase AI-model sensitivity where we can.
 
     >>> _fill(np.zeros((2,), dtype=np.float32), 6)
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
-    if x.shape[axis] == size: return x
-    if x.shape[axis] > size:
-        return np.take(x, range(0,size), axis)
+    sz = x.shape[-1]
+    if sz == size: return x
+    if sz > size: return x[..., :size]
     folds = [x]
-    for _ in range(1, -(-size // x.shape[axis])):
+    for _ in range(1, -(-size // sz)):
         folds.append(1 - 2 * np.abs(folds[-1]))
-    x = np.concatenate(folds, axis)
-    if x.shape[axis] == size: return x
-    return np.take(x, range(0,size), axis)
+    x = np.concatenate(folds, -1)
+    if sz == size: return x
+    return x[..., :size]
 def _feedback(callbacks, feedback, cell_shape):
     fb = None
     got_err = None

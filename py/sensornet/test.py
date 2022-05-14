@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 323904000.0 bytes/sec (308.9 MiB/s) (16870.0 it/s)
-With 9600 values, throughput: 605706240.0 bytes/sec (577.65 MiB/s) (15773.6 it/s)
-With 14400 values, throughput: 845412480.0 bytes/sec (806.25 MiB/s) (14677.3 it/s)
-With 19200 values, throughput: 1052090880.0 bytes/sec (1003.35 MiB/s) (13699.1 it/s)
-With 24000 values, throughput: 1267296000.0 bytes/sec (1208.59 MiB/s) (13201.0 it/s)
-With 28800 values, throughput: 1451289600.0 bytes/sec (1384.06 MiB/s) (12598.0 it/s)
-With 33600 values, throughput: 1619708160.0 bytes/sec (1544.67 MiB/s) (12051.4 it/s)
-With 38400 values, throughput: 1780807680.0 bytes/sec (1698.31 MiB/s) (11593.8 it/s)
-With 43200 values, throughput: 1916300160.0 bytes/sec (1827.53 MiB/s) (11089.7 it/s)
-With 48000 values, throughput: 2071622400.0 bytes/sec (1975.65 MiB/s) (10789.7 it/s)
+With 4800 values, throughput: 293637120.0 bytes/sec (280.03 MiB/s) (15293.6 it/s)
+With 9600 values, throughput: 555648000.0 bytes/sec (529.91 MiB/s) (14470.0 it/s)
+With 14400 values, throughput: 779875200.0 bytes/sec (743.75 MiB/s) (13539.5 it/s)
+With 19200 values, throughput: 1009182720.0 bytes/sec (962.43 MiB/s) (13140.4 it/s)
+With 24000 values, throughput: 1214438400.0 bytes/sec (1158.18 MiB/s) (12650.4 it/s)
+With 28800 values, throughput: 1376202240.0 bytes/sec (1312.45 MiB/s) (11946.2 it/s)
+With 33600 values, throughput: 1541366400.0 bytes/sec (1469.96 MiB/s) (11468.5 it/s)
+With 38400 values, throughput: 1674055680.0 bytes/sec (1596.5 MiB/s) (10898.8 it/s)
+With 43200 values, throughput: 1824076800.0 bytes/sec (1739.58 MiB/s) (10556.0 it/s)
+With 48000 values, throughput: 1990272000.0 bytes/sec (1898.07 MiB/s) (10366.0 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
@@ -250,21 +250,23 @@ print('Tests OK')
 
 async def benchmark(N=64*10):
     """Raw number-shuffling performance."""
-    h = sn.Handler(8,8,8,8, 64)
+    h = sn.Handler(8,8,8,8, 64, backend=sn.Torch()) # TODO:
+    # h = sn.Handler(8,8,8,8, 64) # TODO:
     iterations, feedback = 0, None
     def check_feedback(fb, *_):
         assert fb is not None and fb.shape == (64,) and fb[0] == .2
     async def await_feedback(fut): # pragma: no cover
         check_feedback(await fut)
-    send_data = np.random.randn(N)
+    randn_src = h.backend.random if not hasattr(h.backend, 'randn') else h.backend
+    send_data = randn_src.randn(N)
     start, duration = time.monotonic(), 10.
-    name = sn.Namer('benchmark')
+    name = sn.Namer('benchmark', backend=h.backend)
     while time.monotonic() - start < duration:
         h.data(name, data=send_data)
         # asyncio.ensure_future(await_feedback(h.query(name, 64))) # 15% slowdown.
         h.query(name, 64, callback=check_feedback)
         data, query, data_error, query_error = await h.handle(feedback)
-        feedback = np.full((query.shape[0], data.shape[1]), .2) if data is not None else None
+        feedback = h.backend.full((query.shape[0], data.shape[1]), .2) if data is not None else None
         iterations += 1
     h.discard()
     thr = N*4 * (96/64) * iterations / duration
