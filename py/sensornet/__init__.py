@@ -80,7 +80,7 @@ class Handler:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
     - `sensors`: function/s that take this handler, to prepare data to handle.
     - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
-    - `backend`: TODO:
+    - `backend`: the NumPy object.
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/write `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
@@ -468,17 +468,19 @@ class Filter:
 
 
 
-# TODO: Implement a PyTorch backend, just for making those benchmark numbers go up due to its multi-threaded-ness (hopefully).
-class Torch:
-    """TODO:"""
-    __slots__ = ('torch', 'nan', 'ndarray')
-    def __init__(self):
+class Torch: # pragma: no cover
+    """A [PyTorch](https://pytorch.org/) backend. Often [slower](https://github.com/pytorch/pytorch/issues/9873) than NumPy, even on GPU, so, not recommended."""
+    __slots__ = ('torch', 'nan', 'uint8', 'ndarray', 'float32')
+    def __init__(self, autogpu=False):
         import torch
+        if autogpu and torch.cuda.is_available():
+            # (This is much easier than specifying `device=…`-but-only-if-not-NumPy.)
+            torch.set_default_tensor_type('torch.cuda.FloatTensor')
         self.torch = torch
         self.nan = float('nan')
+        self.uint8 = torch.uint8
         self.ndarray = torch.Tensor
-    def __getattr__(self, name):
-        return object.__getattribute__(self.torch, name)
+        self.float32 = torch.float32
     def repeat(self, x, repeats, axis):
         # Even though `torch.repeat_interleave`'s interface exactly matches, this is more efficient.
         assert axis == 0
@@ -501,8 +503,10 @@ class Torch:
     def minimum(self, x1, x2):
         # `x2` is always a number here, and `torch.minimum` doesn't support that.
         return self.torch.clamp(x1, x2)
-    # TODO: Use this backend in the benchmark.
-    #   TODO: …Why so slow? Is it because of computed attribute accesses?
+    def nan_to_num(self, x):
+        return self.torch.where(self.torch.isnan(x), self.torch.zeros_like(x), x)
+    def __getattr__(self, name):
+        return object.__getattribute__(self.torch, name)
 
 
 
@@ -536,7 +540,7 @@ def _fill(x, size, np=...): # → y
     for _ in range(1, -(-size // sz)):
         folds.append(1 - 2 * np.abs(folds[-1]))
     x = np.concatenate(folds, -1)
-    if sz == size: return x
+    if x.shape[-1] == size: return x
     return x[..., :size]
 def _feedback(callbacks, feedback, cell_shape):
     fb = None

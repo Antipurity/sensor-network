@@ -1,7 +1,7 @@
 """
 Tests and benchmarks for this Python implementation of a sensor network.
 
-Not counting other bottlenecks, expect less than around 10000 steps per second, which should be enough for most AI models.
+Not counting other bottlenecks, expect around 10000 steps/second or less, which should be enough for most AI models.
 
 ```bash
 python3 sensor-network/py/sensornet/test.py
@@ -250,8 +250,7 @@ print('Tests OK')
 
 async def benchmark(N=64*10):
     """Raw number-shuffling performance."""
-    h = sn.Handler(8,8,8,8, 64, backend=sn.Torch()) # TODO:
-    # h = sn.Handler(8,8,8,8, 64) # TODO:
+    h = sn.Handler(8,8,8,8, 64) # `backend=sn.Torch()` seems slower.
     iterations, feedback = 0, None
     def check_feedback(fb, *_):
         assert fb is not None and fb.shape == (64,) and fb[0] == .2
