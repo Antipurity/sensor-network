@@ -17,9 +17,9 @@ First, initialize the handler:
 import sensornet as sn
 import numpy as np
 
-h = sn.Handler(8,8,8, 64) # See `sn.Namer` for discussion of cell shapes.
+h = sn.Handler(8,8,8,8, 64) # First name-parts, then data, in a cell.
 # OR, simply use the global `sn` as if it's a handler:
-sn.shape(8,8,8, 64)
+sn.shape(8,8,8,8, 64)
 h = sn
 ```
 
@@ -45,7 +45,7 @@ async def main():
         fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
-This module implements this basic protocol, and does not include anything else by default, such as string/image handling or file storage or Internet communication.
+This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication or integration with ML-libraries.
 
 (Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
 
@@ -453,8 +453,7 @@ class Filter:
         if data.size > 0:
             return self.func(data, error, cell_shape)
 
-# TODO: Bump the minor version.
-# TODO: Update README.md (in particular, the cell shapes in the usage-example).
+# TODO: …Maybe we should also make an abstraction for backends (since NumPy is single-threaded), and implement a PyTorch backend, to really drive those benchmark numbers up, and silence any complaints that ML workloads may need really REALLY fast data-consumption pipelines?
 
 
 
