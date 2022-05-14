@@ -404,7 +404,7 @@ class Namer:
             for i, part in enumerate(part_sizes):
                 sz = cell_shape[i]
                 if part != sz:
-                    name[:, at : at+sz] = _fill(name[:, at : at+part], sz)
+                    name[:, at : at+sz] = _fill(name[:, at : at+part], sz, -1)
                 at += sz
             self.last_name, self.last_cells = name, cells
         else:
@@ -523,7 +523,7 @@ def _name_template(name, cell_shape):
     _shape_ok(cell_shape)
     template = np.empty((sum(cell_shape),), dtype=np.float32) * np.nan
     func_indices = []
-    part_sizes = cell_shape[:-1]
+    part_sizes = list(cell_shape[:-1])
     at, nums = 0, []
     for i, sz in enumerate(cell_shape[:-1]):
         in_name = i < len(name)
@@ -547,7 +547,7 @@ def _name_template(name, cell_shape):
         elif part is not None and part is not ...:
             raise TypeError("Names must consist of strings, `None`/`...`, and tuples of either numbers or number-returning functions")
         at += sz
-    return template, func_indices, part_sizes
+    return template, func_indices, tuple(part_sizes)
 
 
 

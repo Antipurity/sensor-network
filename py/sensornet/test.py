@@ -62,8 +62,11 @@ def test2():
     """Different kinds of names."""
     h = sn.Handler(8,8,8,8, 64)
     h.data(name=('test',), data=np.array([-.4, -.2, .2, .4]))
-    h.data(name=('test', -.2, .2, lambda start,end,total: start/total*2-1), data=np.array([-.4, -.2, .2, .4]))
-    h.data(name=(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), data=np.array([-.4, -.2, .2, .4]))
+    h.data(
+        name=('test', (-.2, .2, lambda start,end,total: start/total*2-1)),
+        data=np.array([-.4, -.2, .2, .4]),
+    )
+    h.data(name=((1,1,1,1,1,1,1,1),(1,1,1,1,1,1,1,1),(1,1,1,1)), data=np.array([-.4, -.2, .2, .4]))
     h.commit()
     data, query, *_ = h.handle(None, None)
     assert data.shape == (3, 96)
