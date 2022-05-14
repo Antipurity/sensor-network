@@ -226,15 +226,18 @@ async def test12():
 @sn.run
 async def test13():
     """`Filter`ing data for specifically-named cells."""
-    def match(data, *_):
-        match.b = True
+    def good(data, *_):
+        good.b = True
         assert (data[:, -64:].flatten()[:3] == np.array([.1, .2, .3])).all()
-    h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, 'this one'), match)])
+    def bad(data, *_): # pragma: no cover
+        assert False
+    h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, 'this one'), good), sn.Filter(('no'), bad)])
     h.data(name=('mm not this one',), data=np.array([1., 2., 3.]))
     h.data(name=('yes', 'this one'), data=np.array([.1, .2, .3]))
     h.data(name=('this one', 'does not match'), data=np.array([.1, .2, .5]))
     data, query, data_error, query_error = await h.handle()
-    assert match.b
+    assert good.b
+    h.listeners[0](data, data_error, h.cell_shape)
 print('Tests OK')
 
 

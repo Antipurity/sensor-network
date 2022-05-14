@@ -453,7 +453,6 @@ class Filter:
         if data.size > 0:
             return self.func(data, error, cell_shape)
 
-# TODO: Ensure 100% test-coverage again.
 # TODO: Bump the minor version.
 # TODO: Update README.md (in particular, the cell shapes in the usage-example).
 
