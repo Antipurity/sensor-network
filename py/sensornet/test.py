@@ -78,12 +78,22 @@ def test3():
     h.handle(None, None)
     h.handle(np.zeros((1, 96)), None)
 def test4():
-    """Name's error."""
+    """Name's errors."""
     h = sn.Handler(8,8,8,8, 64)
+    d = np.array([1.])
+    h.data(name=((0,True,1),), data=d)
     try:
-        h.data(name=(True,), data=np.array([1.])); assert False
+        h.data(name=(lambda *_:...,), data=d); assert False
     except TypeError:
-        pass
+        pass # Unwrapped function.
+    try:
+        h.data(name=(0,), data=d); assert False
+    except TypeError:
+        pass # Unwrapped number.
+    try:
+        h.data(name=(['obedience'],), data=d); assert False
+    except TypeError:
+        pass # Unknown type.
 def test5():
     """Sensors are auto-called at each step."""
     h = sn.Handler(8,8,8,8, 64)
