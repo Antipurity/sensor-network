@@ -208,8 +208,8 @@ class Handler:
 
         Useful if NumPy arrays have to be transferred manually, such as over the Internet.
         """
-        self.data(None, data, data_error, None)
-        return self.query(None, query, query_error, None, callback)
+        self.data(None, data, data_error)
+        return self.query(None, query, query_error, callback)
     async def get(self, name, query, error=None):
         """
         `await sn.get(name, query)`
