@@ -79,7 +79,7 @@ class Handler:
     Inputs:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
     - `sensors`: function/s that take this handler, to prepare data to handle.
-    - `listeners`: function/s that take data & error, when data is ready to handle. See `Filter`.
+    - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
 
     If needed, read `.cell_shape` or `.cell_size`, or read/write `.sensors` or `.listeners`, wherever the object is available. These values might change between sending and receiving feedback.
     """
@@ -244,7 +244,8 @@ class Handler:
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
         assert max_simultaneous_steps is None or isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         # Collect sensor data.
-        if self.sensors is not None: for s in self.sensors: s(self)
+        if self.sensors is not None:
+            for s in self.sensors: s(self)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback
@@ -306,7 +307,8 @@ class Handler:
         self._prev_fb.append([False, self._next_fb, self.cell_shape, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
-        if self.listeners is not None: for l in self.listeners: l(data, data_error)
+        if self.listeners is not None:
+            for l in self.listeners: l(data, data_error, self.cell_shape)
         return data, query, data_error, query_error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
         """
@@ -421,14 +423,34 @@ class Namer:
 
 
 class Filter:
-    """TODO:""" # (After all, this is how things like rewards or CLIP-embeddings goals would be communicated, without restricting to a particular goal-space nor duplication.) (Also, good for debugging/'spying'.)
-    # TODO: Yes: only accept `name` & `func` at init.
-    #   TODO: …What are the args of `func`, exactly?
-    #     …Can't just pass in individual names & cells, right?…
-    # TODO: When called(data, data_error), should pattern-match the name (in a single NumPy op, heeding the error if non-None) and call `func` if OK, returning its result…
-    #  …`nan`s/`None`s/`...` in names should always be matched…
-    #  …What about that "results are sorted by name lexicographically"… Is it possible to use the name's funcs after we have a match, to enhance our checking experience?…
-# TODO: …We need to extract the "turn name to a NumPy pattern" functionality into a function, reused in both `Namer` and `Filter`…
+    """`Filter(name, func)`
+
+    Wraps a `func(data, error, cell_shape)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
+
+    Example uses: getting a global reward from the env; getting [CLIP](https://cliport.github.io/)-embedding goals from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
+
+    `func`'s `data` and `error` 2D arrays will already be lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`."""
+    def __init__(self, name, func):
+        self.name = name
+        self.func = func
+        self.cell_shape = None
+        self.templ = None
+    def __call__(self, data, error, cell_shape):
+        # Reconstruct the template if needed.
+        if cell_shape != self.cell_shape:
+            self.templ = _name_template(self.name, cell_shape)
+            self.cell_shape = cell_shape
+        # Match.
+        template, func_indices, part_sizes = self.templ
+        matches = (template != template) | ((data - template).abs() <= (error if error is not None else 0.) + 1e-5)
+        matches = matches.all(-1, keepdims=True)
+        data = data[matches]
+        inds = np.lexsort(data.T[::-1])
+        data = data[inds]
+        if error is not None: error = error[matches][inds]
+        # Call.
+        if data.size > 0:
+            return self.func(data, error, cell_shape)
 
 # TODO: Ensure 100% test-coverage again, and retest.
 # TODO: Bump the minor version.
@@ -491,12 +513,12 @@ def _concat_error(main, error, length):
         return np.concatenate([e if e is not None else np.zeros_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length), dtype=np.float32)
     else:
         return None
-def _name_template(name, cell_shape): # TODO: Use this in `Namer`.
+def _name_template(name, cell_shape):
     """Converts a name into `(template, func_indices, part_sizes)`.
 
     - `template`: a NumPy array of shape `(sum(cell_shape),)`, with `nan`s wherever the value doesn't matter.
     - `func_indices`: a list of `(index_to_write_at, func_to_write_the_result_of)`.
-    - `part_sizes`: a list of name-part sizes, typically `cell_shape[p]`, for `_fill`ing."""
+    - `part_sizes`: a list of name-part sizes, always equal to `cell_shape[p]` unless the part has a func, for `_fill`ing."""
     _shape_ok(cell_shape)
     template = np.empty((sum(cell_shape),), dtype=np.float32) * np.nan
     func_indices = []
