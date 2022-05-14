@@ -443,7 +443,7 @@ class Filter:
             self.cell_shape = cell_shape
         # Match.
         template, func_indices, part_sizes = self.templ
-        matches = (template != template) | (np.abs(data - template) <= (error if error is not None else 0.) + 1e-5)
+        matches = (template != template) | (np.abs(data[:, :-cell_shape[-1]] - template) <= (error if error is not None else 0.) + 1e-5)
         matches = matches.all(-1)
         data = data[matches]
         inds = np.lexsort(data.T[::-1])
@@ -522,7 +522,7 @@ def _name_template(name, cell_shape):
     - `func_indices`: a list of `(index_to_write_at, func_to_write_the_result_of)`.
     - `part_sizes`: a list of name-part sizes, always equal to `cell_shape[p]` unless the part has a func, for `_fill`ing."""
     _shape_ok(cell_shape)
-    template = np.empty((sum(cell_shape),), dtype=np.float32) * np.nan
+    template = np.empty((sum(cell_shape[:-1]),), dtype=np.float32) * np.nan
     func_indices = []
     part_sizes = list(cell_shape[:-1])
     at, nums = 0, []
