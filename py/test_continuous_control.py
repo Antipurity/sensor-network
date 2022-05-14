@@ -456,18 +456,15 @@ finish()
 # TODO: …What exactly do we implement, then? Do we not need any new `model/` files, and should just transfer cont-control lessons to `test.py`?
 #   …Do we really still want to do the RNN-of-Transformer architecture…
 #     TODO: …Maybe we should use fast weight programmers instead?
-#       Maybe even a [self-referential weight matrix](https://arxiv.org/pdf/2202.05780.pdf)? TODO: Yes. A `model/` file.
+#       Maybe even a [self-referential weight matrix](https://arxiv.org/pdf/2202.05780.pdf)? TODO: Yes. A `model/` file. `model/recurrency.py`, perhaps.
 #         (This self-attention-like layer would store its initial & current matrices, and allow explicitly changing them. Initial-matrix requires grad.)
-#         (To not access layers one-by-one to do replays: need a ctx-manager that resets current-weights to initial, and on exit, restores them.)
+#         (To not access layers one-by-one to do replays: need a ctx-manager that resets current-weights to initial, and on exit, restores them.) TODO: Should we extend this idea to generic RNN-state-tensors? …Why, yes.
+#           TODO: (…What does "predict next RNN-state using prev RNN-state" mean if we don't really have access to the actual RNN states directly anymore… Does it have any connections with Reptile or something…)
 #         (Updates are additive, so replays can skip huge timespans: faraway-sample and sort-by-timestamp and update in sequence.)
-#         TODO: …What would happen if we updated the 'initial' matrix toward the final matrix (a bit like Reptile)?… …How is the initial matrix constructed anyway? Isn't *this* the most important part?
-#           …Can we do a 'slow reset', where the 'initial' matrix is a slowly-updated 'final' matrix — without any hard-resetting (which the original paper has shown to work poorly) nor NN-based gating?… …But what is gradient descent conducted on? Why do we have 2 sources of updates now (SGD and polyak-avg)? …Should we reverse the updating-direction: current matrix is slowly updated toward the initial matrix (which is itself the best-adapting matrix, possibly with that polyak-avg too)? …Could work.
-#           TODO: …Even if intermediate matrices managed to predict intermediate steps, do we have any guarantee that when the initial is replaced with the final, that predictions would still improve? Don't we need to arrange training to encourage that explicitly?
-#         …Is it even possible to train this through a replay buffer?… We have no weights except for the initial ones, after all… Are we supposed to train this by inputting the same matrix during training, and unrolling for dozens of steps?… But how would this learn any long-horizon dependencies…
-#           …If we had a history→w0 NN, then we could train *that*, right?… But would that be helpful… I guess it could first learn to ignore history then use correlations?…
-#   …Do we really still want to do RNN+synthgrad… Why not, say, [Reptile](https://openai.com/blog/reptile/)?
-#     TODO: How would Reptile for RNNs be formulated? Can we really perform single-step updates from the replay buffer, or do we need a few consecutive steps? …It does train on single steps, but its adaptation isn't an application of an RNN, it's the training of that RNN for a few steps…
-#       Can/should Reptile be combined with BPTT? (A meta-ML task is 'given a few training examples, predict the correct output'; BPTT provides those few training examples as history.)
+#     (…May also want to do the [Reptile](https://openai.com/blog/reptile/) approximation to learn beyond BPTT, where instead of infinite-horizon backprop, we do 2+ SGD steps (each is a BPTT unroll here), then update all trainable tensors toward their new versions, and still do BPTT at unroll-time.)
+#       (Just like SWRM, these updates are also linear, making us able to do faraway-sampling for faraway-BPTT.)
+#       (These unroll-time updates face the same problem as SWRM: unroll-time params diverge from what we optimize. Could use the same solution: slowly polyak-avg them toward the initial/optimized params.)
+#       (…Would self-referential weight matrices not be enough, making us need to add a second optimizer via Reptile?)
 # TODO: …Will we still want to have separate embedders for data & queries, or not? …Why *not* have them, thin if needed?
 #   TODO: What NNs do we want, exactly?
 
