@@ -455,7 +455,7 @@ class Filter:
 
 # TODO: Ensure 100% test-coverage again.
 # TODO: Bump the minor version.
-# TODO: Update README.md (in particular, the cell shapes).
+# TODO: Update README.md (in particular, the cell shapes in the usage-example).
 
 
 
@@ -472,8 +472,8 @@ def _pad(x, size, axis=0): # → y
     if x.shape[axis] > size: return np.take(x, range(0,size), axis)
     shape = list(x.shape)
     shape[axis] = size - x.shape[axis]
-    arr = np.zeros(shape, dtype=np.float32)
-    return np.concatenate((arr, x), axis)
+    z = np.zeros(shape, dtype=np.float32)
+    return np.concatenate((x, z), axis)
 def _fill(x, size, axis=0): # → y
     """
     Ensures that an `axis` of a NumPy array `x` has the appropriate `size`, returning `y`.

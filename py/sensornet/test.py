@@ -225,20 +225,16 @@ async def test12():
     assert (await h.handle())[1].shape == (1, 32)
 @sn.run
 async def test13():
-    """TODO:"""
+    """`Filter`ing data for specifically-named cells."""
     def match(data, *_):
         match.b = True
-        print(data[:, 32:].flatten()[32:]) # TODO:
-        #   TODO: …Why are the values we want at the end of the array?… This isn't how it's supposed to be…
-        # assert (data[:, 32:].flatten()[:3] == np.array([.1, .2, .3])).all()
+        assert (data[:, -64:].flatten()[:3] == np.array([.1, .2, .3])).all()
     h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, 'this one'), match)])
     h.data(name=('mm not this one',), data=np.array([1., 2., 3.]))
     h.data(name=('yes', 'this one'), data=np.array([.1, .2, .3]))
     h.data(name=('this one', 'does not match'), data=np.array([.1, .2, .5]))
     data, query, data_error, query_error = await h.handle()
-    print(data[:, 32:]) # TODO:
     assert match.b
-# TODO: A test for `Filter`, storing several datapoints then retrieving only the correct-name datapoint.
 print('Tests OK')
 
 
