@@ -364,7 +364,6 @@ class Namer:
     def __init__(self, *name):
         self.named = name
         self.templ = None
-        self.name_parts = None # TODO:
         self.cell_shape = None
         self.cell_size = None
         self.last_cells, self.last_name = None, None
@@ -375,6 +374,7 @@ class Namer:
         assert data is None or len(data.shape) == 1
         if cell_shape != self.cell_shape: # Update what needs to be done.
             self.templ = _name_template(self.named, cell_shape)
+            self.templ = np.nan_to_num(self.templ[0]), self.templ[1], self.templ[2]
             self.cell_shape = cell_shape
             self.cell_size = sum(cell_shape)
             self.last_cells, self.last_name = None, None
@@ -428,7 +428,9 @@ class Filter:
 
     Example uses: getting a global reward from the env; getting [CLIP](https://cliport.github.io/)-embedding goals from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
 
-    `func`'s `data` and `error` 2D arrays will already be lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`."""
+    `func`'s `data` and `error` 2D arrays will already be lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
+
+    `func` is not called if there are no matches."""
     def __init__(self, name, func):
         self.name = name
         self.func = func
@@ -441,8 +443,8 @@ class Filter:
             self.cell_shape = cell_shape
         # Match.
         template, func_indices, part_sizes = self.templ
-        matches = (template != template) | ((data - template).abs() <= (error if error is not None else 0.) + 1e-5)
-        matches = matches.all(-1, keepdims=True)
+        matches = (template != template) | (np.abs(data - template) <= (error if error is not None else 0.) + 1e-5)
+        matches = matches.all(-1)
         data = data[matches]
         inds = np.lexsort(data.T[::-1])
         data = data[inds]
@@ -579,7 +581,7 @@ def torch(torch, tensor, awaitable=False): # pragma: no cover
 
 def run(fn, *args, **kwargs):
     """A convenience async-function decorator: equivalent to `import asyncio;  asyncio.run(fn())`."""
-    return asyncio.run(fn(*args, **kwargs))
+    return asyncio.run(fn(*args, **kwargs)) if asyncio.iscoroutinefunction(fn) else fn(*args, **kwargs)
 
 
 

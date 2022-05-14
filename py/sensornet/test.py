@@ -41,6 +41,7 @@ import time
 
 
 
+@sn.run
 def test0():
     """No shape, so no handling."""
     h = sn.Handler()
@@ -49,6 +50,7 @@ def test0():
     h.query('b', query=1, callback=lambda fb: ...)
     h.query('c', query=1)
     assert h.handle(None, None)[0].shape == (0,0)
+@sn.run
 def test1():
     """Already-named data, and transmission error."""
     h = sn.Handler(8,8,8,8, 64)
@@ -58,6 +60,7 @@ def test1():
     assert (query == np.zeros((0, 32))).all()
     assert (data_error == np.full((3, 96), -.7)).all()
     assert query_error == None
+@sn.run
 def test2():
     """Different kinds of names."""
     h = sn.Handler(8,8,8,8, 64)
@@ -70,6 +73,7 @@ def test2():
     h.commit()
     data, query, *_ = h.handle(None, None)
     assert data.shape == (3, 96)
+@sn.run
 def test3():
     """Named error."""
     h = sn.Handler(8,8,8,8, 64)
@@ -77,13 +81,15 @@ def test3():
     h.query(name=('test',), query=16, callback=yes_feedback)
     h.handle(None, None)
     h.handle(np.zeros((1, 96)), None)
+@sn.run
 def test4():
     """Name's errors."""
     h = sn.Handler(8,8,8,8, 64)
     d = np.array([1.])
     h.data(name=((0,True,1),), data=d)
     try:
-        h.data(name=(lambda *_:...,), data=d); assert False
+        def bad(*_): assert False # pragma: no cover
+        h.data(name=(bad,), data=d); assert False
     except TypeError:
         pass # Unwrapped function.
     try:
@@ -94,6 +100,7 @@ def test4():
         h.data(name=(['obedience'],), data=d); assert False
     except TypeError:
         pass # Unknown type.
+@sn.run
 def test5():
     """Sensors are auto-called at each step."""
     h = sn.Handler(8,8,8,8, 64)
@@ -102,6 +109,7 @@ def test5():
     h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
     assert h.handle(None, None)[1].shape == (2, 32)
     h.handle(np.zeros((2, 96)), None)
+@sn.run
 def test6():
     """Errors thrown by `callback` are re-thrown."""
     h = sn.Handler(8,8,8,8, 64)
@@ -115,6 +123,7 @@ def test6():
     assert h.handle(None, None)[1].shape == (5, 32)
     try: h.handle(None, None); assert False
     except TypeError: pass
+@sn.run
 def test7():
     """Non-1D data and feedback."""
     h = sn.Handler(8,8,8,8, 64)
@@ -126,6 +135,7 @@ def test7():
     assert data.shape == (1,96) and query.shape == (1,32)
     h.handle(np.zeros((1,96)), None)
     assert got
+@sn.run
 def test8():
     """Async operations."""
     sn.shape(8,8,8,8, 64)
@@ -157,6 +167,7 @@ def test8():
         await fb # To silence a warning.
         sn.discard()
     asyncio.run(main())
+@sn.run
 async def test9():
     """Pass-through of (synthetic) handler data to another one."""
     sn.shape(8,8,8,8, 64)
@@ -168,6 +179,7 @@ async def test9():
     sn.handle(np.zeros(shape1), None)
     assert (await fut).shape == shape1
     sn.discard()
+@sn.run
 def test10():
     """PyTorch tensor GPU→CPU async transfer."""
     try:
@@ -180,6 +192,7 @@ def test10():
             assert ((await get(a)) == (await get(b))).all()
         asyncio.run(main())
     except ImportError: pass # pragma: no cover
+@sn.run
 def test11():
     """Low-level functions as substitutes for `asyncio.Future`s."""
     h = sn.Handler(8,8,8,8, 64)
@@ -196,6 +209,7 @@ def test11():
     assert not got
     h.handle(None, None)
     assert got
+@sn.run
 async def test12():
     """Waiting for data to arrive."""
     h = sn.Handler(8,8,8,8, 64)
@@ -209,19 +223,22 @@ async def test12():
     assert (await h.handle())[0].shape == (2, 96)
     asyncio.ensure_future(query_later())
     assert (await h.handle())[1].shape == (1, 32)
-test0()
-test1()
-test2()
-test3()
-test4()
-test5()
-test6()
-test7()
-test8()
-sn.run(test9)
-test10()
-test11()
-asyncio.run(test12())
+@sn.run
+async def test13():
+    """TODO:"""
+    def match(data, *_):
+        match.b = True
+        print(data[:, 32:].flatten()[32:]) # TODO:
+        #   TODO: …Why are the values we want at the end of the array?… This isn't how it's supposed to be…
+        # assert (data[:, 32:].flatten()[:3] == np.array([.1, .2, .3])).all()
+    h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, 'this one'), match)])
+    h.data(name=('mm not this one',), data=np.array([1., 2., 3.]))
+    h.data(name=('yes', 'this one'), data=np.array([.1, .2, .3]))
+    h.data(name=('this one', 'does not match'), data=np.array([.1, .2, .5]))
+    data, query, data_error, query_error = await h.handle()
+    print(data[:, 32:]) # TODO:
+    assert match.b
+# TODO: A test for `Filter`, storing several datapoints then retrieving only the correct-name datapoint.
 print('Tests OK')
 
 
