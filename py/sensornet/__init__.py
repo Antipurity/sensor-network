@@ -244,8 +244,7 @@ class Handler:
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
         assert max_simultaneous_steps is None or isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         # Collect sensor data.
-        if self.sensors is not None:
-            for s in self.sensors: s(self)
+        for s in self.sensors: s(self)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback
@@ -307,8 +306,7 @@ class Handler:
         self._prev_fb.append([False, self._next_fb, self.cell_shape, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
-        if self.listeners is not None:
-            for l in self.listeners: l(data, data_error, self.cell_shape)
+        for l in self.listeners: l(data, data_error, self.cell_shape)
         return data, query, data_error, query_error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
         """
