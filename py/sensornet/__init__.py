@@ -83,7 +83,7 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size`, or read/write `.sensors` or `.listeners`, wherever the object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, sensors, listeners):
+    def __init__(self, *cell_shape, sensors=None, listeners=None):
         self._query_cell = 0
         self._data = []
         self._query = []
@@ -454,6 +454,7 @@ class Filter:
 
 # TODO: Ensure 100% test-coverage again, and retest.
 # TODO: Bump the minor version.
+# TODO: Update README.md (in particular, the cell shapes).
 
 
 
