@@ -33,7 +33,7 @@ coverage html
 
 # Lessons learned
 
-- You think `import numpy` in a module is a good way to use other modules in Python? No, it's a global name. Passing it through local variables everywhere is twice as fast.
+- You think `import numpy as np` in a module is a good way to use other modules in Python? No, it's a global name. Passing it through local variables everywhere is twice as fast. (However, caching locally-defined functions in default args has no effect on performance.)
 
 - NumPy is single-threaded.
 """

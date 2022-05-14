@@ -464,11 +464,10 @@ class Filter:
         if data.size > 0:
             return self.func(data, error, cell_shape)
 
-# TODO: Implement a PyTorch backend, just for making those benchmark numbers go up due to its multi-threaded-ness (hopeflly).
+# TODO: Implement a PyTorch backend, just for making those benchmark numbers go up due to its multi-threaded-ness (hopefully).
 
 
 
-# TODO: …Try using default parameters to cache these func objects…
 def _shape_ok(cell_shape: tuple):
     assert isinstance(cell_shape, tuple)
     assert all(isinstance(s, int) and s>=0 for s in cell_shape)
