@@ -17,9 +17,9 @@ First, initialize the handler:
 import sensornet as sn
 import numpy as np
 
-h = sn.Handler((8, 24, 64), 8) # See `sn.Namer` for discussion of cell shapes.
+h = sn.Handler(8,8,8, 64) # See `sn.Namer` for discussion of cell shapes.
 # OR, simply use the global `sn` as if it's a handler:
-sn.shape((8, 24, 64), 8)
+sn.shape(8,8,8, 64)
 h = sn
 ```
 
@@ -67,9 +67,9 @@ import asyncio
 class Handler:
     """
     ```python
-    Handler().shape((8, 24, 64), 8)
-    Handler((8, 24, 64), 8)
-    Handler(cell_shape=None, part_size=None, sensors=None, listeners=None)
+    Handler().shape(8,8,8, 64)
+    Handler(8,8,8, 64)
+    Handler(*cell_shape, sensors=None, listeners=None)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -77,20 +77,19 @@ class Handler:
     All data is split into fixed-size cells, each of which has a numeric name and a part of data. Handlers (AI models) should be position-invariant.
 
     Inputs:
-    - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, the second-last is the name's size, and the rest is padding for any extra data.
-    - `part_size`: the sent name is split into parts of this size. In particular, each string in a name would take up 1 part.
+    - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
     - `sensors`: function/s that take this handler, to prepare data to handle.
-    - `listeners`: function/s that take data & error, when data is ready to handle.
+    - `listeners`: function/s that take data & error, when data is ready to handle. See `Filter`.
 
-    If needed, read `.cell_shape` or `.cell_size` or `.part_size` or `.sensors` or `.listeners` wherever the object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size`, or read/write `.sensors` or `.listeners`, wherever the object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, cell_shape=None, part_size=None, sensors, listeners):
+    def __init__(self, *cell_shape, sensors, listeners):
         self._query_cell = 0
         self._data = []
         self._query = []
         self._data_error = []
         self._query_error = []
-        self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, part_size, cell_count, cell_size], …]
+        self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self._wait_for_requests = None # asyncio.Future()
         x = sensors
@@ -98,22 +97,18 @@ class Handler:
         x = listeners
         self.listeners = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
         self.cell_shape = ()
-        self.part_size = 0
         self.cell_size = 0
-        if cell_shape is not None or part_size is not None:
-            self.shape(cell_shape, part_size)
-    def shape(self, cell_shape, part_size):
-        """`sn.shape(cell_shape, part_size)`
+        if len(cell_shape):
+            self.shape(*cell_shape)
+    def shape(self, *cell_shape):
+        """`sn.shape(*cell_shape)`
 
-        Changes the current shape. `cell_shape` is `(padding, name_size, data_size)`, where `padding % part_size == 0` and `name_size % part_size == 0`.
-
-        Recommendation: leave space for about 3 name parts, meaning, `name_size = part_size*3`. Also leave some space in `padding`, in case some transforms want to leave their mark such as the source IP."""
-        _shape_ok(cell_shape, part_size)
-        if self.cell_shape == cell_shape and self.part_size == part_size:
+        Changes the current shape, where the last number is data, the rest split the name into parts. Safe to call whenever."""
+        _shape_ok(cell_shape)
+        if self.cell_shape == cell_shape:
             return self
         self.discard()
         self.cell_shape = cell_shape
-        self.part_size = part_size
         self.cell_size = sum(cell_shape)
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
         return self
@@ -124,9 +119,8 @@ class Handler:
         Sends named data to the handler. Receives nothing; see `.query`.
 
         Args:
-        - `name`:
-            - If a tuple/list of strings and -1…1 numbers and functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, converted to a `Namer`.
-                - Recommendation: try to use at most about 3 parts, or however much the cell-shape allows for.
+        - `name`, such as `('image', .25, .5)` or `Namer('image', .25, .5)`:
+            - If a tuple/list of strings and `None`/`...` and tuples of either -1…1 numbers or functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, then `name` is converted to a `Namer`.
             - If a `Namer`, it is used.
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
         - `data`: a NumPy array of numbers, preferably -1…1.
@@ -144,10 +138,10 @@ class Handler:
 
         if name is not None:
             if len(data.shape) != 1: data = data.flatten()
-            data = name.name(data, data.shape[0], self.cell_shape, self.part_size, None)
+            data = name.name(data, data.shape[0], self.cell_shape, None)
             if error is not None:
                 if len(error.shape) != 1: error = error.flatten()
-                error = name.name(error, error.shape[0], self.cell_shape, self.part_size, 0.)
+                error = name.name(error, error.shape[0], self.cell_shape, 0.)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
         self._data.append(data)
         self._data_error.append(error)
@@ -193,7 +187,7 @@ class Handler:
             if isinstance(query, tuple):
                 for n in query: length *= n
             assert isinstance(length, int) and length > 0
-            query = name.name(None, length, self.cell_shape, self.part_size, None)
+            query = name.name(None, length, self.cell_shape, None)
         assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
         assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
         self._query.append(query)
@@ -259,7 +253,7 @@ class Handler:
         # Respond to what we can.
         try:
             while len(self._prev_fb):
-                feedback, callbacks, cell_shape, part_size, cell_count, cell_size = self._prev_fb[0]
+                feedback, callbacks, cell_shape, cell_count, cell_size = self._prev_fb[0]
                 if isinstance(feedback, asyncio.Future):
                     if not feedback.done(): break
                     feedback = feedback.result()
@@ -271,7 +265,7 @@ class Handler:
                 if feedback is not None:
                     assert len(feedback.shape) == 2 and feedback.shape[0] == cell_count and feedback.shape[1] == cell_size
                 self._prev_fb.pop(0)
-                _feedback(callbacks, feedback, cell_shape, part_size)
+                _feedback(callbacks, feedback, cell_shape)
         except:
             self.discard()
             raise
@@ -294,7 +288,7 @@ class Handler:
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
-            _feedback(self._next_fb, None, self.cell_shape, self.part_size)
+            _feedback(self._next_fb, None, self.cell_shape)
         finally:
             self._query_cell = 0
             self._data.clear()
@@ -309,7 +303,7 @@ class Handler:
         query = self._query[0];  self._query.clear()
         data_error = self._data_error[0];  self._data_error.clear()
         query_error = self._query_error[0];  self._query_error.clear()
-        self._prev_fb.append([False, self._next_fb, self.cell_shape, self.part_size, query.shape[0], self.cell_size])
+        self._prev_fb.append([False, self._next_fb, self.cell_shape, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
         if self.listeners is not None: for l in self.listeners: l(data, data_error)
@@ -353,31 +347,37 @@ class Namer:
 
     To achieve position-invariance of `handler.send`, data cells need names.
 
-    Naming data first flattens then transforms it into a 2D array, sized `cells×sum(cell_shape)`. All in `cell_shape[:-1]` must be divisible by `part_size`.
+    Naming data first flattens then transforms it into a 2D array, sized `cells×sum(cell_shape)`.
 
     Numeric names are split into fixed-size *parts*. `cell_shape[-2]` is where `Namer` puts its parts, so ensure that `cell_shape` has space for a few. Each part can be:
     - A string: MD5-hashed, and the resulting 16 bytes are put into one part, shifted and rescaled to -1…1.
-    - A number, -1…1: put into a part directly, potentially shared with non-string pieces.
-    - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
-        - For example, `lambda start, end, total: start/total*2-1` puts a number, from -1 (inclusive) to 1 (exclusive).
-        - For example, `lambda start, end, total: end / total*2-1` puts a number, from -1 (exclusive) to 1 (inclusive).
-        - (Good idea to always include at least something dynamic, unless data only occupies one cell.)
+    - `None` or `...`: anything goes here.
+    - A tuple:
+        - A number, -1…1: put into a part directly.
+        - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
+            - For example, `lambda start, end, total: start/total*2-1` puts a number, from -1 (inclusive) to 1 (exclusive).
+            - For example, `lambda start, end, total: end / total*2-1` puts a number, from -1 (exclusive) to 1 (inclusive).
+            - (Good idea to always include at least something dynamic, unless data only occupies one cell.)
 
     Neural networks are good at classification but are poor at regression. So numbers are repeatedly folded via `x → 1 - 2*abs(x)` until a part has no free space, to increase AI-model sensitivity. Handlers can also un/fold or apply I/FFT if needed.
     """
     def __init__(self, *name):
         self.named = name
-        self.name_parts = None
+        self.templ = None
+        self.name_parts = None # TODO:
         self.cell_shape = None
-        self.part_size = None
         self.cell_size = None
         self.last_cells, self.last_name = None, None
-    def name(self, data, length, cell_shape, part_size, fill=None):
+    def name(self, data, length, cell_shape, fill=None):
         """
         1D to 2D.
         """
         assert data is None or len(data.shape) == 1
-        self._name_parts(cell_shape, part_size)
+        if cell_shape != self.cell_shape: # Update what needs to be done.
+            self.templ = _name_template(self.named, cell_shape)
+            self.cell_shape = cell_shape
+            self.cell_size = sum(cell_shape)
+            self.last_cells, self.last_name = None, None
         # Pad & reshape `data`.
         data_size = cell_shape[-1]
         name_size = self.cell_size - data_size
@@ -393,13 +393,23 @@ class Namer:
         start = np.expand_dims(np.arange(0, total, data_size), -1)
         end = np.minimum(start + data_size, length)
         if self.last_cells != cells:
-            name = self.last_name = np.concatenate([_fill(np.concatenate([x(start, end, total) if callable(x) else np.repeat(x, cells, 0) for x in p], 1), part_size, 1) if isinstance(p, list) else np.repeat(p, cells, 0) for p in self.name_parts], 1)
-            self.last_cells = cells
+            # Do what `_name_template` implies: use template, fill func-indices, and `_fill` parts.
+            template, func_indices, part_sizes = self.templ
+            name = template.expand_dims(0).repeat(cells, 0)
+            for at, fn in func_indices:
+                name[:, at:at+1] = fn(start, end, total)
+            at = 0
+            for i, part in enumerate(part_sizes):
+                sz = cell_shape[i]
+                if part != sz:
+                    name[:, at : at+sz] = _fill(name[:, at : at+part], sz)
+                at += sz
+            self.last_name, self.last_cells = name, cells
         else:
             name = self.last_name
         name = _fill(name, name_size, 1)
         return np.concatenate((name, data), 1) if data is not None else name
-    def unname(self, feedback, length, cell_shape, _):
+    def unname(self, feedback, length, cell_shape):
         """
         Reverses `.name`.
         """
@@ -407,72 +417,28 @@ class Namer:
         assert len(feedback.shape) == 2 and feedback.shape[-1] == sum(cell_shape)
         feedback = feedback[:, -cell_shape[-1]:]
         return _pad(feedback.flatten(), length, 0)
-    def _name_parts(self, cell_shape, part_size):
-        # Recomputes the name's parts for faster naming. MD5-hashes, and merges consecutive raw numbers.
-        if cell_shape == self.cell_shape and part_size == self.part_size:
-            return self.name_parts
-        _shape_ok(cell_shape, part_size)
-        extra_parts = sum(cell_shape[:-2]) // part_size
-        name_parts = [np.zeros((1, part_size), dtype=np.float32) for _ in range(extra_parts)]
-        nums = []
-        for part in self.named:
-            if isinstance(part, str):
-                name_parts.append(_fill(np.expand_dims(_str_to_floats(part), 0), part_size, 1))
-            elif callable(part) or not isinstance(part, bool) and (isinstance(part, float) or isinstance(part, int)):
-                nums.append(np.atleast_2d(part) if not callable(part) else part)
-                if len(nums) >= part_size:
-                    name_parts.append(nums)
-                    nums = []
-            else:
-                raise TypeError("Names must consist of strings, numbers, and number-returning functions")
-        if len(nums): name_parts.append(nums)
-        # Concat consecutive numbers in the name for a bit more performance.
-        i = 0
-        while i < len(name_parts):
-            part = name_parts[i]
-            if isinstance(part, list):
-                start, end = 0, 0
-                while end <= len(part):
-                    if start<end and (end >= len(part) or not isinstance(part[end], np.ndarray)):
-                        L = end-start
-                        part[start:end] = [np.concatenate(part[start:end], 1)]
-                        end -= L-1
-                        start = end
-                    if start < len(part) and not isinstance(part[start], np.ndarray): start = end+1
-                    end += 1
-                if len(part) == 1:
-                    part = name_parts[i] = _fill(part[0], part_size, 1)
-            if i > 0 and isinstance(name_parts[i-1], np.ndarray) and isinstance(name_parts[i], np.ndarray):
-                name_parts[i-1:i+1] = [np.concatenate(name_parts[i-1:i+1], 1)]
-            else:
-                i += 1
-        self.name_parts = name_parts
-        self.cell_shape = cell_shape
-        self.part_size = part_size
-        self.cell_size = sum(cell_shape)
-        self.last_cells, self.last_name = None, None
-        return self.name_parts
 
 
 
-class Unnamer:
-    """TODO:"""
-    pass # TODO: …What do we implement here, exactly? How to make it act like a callable(data, data_error) pattern-matching dictionary?
-# TODO: Have a mechanism for pattern-matching a name and retrieving the sent data. (After all, this is how things like rewards or CLIP-embeddings goals would be communicated, without restricting to a particular goal-space nor duplication.) (Also, good for debugging/'spying'.)
-#   (Handle funcs in names via `nan`s in numeric patterns. Results are sorted by name lexicographically, preferably.)
-#   TODO: Have an iterable class `Unnamer` that 'contains' all name→func pairs; possibly based on `dict`.
-#     TODO: Calls to `Unnamer` instances with values & errors should pattern-match (in a single NumPy op) and call all relevant funcs, returning a string-in-name → func-result dist.
+class Filter:
+    """TODO:""" # (After all, this is how things like rewards or CLIP-embeddings goals would be communicated, without restricting to a particular goal-space nor duplication.) (Also, good for debugging/'spying'.)
+    # TODO: Yes: only accept `name` & `func` at init.
+    #   TODO: …What are the args of `func`, exactly?
+    #     …Can't just pass in individual names & cells, right?…
+    # TODO: When called(data, data_error), should pattern-match the name (in a single NumPy op, heeding the error if non-None) and call `func` if OK, returning its result…
+    #  …`nan`s/`None`s/`...` in names should always be matched…
+    #  …What about that "results are sorted by name lexicographically"… Is it possible to use the name's funcs after we have a match, to enhance our checking experience?…
+# TODO: …We need to extract the "turn name to a NumPy pattern" functionality into a function, reused in both `Namer` and `Filter`…
+
 # TODO: Ensure 100% test-coverage again, and retest.
 # TODO: Bump the minor version.
 
 
 
-def _shape_ok(cell_shape: tuple, part_size: int):
-    assert isinstance(part_size, int) and part_size > 0
+def _shape_ok(cell_shape: tuple):
     assert isinstance(cell_shape, tuple)
-    assert all(_inty(s) for s in cell_shape)
+    assert all(isinstance(s, int) and s>=0 for s in cell_shape)
     assert cell_shape[-1] > 0
-    assert all(s % part_size == 0 for s in cell_shape[:-1])
 def _str_to_floats(string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
     return np.frombuffer(hash, dtype=np.uint8).astype(np.float32)/255.*2. - 1.
@@ -502,7 +468,7 @@ def _fill(x, size, axis=0): # → y
     x = np.concatenate(folds, axis)
     if x.shape[axis] == size: return x
     return np.take(x, range(0,size), axis)
-def _feedback(callbacks, feedback, cell_shape, part_size):
+def _feedback(callbacks, feedback, cell_shape):
     fb = None
     got_err = None
     assert feedback is None or feedback.shape[-1] == sum(cell_shape)
@@ -511,7 +477,7 @@ def _feedback(callbacks, feedback, cell_shape, part_size):
             fb = feedback[start_cell:end_cell, :]
             assert fb.shape[0] == end_cell - start_cell
             if namer is not None:
-                fb = namer.unname(fb, length, cell_shape, part_size)
+                fb = namer.unname(fb, length, cell_shape)
                 fb = fb.reshape(shape)
         try:
             callback(fb) if callable(callback) else callback.set_result(fb) if not callback.cancelled() else None
@@ -520,13 +486,45 @@ def _feedback(callbacks, feedback, cell_shape, part_size):
         except Exception as err:
             got_err = err
     if got_err is not None: raise got_err
-def _inty(n):
-    return isinstance(n, int) and n>=0
 def _concat_error(main, error, length):
     if any(e is not None for e in error):
-        return np.concatenate([e if e is not None else -np.ones_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length), dtype=np.float32)
+        return np.concatenate([e if e is not None else np.zeros_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length), dtype=np.float32)
     else:
         return None
+def _name_template(name, cell_shape): # TODO: Use this in `Namer`.
+    """Converts a name into `(template, func_indices, part_sizes)`.
+
+    - `template`: a NumPy array of shape `(sum(cell_shape),)`, with `nan`s wherever the value doesn't matter.
+    - `func_indices`: a list of `(index_to_write_at, func_to_write_the_result_of)`.
+    - `part_sizes`: a list of name-part sizes, typically `cell_shape[p]`, for `_fill`ing."""
+    _shape_ok(cell_shape)
+    template = np.empty((sum(cell_shape),), dtype=np.float32) * np.nan
+    func_indices = []
+    part_sizes = cell_shape[:-1]
+    at, nums = 0, []
+    for i, sz in enumerate(cell_shape[:-1]):
+        in_name = i < len(name)
+        part = name[i] if in_name else None
+        if isinstance(part, str):
+            template[at : at+sz] = _fill(_str_to_floats(part), sz)
+        elif isinstance(part, tuple):
+            for j, num in enumerate(part):
+                if callable(num):
+                    func_indices.append((at + j, num))
+                else:
+                    assert isinstance(num, float) or isinstance(num, int)
+            nums = [None if callable(num) else num for num in part]
+            template[at : at + sz] = _fill(np.array(nums, dtype=np.float32), sz)
+            if any(callable(num) for num in part):
+                part_sizes[i] = len(part)
+        elif callable(part):
+            raise TypeError("A part of the name is a func; wrap it in a tuple")
+        elif isinstance(part, float) or isinstance(part, int):
+            raise TypeError("A part of the name is a number; wrap it in a tuple")
+        elif part is not None and part is not ...:
+            raise TypeError("Names must consist of strings, `None`/`...`, and tuples of either numbers or number-returning functions")
+        at += sz
+    return template, func_indices, part_sizes
 
 
 
@@ -565,11 +563,11 @@ def run(fn, *args, **kwargs):
 
 default = Handler()
 sensors = default.sensors
-cell_shape, part_size, cell_size = default.cell_shape, default.part_size, default.cell_size
+cell_shape, cell_size = default.cell_shape, default.cell_size
 def shape(*k, **kw):
-    global cell_shape, part_size, cell_size
+    global cell_shape, cell_size
     r = default.shape(*k, **kw)
-    cell_shape, part_size, cell_size = default.cell_shape, default.part_size, default.cell_size
+    cell_shape, cell_size = default.cell_shape, default.cell_size
     return r
 def data(*k, **kw):
     return default.data(*k, **kw)
