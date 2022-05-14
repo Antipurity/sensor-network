@@ -92,9 +92,9 @@ class Handler:
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self._wait_for_requests = None # asyncio.Future()
-        x = sensors
+        x = sensors if sensors is not None else []
         self.sensors = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
-        x = listeners
+        x = listeners if listeners is not None else []
         self.listeners = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
         self.cell_shape = ()
         self.cell_size = 0
