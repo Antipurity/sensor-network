@@ -51,7 +51,7 @@ def test0():
     assert h.handle(None, None)[0].shape == (0,0)
 def test1():
     """Already-named data, and transmission error."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     h.data(data = np.zeros((3, 96)), error = np.full((3, 96), -.7))
     data, query, data_error, query_error = h.handle(None, None)
     assert (data == np.zeros((3, 96))).all()
@@ -60,7 +60,7 @@ def test1():
     assert query_error == None
 def test2():
     """Different kinds of names."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     h.data(name=('test',), data=np.array([-.4, -.2, .2, .4]))
     h.data(name=('test', -.2, .2, lambda start,end,total: start/total*2-1), data=np.array([-.4, -.2, .2, .4]))
     h.data(name=(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), data=np.array([-.4, -.2, .2, .4]))
@@ -69,21 +69,21 @@ def test2():
     assert data.shape == (3, 96)
 def test3():
     """Named error."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     def yes_feedback(fb, *_): assert fb is not None
     h.query(name=('test',), query=16, callback=yes_feedback)
     h.handle(None, None)
     h.handle(np.zeros((1, 96)), None)
 def test4():
     """Name's error."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     try:
         h.data(name=(True,), data=np.array([1.])); assert False
     except TypeError:
         pass
 def test5():
     """Sensors are auto-called at each step."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     def eh_feedback(fb, *_): assert fb is not None
     h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
     h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
@@ -91,7 +91,7 @@ def test5():
     h.handle(np.zeros((2, 96)), None)
 def test6():
     """Errors thrown by `callback` are re-thrown."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     def err1(*_): raise KeyboardInterrupt()
     def err2(*_): raise TypeError('damn')
     h.query(name='death', query=1, callback=err1)
@@ -104,7 +104,7 @@ def test6():
     except TypeError: pass
 def test7():
     """Non-1D data and feedback."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     got = False
     def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
     h.data(name=('test',), data=np.zeros((2,3,4)), error=np.full((2,3,4), -.4))
@@ -115,10 +115,9 @@ def test7():
     assert got
 def test8():
     """Async operations."""
-    sn.shape((0, 32, 64), 8)
-    sn.shape((0, 32, 64), 8)
-    assert sn.cell_shape == (0, 32, 64)
-    assert sn.part_size == 8
+    sn.shape(8,8,8,8, 64)
+    sn.shape(8,8,8,8, 64)
+    assert sn.cell_shape == (8,8,8,8, 64)
     assert sn.cell_size == 96
     name = sn.Namer('test')
     n = 0
@@ -147,7 +146,7 @@ def test8():
     asyncio.run(main())
 async def test9():
     """Pass-through of (synthetic) handler data to another one."""
-    sn.shape((8, 24, 64), 8)
+    sn.shape(8,8,8,8, 64)
     shape1, shape2 = (13,96), (13,32)
     fut = sn.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
     data, query, *_ = sn.handle(None, None)
@@ -170,7 +169,7 @@ def test10():
     except ImportError: pass # pragma: no cover
 def test11():
     """Low-level functions as substitutes for `asyncio.Future`s."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     h.handle(None, None)
     n, got = 0, False
     def feedback():
@@ -186,7 +185,7 @@ def test11():
     assert got
 async def test12():
     """Waiting for data to arrive."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     async def data_later():
         await asyncio.sleep(.2)
         h.data('hey listen', np.zeros((128,)))
@@ -216,7 +215,7 @@ print('Tests OK')
 
 async def benchmark(N=64*10):
     """Raw number-shuffling performance."""
-    h = sn.Handler((8, 24, 64), 8)
+    h = sn.Handler(8,8,8,8, 64)
     iterations, feedback = 0, None
     def check_feedback(fb, *_):
         assert fb is not None and fb.shape == (64,) and fb[0] == .2
