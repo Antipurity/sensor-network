@@ -398,14 +398,15 @@ class Namer:
             # Do what `_name_template` implies: use template, fill func-indices, and `_fill` parts.
             template, func_indices, part_sizes = self.templ
             name = np.expand_dims(template, 0).repeat(cells, 0)
-            for at, fn in func_indices:
-                name[:, at:at+1] = fn(start, end, total)
-            at = 0
-            for i, part in enumerate(part_sizes):
-                sz = cell_shape[i]
-                if part != sz:
-                    name[:, at : at+sz] = _fill(name[:, at : at+part], sz, -1)
-                at += sz
+            if len(func_indices):
+                for at, fn in func_indices:
+                    name[:, at:at+1] = fn(start, end, total)
+                at = 0
+                for i, part in enumerate(part_sizes):
+                    sz = cell_shape[i]
+                    if part != sz:
+                        name[:, at : at+sz] = _fill(name[:, at : at+part], sz, -1)
+                    at += sz
             self.last_name, self.last_cells = name, cells
         else:
             name = self.last_name
@@ -452,7 +453,7 @@ class Filter:
         if data.size > 0:
             return self.func(data, error, cell_shape)
 
-# TODO: Ensure 100% test-coverage again, and retest.
+# TODO: Ensure 100% test-coverage again.
 # TODO: Bump the minor version.
 # TODO: Update README.md (in particular, the cell shapes).
 
