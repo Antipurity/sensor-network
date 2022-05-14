@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 231369600.0 bytes/sec (220.65 MiB/s) (12050.5 it/s)
-With 9600 values, throughput: 409301760.0 bytes/sec (390.34 MiB/s) (10658.9 it/s)
-With 14400 values, throughput: 559422720.0 bytes/sec (533.51 MiB/s) (9712.2 it/s)
-With 19200 values, throughput: 689617920.0 bytes/sec (657.67 MiB/s) (8979.4 it/s)
-With 24000 values, throughput: 802108800.0 bytes/sec (764.95 MiB/s) (8355.3 it/s)
-With 28800 values, throughput: 883180800.0 bytes/sec (842.27 MiB/s) (7666.5 it/s)
-With 33600 values, throughput: 966940800.0 bytes/sec (922.15 MiB/s) (7194.5 it/s)
-With 38400 values, throughput: 1012131840.0 bytes/sec (965.24 MiB/s) (6589.4 it/s)
-With 43200 values, throughput: 1107095040.0 bytes/sec (1055.81 MiB/s) (6406.8 it/s)
-With 48000 values, throughput: 1144569600.0 bytes/sec (1091.55 MiB/s) (5961.3 it/s)
+With 4800 values, throughput: 323904000.0 bytes/sec (308.9 MiB/s) (16870.0 it/s)
+With 9600 values, throughput: 605706240.0 bytes/sec (577.65 MiB/s) (15773.6 it/s)
+With 14400 values, throughput: 845412480.0 bytes/sec (806.25 MiB/s) (14677.3 it/s)
+With 19200 values, throughput: 1052090880.0 bytes/sec (1003.35 MiB/s) (13699.1 it/s)
+With 24000 values, throughput: 1267296000.0 bytes/sec (1208.59 MiB/s) (13201.0 it/s)
+With 28800 values, throughput: 1451289600.0 bytes/sec (1384.06 MiB/s) (12598.0 it/s)
+With 33600 values, throughput: 1619708160.0 bytes/sec (1544.67 MiB/s) (12051.4 it/s)
+With 38400 values, throughput: 1780807680.0 bytes/sec (1698.31 MiB/s) (11593.8 it/s)
+With 43200 values, throughput: 1916300160.0 bytes/sec (1827.53 MiB/s) (11089.7 it/s)
+With 48000 values, throughput: 2071622400.0 bytes/sec (1975.65 MiB/s) (10789.7 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
@@ -30,6 +30,12 @@ coverage run --branch sensor-network/py/sensornet/test.py
 coverage report
 coverage html
 ```
+
+# Lessons learned
+
+- You think `import numpy` in a module is a good way to use other modules in Python? No, it's a global name. Passing it through local variables everywhere is twice as fast.
+
+- NumPy is single-threaded.
 """
 
 
