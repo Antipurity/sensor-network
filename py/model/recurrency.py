@@ -39,6 +39,9 @@ class State(nn.Module):
         assert len(State._episodes) > 0, "Use `with State.Episode():`"
         State._episodes[-1]._register(self)
         if to is not None:
+            for fn in State._setters:
+                r = fn(self, to)
+                if r is not None: to = r
             self.current = to
         return self.current
 
@@ -110,11 +113,24 @@ class State(nn.Module):
                 rest.remove(id)
                 olds[id], s.current = s.current, olds[id]
 
-    # TODO: Have the `State.Setter(fn(prev,next)→next)` context manager, which adds `fn` to the list of funcs that we call on `.set`.
+    class Setter:
+        """`with State.Setter(lambda state, to: to): ...`
+
+        Within this context, `State` updates will go through the specified function first. To not change `to`, return `to` or `None`.
+
+        Example uses:
+        - `lambda state, to: state.initial if random.randint(1,100)==1 else to`: hard-reset.
+        - `lambda state, to: state.initial*.001 + .999*to`: soft-reset, for very-long episodes.
+        - `lambda state, to: State.loss((state() - to.detach()).square())`: predict updates and maximize mutual information, for extracting good features and skipping updates.
+        """
+        __slots__ = ('fn',)
+        def __init__(self, fn): self.fn = fn
+        def __enter__(self): State._setters.append(self.fn)
+        def __exit__(self, type, value, traceback): State._setters.pop()
 
 
 
-# TODO: …Also SWRM…
+# TODO: …Also SRWM…
 
 
 
@@ -186,7 +202,17 @@ if __name__ == '__main__': # pragma: no cover
             State.loss(s().square())
             assert (State.loss() == torch.tensor(5.)).all()
         assert (s.initial.grad == torch.tensor([[10.]])).all()
-    # TODO: Test overridable setters.
+    @run
+    def test5():
+        """`State.Setter` applications."""
+        s = State(torch.zeros((1,1)))
+        with State.Setter(lambda state, to: (state() + to) / 2):
+            with State.Episode():
+                s(s() + 1)
+                assert (s() == torch.tensor([[.5]])).all()
+                s(s() + 1)
+                assert (s() == torch.tensor([[1.]])).all()
     # TODO: (Also want a test for saving/loading, with an episode, making sure that it works correctly.)
     #   TODO: …How to support save+load?… What was PyTorch's way of doing that, again?
+    #   TODO: Should we use torch.save or nn.Module.load_state_dict? (Would `torch.save` "just work", since it just pickles?)
     print('Tests OK')
