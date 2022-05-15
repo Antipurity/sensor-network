@@ -122,7 +122,7 @@ if __name__ == '__main__': # pragma: no cover
     def run(f): f()
     @run
     def test0():
-        """No-`State.Episode` operations on `State`s don't work."""
+        """No-`State.Episode` operations on `State`s don't work. Neither do recursive episodes."""
         s = State((1,1))
         try:
             s()
@@ -136,7 +136,13 @@ if __name__ == '__main__': # pragma: no cover
             State.loss()
             raise RuntimeError()
         except AssertionError: pass
-        # TODO: Also assert that recursive episodes fail.
+        try:
+            ep = State.Episode()
+            with ep:
+                with ep:
+                    ...
+            raise RuntimeError()
+        except AssertionError: pass
     @run
     def test1():
         """Basic `State` operation."""
