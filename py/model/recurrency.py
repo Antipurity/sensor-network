@@ -136,6 +136,7 @@ if __name__ == '__main__': # pragma: no cover
             State.loss()
             raise RuntimeError()
         except AssertionError: pass
+        # TODO: Also assert that recursive episodes fail.
     @run
     def test1():
         """Basic `State` operation."""
@@ -157,8 +158,28 @@ if __name__ == '__main__': # pragma: no cover
         with ep:
             s().sum().backward()
             assert (s.initial.grad == 2*torch.ones((1,1))).all()
-    # TODO: Test nested episodes.
-    # TODO: Test recursive re-entering.
+    @run
+    def test3():
+        """Nested `State.Episode`s."""
+        s = State(torch.zeros((1,1)))
+        with State.Episode():
+            s(s() + 1)
+            with State.Episode():
+                s(s() * 2)
+                assert (s() == torch.zeros((1,1))).all()
+            s().sum().backward()
+            assert (s.initial.grad == torch.ones((1,1))).all()
+    @run
+    def test4():
+        """`State.loss` applications."""
+        s = State(torch.zeros((1,1)))
+        with State.Episode():
+            s(s() + 1)
+            State.loss(s().square())
+            s(s() * 2)
+            State.loss(s().square())
+            assert (State.loss() == torch.tensor(5.)).all()
+        assert (s.initial.grad == torch.tensor([[10.]])).all()
     # TODO: Test overridable setters.
     # TODO: (Also want a test for saving/loading, with an episode, making sure that it works correctly.)
     #   TODO: …How to support save+load?… What was PyTorch's way of doing that, again?
