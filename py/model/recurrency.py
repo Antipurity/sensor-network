@@ -17,8 +17,9 @@ class State(nn.Module):
     RNN state could be a simple variable, but separating it into a class allows easily managing arbitrarily-many variables at once.
 
     In addition:
+    - `.initial`: the value for new episodes to start from.
     - `State.loss(…)`: handles an episode's loss in one place.
-    - `with State.Episode():` for starting a new unroll, with the initial `State`. (Which is differentiable; what else would you reasonably reset to? Either a frozen tensor or a frozen past state, none of which allow for efficient learning.)
+    - `with State.Episode():` for starting a new unroll, with the `.initial` value. (Which is differentiable; what else would you reasonably reset to? Either a frozen tensor or a frozen past state, none of which allow for efficient learning.)
     - TODO:
     """
     __slots__ = ('id', 'initial', 'current')
@@ -97,13 +98,14 @@ class State(nn.Module):
             if s.id in self.restorable: self.restorable.remove(s.id)
         def _register(self, s):
             """Registers a `State` object in this episode, updating its `.current` value if needed."""
-            id, objs = s.id, self.state_obj
-            if id in objs: return None
-            olds, rest = self.state_old, self.restorable
+            id, objs, olds, rest = s.id, self.state_obj, self.state_old, self.restorable
             if id not in rest:
-                objs[id] = s
-                olds[id] = s.current
-                s.current = s.initial+0 # `+0` to not treat this as an assignable param.
+                if id not in objs:
+                    objs[id] = s
+                    olds[id] = s.current
+                    s.current = s.initial+0 # `+0` to not treat this as an assignable param.
+                else:
+                    return
             else:
                 rest.remove(id)
                 olds[id], s.current = s.current, olds[id]
@@ -117,21 +119,47 @@ class State(nn.Module):
 
 
 if __name__ == '__main__': # pragma: no cover
-    def run(f): f() # TODO: Use this as a decorator for tests.
-    # TODO: Test that no-Episode operations don't work.
+    def run(f): f()
+    @run
+    def test0():
+        """No-`State.Episode` operations on `State`s don't work."""
+        s = State((1,1))
+        try:
+            s()
+            raise RuntimeError()
+        except AssertionError: pass
+        try:
+            s(2)
+            raise RuntimeError()
+        except AssertionError: pass
+        try:
+            State.loss()
+            raise RuntimeError()
+        except AssertionError: pass
     @run
     def test1():
-        """Just normal state action."""
-        x=State((1,1))
+        """Basic `State` operation."""
+        s = State((1,1))
         with State.Episode():
-            x(x() + 1)
-            x(x() * 2)
-            x().sum().backward()
-            print(x.initial.grad) # TODO: Assert instead.
-    # TODO: Test basic operation.
-    # TODO: Test re-entering the same episode.
+            s(s() + 1)
+            s(s() * 2)
+            s().sum().backward()
+            assert (s.initial.grad == 2*torch.ones((1,1))).all()
+    @run
+    def test2():
+        """Re-entering a `State.Episode`."""
+        s = State(torch.zeros((1,1)))
+        ep = State.Episode()
+        with ep:
+            s(s() + 1)
+            s(s() * 2)
+        assert s.current is None
+        with ep:
+            s().sum().backward()
+            assert (s.initial.grad == 2*torch.ones((1,1))).all()
     # TODO: Test nested episodes.
     # TODO: Test recursive re-entering.
     # TODO: Test overridable setters.
     # TODO: (Also want a test for saving/loading, with an episode, making sure that it works correctly.)
     #   TODO: …How to support save+load?… What was PyTorch's way of doing that, again?
+    print('Tests OK')
