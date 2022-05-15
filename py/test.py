@@ -99,6 +99,7 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 #           TODO: Have the `State` class first, with `with State.New(): ...`.
 #           TODO: (…What does "predict next RNN-state using prev RNN-state" mean if we don't really have access to the actual RNN states directly anymore… Does it have any connections with Reptile or something…)
 #             (It updates initial-state toward final-state, albeit via SGD rather than polyak-avg. Which is the opposite of soft-reset, in both ways. …What if we did actually do this, via gradient during replay, trying to make each initial-state the average of possible-states? Doesn't it augment, not replace? Make initial-states as non-intrusive as possible?)
+#               (Should allow attaching global handlers of state-update, to compute such a loss.)
 #         (Updates are additive, so replays can skip huge timespans: faraway-sample and sort-by-timestamp and update in sequence.)
 #     (…May also want to do the [Reptile](https://openai.com/blog/reptile/) approximation to learn beyond BPTT, where instead of infinite-horizon backprop, we do 2+ SGD steps (each is a BPTT unroll here), then update all trainable tensors toward their new versions, and still do BPTT at unroll-time.)
 #       (Just like SWRM, these updates are also linear, making us able to do faraway-sampling for faraway-BPTT.)
