@@ -20,24 +20,33 @@ class State(nn.Module):
     - `.initial`: the value for new episodes to start from.
     - `State.loss(…)`: handles an episode's loss in one place.
     - `with State.Episode():` for starting a new unroll, with the `.initial` value. (Which is differentiable; what else would you reasonably reset to? Either a frozen tensor or a frozen past state, none of which allow for efficient learning.)
-    - TODO:
+    - `with State.Setter(lambda state, to: to):` modifies state modifications; see the class for usage examples.
+    - To save/load: `torch.save`/`torch.load`, on models that contain `State`s, and/or episodes. Saving models within an episode would make their current values top-level (episode-less).
+      - Advanced: to save/load via `model.state_dict()`/`model.load_state_dict(d)` (episodes are not supported), have to manually reset `.current` values. Hard-resetting like `with State.Setter(lambda s,_: s.initial+0): model()` should do the trick. (Not handling this was a design choice made for efficiency.)
     """
-    __slots__ = ('id', 'initial', 'current')
+    # __slots__ = ('id', 'initial', 'current')
+    #   `torch.load` complains if we follow these best practices, since it gives us the props of `nn.Module`s.
     _setters = []
-    _losses = []
+    _losses = [0.]
     _episodes = []
     def __init__(self, shape, device=None):
         super().__init__()
         x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device)
         self.id = id(self) # Might expose OS-level details. And might collide between processes.
         self.initial = nn.parameter.Parameter(x, requires_grad=True)
-        self.current = None
+        self.current = self.initial+0 # `+0`: no duplicate `Parameter` here.
+    def __getstate__(self):
+        """Custom pickling, for about ≈400-byte savings."""
+        return self.id, self.initial, self.current.detach()
+    def __setstate__(self, state):
+        super().__init__()
+        self.id, self.initial, self.current = state
     def __call__(self, to=None):
         """Either:
         - Get. Either the initial value, or the previously-set value.
         - Set, with `x` as an arg. Remembers & returns `x`."""
-        assert len(State._episodes) > 0, "Use `with State.Episode():`"
-        State._episodes[-1]._register(self)
+        if len(State._episodes) > 0:
+            State._episodes[-1]._register(self)
         if to is not None:
             for fn in State._setters:
                 r = fn(self, to)
@@ -53,7 +62,7 @@ class State(nn.Module):
         - `State.loss(L)`: adds `L.sum()` to the current loss.
         - `State.loss()`: reports the current loss. Useful for logging.
         - `State.loss(True)`: reports the current loss and resets it to 0. Useful for mid-episode `State.loss(True).backward()`."""
-        assert len(State._losses) > 0, "Use `with State.Episode():`"
+        assert len(State._losses) > 0
         if isinstance(reset, bool): # We were asked to report the loss.
             L = State._losses[-1]
             if reset: State._losses[-1] = 0.
@@ -121,7 +130,7 @@ class State(nn.Module):
         Example uses:
         - `lambda state, to: state.initial if random.randint(1,100)==1 else to`: hard-reset.
         - `lambda state, to: state.initial*.001 + .999*to`: soft-reset, for very-long episodes.
-        - `lambda state, to: State.loss((state() - to.detach()).square())`: predict updates and maximize mutual information, for extracting good features and skipping updates.
+        - `lambda state, to: State.loss((state() - to.detach()).square())`: predict updates and maximize [mutual information](https://en.wikipedia.org/wiki/Directed_information), for extracting good features and skipping updates.
         """
         __slots__ = ('fn',)
         def __init__(self, fn): self.fn = fn
@@ -138,30 +147,15 @@ if __name__ == '__main__': # pragma: no cover
     def run(f): f()
     @run
     def test0():
-        """No-`State.Episode` operations on `State`s don't work. Neither do recursive episodes."""
+        """Basic `State` operation."""
         s = State((1,1))
-        try:
-            s()
-            raise RuntimeError()
-        except AssertionError: pass
-        try:
-            s(2)
-            raise RuntimeError()
-        except AssertionError: pass
-        try:
-            State.loss()
-            raise RuntimeError()
-        except AssertionError: pass
-        try:
-            ep = State.Episode()
-            with ep:
-                with ep:
-                    ...
-            raise RuntimeError()
-        except AssertionError: pass
+        s(s() + 1)
+        s(s() * 2)
+        s().sum().backward()
+        assert (s.initial.grad == 2*torch.ones((1,1))).all()
     @run
     def test1():
-        """Basic `State` operation."""
+        """`State.Episode` operation."""
         s = State((1,1))
         with State.Episode():
             s(s() + 1)
@@ -176,7 +170,7 @@ if __name__ == '__main__': # pragma: no cover
         with ep:
             s(s() + 1)
             s(s() * 2)
-        assert s.current is None
+        assert (s.initial == s.current).all()
         with ep:
             s().sum().backward()
             assert (s.initial.grad == 2*torch.ones((1,1))).all()
@@ -193,6 +187,16 @@ if __name__ == '__main__': # pragma: no cover
             assert (s.initial.grad == torch.ones((1,1))).all()
     @run
     def test4():
+        """No recursive `State.Episodes`."""
+        try:
+            ep = State.Episode()
+            with ep:
+                with ep:
+                    ...
+            raise RuntimeError()
+        except AssertionError: pass
+    @run
+    def test5():
         """`State.loss` applications."""
         s = State(torch.zeros((1,1)))
         with State.Episode():
@@ -203,7 +207,7 @@ if __name__ == '__main__': # pragma: no cover
             assert (State.loss() == torch.tensor(5.)).all()
         assert (s.initial.grad == torch.tensor([[10.]])).all()
     @run
-    def test5():
+    def test6():
         """`State.Setter` applications."""
         s = State(torch.zeros((1,1)))
         with State.Setter(lambda state, to: (state() + to) / 2):
@@ -212,7 +216,20 @@ if __name__ == '__main__': # pragma: no cover
                 assert (s() == torch.tensor([[.5]])).all()
                 s(s() + 1)
                 assert (s() == torch.tensor([[1.]])).all()
-    # TODO: (Also want a test for saving/loading, with an episode, making sure that it works correctly.)
-    #   TODO: …How to support save+load?… What was PyTorch's way of doing that, again?
-    #   TODO: Should we use torch.save or nn.Module.load_state_dict? (Would `torch.save` "just work", since it just pickles?)
+    @run
+    def test7():
+        """Saving and loading `State`s."""
+        s = State(torch.zeros((1,1)))
+        ep = State.Episode()
+        import io
+        file = io.BytesIO()
+        with ep:
+            s(s() + 1)
+            s(s() + 2)
+            torch.save(s, file)
+        # print(file.getbuffer().nbytes, 'bytes')
+        file.seek(0)
+        s = torch.load(file)
+        s(s() + 3)
+        assert (s() == torch.tensor([[6.]])).all()
     print('Tests OK')
