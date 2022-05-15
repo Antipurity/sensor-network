@@ -19,7 +19,8 @@ class State(nn.Module):
     In addition:
     - `State.loss(…)`: handles an episode's loss in one place.
     - `with State.Episode():` for starting a new unroll, with the initial `State`. (Which is differentiable; what else would you reasonably reset to? Either a frozen tensor or a frozen past state, none of which allow for efficient learning.)
-    - TODO:"""
+    - TODO:
+    """
     __slots__ = ('id', 'initial', 'current')
     _setters = []
     _losses = []
@@ -57,8 +58,13 @@ class State(nn.Module):
             State._losses[-1] = State._losses[-1] + reset.sum()
 
     class Episode:
-        """
-        TODO:
+        """`with State.Episode(): ...`
+
+        Represents one trajectory, unrolled so that learning can happen on it. Each `State` starts at its initial value within it.
+
+        Can be pre-created and re-entered many times. (But not recursively. For that, use normal re-entrance: leave all intermediate episodes, return to this one, then re-enter intermediates.)
+
+        Encountered `State`s are not garbage-collected automatically. Use `ep.remove(state)` if that is really required.
         """
         __slots__ = ('state_obj', 'state_old', 'restorable', 'active')
         def __init__(self):
@@ -67,7 +73,7 @@ class State(nn.Module):
             self.restorable = set()
             self.active = False
         def __enter__(self):
-            assert not self.active, ""
+            assert not self.active, "Recursive re-entry is not allowed, so express it with normal re-entry"
             self.active = True # No recursive re-entry.
             State._losses.append(0.) # Allow losses.
             State._episodes.append(self) # Make ourselves known.
@@ -112,13 +118,16 @@ class State(nn.Module):
 
 if __name__ == '__main__': # pragma: no cover
     def run(f): f() # TODO: Use this as a decorator for tests.
-    x=State((5,6))
-    with State.Episode():
-        x(x() + 1)
-        x(x() * 2)
-        print(len([*x.parameters()]))
-        x().sum().backward()
-        print(x.initial.grad)
+    # TODO: Test that no-Episode operations don't work.
+    @run
+    def test1():
+        """Just normal state action."""
+        x=State((1,1))
+        with State.Episode():
+            x(x() + 1)
+            x(x() * 2)
+            x().sum().backward()
+            print(x.initial.grad) # TODO: Assert instead.
     # TODO: Test basic operation.
     # TODO: Test re-entering the same episode.
     # TODO: Test nested episodes.
