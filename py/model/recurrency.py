@@ -128,7 +128,7 @@ class State(nn.Module):
         Within this context, `State` updates will go through the specified function first. To not change `to`, return `to` or `None`.
 
         Example uses:
-        - `lambda state, to: state.initial if random.randint(1,100)==1 else to`: hard-reset.
+        - `lambda state, to: state.initial+0 if random.randint(1,100)==1 else to`: hard-reset.
         - `lambda state, to: state.initial*.001 + .999*to`: soft-reset, for very-long episodes.
         - `lambda state, to: State.loss((state() - to.detach()).square())`: predict updates and maximize [mutual information](https://en.wikipedia.org/wiki/Directed_information), for extracting good features and skipping updates.
         """
@@ -142,7 +142,11 @@ class State(nn.Module):
 class SRWM(nn.Module):
     """`SRWM(ins, outs, batch_size=None, device=None)`
 
-    TODO: [SRWM](https://arxiv.org/pdf/2202.05780.pdf)
+    [Self-referential weight matrix](https://arxiv.org/pdf/2202.05780.pdf): a linear-time RNN-like alternative to attention, with meta-learning built-in.
+    - `ins`, `outs`: sizes of input & output vectors.
+    - `batch_size`: if `None`, inputs should be 1D vectors, else `(batch_size, 1, ?)`-shaped tensors.
+
+    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.
     """
     def __init__(self, ins, outs, batch_size=None, device=None):
         super().__init__()
@@ -155,6 +159,7 @@ class SRWM(nn.Module):
         W = self.W()
         ins, outs = self.ins, self.outs
         si, sm = self.sigmoid, self.softmax
+        assert x.shape[-1] == ins
         y, k, q, lr = torch.split(sm(x) @ W, (ins, outs, outs, 1), -1)
         vk, vq = sm(k) @ W, sm(q) @ W
         self.W(W + (si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1))
