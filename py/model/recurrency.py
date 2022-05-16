@@ -139,7 +139,27 @@ class State(nn.Module):
 
 
 
-# TODO: …Also SRWM…
+class SRWM(nn.Module):
+    """`SRWM(ins, outs, batch_size=None, device=None)`
+
+    TODO: [SRWM](https://arxiv.org/pdf/2202.05780.pdf)
+    """
+    def __init__(self, ins, outs, batch_size=None, device=None):
+        super().__init__()
+        self.ins, self.outs = ins, outs
+        O = outs + ins + ins + 1
+        self.W = State((ins, O) if batch_size is None else (batch_size, ins, O), device=device)
+        self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax(-1)
+    def __call__(self, x):
+        W = self.W()
+        ins, outs = self.ins, self.outs
+        si, sm = self.sigmoid, self.softmax
+        y, k, q, lr = torch.split(sm(x) @ W, (ins, outs, outs, 1), -1)
+        vk, vq = sm(k) @ W, sm(q) @ W
+        self.W(W + (si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1))
+        return y
+    # TODO: …How do we implement the multihead case…
 
 
 
@@ -232,4 +252,5 @@ if __name__ == '__main__': # pragma: no cover
         s = torch.load(file)
         s(s() + 3)
         assert (s() == torch.tensor([[6.]])).all()
+    # TODO: Also a test that creates a few SRWM-Transformer layers and trains them.
     print('Tests OK')
