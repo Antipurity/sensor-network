@@ -140,31 +140,39 @@ class State(nn.Module):
 
 
 class SRWM(nn.Module):
-    """`SRWM(ins, outs, batch_size=None, device=None)`
+    """`SRWM(ins, outs, heads=1, device=None)`
 
-    [Self-referential weight matrix](https://arxiv.org/pdf/2202.05780.pdf): a linear-time RNN-like alternative to attention, with meta-learning built-in.
+    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to attention, with meta-learning built-in.
     - `ins`, `outs`: sizes of input & output vectors.
-    - `batch_size`: if `None`, inputs should be 1D vectors, else `(batch_size, 1, ?)`-shaped tensors.
+    - `heads`: splits inputs into this many sub-tensors, operates on each independently, then reassembles.
 
     Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.
+
+    Use `State.Episode` to train this. Inputs should be tensors shaped either as `(ins,)` or `(batch_size, ins)`.
     """
-    def __init__(self, ins, outs, batch_size=None, device=None):
+    def __init__(self, ins, outs, heads=1, device=None):
+        assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
         super().__init__()
-        self.ins, self.outs = ins, outs
-        O = outs + ins + ins + 1
-        self.W = State((ins, O) if batch_size is None else (batch_size, ins, O), device=device)
+        self.ins, self.outs, self.heads = ins, outs, heads
+        self.W = State((ins//heads, outs + ins//heads + ins//heads + 1), device=device)
+        #   (Here, just 1 global learning rate.)
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(-1)
     def __call__(self, x):
         W = self.W()
-        ins, outs = self.ins, self.outs
+        ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
         assert x.shape[-1] == ins
-        y, k, q, lr = torch.split(sm(x) @ W, (ins, outs, outs, 1), -1)
+        y, k, q, lr = torch.split(sm(_head(x,h)) @ W, (ins, outs, outs, 1), -1)
         vk, vq = sm(k) @ W, sm(q) @ W
-        self.W(W + (si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1))
-        return y
-    # TODO: …How do we implement the multihead case…
+        self.W(W + _unhead(si(lr) * (vq - vk), h).unsqueeze(-2) * sm(_unhead(k,h)).unsqueeze(-1))
+        return _unhead(y, h)
+def _head(x, h):
+    if h == 1: return x
+    return x.reshape(*x.shape[:-1], h, x.shape[-1]//h)
+def _unhead(y, h):
+    if h == 1: return y
+    return y.reshape(*y.shape[:-2], h * y.shape[-1])
 
 
 
@@ -257,5 +265,5 @@ if __name__ == '__main__': # pragma: no cover
         s = torch.load(file)
         s(s() + 3)
         assert (s() == torch.tensor([[6.]])).all()
-    # TODO: Also a test that creates a few SRWM-Transformer layers and trains them.
+    # TODO: Also a test that creates a few multihead SRWM-Transformer layers and trains them.
     print('Tests OK')
