@@ -140,18 +140,19 @@ class State(nn.Module):
 
 
 class SRWM(nn.Module):
-    """`SRWM(ins, outs, heads=1, device=None)`
+    """`SRWM(ins, outs=ins, heads=1, device=None)`
 
-    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to attention, with meta-learning built-in.
+    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
     - `ins`, `outs`: sizes of input & output vectors.
     - `heads`: splits inputs into this many sub-tensors, operates on each independently, then reassembles.
 
-    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.
+    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers. (The sequence of input vectors has to be presented not in parallel, but one-by-one.)
 
     Use `State.Episode` to train this. Inputs should be tensors shaped either as `(ins,)` or `(batch_size, ins)`.
     """
-    def __init__(self, ins, outs, heads=1, device=None):
+    def __init__(self, ins, outs=..., heads=1, device=None):
         assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
+        if outs is ...: outs = ins
         super().__init__()
         self.ins, self.outs, self.heads = ins, outs, heads
         self.W = State((ins//heads, outs + ins//heads + ins//heads + 1), device=device)
@@ -265,5 +266,40 @@ if __name__ == '__main__': # pragma: no cover
         s = torch.load(file)
         s(s() + 3)
         assert (s() == torch.tensor([[6.]])).all()
-    # TODO: Also a test that creates a few multihead SRWM-Transformer layers and trains them.
+    @run
+    def test8():
+        """Using `SRWM` for actual NN training.
+
+        We learn to denoise samples (which is pretty-much equivalent to classification in realistic NNs, [due to neural collapse](https://arxiv.org/abs/2112.15121))."""
+        import random
+        class SkipConnection(nn.Module):
+            def __init__(self, fn): super().__init__();  self.fn = fn
+            def forward(self, x): return x + self.fn(x)
+        N = 32
+        net = nn.Sequential(
+            SkipConnection(nn.Linear(N, N)),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+        )
+        opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+        classes, examples_per_class = 3, 3
+        batch_sz = 16
+        noise_magnitude = .1
+        for _ in range(5000):
+            # First give a few training examples, then the test examples.
+            with State.Episode():
+                cls = torch.randn(classes, batch_sz, N // 2)
+                def example(of_class=None):
+                    if of_class is None: of_class = random.randrange(classes)
+                    return cls[of_class] + noise_magnitude * torch.randn(N), cls[of_class]
+                for train in range(classes * examples_per_class):
+                    net(torch.cat(example(), -1))
+                for test in range(examples_per_class):
+                    ex, cl = example(test)
+                    cl_pred = net(torch.cat((ex, torch.zeros(batch_sz, N//2)), -1))
+                    State.loss((cl_pred - cl).square())
+                print('L2', State.loss().detach().cpu().numpy()) # TODO:
+                opt.step();  opt.zero_grad()
     print('Tests OK')

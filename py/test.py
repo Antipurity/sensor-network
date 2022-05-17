@@ -190,7 +190,7 @@ def h(in_sz = state_sz, out_sz = state_sz): # A cross-cell transform.
         nn.LayerNorm(in_sz),
         nn.ReLU(),
         SelfAttention(embed_dim=in_sz, num_heads=2),
-        f(in_sz, out_sz),
+        f(in_sz, out_sz), # TODO: …No nested skip-connections, do it properly (it's just 2 one-liners anyway)…
     )
 def norm(x, axis=None, eps=1e-5):
     if axis is not None:
