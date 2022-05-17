@@ -31,9 +31,9 @@ class State(nn.Module):
     _episodes = []
     def __init__(self, shape, device=None):
         super().__init__()
-        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device)
+        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device, requires_grad=True)
         self.id = id(self) # Might expose OS-level details. And might collide between processes.
-        self.initial = nn.parameter.Parameter(x, requires_grad=True)
+        self.initial = nn.parameter.Parameter(x)
         self.current = self.initial+0 # `+0`: no duplicate `Parameter` here.
     def __getstate__(self):
         """Custom pickling, for about ≈400-byte savings."""
@@ -75,6 +75,7 @@ class State(nn.Module):
 
         Represents one trajectory, unrolled so that learning can happen on it. Each `State` starts at its initial value within it.
 
+        Optimizer steps should go *after* the episode, if using `State.loss(…)`.    
         Can be pre-created and re-entered many times. (But not recursively. For that, use normal re-entrance: leave all intermediate episodes, return to this one, then re-enter intermediates.)
 
         Encountered `State`s are not garbage-collected automatically. Use `ep.remove(state)` if that is really required.
@@ -140,6 +141,34 @@ class State(nn.Module):
 
 
 class SRWM(nn.Module):
+    """`SRWM(ins, outs=ins, device=None)`
+
+    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
+
+    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers. (The sequence of input vectors has to be presented not in parallel, but one-by-one.)
+
+    Use `State.Episode` to train this. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, ins)`.
+    """
+    def __init__(self, ins, outs=..., device=None):
+        if outs is ...: outs = ins
+        super().__init__()
+        self.ins, self.outs = ins, outs
+        self.split_sz = (outs, ins, ins, 1)
+        self.W = State((ins, sum(self.split_sz)), device=device)
+        #   (Here, just 1 global learning rate.)
+        self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax(-1)
+    def __call__(self, x):
+        W = self.W()
+        ins, outs = self.ins, self.outs
+        si, sm = self.sigmoid, self.softmax
+        assert x.shape[-1] == ins
+        x = x.unsqueeze(-2) # TODO: …If we still do this, then there's no point to NOT already be implementing multihead SRWM, right…
+        y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
+        vk, vq = sm(k) @ W, sm(q) @ W
+        self.W(W + ((si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1)).squeeze(-3))
+        return y.squeeze(-1)
+class SRWM(nn.Module): # TODO:
     """`SRWM(ins, outs=ins, heads=1, device=None)`
 
     [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
@@ -148,14 +177,16 @@ class SRWM(nn.Module):
 
     Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers. (The sequence of input vectors has to be presented not in parallel, but one-by-one.)
 
-    Use `State.Episode` to train this. Inputs should be tensors shaped either as `(ins,)` or `(batch_size, ins)`.
+    Use `State.Episode` to train this. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, ins)`.
     """
     def __init__(self, ins, outs=..., heads=1, device=None):
         assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
+        assert outs % heads == 0, "Head-count must divide output-size; slice the output or something"
         if outs is ...: outs = ins
         super().__init__()
         self.ins, self.outs, self.heads = ins, outs, heads
-        self.W = State((ins//heads, outs + ins//heads + ins//heads + 1), device=device)
+        self.split_sz = (outs//heads, ins//heads, ins//heads, 1)
+        self.W = State((heads, ins//heads, sum(self.split_sz)), device=device)
         #   (Here, just 1 global learning rate.)
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(-1)
@@ -164,16 +195,17 @@ class SRWM(nn.Module):
         ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
         assert x.shape[-1] == ins
-        y, k, q, lr = torch.split(sm(_head(x,h)) @ W, (ins, outs, outs, 1), -1)
+        y, k, q, lr = torch.split(sm(_head(x,h)) @ W, self.split_sz, -1)
         vk, vq = sm(k) @ W, sm(q) @ W
-        self.W(W + _unhead(si(lr) * (vq - vk), h).unsqueeze(-2) * sm(_unhead(k,h)).unsqueeze(-1))
+        self.W(W + ((si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1)).squeeze(-3))
+        #   TODO: …No way to compute many updates in parallel (but not in batch), right?… Like, maybe replace the outer product by matmul, where the currently-1 dimension is the update count…?
+        #     (…Maybe we SHOULD do this after all, even if not covered in the paper, since computational efficiency may just take priority…)
         return _unhead(y, h)
 def _head(x, h):
-    if h == 1: return x
-    return x.reshape(*x.shape[:-1], h, x.shape[-1]//h)
+    return x.reshape(*x.shape[:-1], h, 1, x.shape[-1]//h)
 def _unhead(y, h):
-    if h == 1: return y
-    return y.reshape(*y.shape[:-2], h * y.shape[-1])
+    assert y.shape[-3] == h
+    return y.reshape(*y.shape[:-3], h * y.shape[-1])
 
 
 
@@ -273,33 +305,53 @@ if __name__ == '__main__': # pragma: no cover
         We learn to denoise samples (which is pretty-much equivalent to classification in realistic NNs, [due to neural collapse](https://arxiv.org/abs/2112.15121))."""
         import random
         class SkipConnection(nn.Module):
-            def __init__(self, fn): super().__init__();  self.fn = fn
+            def __init__(self, *fns): super().__init__();  self.fn = nn.Sequential(*fns)
             def forward(self, x): return x + self.fn(x)
         N = 32
         net = nn.Sequential(
-            SkipConnection(nn.Linear(N, N)),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            SRWM(N, N, heads=1), # TODO: …Why does this fail to learn anything… Even at 500, loss is still 800… Even though there *is* gradient, and `opt` DOES know…
+            #   …Learning is at least *non-zero*… But still: why so non-existent?…
+            #   …Even an autoencoder is too much to ask for…
+            # nn.Linear(N, N),
+            # SkipConnection(nn.Linear(N, N)),
+            # # TODO: …Are we underperforming?… Absolutely:
+            # #   1 linear layer reaches 20 at 5k…
+            # #   2 linear layers reach 20 at 5k…
+            # #   1 SRWM reaches 350 at 5k… (Loss at 0 is 500.)
+            # #   SRWM+linear reach 150…120 at 2k…5k…
+            # #   TODO: How can we find the bug?…
+            # # TODO: …Compare the speeds of SRWM and Linear… …Like 3…5 times slower, with like 3…5 times more CPU utilization… …Can we optimize it… (…Multi-update formulation, maybe?…)
+            # #   …Wait, was `torch.autograd.set_detect_anomaly(True)` the cause of slowness… …Not at all.
+            # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
+            # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=1)),
+            # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
         )
+        S = State((1,32)) # TODO:
+        optS = torch.optim.Adam(S.parameters(), lr=1e-3) # TODO:
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
-        classes, examples_per_class = 3, 3
-        batch_sz = 16
-        noise_magnitude = .1
-        for _ in range(5000):
+        classes, examples_per_class = 2, 2
+        batch_sz = 16 # TODO: 16
+        noise_magnitude = .2
+        for minibatch in range(5000):
             # First give a few training examples, then the test examples.
             with State.Episode():
-                cls = torch.randn(classes, batch_sz, N // 2)
+                cls = torch.randn(classes, batch_sz, N//2)
                 def example(of_class=None):
                     if of_class is None: of_class = random.randrange(classes)
-                    return cls[of_class] + noise_magnitude * torch.randn(N), cls[of_class]
+                    noise = noise_magnitude * torch.randn(batch_sz, N//2)
+                    return cls[of_class] + noise, cls[of_class]
                 for train in range(classes * examples_per_class):
                     net(torch.cat(example(), -1))
-                for test in range(examples_per_class):
+                for test in range(classes):
                     ex, cl = example(test)
-                    cl_pred = net(torch.cat((ex, torch.zeros(batch_sz, N//2)), -1))
-                    State.loss((cl_pred - cl).square())
-                print('L2', State.loss().detach().cpu().numpy()) # TODO:
-                opt.step();  opt.zero_grad()
+                    cl_pred = net(torch.cat((ex, torch.zeros_like(cl)), -1))
+                    State.loss((cl_pred[..., :N//2] - cl).square())
+                print(minibatch, 'L2', State.loss().detach().cpu().numpy()) # TODO:
+            # print('               ', [*net.modules()][2].initial.grad.abs().sum()) # TODO:
+            # print('               ', S.initial.grad.abs().sum()) # TODO:
+            opt.step();  opt.zero_grad(True)
+            optS.step();  optS.zero_grad(True) # TODO:
     print('Tests OK')
