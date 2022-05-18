@@ -31,7 +31,7 @@ class State(nn.Module):
     _episodes = []
     def __init__(self, shape, device=None):
         super().__init__()
-        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device, requires_grad=True)
+        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device, requires_grad=True) * sum(shape) ** -.5
         self.id = id(self) # Might expose OS-level details. And might collide between processes.
         self.initial = nn.parameter.Parameter(x)
         self.current = self.initial+0 # `+0`: no duplicate `Parameter` here.
@@ -194,10 +194,17 @@ class SRWM(nn.Module): # TODO:
         W = self.W()
         ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
+        # TODO: …Should we maybe temporarily implement the DeltaNet?…
+        #   (Can't think of anything else to do…)
         assert x.shape[-1] == ins
         y, k, q, lr = torch.split(sm(_head(x,h)) @ W, self.split_sz, -1)
         vk, vq = sm(k) @ W, sm(q) @ W
-        self.W(W + ((si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1)).squeeze(-3))
+        update = ((si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1)).squeeze(-3)
+        # print(W.shape, update.shape)
+        self.W(W + update)
+        # print('                          lr', si(lr).mean().detach().cpu().numpy()) # TODO: …LR does go up, to near-1…
+        # print('                          W', W.abs().mean().detach().cpu().numpy(), '+', update.abs().mean().detach().cpu().numpy()) # TODO: …W also increases each parameter, and its stdev…
+        #   …Also, why *are* updates about 7e-4 initially, 7e-3 at 5k?
         #   TODO: …No way to compute many updates in parallel (but not in batch), right?… Like, maybe replace the outer product by matmul, where the currently-1 dimension is the update count…?
         #     (…Maybe we SHOULD do this after all, even if not covered in the paper, since computational efficiency may just take priority…)
         return _unhead(y, h)
@@ -333,23 +340,40 @@ if __name__ == '__main__': # pragma: no cover
         optS = torch.optim.Adam(S.parameters(), lr=1e-3) # TODO:
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
         classes, examples_per_class = 2, 2
-        batch_sz = 16 # TODO: 16
+        batch_sz = 16
         noise_magnitude = .2
         for minibatch in range(5000):
-            # First give a few training examples, then the test examples.
             with State.Episode():
-                cls = torch.randn(classes, batch_sz, N//2)
-                def example(of_class=None):
-                    if of_class is None: of_class = random.randrange(classes)
-                    noise = noise_magnitude * torch.randn(batch_sz, N//2)
-                    return cls[of_class] + noise, cls[of_class]
-                for train in range(classes * examples_per_class):
-                    net(torch.cat(example(), -1))
-                for test in range(classes):
-                    ex, cl = example(test)
-                    cl_pred = net(torch.cat((ex, torch.zeros_like(cl)), -1))
-                    State.loss((cl_pred[..., :N//2] - cl).square())
+                # TODO: Simplified env: just remember the one previous input. (Would really tell us whether ANY RNN-learning is happening.)
+                #   TODO: Why isn't any RNN learning happening?
+                #   TODO: Have the `RNN` class, taking the role of `nn.Sequential` (with the state-sz hyperparam); state is given & taken as input & output. (If *that* doesn't work, we'll know where the bug is: in `State`.)
+                def example():
+                    cond = torch.rand(batch_sz,1) < .5
+                    bit = torch.ones(batch_sz,1)
+                    bit = torch.where(cond, bit, -bit)
+                    return torch.cat((bit, torch.zeros(batch_sz,N-1)), -1)
+                prev = example()
+                net(prev)
+                for _ in range(12):
+                    next = example()
+                    pred = net(next)
+                    State.loss((pred - prev).square())
+                    prev = next
                 print(minibatch, 'L2', State.loss().detach().cpu().numpy()) # TODO:
+            # First give a few training examples, then the test examples.
+            # with State.Episode():
+            #     cls = torch.randn(classes, batch_sz, N//2)
+            #     def example(of_class=None):
+            #         if of_class is None: of_class = random.randrange(classes)
+            #         noise = noise_magnitude * torch.randn(batch_sz, N//2)
+            #         return cls[of_class] + noise, cls[of_class]
+            #     for train in range(classes * examples_per_class):
+            #         net(torch.cat(example(), -1))
+            #     for test in range(classes):
+            #         ex, cl = example(test)
+            #         cl_pred = net(torch.cat((ex, torch.zeros_like(cl)), -1))
+            #         State.loss((cl_pred[..., :N//2] - cl).square())
+            #     print(minibatch, 'L2', State.loss().detach().cpu().numpy()) # TODO:
             # print('               ', [*net.modules()][2].initial.grad.abs().sum()) # TODO:
             # print('               ', S.initial.grad.abs().sum()) # TODO:
             opt.step();  opt.zero_grad(True)
