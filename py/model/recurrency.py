@@ -140,6 +140,23 @@ class State(nn.Module):
 
 
 
+class RNN(nn.Module):
+    """RNN with `State`-based state: a neural net, with a state vector appended at input & output."""
+    __slots__ = ('state', 'sz', 'fn')
+    def __init__(self, state_size, *fns, device=None):
+        super().__init__()
+        assert isinstance(state_size, int)
+        self.state = State((state_size,), device)
+        self.sz = state_size
+        self.fn = fns[0] if len(fns) == 1 else nn.Sequential(*fns)
+    def forward(self, *ins):
+        x = torch.cat([self.state(), *ins], -1)
+        y = self.fn(x)
+        self.state(y[..., :self.sz])
+        return y[..., self.sz:]
+
+
+
 class SRWM(nn.Module):
     """`SRWM(ins, outs=ins, device=None)`
 
@@ -336,6 +353,10 @@ if __name__ == '__main__': # pragma: no cover
             # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
             # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
         )
+        net = RNN(N,
+            nn.Linear(N+N, N+N),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
+        )
         S = State((1,32)) # TODO:
         optS = torch.optim.Adam(S.parameters(), lr=1e-3) # TODO:
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
@@ -346,7 +367,7 @@ if __name__ == '__main__': # pragma: no cover
             with State.Episode():
                 # TODO: Simplified env: just remember the one previous input. (Would really tell us whether ANY RNN-learning is happening.)
                 #   TODO: Why isn't any RNN learning happening?
-                #   TODO: Have the `RNN` class, taking the role of `nn.Sequential` (with the state-sz hyperparam); state is given & taken as input & output. (If *that* doesn't work, we'll know where the bug is: in `State`.)
+                #   TODO: Use `RNN(sz, *fn)` for `net`.
                 def example():
                     cond = torch.rand(batch_sz,1) < .5
                     bit = torch.ones(batch_sz,1)
