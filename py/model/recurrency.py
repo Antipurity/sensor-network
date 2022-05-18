@@ -141,7 +141,9 @@ class State(nn.Module):
 
 
 class RNN(nn.Module):
-    """RNN with `State`-based state: a neural net, with a state vector appended at input & output."""
+    """RNN: a neural net, with a state vector appended at the front of input & output.
+
+    Has `State`-based state, so don't manage state variables explicitly, and do train it inside `State.Episode`s."""
     __slots__ = ('state', 'sz', 'fn')
     def __init__(self, state_size, *fns, device=None):
         super().__init__()
@@ -150,42 +152,18 @@ class RNN(nn.Module):
         self.sz = state_size
         self.fn = fns[0] if len(fns) == 1 else nn.Sequential(*fns)
     def forward(self, *ins):
-        x = torch.cat([self.state(), *ins], -1)
+        x = torch.cat([self.state().expand(ins[0].shape), *ins], -1)
         y = self.fn(x)
         self.state(y[..., :self.sz])
         return y[..., self.sz:]
 
 
 
+# TODO: DeltaNet
+
+
+
 class SRWM(nn.Module):
-    """`SRWM(ins, outs=ins, device=None)`
-
-    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
-
-    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers. (The sequence of input vectors has to be presented not in parallel, but one-by-one.)
-
-    Use `State.Episode` to train this. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, ins)`.
-    """
-    def __init__(self, ins, outs=..., device=None):
-        if outs is ...: outs = ins
-        super().__init__()
-        self.ins, self.outs = ins, outs
-        self.split_sz = (outs, ins, ins, 1)
-        self.W = State((ins, sum(self.split_sz)), device=device)
-        #   (Here, just 1 global learning rate.)
-        self.sigmoid = nn.Sigmoid()
-        self.softmax = nn.Softmax(-1)
-    def __call__(self, x):
-        W = self.W()
-        ins, outs = self.ins, self.outs
-        si, sm = self.sigmoid, self.softmax
-        assert x.shape[-1] == ins
-        x = x.unsqueeze(-2) # TODO: …If we still do this, then there's no point to NOT already be implementing multihead SRWM, right…
-        y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
-        vk, vq = sm(k) @ W, sm(q) @ W
-        self.W(W + ((si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1)).squeeze(-3))
-        return y.squeeze(-1)
-class SRWM(nn.Module): # TODO:
     """`SRWM(ins, outs=ins, heads=1, device=None)`
 
     [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
@@ -213,6 +191,7 @@ class SRWM(nn.Module): # TODO:
         si, sm = self.sigmoid, self.softmax
         # TODO: …Should we maybe temporarily implement the DeltaNet?…
         #   (Can't think of anything else to do…)
+        #   TODO: Yes.
         assert x.shape[-1] == ins
         y, k, q, lr = torch.split(sm(_head(x,h)) @ W, self.split_sz, -1)
         vk, vq = sm(k) @ W, sm(q) @ W
@@ -322,6 +301,7 @@ if __name__ == '__main__': # pragma: no cover
         s = torch.load(file)
         s(s() + 3)
         assert (s() == torch.tensor([[6.]])).all()
+    # TODO: Separate the RNN-with-bits thing into a separate test.
     @run
     def test8():
         """Using `SRWM` for actual NN training.
@@ -344,10 +324,10 @@ if __name__ == '__main__': # pragma: no cover
             # #   1 SRWM reaches 350 at 5k… (Loss at 0 is 500.)
             # #   SRWM+linear reach 150…120 at 2k…5k…
             # #   TODO: How can we find the bug?…
+            # #     `RNN` works flawlessly. So, `SRWM` is the bug here.
             # # TODO: …Compare the speeds of SRWM and Linear… …Like 3…5 times slower, with like 3…5 times more CPU utilization… …Can we optimize it… (…Multi-update formulation, maybe?…)
-            # #   …Wait, was `torch.autograd.set_detect_anomaly(True)` the cause of slowness… …Not at all.
             # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
-            # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
             # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
             # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=1)),
             # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
@@ -357,8 +337,6 @@ if __name__ == '__main__': # pragma: no cover
             nn.Linear(N+N, N+N),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
         )
-        S = State((1,32)) # TODO:
-        optS = torch.optim.Adam(S.parameters(), lr=1e-3) # TODO:
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
         classes, examples_per_class = 2, 2
         batch_sz = 16
@@ -366,8 +344,9 @@ if __name__ == '__main__': # pragma: no cover
         for minibatch in range(5000):
             with State.Episode():
                 # TODO: Simplified env: just remember the one previous input. (Would really tell us whether ANY RNN-learning is happening.)
-                #   TODO: Why isn't any RNN learning happening?
-                #   TODO: Use `RNN(sz, *fn)` for `net`.
+                #   TODO: Why isn't `SRWM` learning anything?
+                #     Is it us, or is the idea that doesn't work in a trivialized setting like this?
+                #   TODO: Implement DeltaNet after all.
                 def example():
                     cond = torch.rand(batch_sz,1) < .5
                     bit = torch.ones(batch_sz,1)
@@ -398,5 +377,4 @@ if __name__ == '__main__': # pragma: no cover
             # print('               ', [*net.modules()][2].initial.grad.abs().sum()) # TODO:
             # print('               ', S.initial.grad.abs().sum()) # TODO:
             opt.step();  opt.zero_grad(True)
-            optS.step();  optS.zero_grad(True) # TODO:
     print('Tests OK')
