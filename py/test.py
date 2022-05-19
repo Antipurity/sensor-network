@@ -134,13 +134,18 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 # TODO: With `recurrency.py`, we probably want: obs-labels→obs-pred; obs→nothing; query-labels→actions.
 #   TODO: …The goal can be given as the 'prefix' (rather than as a hidden extra input to NNs), and if we do so, then it's kinda natural to be able to only specify parts of the observation space as goals…
-#     TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
-#       TODO: At unroll-time, generate an observation-cell and estimate time-to-reach-it; and when the prev estimated time runs out, append the named-as-goal cell to observations and update the estimated time.
-#       TODO: At replay-time, TODO:.
-#     (This would be really good from the perspective of a software framework (AKA usability): don't have to code up separate goal-spaces, can just expose new observations, train the model, and immediately use those observations as goals.)
+#     (Amazing for usability: out of the box, users/envs can either allow the model to explore, or specify what they want; and developer-users don't have to program any new goal-spaces, since users/envs can just expose observations then demand to revisit those.)
 #     TODO: How do we do goal relabeling with this? Start an episode with the initial state and a different goal, possibly any observation cells of anything along the trajectory, and possibly inserting a goal-change token right after the observation that reached the goal, to make the NN able to handle suddenly-changing goals? …I do believe so.
-#     TODO: …But can we really use Floyd-Warshall search if we support non-full-state goals?… Wouldn't we be limited to (critic-regularized) autoregressive modeling and distance prediction (and unroll-time action-search I guess) – because Floyd's needs all-to-all pairwise distances, and appending goal-space dst-cells for all pairs is too expensive?… (…Then again, with multiupdating, it *could* be done relatively quickly…)
+#     TODO: …But can we really use Floyd-Warshall search if we support non-full-state goals?… Wouldn't we be limited to (critic-regularized) autoregressive modeling and distance prediction (and unroll-time action-search I guess) – because Floyd's needs all-to-all pairwise distances, and appending goal-space dst-cells for all pairs is too expensive?… (…Then again, with multiupdating, it *could* be done relatively quickly, *and* use full-state goals for estimation…)
 #       (…At least dist-prediction can be done both at obs-level and at act-level… TODO: …Wait: but does act-level really know its goal?… …Does our loss just assume one-goal-at-a-time by giving all cells the same distance to the same goal-state?…)
+#       TODO: …How would we, theoretically, implement per-cell goals?… The distance would need to be queried on a per-obs-name basis. Probably need to append the goals to actions, so that distance can know those. …But: this really would be per-cell goals, with no way to specify cell-combination goals and thus no way to do Floyd's… Our actions would learn to minimize the sum of distances to per-cell goals, which isn't necessarily the same as dist to sum-of-cells goal, which is fine for users but not fine for Floyd's…
+#         Do we really need Floyd's…
+#           (Can't the learned-weight-matrices learn to implement search if it's useful, just to minimize distance-mispredictions…)
+#     TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
+#       TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
+#       TODO: At replay-time, TODO:.
+
+# (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
 
 
 
@@ -162,7 +167,9 @@ import torch.nn as nn
 import sensornet as sn
 import minienv
 from model.rnn import RNN # TODO: …Do we even want *this*? Aren't we kinda tired of BPTT? (And even if we aren't, isn't this trivial to implement?)
+#   TODO: …We have the whole `model.recurrency` thing now, so we should remove both this line and the file.
 from model.loss import CrossCorrelationLoss # TODO: No; don't do this.
+#   TODO: This file isn't used anywhere either, and should be removed too, right?
 from model.log import log, clear
 
 
