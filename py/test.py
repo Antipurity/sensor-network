@@ -132,6 +132,11 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 #           - Mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
 #     - Penalize probably-unconnected components (which could mislead optimization if left untreated, especially with Floyd-Warshall search) like a GAN: at unroll, store `dst`, and on replay, maximize distances to `dst`s. This on-policy loss must be weaker than dist-learning loss.
 
+# With `recurrency.py`, we may want: obs→nothing; query-labels→actions; obs-labels→obs-pred
+#   TODO: What did we want to say here? …Oh yeah: that the goal can be given as the 'prefix', and if we do so, then it's kinda natural to be able to only specify parts of the observation space, and/or combine those goals… Only really need a separate obs→goal per-token NN — OR, maybe even reuse `sn` to change a part of the cell's name to 'goal'…
+#     (This would be really good from the perspective of a software framework (AKA usability): don't have to code up separate goal-spaces, can just expose new observations, train the model, and immediately use those observations as goals.)
+#     TODO: How do we do goal relabeling with this? Start an episode with the initial state and a different goal, possibly any observation cells of anything along the trajectory, and possibly inserting a goal-change token right after the observation that reached the goal, to make the NN able to handle suddenly-changing goals? …I do believe so.
+
 
 
 

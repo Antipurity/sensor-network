@@ -232,8 +232,10 @@ class SRWM(nn.Module):
         W = self.W()
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
-        k, q = sm(k), sm(q)
-        self.W(W + si(lr) * k.transpose(-2,-1) @ ((q - k) @ W))
+        k, q, lr = sm(k), sm(q), si(lr)
+        kt = k.transpose(-2,-1)
+        update = kt @ ((lr * (q - k)) @ W) if x.shape[-2] < self.ins else kt @ (lr * (q - k)) @ W
+        self.W(W + update)
         #   (Note: for speed, `torch.baddbmm(W, m1, m2)` *could* be used, but reshaping around that is harder to implement, unless `len(x.shape)==2`. Might want to consider & measure in the future.)
         return y.transpose(-2,-3).reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
@@ -333,9 +335,8 @@ if __name__ == '__main__': # pragma: no cover
         assert (s() == torch.tensor([[6.]])).all()
     @run
     def test8():
-        """TODO:"""
-        # TODO: Separate the RNN-with-bits thing into a separate test.
-        #   (L2<.5 at 2k — or with full-loss, at 3k.) (Test `RNN`, `DeltaNet`, and `SRWM`; should all work.)
+        """`RNN`, `DeltaNet`, `SRWM` can all learn to remember state."""
+        return # TODO:
         N, batch_sz = 32, 16
         def example():
             """The bit to remember, zero-padded to `N`."""
@@ -385,30 +386,9 @@ if __name__ == '__main__': # pragma: no cover
         import random
         N = 32
         # TODO: Restore the sample-denoising env.
-        net = nn.Sequential( # TODO: This implementation is superseded already, right?
-            SRWM(N, N, heads=1), # TODO: …Why does this fail to learn anything… Even at 500, loss is still 800… Even though there *is* gradient, and `opt` DOES know…
-            #   …Learning is at least *non-zero*… But still: why so non-existent?…
-            #   …Even an autoencoder is too much to ask for…
-            # nn.Linear(N, N),
-            # SkipConnection(nn.Linear(N, N)),
-            # # TODO: …Are we underperforming?… Absolutely:
-            # #   1 linear layer reaches 20 at 5k…
-            # #   2 linear layers reach 20 at 5k…
-            # #   1 SRWM reaches 350 at 5k… (Loss at 0 is 500.)
-            # #   SRWM+linear reach 150…120 at 2k…5k…
-            # #   TODO: How can we find the bug?…
-            # #     `RNN` works flawlessly. So, `SRWM` is the bug here.
-            # #     …Maybe state initialization is at fault — stdev=1 is too much for weights?…
-            # # TODO: …Compare the speeds of SRWM and Linear… …Like 3…5 times slower, with like 3…5 times more CPU utilization… …Can we optimize it… (…Multi-update formulation, maybe?…)
-            # #   TODO: Try `torch.baddbmm` for updating the weight matrix.
-            # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
-            # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
-            # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=1)),
-            # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
-            # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
-        )
-        net = RNN(N,
+        net = RNN(N, # TODO: …Can RNN solve the task?… …No…
+            # …Is the task just unsolvable, meaning that we should just remove the test?…
+            # …If the bit-task *was* able to be solved, but this one can't with exactly the same models, then isn't this the sign that this task is unsolvable? (Maybe because input & output have too much variance, so we can't really memorize anything.)
             nn.Linear(N+N, N+N),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
         )
@@ -419,40 +399,27 @@ if __name__ == '__main__': # pragma: no cover
             #   (Being surrounded by linear layers is necessary to solve this task of remembering 1 bit.)
         )
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
-        classes, examples_per_class = 2, 2
-        batch_sz = 16 # TODO:
-        noise_magnitude = .2
+        classes, examples_per_class = 2, 30
+        batch_sz = 16
+        noise_magnitude = .1
         for minibatch in range(5000):
-            with State.Episode():
-                # Bit-env: just recall the previous one-bit input.
-                def example():
-                    cond = torch.rand(batch_sz,1,1) < .5
-                    bit = torch.ones(batch_sz,1,1)
-                    bit = torch.where(cond, bit, -bit)
-                    return torch.cat((bit, torch.zeros(batch_sz,1,N-1)), -1)
-                next = example()
-                net(next)
-                for _ in range(12):
-                    prev, next = next, example()
-                    pred = net(next)
-                    if minibatch>4000: print(prev[0,0,0].numpy(), pred[0,0,0].detach().numpy()) # TODO:
-                    State.loss((pred - prev).square())
-                print(minibatch, 'L2', (State.loss()/batch_sz).detach().cpu().numpy()) # TODO:
             # First give a few training examples, then the test examples.
-            # with State.Episode():
-            #     cls = torch.randn(classes, batch_sz, 1, N//2)
-            #     def example(of_class=None):
-            #         if of_class is None: of_class = random.randrange(classes)
-            #         noise = noise_magnitude * torch.randn(batch_sz, 1, N//2)
-            #         return cls[of_class] + noise, cls[of_class]
-            #     for train in range(classes * examples_per_class):
-            #         net(torch.cat(example(), -1))
-            #     for test in range(classes):
-            #         ex, cl = example(test)
-            #         cl_pred = net(torch.cat((ex, torch.zeros_like(cl)), -1))
-            #         State.loss((cl_pred[..., :N//2] - cl).square())
-            #     print(minibatch, 'L2', State.loss().detach().cpu().numpy()) # TODO:
-            # print('               ', [*net.modules()][2].initial.grad.abs().sum()) # TODO:
-            # print('               ', S.initial.grad.abs().sum()) # TODO:
+            with State.Episode():
+                cls = torch.randn(classes, batch_sz, 1, N//2)
+                def example(of_class=None):
+                    if of_class is None: of_class = random.randrange(classes)
+                    noise = noise_magnitude * torch.randn(batch_sz, 1, N//2)
+                    return cls[of_class] + noise, cls[of_class]
+                train = torch.cat([torch.cat(example(), -1) for _ in range(classes * examples_per_class)], -2)
+                print(train.shape) # TODO:
+                #   TODO: …Ah: found a bug in multi-updating…
+                net(train)
+                for test in range(classes):
+                    ex, cl = example(test)
+                    cl_pred = net(torch.cat((ex, torch.zeros_like(cl)), -1))
+                    State.loss((cl_pred[..., :N//2] - cl).square())
+                print(minibatch, 'L2', (State.loss().detach()/batch_sz).cpu().numpy()) # TODO:
+                #   TODO: …Is 1.2 loss good or bad? Much lower than the initial 50, so, I'm assuming it has to be good? But what loss do we expect…
+                #     TODO: What's the performance with 0 training examples per class? Is it 1.2 too? …It is. Which is really bad.
             opt.step();  opt.zero_grad(True)
     print('Tests OK')
