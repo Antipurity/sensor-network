@@ -115,7 +115,16 @@ class State(nn.Module):
                 s.current, olds[id] = olds[id], s.current
             self.restorable.update(objs.keys())
 
-        # TODO: …For save/load, maybe return just the `(.state_obj, .state_old)` tuple, assuming that `.restorable` is "all keys in .state_old"?…
+        def __getstate__(self):
+            if self.active:
+                return self.state_obj, {id:s() for id,s in self.state_obj}, self.start_from_initial is True
+            else:
+                return self.state_obj, self.state_old, self.start_from_initial is True
+        def __setstate__(self, state):
+            self.state_obj, self.state_old, self.start_from_initial = state
+            self.restorable = set(self.state_obj.keys())
+            self.active = False
+
         def update(self, fn):
             """Applies `fn(initial, current) → current` to every RNN-state tensor.
 
@@ -124,13 +133,14 @@ class State(nn.Module):
             (If the episode is currently active, this calls `State.Setter`s.)"""
             for id, s in self.state_obj.items():
                 if self.active:
-                    s(fn(s.initial+0, s.current))
+                    s(fn(s.initial+0, s()))
                 else:
                     self.state_old[id] = fn(self.state_old[id])
         def clone(self, start_from_initial=True):
             """Copies the current RNN state."""
             ep = State.Episode(start_from_initial)
             for id, s in self.state_obj.items():
+                if self.active: self._register(s)
                 current = s.current if self.active else self.state_old[id]
                 ep.state_obj[id] = s
                 ep.state_old[id] = current
@@ -144,6 +154,7 @@ class State(nn.Module):
 
         def _register(self, s):
             """Registers a `State` object in this episode, updating its `.current` value if needed."""
+            assert self.active
             id, objs, olds, rest = s.id, self.state_obj, self.state_old, self.restorable
             if id not in rest:
                 if id not in objs:
@@ -154,7 +165,7 @@ class State(nn.Module):
                     elif self.start_from_initial:
                         s.current = s.initial+0 # `+0` to not treat this as an assignable Parameter.
                 else:
-                    return
+                    return # (Yes, this branch does nothing.)
             else:
                 rest.remove(id)
                 olds[id], s.current = s.current, olds[id]
