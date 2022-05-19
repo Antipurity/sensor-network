@@ -31,7 +31,8 @@ class State(nn.Module):
     _episodes = []
     def __init__(self, shape, device=None):
         super().__init__()
-        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device) * sum(shape) ** -.5
+        scale = 1. if isinstance(shape, torch.Tensor) else shape[-2]**-.5 if len(shape)>1 else 1.
+        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device) * scale
         self.id = id(self) # Might expose OS-level details. And might collide between processes.
         self.initial = nn.parameter.Parameter(x, requires_grad=True)
         self.current = self.initial+0 # `+0`: no duplicate `Parameter` here.
@@ -108,6 +109,7 @@ class State(nn.Module):
                 s.current, olds[id] = olds[id], s.current
             self.restorable.update(objs.keys())
 
+        # TODO: For convenience of implementing tBPTT, should have `.update(fn)` which goes through .state_obj and sets the value to fn(value). (`fn` could be `lambda x: x.detach()` for tBPTT.)
         def remove(self, s):
             """Provided instead of any garbage collection: if any `State` object will not be used anymore, then just remove it."""
             del self.state_obj[s.id]
@@ -165,7 +167,7 @@ class RNN(nn.Module):
 
 
 
-class DeltaNet:
+class DeltaNet(nn.Module):
     """`DeltaNet(ins, outs=ins, heads=1, device=None)`
 
     [DeltaNet](https://arxiv.org/abs/2102.11174): a linear-time RNN-like alternative to self-attention, with some meta-learning built-in.
@@ -182,6 +184,7 @@ class DeltaNet:
         if outs is ...: outs = ins
         h = heads
         super().__init__()
+        self.ins, self.outs, self.heads = ins, outs, h
         self.split_sz = (ins//h, outs//h, ins//h, 1)
         self.slow = nn.parameter.Parameter(torch.randn(h, ins//h, sum(self.split_sz), device=device))
         self.fast = State((h, ins//h, outs//h), device=device)
@@ -191,18 +194,23 @@ class DeltaNet:
         ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
         assert x.shape[-1] == ins
-        x = x.reshape(*x.shape[:-2], h, x.shape[-2], x.shape[-1]//h) # Per-head.
 
+        x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         k, v1, q, lr = torch.split(sm(x) @ self.slow, self.split_sz, -1)
         v2 = sm(k) @ self.fast()
         self.fast(self.fast() + si(lr) * ((v1 - v2).transpose(-2,-1) @ sm(k)))
+        # TODO: Fuck around in Python REPL, to make sure we understand the update mechanism correctly: a random weight-matrix, and a key vector, and extract query, and subtract the mm-outer-product, and re-extract query (which should be 0).
+        #   …`q @ (W - (q @ W).transpose(-2,-1) @ q)` doesn't give 0s… In fact, it hardly changes anything in the matrix… Was our impl wrong all along?…
+        #     Has to be… But what's the correct version? Can't get actual outer products to work either…
         y = sm(q) @ self.fast()
-        return y.reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
+        return y.transpose(-2,-3).reshape(*x.shape[:-1], h * y.shape[-1]) # Concat per-head results.
 
 
 
-class SRWM(nn.Module): # TODO: Make this multi-update-capable too. (So that `DeltaNet` really is a drop-in replacement.)
+class SRWM(nn.Module):
     """`SRWM(ins, outs=ins, heads=1, device=None)`
+
+    A drop-in replacement for `DeltaNet`, with more "meta".
 
     [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
     - `ins`, `outs`: sizes of input & output vectors.
@@ -229,7 +237,8 @@ class SRWM(nn.Module): # TODO: Make this multi-update-capable too. (So that `Del
         ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
         assert x.shape[-1] == ins
-        x = x.reshape(*x.shape[:-2], h, x.shape[-2], x.shape[-1]//h)
+
+        x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
         vk, vq = sm(k) @ W, sm(q) @ W
         update = si(lr) * ((vq - vk).transpose(-2, -1) @ sm(k))
@@ -237,7 +246,7 @@ class SRWM(nn.Module): # TODO: Make this multi-update-capable too. (So that `Del
         # print('                          lr', si(lr).mean().detach().cpu().numpy()) # TODO: …LR does go up, to near-1…
         # print('                          W', W.abs().mean().detach().cpu().numpy(), '+', update.abs().mean().detach().cpu().numpy()) # TODO: …W also increases each parameter, and its stdev…
         #   …Also, why *are* updates about 7e-4 initially, 7e-3 at 5k?
-        return y.reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1])
+        return y.transpose(-2,-3).reshape(*x.shape[:-1], h * y.shape[-1]) # Concat per-head results.
 
 
 
@@ -367,17 +376,27 @@ if __name__ == '__main__': # pragma: no cover
             nn.Linear(N+N, N+N),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
         )
-        # TODO: Use DeltaNet.
+        net = nn.Sequential( # TODO: …Why is even DeltaNet unable to learn bits, reaching L2 of 4.4 per batch (VERY slowly, 7.5 at 100) whereas `RNN` reaches 1e-5?…
+            # …But, can't deny that it *is* making *some* progress on the task with time…
+            # Maybe the additive nature of the matrix-update is working against us in this task. (`RNN` *did* perform worse with skip-connections all the way through, after all.)
+            #   More or less (batch_sz=256):
+            #     Without addition in `DeltaNet`: 6 at 600, 6 at 2k.
+            #     With addition: 7 at 2k.
+            #   Removing LR gating too:
+            #     Without addition: 5.2 at 600, 0.6 at 1k, 0.1 at 2k. (Solved.)
+            #     With addition: 9 at 600, 7 at 1k, 5 at 2k.
+            # DeltaNet(N, N),
+            nn.Linear(N, N),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), DeltaNet(N, N, heads=2)), # TODO: heads=2… Well, it runs, so not much to say, right? …Except, we're severely underperforming, though if we enable weight-addition, we're underperforming less…
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+        )
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
         classes, examples_per_class = 2, 2
         batch_sz = 16
         noise_magnitude = .2
         for minibatch in range(5000):
             with State.Episode():
-                # TODO: Simplified env: just remember the one previous input. (Would really tell us whether ANY RNN-learning is happening.)
-                #   TODO: Why isn't `SRWM` learning anything?
-                #     Is it us, or is the idea that doesn't work in a trivialized setting like this?
-                #   TODO: Implement DeltaNet after all.
+                # Bit-env: just recall the previous one-bit input.
                 def example():
                     cond = torch.rand(batch_sz,1,1) < .5
                     bit = torch.ones(batch_sz,1,1)
@@ -388,9 +407,10 @@ if __name__ == '__main__': # pragma: no cover
                 for _ in range(12):
                     next = example()
                     pred = net(next)
-                    State.loss((pred - prev).square())
+                    if minibatch>2000: print(prev[0,0,0].numpy(), pred[0,0,0].detach().numpy()) # TODO: …When seeing sequences of bits, prediction only *gradually* goes in the correct direction: a bit receptive, but not very…
+                    State.loss((pred[..., 0] - prev[..., 0]).square())
                     prev = next
-                print(minibatch, 'L2', State.loss().detach().cpu().numpy()) # TODO:
+                print(minibatch, 'L2', (State.loss()/batch_sz).detach().cpu().numpy()) # TODO:
             # First give a few training examples, then the test examples.
             # with State.Episode():
             #     cls = torch.randn(classes, batch_sz, 1, N//2)
