@@ -168,43 +168,50 @@ class RNN(nn.Module):
 class DeltaNet:
     """`DeltaNet(ins, outs=ins, heads=1, device=None)`
 
-    TODO:
-    
-    TODO: Inputs are shaped as `(1, N)` or `(batch_size, update_count, N)`."""
+    [DeltaNet](https://arxiv.org/abs/2102.11174): a linear-time RNN-like alternative to self-attention, with some meta-learning built-in.
+    - `ins`, `outs`: sizes of input & output vectors.
+    - `heads`: splits inputs into this many sub-tensors, operates on each independently, then reassembles.
+
+    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.    
+    (The sequence of input vectors has to be presented not in parallel, but one-by-one. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, update_count, ins)`; `update_count` can be used to perform many updates at once at the cost of correctness.)
+
+    Use `State.Episode` to train this."""
     def __init__(self, ins, outs=..., heads=1, device=None):
         assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
         assert outs % heads == 0, "Head-count must divide output-size; slice the output or something"
         if outs is ...: outs = ins
+        h = heads
         super().__init__()
-        self.split_sz = (ins, outs, ins, 1)
-        self.slow = nn.parameter.Parameter(torch.randn(ins, sum(self.split_sz), device=device))
-        self.fast = State((ins, outs), device=device)
+        self.split_sz = (ins//h, outs//h, ins//h, 1)
+        self.slow = nn.parameter.Parameter(torch.randn(h, ins//h, sum(self.split_sz), device=device))
+        self.fast = State((h, ins//h, outs//h), device=device)
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(-1)
-    def forward(self, x): # TODO: …How does multi-update interact with head-count; unhead before update? Unlike SRWM which puts heads into `x` and its own weight matrices?
-        # TODO: …Wait: isn't this "multi-update" business reminiscent of per-head operations?…
-        #   So which wins?…
+    def forward(self, x):
         ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
         assert x.shape[-1] == ins
+        x = x.reshape(*x.shape[:-2], h, x.shape[-2], x.shape[-1]//h) # Per-head.
 
-        k, v1, q, lr = torch.split(sm(_head(x,h)) @ self.slow, self.split_sz, -1)
+        k, v1, q, lr = torch.split(sm(x) @ self.slow, self.split_sz, -1)
         v2 = sm(k) @ self.fast()
         self.fast(self.fast() + si(lr) * ((v1 - v2).transpose(-2,-1) @ sm(k)))
-        return sm(q) @ self.fast()
+        y = sm(q) @ self.fast()
+        return y.reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
 
 
-class SRWM(nn.Module):
+class SRWM(nn.Module): # TODO: Make this multi-update-capable too. (So that `DeltaNet` really is a drop-in replacement.)
     """`SRWM(ins, outs=ins, heads=1, device=None)`
 
     [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
     - `ins`, `outs`: sizes of input & output vectors.
     - `heads`: splits inputs into this many sub-tensors, operates on each independently, then reassembles.
 
-    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers. (The sequence of input vectors has to be presented not in parallel, but one-by-one.)
+    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.    
+    (The sequence of input vectors has to be presented not in parallel, but one-by-one. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, update_count, ins)`; `update_count` can be used to perform many updates at once at the cost of correctness.)
 
-    Use `State.Episode` to train this. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, ins)`.
+    Use `State.Episode` to train this.
     """
     def __init__(self, ins, outs=..., heads=1, device=None):
         assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
@@ -221,26 +228,16 @@ class SRWM(nn.Module):
         W = self.W()
         ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
-        # TODO: …Should we maybe temporarily implement the DeltaNet?…
-        #   (Can't think of anything else to do…)
-        #   TODO: Yes.
         assert x.shape[-1] == ins
-        y, k, q, lr = torch.split(sm(_head(x,h)) @ W, self.split_sz, -1)
+        x = x.reshape(*x.shape[:-2], h, x.shape[-2], x.shape[-1]//h)
+        y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
         vk, vq = sm(k) @ W, sm(q) @ W
-        update = ((si(lr) * (vq - vk)).unsqueeze(-2) * sm(k).unsqueeze(-1)).squeeze(-3)
-        # print(W.shape, update.shape)
+        update = si(lr) * ((vq - vk).transpose(-2, -1) @ sm(k))
         self.W(W + update)
         # print('                          lr', si(lr).mean().detach().cpu().numpy()) # TODO: …LR does go up, to near-1…
         # print('                          W', W.abs().mean().detach().cpu().numpy(), '+', update.abs().mean().detach().cpu().numpy()) # TODO: …W also increases each parameter, and its stdev…
         #   …Also, why *are* updates about 7e-4 initially, 7e-3 at 5k?
-        #   TODO: …No way to compute many updates in parallel (but not in batch), right?… Like, maybe replace the outer product by matmul, where the currently-1 dimension is the update count…?
-        #     (…Maybe we SHOULD do this after all, even if not covered in the paper, since computational efficiency may just take priority…)
-        return _unhead(y, h)
-def _head(x, h):
-    return x.reshape(*x.shape[:-1], h, 1, x.shape[-1]//h)
-def _unhead(y, h):
-    assert y.shape[-3] == h
-    return y.reshape(*y.shape[:-3], h * y.shape[-1])
+        return y.reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1])
 
 
 
@@ -370,6 +367,7 @@ if __name__ == '__main__': # pragma: no cover
             nn.Linear(N+N, N+N),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
         )
+        # TODO: Use DeltaNet.
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
         classes, examples_per_class = 2, 2
         batch_sz = 16
@@ -381,10 +379,10 @@ if __name__ == '__main__': # pragma: no cover
                 #     Is it us, or is the idea that doesn't work in a trivialized setting like this?
                 #   TODO: Implement DeltaNet after all.
                 def example():
-                    cond = torch.rand(batch_sz,1) < .5
-                    bit = torch.ones(batch_sz,1)
+                    cond = torch.rand(batch_sz,1,1) < .5
+                    bit = torch.ones(batch_sz,1,1)
                     bit = torch.where(cond, bit, -bit)
-                    return torch.cat((bit, torch.zeros(batch_sz,N-1)), -1)
+                    return torch.cat((bit, torch.zeros(batch_sz,1,N-1)), -1)
                 prev = example()
                 net(prev)
                 for _ in range(12):
@@ -395,10 +393,10 @@ if __name__ == '__main__': # pragma: no cover
                 print(minibatch, 'L2', State.loss().detach().cpu().numpy()) # TODO:
             # First give a few training examples, then the test examples.
             # with State.Episode():
-            #     cls = torch.randn(classes, batch_sz, N//2)
+            #     cls = torch.randn(classes, batch_sz, 1, N//2)
             #     def example(of_class=None):
             #         if of_class is None: of_class = random.randrange(classes)
-            #         noise = noise_magnitude * torch.randn(batch_sz, N//2)
+            #         noise = noise_magnitude * torch.randn(batch_sz, 1, N//2)
             #         return cls[of_class] + noise, cls[of_class]
             #     for train in range(classes * examples_per_class):
             #         net(torch.cat(example(), -1))
