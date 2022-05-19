@@ -31,9 +31,9 @@ class State(nn.Module):
     _episodes = []
     def __init__(self, shape, device=None):
         super().__init__()
-        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device, requires_grad=True) * sum(shape) ** -.5
+        x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device) * sum(shape) ** -.5
         self.id = id(self) # Might expose OS-level details. And might collide between processes.
-        self.initial = nn.parameter.Parameter(x)
+        self.initial = nn.parameter.Parameter(x, requires_grad=True)
         self.current = self.initial+0 # `+0`: no duplicate `Parameter` here.
     def __getstate__(self):
         """Custom pickling, for about ≈400-byte savings."""
@@ -71,21 +71,25 @@ class State(nn.Module):
             State._losses[-1] = State._losses[-1] + reset.sum()
 
     class Episode:
-        """`with State.Episode(): ...`
+        """`with State.Episode(start_from_initial = True): ...`
 
         Represents one trajectory, unrolled so that learning can happen on it. Each `State` starts at its initial value within it.
 
         Optimizer steps should go *after* the episode, if using `State.loss(…)`.    
-        Can be pre-created and re-entered many times. (But not recursively. For that, use normal re-entrance: leave all intermediate episodes, return to this one, then re-enter intermediates.)
+        Can be pre-created and re-entered many times. (But not recursively. For that, use normal re-entrance: leave all intermediate episodes, return to this one, then re-enter intermediates.)    
+        `start_from_initial` can be `False` to make the episode act as a simple checkpoint within another episode, restoring `State`s when done.
+
 
         Encountered `State`s are not garbage-collected automatically. Use `ep.remove(state)` if that is really required.
         """
-        __slots__ = ('state_obj', 'state_old', 'restorable', 'active')
-        def __init__(self):
+        __slots__ = ('state_obj', 'state_old', 'restorable', 'active', 'start_from_initial')
+        def __init__(self, start_from_initial=True):
+            assert isinstance(start_from_initial, bool)
             self.state_obj = {} # id → State
             self.state_old = {} # id → current
             self.restorable = set()
             self.active = False
+            self.start_from_initial = start_from_initial
         def __enter__(self):
             assert not self.active, "Recursive re-entry is not allowed, so express it with normal re-entry"
             self.active = True # No recursive re-entry.
@@ -116,7 +120,8 @@ class State(nn.Module):
                 if id not in objs:
                     objs[id] = s
                     olds[id] = s.current
-                    s.current = s.initial+0 # `+0` to not treat this as an assignable param.
+                    if self.start_from_initial:
+                        s.current = s.initial+0 # `+0` to not treat this as an assignable param.
                 else:
                     return
             else:
@@ -152,6 +157,7 @@ class RNN(nn.Module):
         self.sz = state_size
         self.fn = fns[0] if len(fns) == 1 else nn.Sequential(*fns)
     def forward(self, *ins):
+        """Concatenates RNN-state and inputs, and executes functions."""
         x = torch.cat([self.state().expand(ins[0].shape), *ins], -1)
         y = self.fn(x)
         self.state(y[..., :self.sz])
@@ -159,7 +165,33 @@ class RNN(nn.Module):
 
 
 
-# TODO: DeltaNet
+class DeltaNet:
+    """`DeltaNet(ins, outs=ins, heads=1, device=None)`
+
+    TODO:
+    
+    TODO: Inputs are shaped as `(1, N)` or `(batch_size, update_count, N)`."""
+    def __init__(self, ins, outs=..., heads=1, device=None):
+        assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
+        assert outs % heads == 0, "Head-count must divide output-size; slice the output or something"
+        if outs is ...: outs = ins
+        super().__init__()
+        self.split_sz = (ins, outs, ins, 1)
+        self.slow = nn.parameter.Parameter(torch.randn(ins, sum(self.split_sz), device=device))
+        self.fast = State((ins, outs), device=device)
+        self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax(-1)
+    def forward(self, x): # TODO: …How does multi-update interact with head-count; unhead before update? Unlike SRWM which puts heads into `x` and its own weight matrices?
+        # TODO: …Wait: isn't this "multi-update" business reminiscent of per-head operations?…
+        #   So which wins?…
+        ins, outs, h = self.ins, self.outs, self.heads
+        si, sm = self.sigmoid, self.softmax
+        assert x.shape[-1] == ins
+
+        k, v1, q, lr = torch.split(sm(_head(x,h)) @ self.slow, self.split_sz, -1)
+        v2 = sm(k) @ self.fast()
+        self.fast(self.fast() + si(lr) * ((v1 - v2).transpose(-2,-1) @ sm(k)))
+        return sm(q) @ self.fast()
 
 
 
@@ -325,6 +357,7 @@ if __name__ == '__main__': # pragma: no cover
             # #   SRWM+linear reach 150…120 at 2k…5k…
             # #   TODO: How can we find the bug?…
             # #     `RNN` works flawlessly. So, `SRWM` is the bug here.
+            # #     …Maybe state initialization is at fault — stdev=1 is too much for weights?…
             # # TODO: …Compare the speeds of SRWM and Linear… …Like 3…5 times slower, with like 3…5 times more CPU utilization… …Can we optimize it… (…Multi-update formulation, maybe?…)
             # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
