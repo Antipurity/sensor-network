@@ -122,6 +122,7 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 #     - Learning to predict consequences-of-`next_obs` while extracting mutual info (directly, the result of `update`): `history = sg update.copy(history, obs)`, possibly for `next_history` and `next_obs`.
 #       - (Not predicting `obs` directly because its non-determinism leads to smearing.) (No need for another NN for `history`, because the prior `env` call could take care of obs-independent time-keeping.)
 #       - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too egregiously.)
+#       - …Wait: but if we embed observations & queries anyway, then can't we avoid smearing by just predicting those embeddings (with targets being momentum-slowed, exactly like in BYOL)?… (Not inspecting `history` explicitly would mesh with `model/recurrency.py` stuff better too.)
 #     - *Maybe*, backward-prediction too, so that single-step updates can still sense the past despite gradient-descent being unconnected: the autoencoder `reverse_update(obscure(history), obs) = sg history`, possibly reversing `prev_act` and `prev_obs` too.
 #     - Min-dist actions:
 #       - …The standard methods have proven superior: dist-prediction along real trajectories, [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), possibly DDPG, and a discrete search among actions at unroll-time. And synthetic-gradient for simple learning-through-time.

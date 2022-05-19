@@ -193,26 +193,15 @@ class DeltaNet(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(-1)
     def forward(self, x):
-        ins, outs, h = self.ins, self.outs, self.heads
-        si, sm = self.sigmoid, self.softmax
-        assert x.shape[-1] == ins
+        h, si, sm = self.heads, self.sigmoid, self.softmax
 
+        W = self.fast()
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         k, v1, q, lr = torch.split(sm(x) @ self.slow, self.split_sz, -1)
         k, q = sm(k), sm(q)
-        v2 = k @ self.fast()
-        self.fast(self.fast() + si(lr) * (k.transpose(-2,-1) @ (v1 - v2)))
-        # self.fast(self.fast() + si(lr) * v1 - si(lr) * v2) # TODO: What does this mess get us at 2k? .3 AT 600, .005 AT 2k?! And if we don't even use `k` at all, we get .02 at 600 and .0005 at 2k…
-        #    What the hell is going on here?
-        # TODO: Fuck around in Python REPL, to make sure we understand the update mechanism correctly: a random weight-matrix, and a key vector, and extract query, and subtract the mm-outer-product, and re-extract query (which should be 0).
-        #   …`q @ (W - (q @ W).t() @ q)` doesn't give 0s (`q` is post-softmax, of course)… In fact, it hardly changes anything in the matrix… Was our impl wrong all along?…
-        #     Has to be… But what's the correct version? Can't get actual outer products to work either… (The only ins!=outs shape-correct matmul-based version is `W - q.t() @ (q@W)`. But does its operation really make any sense? With matmul, can't we open the brackets — and then why are we multiplying q.t() with q?)
-        #       Nothing's working.
-        #       `q @ (W - q.t() @ q @ W)`, which FWP equations work out to, don't add up to 0.
-        #       `q @ (W - q@W)` produces 0s. But how is this related to FWP equations? What is this? Aren't we just subtracting the value from *all* keys, not just one?
-        # TODO: …But with FWP-equations, we're reaching .7 at 2k, which is kinda a win… Did we change the behavior? We did, didn't we: fixed the shapes… So which is correct: the FWP-equations, or our discovered-by-accident bullshit?…
-        #   Our key-less value-only approach really wouldn't work if there are many keys. We really have to weigh by key. It's slower to learn, but it does still reach really low loss, so it's more general, not more wrong.
-        y = q @ self.fast()
+        v2 = k @ W
+        self.fast(W + si(lr) * k.transpose(-2,-1) @ (v1 - v2))
+        y = q @ W
         return y.transpose(-2,-3).reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
 
@@ -220,16 +209,9 @@ class DeltaNet(nn.Module):
 class SRWM(nn.Module):
     """`SRWM(ins, outs=ins, heads=1, device=None)`
 
-    A drop-in replacement for `DeltaNet`, with more "meta".
+    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a drop-in replacement for `DeltaNet`, with DeltaNet only having 1 "meta" layer (fast & slow weight matrices), whereas this has ∞.
 
-    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a linear-time RNN-like alternative to self-attention, with meta-learning built-in.
-    - `ins`, `outs`: sizes of input & output vectors.
-    - `heads`: splits inputs into this many sub-tensors, operates on each independently, then reassembles.
-
-    Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.    
-    (The sequence of input vectors has to be presented not in parallel, but one-by-one. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, update_count, ins)`; `update_count` can be used to perform many updates at once at the cost of correctness.)
-
-    Use `State.Episode` to train this.
+    See `DeltaNet` for params & docs.
     """
     def __init__(self, ins, outs=..., heads=1, device=None):
         assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
@@ -239,25 +221,20 @@ class SRWM(nn.Module):
         self.ins, self.outs, self.heads = ins, outs, heads
         self.split_sz = (outs//heads, ins//heads, ins//heads, 1)
         self.W = State((heads, ins//heads, sum(self.split_sz)), device=device)
-        #   (Here, just 1 global learning rate.)
+        #   (Here, just 1 global learning rate, unlike in the paper.)
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(-1)
     def __call__(self, x):
         # This is less efficient than https://github.com/IDSIA/modern-srwm/blob/main/reinforcement_learning/torchbeast/self_ref_v1/self_ref_v1.cu
-        #   But are 10 lines more comprehensible than 1671?
-        W = self.W()
-        ins, outs, h = self.ins, self.outs, self.heads
-        si, sm = self.sigmoid, self.softmax
-        assert x.shape[-1] == ins
+        #   But are these 10 lines more comprehensible than those 1671?
+        h, si, sm = self.heads, self.sigmoid, self.softmax
 
+        W = self.W()
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
-        vk, vq = sm(k) @ W, sm(q) @ W
-        update = si(lr) * (sm(k).transpose(-2,-1) @ (vq - vk))
-        self.W(W + update)
-        # print('                          lr', si(lr).mean().detach().cpu().numpy()) # TODO: …LR does go up, to near-1…
-        # print('                          W', W.abs().mean().detach().cpu().numpy(), '+', update.abs().mean().detach().cpu().numpy()) # TODO: …W also increases each parameter, and its stdev…
-        #   …Also, why *are* updates about 7e-4 initially, 7e-3 at 5k?
+        k, q = sm(k), sm(q)
+        self.W(W + si(lr) * k.transpose(-2,-1) @ (q - k) @ W)
+        #   (Note: for speed, `torch.baddbmm(W, m1, m2)` *could* be used, but reshaping around that is harder to implement, unless `len(x.shape)==2`. Might want to consider & measure in the future.)
         return y.transpose(-2,-3).reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
 
@@ -351,9 +328,13 @@ if __name__ == '__main__': # pragma: no cover
         s = torch.load(file)
         s(s() + 3)
         assert (s() == torch.tensor([[6.]])).all()
-    # TODO: Separate the RNN-with-bits thing into a separate test.
     @run
     def test8():
+        """TODO:"""
+        # TODO: Separate the RNN-with-bits thing into a separate test.
+        #   (L2<.5 at 2k — or with full-loss, at 3k.) (Test `RNN`, `DeltaNet`, and `SRWM`; should all work.)
+    @run
+    def test9():
         """Using `SRWM` for actual NN training.
 
         We learn to denoise samples (which is pretty-much equivalent to classification in realistic NNs, [due to neural collapse](https://arxiv.org/abs/2112.15121))."""
@@ -389,18 +370,11 @@ if __name__ == '__main__': # pragma: no cover
             nn.Linear(N+N, N+N),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
         )
-        net = nn.Sequential( # TODO: …Why is even DeltaNet unable to learn bits, reaching L2 of 4.4 per batch (VERY slowly, 7.5 at 100) whereas `RNN` reaches 1e-5?…
-            # …But, can't deny that it *is* making *some* progress on the task with time…
-            # Maybe the additive nature of the matrix-update is working against us in this task. (`RNN` *did* perform worse with skip-connections all the way through, after all.)
-            #   More or less (batch_sz=256):
-            #     Without addition in `DeltaNet`: 6 at 600, 6 at 2k.
-            #     With addition: 7 at 2k.
-            #   Removing LR gating too:
-            #     Without addition: 5.2 at 600, 0.6 at 1k, 0.1 at 2k. (Solved.)
-            #     With addition: 9 at 600, 7 at 1k, 5 at 2k.
+        net = nn.Sequential(
             nn.Linear(N, N),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), DeltaNet(N, N, heads=2)), # TODO: heads=2… Well, it runs, so not much to say, right? …Except, we're severely underperforming, though if we enable weight-addition, we're underperforming less…
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=1)),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            #   (Being surrounded by linear layers is necessary to solve this task of remembering 1 bit.)
         )
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
         classes, examples_per_class = 2, 2
@@ -419,8 +393,10 @@ if __name__ == '__main__': # pragma: no cover
                 for _ in range(12):
                     next = example()
                     pred = net(next)
-                    if minibatch>4000: print(prev[0,0,0].numpy(), pred[0,0,0].detach().numpy()) # TODO: …When seeing sequences of bits, prediction only *gradually* goes in the correct direction: a bit receptive, but not very…
-                    State.loss((pred[..., 0] - prev[..., 0]).square())
+                    if minibatch>4000: print(prev[0,0,0].numpy(), pred[0,0,0].detach().numpy()) # TODO:
+                    State.loss((pred - prev).square())
+                    # State.loss((pred[..., 0] - prev[..., 0]).square())
+                    #   TODO: Try full-state loss. (How could it fail, if the final linear layer can just learn to counteract it and output 0s? Right? …Yeah, but it does seem to slow down training by ≈1k epochs.)
                     prev = next
                 print(minibatch, 'L2', (State.loss()/batch_sz).detach().cpu().numpy()) # TODO:
             # First give a few training examples, then the test examples.
