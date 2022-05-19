@@ -209,7 +209,7 @@ class DeltaNet(nn.Module):
 class SRWM(nn.Module):
     """`SRWM(ins, outs=ins, heads=1, device=None)`
 
-    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a drop-in replacement for `DeltaNet`, with DeltaNet only having 1 "meta" layer (fast & slow weight matrices), whereas this has ∞.
+    [Self-Referential Weight Matrix](https://arxiv.org/abs/2202.05780): a drop-in replacement for `DeltaNet`, with DeltaNet only having 1 "meta" layer (fast & slow weight matrices), whereas this has ∞, while being just as fast to run.
 
     See `DeltaNet` for params & docs.
     """
@@ -233,7 +233,7 @@ class SRWM(nn.Module):
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
         k, q = sm(k), sm(q)
-        self.W(W + si(lr) * k.transpose(-2,-1) @ (q - k) @ W)
+        self.W(W + si(lr) * k.transpose(-2,-1) @ ((q - k) @ W))
         #   (Note: for speed, `torch.baddbmm(W, m1, m2)` *could* be used, but reshaping around that is harder to implement, unless `len(x.shape)==2`. Might want to consider & measure in the future.)
         return y.transpose(-2,-3).reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
@@ -241,6 +241,9 @@ class SRWM(nn.Module):
 
 if __name__ == '__main__': # pragma: no cover
     def run(f): f()
+    class SkipConnection(nn.Module):
+        def __init__(self, *fns): super().__init__();  self.fn = nn.Sequential(*fns)
+        def forward(self, x): return x + self.fn(x)
     @run
     def test0():
         """Basic `State` operation."""
@@ -333,17 +336,56 @@ if __name__ == '__main__': # pragma: no cover
         """TODO:"""
         # TODO: Separate the RNN-with-bits thing into a separate test.
         #   (L2<.5 at 2k — or with full-loss, at 3k.) (Test `RNN`, `DeltaNet`, and `SRWM`; should all work.)
+        N, batch_sz = 32, 16
+        def example():
+            """The bit to remember, zero-padded to `N`."""
+            cond = torch.rand(batch_sz,1,1) < .5
+            bit = torch.ones(batch_sz,1,1)
+            bit = torch.where(cond, bit, -bit)
+            return torch.cat((bit, torch.zeros(batch_sz,1,N-1)), -1)
+        def env(name, net):
+            """Bit-remembering: just learn to output the prev-iteration bit."""
+            opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+            for minibatch in range(3000):
+                with State.Episode():
+                    next = example()
+                    net(next)
+                    for _ in range(12):
+                        prev, next = next, example()
+                        pred = net(next)
+                        State.loss((pred - prev).square())
+                    loss = State.loss().detach() / batch_sz
+                    if (loss < .5).all():
+                        return minibatch
+                opt.step();  opt.zero_grad()
+            assert False, name+" does not converge"
+        import time;  start = time.monotonic()
+        n = env('RNN', RNN(N,
+            nn.Linear(N+N, N+N),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
+        ))
+        print('RNN', (time.monotonic() - start) / n, 'sec/minibatch');  start = time.monotonic()
+        n = env('DeltaNet', nn.Sequential(
+            nn.Linear(N, N),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), DeltaNet(N, N, heads=1)),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+        ))
+        print('DeltaNet', (time.monotonic() - start) / n, 'sec/minibatch');  start = time.monotonic()
+        n = env('SRWM', nn.Sequential(
+            nn.Linear(N, N),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=1)),
+            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+        ))
+        print('SRWM', (time.monotonic() - start) / n, 'sec/minibatch');  start = time.monotonic()
     @run
     def test9():
         """Using `SRWM` for actual NN training.
 
         We learn to denoise samples (which is pretty-much equivalent to classification in realistic NNs, [due to neural collapse](https://arxiv.org/abs/2112.15121))."""
         import random
-        class SkipConnection(nn.Module):
-            def __init__(self, *fns): super().__init__();  self.fn = nn.Sequential(*fns)
-            def forward(self, x): return x + self.fn(x)
         N = 32
-        net = nn.Sequential(
+        # TODO: Restore the sample-denoising env.
+        net = nn.Sequential( # TODO: This implementation is superseded already, right?
             SRWM(N, N, heads=1), # TODO: …Why does this fail to learn anything… Even at 500, loss is still 800… Even though there *is* gradient, and `opt` DOES know…
             #   …Learning is at least *non-zero*… But still: why so non-existent?…
             #   …Even an autoencoder is too much to ask for…
@@ -378,7 +420,7 @@ if __name__ == '__main__': # pragma: no cover
         )
         opt = torch.optim.Adam(net.parameters(), lr=1e-3)
         classes, examples_per_class = 2, 2
-        batch_sz = 16
+        batch_sz = 16 # TODO:
         noise_magnitude = .2
         for minibatch in range(5000):
             with State.Episode():
@@ -388,16 +430,13 @@ if __name__ == '__main__': # pragma: no cover
                     bit = torch.ones(batch_sz,1,1)
                     bit = torch.where(cond, bit, -bit)
                     return torch.cat((bit, torch.zeros(batch_sz,1,N-1)), -1)
-                prev = example()
-                net(prev)
+                next = example()
+                net(next)
                 for _ in range(12):
-                    next = example()
+                    prev, next = next, example()
                     pred = net(next)
                     if minibatch>4000: print(prev[0,0,0].numpy(), pred[0,0,0].detach().numpy()) # TODO:
                     State.loss((pred - prev).square())
-                    # State.loss((pred[..., 0] - prev[..., 0]).square())
-                    #   TODO: Try full-state loss. (How could it fail, if the final linear layer can just learn to counteract it and output 0s? Right? …Yeah, but it does seem to slow down training by ≈1k epochs.)
-                    prev = next
                 print(minibatch, 'L2', (State.loss()/batch_sz).detach().cpu().numpy()) # TODO:
             # First give a few training examples, then the test examples.
             # with State.Episode():
