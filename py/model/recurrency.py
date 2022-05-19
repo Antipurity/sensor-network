@@ -136,6 +136,7 @@ class State(nn.Module):
                     s(fn(s.initial+0, s()))
                 else:
                     self.state_old[id] = fn(self.state_old[id])
+            return self
         def clone(self, start_from_initial=True):
             """Copies the current RNN state."""
             ep = State.Episode(start_from_initial)
@@ -151,6 +152,7 @@ class State(nn.Module):
             del self.state_obj[s.id]
             del self.state_old[s.id]
             if s.id in self.restorable: self.restorable.remove(s.id)
+            return self
 
         def _register(self, s):
             """Registers a `State` object in this episode, updating its `.current` value if needed."""
