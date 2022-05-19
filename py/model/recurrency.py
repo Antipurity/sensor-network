@@ -84,7 +84,7 @@ class State(nn.Module):
         Encountered `State`s are not garbage-collected automatically. Use `ep.remove(state)` if that is really required.
         """
         __slots__ = ('state_obj', 'state_old', 'restorable', 'active', 'start_from_initial')
-        def __init__(self, start_from_initial=True):
+        def __init__(self, start_from_initial=True): # TODO: Replace `start_with_initial` bool with `initial(initial+0, current)` func. (So that we can pre-emptively detach.)
             assert isinstance(start_from_initial, bool)
             self.state_obj = {} # id → State
             self.state_old = {} # id → current
@@ -110,6 +110,8 @@ class State(nn.Module):
             self.restorable.update(objs.keys())
 
         # TODO: For convenience of implementing tBPTT, should have `.update(fn)` which goes through .state_obj and sets the value to fn(value). (`fn` could be `lambda x: x.detach()` for tBPTT.)
+        # TODO: …For replay buffers, maybe have `.clone()`?…
+        # TODO: …For save/load, maybe return just the `(.state_obj, .state_old)` tuple, assuming that `.restorable` is "all keys in .state_old"?…
         def remove(self, s):
             """Provided instead of any garbage collection: if any `State` object will not be used anymore, then just remove it."""
             del self.state_obj[s.id]
@@ -197,13 +199,21 @@ class DeltaNet(nn.Module):
 
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         k, v1, q, lr = torch.split(sm(x) @ self.slow, self.split_sz, -1)
-        v2 = sm(k) @ self.fast()
-        self.fast(self.fast() + si(lr) * ((v1 - v2).transpose(-2,-1) @ sm(k)))
+        k, q = sm(k), sm(q)
+        v2 = k @ self.fast()
+        self.fast(self.fast() + si(lr) * (k.transpose(-2,-1) @ (v1 - v2)))
+        # self.fast(self.fast() + si(lr) * v1 - si(lr) * v2) # TODO: What does this mess get us at 2k? .3 AT 600, .005 AT 2k?! And if we don't even use `k` at all, we get .02 at 600 and .0005 at 2k…
+        #    What the hell is going on here?
         # TODO: Fuck around in Python REPL, to make sure we understand the update mechanism correctly: a random weight-matrix, and a key vector, and extract query, and subtract the mm-outer-product, and re-extract query (which should be 0).
-        #   …`q @ (W - (q @ W).transpose(-2,-1) @ q)` doesn't give 0s… In fact, it hardly changes anything in the matrix… Was our impl wrong all along?…
-        #     Has to be… But what's the correct version? Can't get actual outer products to work either…
-        y = sm(q) @ self.fast()
-        return y.transpose(-2,-3).reshape(*x.shape[:-1], h * y.shape[-1]) # Concat per-head results.
+        #   …`q @ (W - (q @ W).t() @ q)` doesn't give 0s (`q` is post-softmax, of course)… In fact, it hardly changes anything in the matrix… Was our impl wrong all along?…
+        #     Has to be… But what's the correct version? Can't get actual outer products to work either… (The only ins!=outs shape-correct matmul-based version is `W - q.t() @ (q@W)`. But does its operation really make any sense? With matmul, can't we open the brackets — and then why are we multiplying q.t() with q?)
+        #       Nothing's working.
+        #       `q @ (W - q.t() @ q @ W)`, which FWP equations work out to, don't add up to 0.
+        #       `q @ (W - q@W)` produces 0s. But how is this related to FWP equations? What is this? Aren't we just subtracting the value from *all* keys, not just one?
+        # TODO: …But with FWP-equations, we're reaching .7 at 2k, which is kinda a win… Did we change the behavior? We did, didn't we: fixed the shapes… So which is correct: the FWP-equations, or our discovered-by-accident bullshit?…
+        #   Our key-less value-only approach really wouldn't work if there are many keys. We really have to weigh by key. It's slower to learn, but it does still reach really low loss, so it's more general, not more wrong.
+        y = q @ self.fast()
+        return y.transpose(-2,-3).reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
 
 
@@ -233,6 +243,8 @@ class SRWM(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.softmax = nn.Softmax(-1)
     def __call__(self, x):
+        # This is less efficient than https://github.com/IDSIA/modern-srwm/blob/main/reinforcement_learning/torchbeast/self_ref_v1/self_ref_v1.cu
+        #   But are 10 lines more comprehensible than 1671?
         W = self.W()
         ins, outs, h = self.ins, self.outs, self.heads
         si, sm = self.sigmoid, self.softmax
@@ -241,12 +253,12 @@ class SRWM(nn.Module):
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
         y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
         vk, vq = sm(k) @ W, sm(q) @ W
-        update = si(lr) * ((vq - vk).transpose(-2, -1) @ sm(k))
+        update = si(lr) * (sm(k).transpose(-2,-1) @ (vq - vk))
         self.W(W + update)
         # print('                          lr', si(lr).mean().detach().cpu().numpy()) # TODO: …LR does go up, to near-1…
         # print('                          W', W.abs().mean().detach().cpu().numpy(), '+', update.abs().mean().detach().cpu().numpy()) # TODO: …W also increases each parameter, and its stdev…
         #   …Also, why *are* updates about 7e-4 initially, 7e-3 at 5k?
-        return y.transpose(-2,-3).reshape(*x.shape[:-1], h * y.shape[-1]) # Concat per-head results.
+        return y.transpose(-2,-3).reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
 
 
@@ -365,6 +377,7 @@ if __name__ == '__main__': # pragma: no cover
             # #     `RNN` works flawlessly. So, `SRWM` is the bug here.
             # #     …Maybe state initialization is at fault — stdev=1 is too much for weights?…
             # # TODO: …Compare the speeds of SRWM and Linear… …Like 3…5 times slower, with like 3…5 times more CPU utilization… …Can we optimize it… (…Multi-update formulation, maybe?…)
+            # #   TODO: Try `torch.baddbmm` for updating the weight matrix.
             # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2)),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
             # # SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
@@ -385,7 +398,6 @@ if __name__ == '__main__': # pragma: no cover
             #   Removing LR gating too:
             #     Without addition: 5.2 at 600, 0.6 at 1k, 0.1 at 2k. (Solved.)
             #     With addition: 9 at 600, 7 at 1k, 5 at 2k.
-            # DeltaNet(N, N),
             nn.Linear(N, N),
             SkipConnection(nn.ReLU(), nn.LayerNorm(N), DeltaNet(N, N, heads=2)), # TODO: heads=2… Well, it runs, so not much to say, right? …Except, we're severely underperforming, though if we enable weight-addition, we're underperforming less…
             SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
@@ -407,7 +419,7 @@ if __name__ == '__main__': # pragma: no cover
                 for _ in range(12):
                     next = example()
                     pred = net(next)
-                    if minibatch>2000: print(prev[0,0,0].numpy(), pred[0,0,0].detach().numpy()) # TODO: …When seeing sequences of bits, prediction only *gradually* goes in the correct direction: a bit receptive, but not very…
+                    if minibatch>4000: print(prev[0,0,0].numpy(), pred[0,0,0].detach().numpy()) # TODO: …When seeing sequences of bits, prediction only *gradually* goes in the correct direction: a bit receptive, but not very…
                     State.loss((pred[..., 0] - prev[..., 0]).square())
                     prev = next
                 print(minibatch, 'L2', (State.loss()/batch_sz).detach().cpu().numpy()) # TODO:
