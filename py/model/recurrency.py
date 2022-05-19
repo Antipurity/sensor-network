@@ -1,5 +1,7 @@
 """
-TODO:
+Code that simplifies working with recurrency (`state → f(state)`).
+
+In particular, this module contains the `State` framework, and the PyTorch NN modules `RNN` and `DeltaNet` and `SRWM` that use that framework.
 """
 
 
@@ -72,20 +74,23 @@ class State(nn.Module):
             State._losses[-1] = State._losses[-1] + reset.sum()
 
     class Episode:
-        """`with State.Episode(start_from_initial = True): ...`
+        """`with State.Episode(start_from_initial = True) as ep: ...`
 
         Represents one trajectory, unrolled so that learning can happen on it. Each `State` starts at its initial value within it.
 
-        Optimizer steps should go *after* the episode, if using `State.loss(…)`.    
-        Can be pre-created and re-entered many times. (But not recursively. For that, use normal re-entrance: leave all intermediate episodes, return to this one, then re-enter intermediates.)    
-        `start_from_initial` can be `False` to make the episode act as a simple checkpoint within another episode, restoring `State`s when done.
+        `optimizer.step()` should go *after* the episode, if using `State.loss(…)`.    
+        Can be pre-created and re-entered many times. (But not recursively. For that, use normal re-entrance: leave all intermediate episodes, return to this one, then re-enter the intermediates.)
 
+        Params:
+        - `start_from_initial`: can be `False` to make the episode act as a simple checkpoint within another episode, restoring `State`s when done; or can be `lambda initial, current: current.detach()` to act like `False` but also modify the initial states.
 
-        Encountered `State`s are not garbage-collected automatically. Use `ep.remove(state)` if that is really required.
+        Methods:
+        - `ep.clone(start_from_initial = True)`: for preserving the current RNN state.
+        - `ep.remove(state)`: encountered `State`s are not garbage-collected automatically, so use this if required.
         """
         __slots__ = ('state_obj', 'state_old', 'restorable', 'active', 'start_from_initial')
-        def __init__(self, start_from_initial=True): # TODO: Replace `start_with_initial` bool with `initial(initial+0, current)` func. (So that we can pre-emptively detach.)
-            assert isinstance(start_from_initial, bool)
+        def __init__(self, start_from_initial=True):
+            assert isinstance(start_from_initial, bool) or callable(start_from_initial)
             self.state_obj = {} # id → State
             self.state_old = {} # id → current
             self.restorable = set()
@@ -110,13 +115,22 @@ class State(nn.Module):
             self.restorable.update(objs.keys())
 
         # TODO: For convenience of implementing tBPTT, should have `.update(fn)` which goes through .state_obj and sets the value to fn(value). (`fn` could be `lambda x: x.detach()` for tBPTT.)
-        # TODO: …For replay buffers, maybe have `.clone()`?…
         # TODO: …For save/load, maybe return just the `(.state_obj, .state_old)` tuple, assuming that `.restorable` is "all keys in .state_old"?…
+        def clone(self, start_from_initial=True):
+            """Copies the current RNN state."""
+            ep = State.Episode(start_from_initial)
+            for id, s in self.state_obj.items():
+                current = s.current if self.active else self.state_obj[id]
+                ep.state_obj[id] = s
+                ep.state_old[id] = current
+            ep.restorable.update(self.state_obj.keys())
+            return ep
         def remove(self, s):
             """Provided instead of any garbage collection: if any `State` object will not be used anymore, then just remove it."""
             del self.state_obj[s.id]
             del self.state_old[s.id]
             if s.id in self.restorable: self.restorable.remove(s.id)
+
         def _register(self, s):
             """Registers a `State` object in this episode, updating its `.current` value if needed."""
             id, objs, olds, rest = s.id, self.state_obj, self.state_old, self.restorable
@@ -124,8 +138,10 @@ class State(nn.Module):
                 if id not in objs:
                     objs[id] = s
                     olds[id] = s.current
-                    if self.start_from_initial:
-                        s.current = s.initial+0 # `+0` to not treat this as an assignable param.
+                    if callable(self.start_from_initial):
+                        s.current = self.start_from_initial(s.initial+0, s.current)
+                    elif self.start_from_initial:
+                        s.current = s.initial+0 # `+0` to not treat this as an assignable Parameter.
                 else:
                     return
             else:
@@ -236,7 +252,7 @@ class SRWM(nn.Module):
         kt = k.transpose(-2,-1)
         update = kt @ ((lr * (q - k)) @ W) if x.shape[-2] < self.ins else kt @ (lr * (q - k)) @ W
         self.W(W + update)
-        #   (Note: for speed, `torch.baddbmm(W, m1, m2)` *could* be used, but reshaping around that is harder to implement, unless `len(x.shape)==2`. Might want to consider & measure in the future.)
+        #   (Note: for more speed, `torch.baddbmm(W, m1, m2)` *could* be used, but reshaping around that is harder to implement, unless `len(x.shape)==2`. Might want to consider & measure in the future.)
         return y.transpose(-2,-3).reshape(*y.shape[:-3], y.shape[-2], h * y.shape[-1]) # Concat per-head results.
 
 
@@ -336,7 +352,6 @@ if __name__ == '__main__': # pragma: no cover
     @run
     def test8():
         """`RNN`, `DeltaNet`, `SRWM` can all learn to remember state."""
-        return # TODO:
         N, batch_sz = 32, 16
         def example():
             """The bit to remember, zero-padded to `N`."""
@@ -356,7 +371,7 @@ if __name__ == '__main__': # pragma: no cover
                         pred = net(next)
                         State.loss((pred - prev).square())
                     loss = State.loss().detach() / batch_sz
-                    if (loss < .5).all():
+                    if minibatch > 500 and (loss < .5).all():
                         return minibatch
                 opt.step();  opt.zero_grad()
             assert False, name+" does not converge"
@@ -378,48 +393,4 @@ if __name__ == '__main__': # pragma: no cover
             SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
         ))
         print('SRWM', (time.monotonic() - start) / n, 'sec/minibatch');  start = time.monotonic()
-    @run
-    def test9():
-        """Using `SRWM` for actual NN training.
-
-        We learn to denoise samples (which is pretty-much equivalent to classification in realistic NNs, [due to neural collapse](https://arxiv.org/abs/2112.15121))."""
-        import random
-        N = 32
-        # TODO: Restore the sample-denoising env.
-        net = RNN(N, # TODO: …Can RNN solve the task?… …No…
-            # …Is the task just unsolvable, meaning that we should just remove the test?…
-            # …If the bit-task *was* able to be solved, but this one can't with exactly the same models, then isn't this the sign that this task is unsolvable? (Maybe because input & output have too much variance, so we can't really memorize anything.)
-            nn.Linear(N+N, N+N),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N+N), nn.Linear(N+N, N+N)),
-        )
-        net = nn.Sequential(
-            nn.Linear(N, N),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=1)),
-            SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
-            #   (Being surrounded by linear layers is necessary to solve this task of remembering 1 bit.)
-        )
-        opt = torch.optim.Adam(net.parameters(), lr=1e-3)
-        classes, examples_per_class = 2, 30
-        batch_sz = 16
-        noise_magnitude = .1
-        for minibatch in range(5000):
-            # First give a few training examples, then the test examples.
-            with State.Episode():
-                cls = torch.randn(classes, batch_sz, 1, N//2)
-                def example(of_class=None):
-                    if of_class is None: of_class = random.randrange(classes)
-                    noise = noise_magnitude * torch.randn(batch_sz, 1, N//2)
-                    return cls[of_class] + noise, cls[of_class]
-                train = torch.cat([torch.cat(example(), -1) for _ in range(classes * examples_per_class)], -2)
-                print(train.shape) # TODO:
-                #   TODO: …Ah: found a bug in multi-updating…
-                net(train)
-                for test in range(classes):
-                    ex, cl = example(test)
-                    cl_pred = net(torch.cat((ex, torch.zeros_like(cl)), -1))
-                    State.loss((cl_pred[..., :N//2] - cl).square())
-                print(minibatch, 'L2', (State.loss().detach()/batch_sz).cpu().numpy()) # TODO:
-                #   TODO: …Is 1.2 loss good or bad? Much lower than the initial 50, so, I'm assuming it has to be good? But what loss do we expect…
-                #     TODO: What's the performance with 0 training examples per class? Is it 1.2 too? …It is. Which is really bad.
-            opt.step();  opt.zero_grad(True)
     print('Tests OK')
