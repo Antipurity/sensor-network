@@ -85,6 +85,7 @@ class State(nn.Module):
         - `start_from_initial`: can be `False` to make the episode act as a simple checkpoint within another episode, restoring `State`s when done; or can be `lambda initial, current: current.detach()` to act like `False` but also modify the initial states.
 
         Methods:
+        - `ep.update(lambda initial, current: current.detach())`: for TBPTT.
         - `ep.clone(start_from_initial = True)`: for preserving the current RNN state.
         - `ep.remove(state)`: encountered `State`s are not garbage-collected automatically, so use this if required.
         """
@@ -114,13 +115,23 @@ class State(nn.Module):
                 s.current, olds[id] = olds[id], s.current
             self.restorable.update(objs.keys())
 
-        # TODO: For convenience of implementing tBPTT, should have `.update(fn)` which goes through .state_obj and sets the value to fn(value). (`fn` could be `lambda x: x.detach()` for tBPTT.)
         # TODO: …For save/load, maybe return just the `(.state_obj, .state_old)` tuple, assuming that `.restorable` is "all keys in .state_old"?…
+        def update(self, fn):
+            """Applies `fn(initial, current) → current` to every RNN-state tensor.
+
+            [TBPTT](https://www.gabormelli.com/RKB/Truncated_Back-Propagation_Through_Time_(TBPTT)_Algorithm) can be implemented by sometimes doing `State.loss(True).backward();  optimizer.step();  optimizer.zero_grad(); episode.update(lambda _,x: x.detach())`.
+
+            (If the episode is currently active, this calls `State.Setter`s.)"""
+            for id, s in self.state_obj.items():
+                if self.active:
+                    s(fn(s.initial+0, s.current))
+                else:
+                    self.state_old[id] = fn(self.state_old[id])
         def clone(self, start_from_initial=True):
             """Copies the current RNN state."""
             ep = State.Episode(start_from_initial)
             for id, s in self.state_obj.items():
-                current = s.current if self.active else self.state_obj[id]
+                current = s.current if self.active else self.state_old[id]
                 ep.state_obj[id] = s
                 ep.state_old[id] = current
             ep.restorable.update(self.state_obj.keys())
