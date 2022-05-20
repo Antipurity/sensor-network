@@ -26,7 +26,7 @@ class State(nn.Module):
     - To save/load: `torch.save`/`torch.load`, on models that contain `State`s, and/or episodes. Saving models within an episode would make their current values top-level (episode-less).
       - Advanced: to save/load via `model.state_dict()`/`model.load_state_dict(d)` (episodes are not supported), have to manually reset `.current` values. Hard-resetting like `with State.Setter(lambda s,_: s.initial+0): model()` should do the trick. (Not handling this was a design choice made for efficiency.)
 
-    (What's the difference between RNN states and NN weights, after all? Only a pre-programmed optimizer for the latter.)
+    (What's the difference between RNN states and NN weights, after all? Only a pre-programmed optimizer for the latter, and a learned one (if any) for the former. And PyTorch already makes NN weights hidden parameters.)
     """
     # __slots__ = ('id', 'initial', 'current')
     #   `torch.load` complains if we follow these best practices, since it gives us the props of `nn.Module`s.
