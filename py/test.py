@@ -79,6 +79,7 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 
 
+# TODO: (This should be our new intro to `test.py`.)
 # (Let's assume a discrete model of the world: `universe: state → state`. This describes one boring line/circle through time.)
 # (Now, let's consider an agent with bidirectional communication with its world, receiving `obs`ervations and returning `act`ions: `universe: (state, act) → (state, obs)`. Now we have a whole infinite graph of possibilities, with the path selected by `act`ions.)
 # (Where that agent ultimately goes can be named its goal. In the sequence of the agent's `obs`ervations, this can be written as `SRC <path> DST <path>: MID0 MID1 MID2 … DST`. This is very [similar to ](https://paperswithcode.com/task/text-infilling)[text ](https://nlp.stanford.edu/pubs/donahue2020infilling.pdf)[infilling](https://beta.openai.com/docs/guides/completion/inserting-text), where `DST` is either in `state`-space or in `obs`-space but variable-length.) (RL writes goals as one-number-utility functions. We follow [upside-down RL](https://arxiv.org/abs/1912.02877) here, but both approaches are general enough to implement each other.)
@@ -90,7 +91,6 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 
 
-# TODO: …Merge obs & act (next-frame predictions & actions in next-frames) in everything below…
 
 
 
@@ -107,31 +107,38 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 #   TODO: Should we faraway-sample and sort-by-timestamp? Or demand contiguous sequences?
 #     TODO: Or both: faraway-sample to determine the goal and distances, then unroll BPTT near the starting point, hoping that meta-learning would pick up what it needs?
 #       (…Or are faraway-sequences inherently better for meta-learning…)
+#     We can't do faraway-sampling, because next-obs prediction would instantly get broken. We can only faraway-sample the goal, and have to unroll a contiguous sequence.
 #   TODO: Do we softly-reset the RNN state when unrolling?
 #   TODO: What actions do we search through at unroll-time, exactly? (…Do we need a GAN for potential actions?… But how would it be limited to only not-the-same-future actions?…) (Can we get away with inverting and/or corrupting a single random number per cell?) (Should we do one or a few steps of gradient descent on corrupted actions?)
 #     TODO: …Should we maybe output a probability distribution, and treat every number in actions as 0/1?… …No, this assumes that each bit is independent in a cell, which is quite likely to not be true… …But this assumption doesn't really affect anything except for how effective interventions-on-actions are, unless multiple bigger-actions have EXACTLY the same distances; and besides, we can just design envs with bit-actions in mind from the ground up…
 #       Kinda starting to like this idea. Because to search, we don't need to *guess* any actions, just sample several times. (Even if interaction-dependencies get screwed up and this search would only do a tiny bit to fix it. Again: envs can be designed to handle this, at least by allowing (sub-)actions to be performed many times, like in painting.)
 #       (TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` here?)
+#       TODO: Yes: have `sample(act_prob)→act`, and use that on unroll & replay.
+#         …Is there no way to sample autoregressively, or something…?
+#           Because this primitive sampling has a good chance of really collapsing the useful combinations, even if just 2 bit-actions are equally good…
 
 # TODO: Only have one RNN net: input prev-act & next-obs, output, per-cell, prev-frame dists and next-frame predictions (since it includes prev-action, this is also the action).
 #   TODO: To make next-queries not conflict with prev-queries/actions, pattern-match `sn` tensors via NumPy, and use old indices where names match and create zero-filled 'prev-actions' for new queries. Feedback should read from those indices.
 #   TODO: To predict even the first frame of new obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
-#     (…Though with faraway-sampling, it might be better to do this at replay-time. …Though: with faraway-sampling, don't "next-frame predictions" not make any sense? Maybe only `dst` should be sampled from faraway?)
-#   (Can do safe exploration / simple planning, by (inside `with State.Episode(False): ...`) giving the RNN constructed-by-us actions and only summing up the dist-predictions of those.)
+#   (Can do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
 
-# - Min-dist actions:
-#   - …The standard methods have proven superior: dist-prediction along real trajectories, [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), possibly DDPG, and a discrete search among actions at unroll-time. And synthetic-gradient for simple learning-through-time.
-#     - Learn not dist mean/median (L2 loss) but its min, likely via quantile regression (tilted L1 loss). (Use distributional RL to mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.) (Downside: learning the 1/1000th median is 1000 times slower. Which we'll need, in episodic envs with lots of uselessly-big sampled dists.)
-#       - OR, simply `next_dist = min(j-i, prev_dist)` with L2 loss, possibly tilted too if in the `prev_dist` branch (though that again is slower to learn).
-#       - Mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
-# - Penalize probably-unconnected components (which could mislead optimization if left untreated) like a GAN: at unroll, store `dst`, and on replay, maximize distances to `dst`s (TODO: Or should we increase distance when i>j, without `dst` entering into consideration?…). This on-policy loss must be weaker than dist-learning loss.
-#   - …And in fact, if dists of predicted-stuff are increased and replayed-stuff gives grounding, then this will create a GAN already. Good for generativeness, and for noting connections.
+# TODO: Softly-reset the RNN when unrolling, via the global `with State.Setter(lambda initial, current: initial*.001 + .999*current): ...`.
+
+# TODO: Loss:
+#   TODO: Prediction, filtered by advantage (`(dist_replay < dist_policy).float()`). The policy-action is `sample`d.
+#   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
+#   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
+#   (It's a simple loss, but quite general.)
+
+# TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
 
 # TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
 #   TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
 #     TODO: How do we implement these per-cell extractions of grouped goals?
 #   TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
+#     TODO: At unroll-time, save to the replay buffer.
 #   TODO: At replay-time, TODO: what do we do, exactly?… How to learn per-cell goals?…
+#     TODO: At replay-time, inside an episode: should pick a starting point (from which the episode-copy should be taken), sample a faraway goal from the future (preferably) and put it at the start, and unroll several from the starting point steps, applying the loss.
 
 # (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
 #   Is this a good idea?
