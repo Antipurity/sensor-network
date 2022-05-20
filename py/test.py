@@ -80,19 +80,17 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 
 # (Let's assume a discrete model of the world: `universe: state → state`. This describes one boring line/circle through time.)
-# (Now, let's consider an agent with bidirectional communication with its world, receiving observations and returning actions: `universe: (state, act) → (state, obs)`. Now we have a whole infinite graph of possibilities, with the path selected by `act`ions.)
-# (Where that agent ultimately goes can be named its goal. In the sequence of the agent's `obs`ervations, this can be written as `SRC <path> DST <path>: MID0 MID1 MID2 … DST`. This is very similar to [text ](https://nlp.stanford.edu/pubs/donahue2020infilling.pdf)[infilling](https://beta.openai.com/docs/guides/completion/inserting-text), except `DST` *should* be `state`-space, not `obs`-space.) (RL writes goals as one-number-utility functions. We follow [upside-down RL](https://arxiv.org/abs/1912.02877) here, but both approaches are general enough to implement each other.)
-# (To reach goals most efficiently, the agent should build a map of that graph of possibilities, to run shortest-path queries on. Why *not* use something like a [Transformer](https://arxiv.org/abs/1706.03762) with [RNN-state](https://arxiv.org/abs/2202.05780)?)
-# (Also, the agent may want to know its own `act`ions, so its observation-sequence is really `OBS ACT OBS ACT OBS ACT`. TODO: …What about goals here… And next-state predictions; can predictions be merged with actions…)
+# (Now, let's consider an agent with bidirectional communication with its world, receiving `obs`ervations and returning `act`ions: `universe: (state, act) → (state, obs)`. Now we have a whole infinite graph of possibilities, with the path selected by `act`ions.)
+# (Where that agent ultimately goes can be named its goal. In the sequence of the agent's `obs`ervations, this can be written as `SRC <path> DST <path>: MID0 MID1 MID2 … DST`. This is very [similar to ](https://paperswithcode.com/task/text-infilling)[text ](https://nlp.stanford.edu/pubs/donahue2020infilling.pdf)[infilling](https://beta.openai.com/docs/guides/completion/inserting-text), where `DST` is either in `state`-space or in `obs`-space but variable-length.) (RL writes goals as one-number-utility functions. We follow [upside-down RL](https://arxiv.org/abs/1912.02877) here, but both approaches are general enough to implement each other.)
+# (To reach goals most efficiently, the agent should build a map of that graph of possibilities, to run shortest-path queries on. Why *not* use something like a [Transformer](https://arxiv.org/abs/1706.03762) with [RNN-state](https://arxiv.org/abs/2202.05780), and do next-`obs` prediction? Without an ideological agenda, there's no reason to claim that Deep Learning can't succeed at general intelligence, being the most data-driven and successful approach that we have.)
+# (`act`ing can actually be exactly the same as next-frame prediction, if actions are included in next-frame observations; then it's easy for human and AI actions to be treated exactly the same. But we do want shortest/best paths and not just any paths, so that prediction has to be [critic-](https://arxiv.org/abs/2006.15134)[regularized](https://arxiv.org/abs/1806.05635); if `obs` are stochastic, the model may become overly optimistic instead of averaging/smudging the predictions.)
 
 #   TODO: …Should we make `DST` `state`-space in our impl too, and to bridge from obs-space to state-space, have a NN from obs to RNN-state, possibly just a single episode of the main NN with just the desired-obs inputted? TODO: But how would this model partial goals, AKA "we don't care about any of the other cells"? By training dists with partial goals?…
 #     TODO: Since RNN state is unwieldy to actually condition on, should we learn a separate cell type just for goals, outputted by the main RNN per-cell? How is it learned, exactly? …We either need to store the unroll's goal-cells in replay (and maybe update this on replay), or do a no-DST unroll first then a with-DST unroll… Which approach is better?
 
-# TODO: …Is there any way we can, like, merge observations and actions in the loss too (AKA next-frame pred = action; if envs want to give us actions, each frame should give prev-frame's actions), to make "next-frame prediction" learn obs-actions and agent-actions in exactly the same way…
-#   TODO: …Would this mean *critic-regularized* prediction, which would push obs-stochasticity into most-lucky-for-the-current-goal configurations?…
-#     Can we live with this?
-#     Can we write this merge/loss down?
-#       …If prev-frame actions are next-frame, then this neatly solves the mismatch of actions and next-frame predictions: the predictor can receive literally just next-frame labels and give us everything…
+
+
+# TODO: …Merge obs & act (next-frame predictions & actions in next-frames) in everything below…
 
 
 
@@ -103,76 +101,41 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 
 
-
-
-
-# TODO: …What exactly do we implement, then? Do we not need any new `model/` files, and should just transfer cont-control lessons to `test.py`?
-# TODO: …Will we still want to have separate embedders for data & queries, or not? …Why *not* have them, thin if needed? Could return to doing BYOL with them. (Can't avoid embedders if data & queries are of different sizes.)
-#   …I think it's better to just zero-pad queries and embed everything with the same NN, actually.
-#   TODO: What NNs do we want, exactly?
-#   TODO: What losses do we want, exactly?
+# TODO: …What exactly do we implement, then?
+# TODO: Have just one RNN, from observations to actions/predictions and prev-dists.
+#   TODO: What losses do we want, exactly? Min-filtered critic and critic-filtered regression?
 #   TODO: Should we faraway-sample and sort-by-timestamp? Or demand contiguous sequences?
 #     TODO: Or both: faraway-sample to determine the goal and distances, then unroll BPTT near the starting point, hoping that meta-learning would pick up what it needs?
 #       (…Or are faraway-sequences inherently better for meta-learning…)
 #   TODO: Do we softly-reset the RNN state when unrolling?
 #   TODO: What actions do we search through at unroll-time, exactly? (…Do we need a GAN for potential actions?… But how would it be limited to only not-the-same-future actions?…) (Can we get away with inverting and/or corrupting a single random number per cell?) (Should we do one or a few steps of gradient descent on corrupted actions?)
-#     TODO: …Should we maybe output a probability distribution, and treat every number in actions as 0/1?… …No, this assumes that each bit is independent in a cell, which is quite likely to not be true…
+#     TODO: …Should we maybe output a probability distribution, and treat every number in actions as 0/1?… …No, this assumes that each bit is independent in a cell, which is quite likely to not be true… …But this assumption doesn't really affect anything except for how effective interventions-on-actions are, unless multiple bigger-actions have EXACTLY the same distances; and besides, we can just design envs with bit-actions in mind from the ground up…
+#       Kinda starting to like this idea. Because to search, we don't need to *guess* any actions, just sample several times. (Even if interaction-dependencies get screwed up and this search would only do a tiny bit to fix it. Again: envs can be designed to handle this, at least by allowing (sub-)actions to be performed many times, like in painting.)
+#       (TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` here?)
 
-# TODO: (…Theoretically, the model could just be `obs→act`, BUT not if we separate queries from data… Was that the correct decision?…)
-#   (With separate queries, the model won't be able to regard human actions as its own, only observe them…)
-#     (Why did we even decide that separate queries were better…)
-#     (…Do we want to… Resurrect that?… For easy human-data integration…)
-#       TODO: What would 'per-cell' goals mean when the only goal that an action could have is a particular action?… Are global-ish goals the only option… Would that be so bad though?…
-#     …Wait: even if queries are different, can't we make the net treat its actions the same as observations by, you know, giving the net those actions after it decides on them?…
-#       (…Everything, targets and observations and actions, in one space…)
-#       So, no need to resurrect per-observation queries… (Which is good for compute-efficiency of `sn`, and for comprehensibility of its interface…)
+# TODO: Only have one RNN net: input prev-act & next-obs, output, per-cell, prev-frame dists and next-frame predictions (since it includes prev-action, this is also the action).
+#   TODO: To make next-queries not conflict with prev-queries/actions, pattern-match `sn` tensors via NumPy, and use old indices where names match and create zero-filled 'prev-actions' for new queries. Feedback should read from those indices.
+#   TODO: To predict even the first frame of new obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
+#     (…Though with faraway-sampling, it might be better to do this at replay-time. …Though: with faraway-sampling, don't "next-frame predictions" not make any sense? Maybe only `dst` should be sampled from faraway?)
+#   (Can do safe exploration / simple planning, by (inside `with State.Episode(False): ...`) giving the RNN constructed-by-us actions and only summing up the dist-predictions of those.)
 
-# TODO: Don't have a separate embedder NN for queries, instead zero-pad them and concatenate them with observations. *Probably* don't need an RNN. (Not like zero-actions would be unrepresentable this way, so we're not really losing functionality.)
-#   (This allows: foregoing BYOL; RNN-state in embedder-nets.)
-
-# …The gap between embedding obs first and acts second, and embedding obs+act at the same time, could be closed by converting queries to actions and storing the joint observation-action tensor in the replay buffer… Though, if we want to compare with different-actions, we still want separate variables for these so that we could slice out the queries…
-
-# TODO: Maybe only have one RNN net: input obs & act, output per-cell next-frame prediction and corrected- act and UNcorrected-act dist/s. (Can learn act-dependent dists this way: correct acts, input, and estimate dists.)
-
-# (…Goals are a lot like in-text variables: "SRC <path> DST <path>: mid0 mid1 mid2 mid3" but with extra assurance that the path is as short as possible… Could maybe be trained in the same way, and explained in the same way.)
-
-# - Theoretically, the inverted env `(state, obs) → (state, act)`, but it should be split to better model `env`'s exact inputs/outputs, and to allow tampering with inputs/actions/goals:
-#   - TODO: …Can/should we rewrite this with a history-less formulation?…
-#   - `act(src, dst) → act` and `dist(src, act, dst) → dist`.
-#     - `update(history, obs) → src`, because the NN is not blind.
-#     - `env(src, act) → history`, to round out the RNN.
-#       - TODO: (…Yeah, this is the action-incorporation step… No output, right?…)
-#       - TODO: …Wait: if we used `update(history, act) → history` instead of another NN, then we could allow observations to tell us another agent's (human's) actions, right? Great idea, isn't it?
-#         - (This would make obs-space and act-space the same, which is fine because `sn` has labels anyway.)
-#     - TODO: …Should `update`/`env` be the RNN, and `act`/`dist`, uh, regular NNs, which take only the RNN's output embeddings?… …Do we even need separate `act` and `dist`; can't we just make the RNN output both… …No, we at least need a separate `dist`, which takes the action… …Or do we? Can't we take distance-readings at a post-action RNN state?
-#     - (`dst`s of `src`s should be provided when storing samples in the replay buffer. Probably zero-out and/or defer the storage if not available immediately.)
-# From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
-# - Learning to predict consequences-of-`next_obs` while extracting mutual info (directly, the result of `update`): `history = sg update.copy(history, obs)`, possibly for `next_history` and `next_obs`.
-#   - (Not predicting `obs` directly because its non-determinism leads to smearing.) (No need for another NN for `history`, because the prior `env` call could take care of obs-independent time-keeping.)
-#   - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too egregiously. TODO: …But 'safe' exploration can also be done by learning action-dependent distances…)
-#   - TODO: …Wait: but if we embed observations & queries anyway (can't avoid that if data & queries are of different sizes), then can't we avoid smearing by just predicting those embeddings (with targets being momentum-slowed, exactly like in BYOL)?… (Not inspecting `history` explicitly would mesh with `model/recurrency.py` stuff better too.)
 # - Min-dist actions:
 #   - …The standard methods have proven superior: dist-prediction along real trajectories, [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), possibly DDPG, and a discrete search among actions at unroll-time. And synthetic-gradient for simple learning-through-time.
-#     - Learn not dist mean/median but its min, likely via quantile regression (tilted L1 loss). (Use distributional RL to mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.) (Downside: learning the 1/1000th median is 1000 times slower. Which we'll need, in episodic envs with lots of uselessly-big sampled dists.)
-#       - OR, simply `next_dist = min(j-i, prev_dist)`, possibly L1, possibly with a per-level ever-decreasing multiplier for the too-big targets (though that again is slower to learn).
+#     - Learn not dist mean/median (L2 loss) but its min, likely via quantile regression (tilted L1 loss). (Use distributional RL to mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.) (Downside: learning the 1/1000th median is 1000 times slower. Which we'll need, in episodic envs with lots of uselessly-big sampled dists.)
+#       - OR, simply `next_dist = min(j-i, prev_dist)` with L2 loss, possibly tilted too if in the `prev_dist` branch (though that again is slower to learn).
 #       - Mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
-# - Penalize probably-unconnected components (which could mislead optimization if left untreated) like a GAN: at unroll, store `dst`, and on replay, maximize distances to `dst`s (TODO: Or should we increase distance when i>j?…). This on-policy loss must be weaker than dist-learning loss.
-#   - TODO: …How can there be unconnected components if we have one lifelong episode, anyway? …Maybe if we've only seen one-way and not the other…
+# - Penalize probably-unconnected components (which could mislead optimization if left untreated) like a GAN: at unroll, store `dst`, and on replay, maximize distances to `dst`s (TODO: Or should we increase distance when i>j, without `dst` entering into consideration?…). This on-policy loss must be weaker than dist-learning loss.
+#   - …And in fact, if dists of predicted-stuff are increased and replayed-stuff gives grounding, then this will create a GAN already. Good for generativeness, and for noting connections.
 
-# TODO: With `recurrency.py`, we probably want: obs-labels→obs-pred; obs→nothing; query-labels→actions.
-#   TODO: …Don't we want to also give actions as inputs?…
-#   TODO: …The goal can be given as the 'prefix' (rather than as a hidden extra input to NNs), and if we do so, then it's kinda natural to be able to only specify parts of the observation space as goals…
-#     (Amazing for usability: out of the box, users/envs can either allow the model to explore, or specify what they want; and developer-users don't have to program any new goal-spaces, since users/envs can just expose observations then demand to revisit those.)
-#     TODO: How do we do goal relabeling with this? Start an episode with the initial state and a different goal, possibly any observation cells of anything along the trajectory, and possibly inserting a goal-change token right after the observation that reached the goal, to make the NN able to handle suddenly-changing goals? …I do believe so.
-#     TODO: …How would we, theoretically, implement per-cell goals?… The distance would need to be queried on a per-obs-name basis. Probably need to append the goals to actions, so that distance can know those. …But: this really would be per-cell goals, with no way to specify cell-combination goals… Our actions would learn to minimize the sum of distances to per-cell goals, which isn't necessarily the same as dist to sum-of-cells goal…
-#       Would it be better for goals to be input-space, or RNN-state-space?… Is input-space enough…
-#     TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
-#       TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
-#       TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
-#       TODO: At replay-time, TODO: what do we do, exactly?….
+# TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
+#   TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
+#     TODO: How do we implement these per-cell extractions of grouped goals?
+#   TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
+#   TODO: At replay-time, TODO: what do we do, exactly?… How to learn per-cell goals?…
 
 # (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
 #   Is this a good idea?
+#   TODO: Do we maybe want to learn multiple metrics-about learning, such as misprediction? Which, exactly?
 
 # (…Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…)
 #   TODO: Maybe move `minienv` to `env/`, so that we can safely implement as many environments as we want?…

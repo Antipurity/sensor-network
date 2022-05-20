@@ -177,7 +177,8 @@ class State(nn.Module):
     class Setter:
         """`with State.Setter(lambda state, to: to): ...`
 
-        Within this context, `State` updates will go through the specified function first. To not change `to`, return `to` or `None`.
+        Within this context, `State` updates will go through the specified function first, outermost-setter first.    
+        To not change `to`, return `to` or `None`.
 
         Example uses:
         - `lambda state, to: state.initial+0 if random.randint(1,100)==1 else to`: hard-reset.
