@@ -90,62 +90,64 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 
 
 # TODO: …What exactly do we implement, then? Do we not need any new `model/` files, and should just transfer cont-control lessons to `test.py`?
-#   …Do we really still want to do the RNN-of-Transformer architecture…
-#     TODO: …Maybe we should use fast weight programmers instead?
-#       Maybe even a [self-referential weight matrix](https://arxiv.org/pdf/2202.05780.pdf)? TODO: Yes. A `model/` file. `model/recurrency.py`, perhaps.
-#         (This self-attention-like layer would store its initial & current matrices, and allow explicitly changing them. Initial-matrix requires grad.)
-#         (To not access layers one-by-one to do replays: need a ctx-manager that resets current-weights to initial, and on exit, restores them.) TODO: Should we extend this idea to generic RNN-state-tensors? …Why, yes.
-#           …That 'generic RNN state' should also follow that pattern of "softly-reset toward an initial state", right?
-#           TODO: Have the `State` class first, with `with State.New(): ...`.
-#           TODO: (…What does "predict next RNN-state using prev RNN-state" mean if we don't really have access to the actual RNN states directly anymore… Does it have any connections with Reptile or something…)
-#             (It updates initial-state toward final-state, albeit via SGD rather than polyak-avg. Which is the opposite of soft-reset, in both ways. …What if we did actually do this, via gradient during replay, trying to make each initial-state the average of possible-states? Doesn't it augment, not replace? Make initial-states as non-intrusive as possible?)
-#               (Should allow attaching global handlers of state-update, to compute such a loss.)
-#         (Updates are additive, so replays can skip huge timespans: faraway-sample and sort-by-timestamp and update in sequence.)
-#     (…May also want to do the [Reptile](https://openai.com/blog/reptile/) approximation to learn beyond BPTT, where instead of infinite-horizon backprop, we do 2+ SGD steps (each is a BPTT unroll here), then update all trainable tensors toward their new versions, and still do BPTT at unroll-time.)
-#       (Just like SWRM, these updates are also linear, making us able to do faraway-sampling for faraway-BPTT.)
-#       (These unroll-time updates face the same problem as SWRM: unroll-time params diverge from what we optimize. Could use the same solution: slowly polyak-avg them toward the initial/optimized params.)
-#       (…Would self-referential weight matrices not be enough, making us need to add a second optimizer via Reptile?)
-# TODO: …Will we still want to have separate embedders for data & queries, or not? …Why *not* have them, thin if needed?
+# TODO: …Will we still want to have separate embedders for data & queries, or not? …Why *not* have them, thin if needed? Could return to doing BYOL with them. (Can't avoid embedders if data & queries are of different sizes.)
 #   TODO: What NNs do we want, exactly?
+#   TODO: What losses do we want, exactly?
+#   TODO: Should we faraway-sample and sort-by-timestamp? Or demand contiguous sequences?
+#   TODO: Do we softly-reset the RNN state when unrolling?
+#   TODO: What actions do we search through at unroll-time, exactly? (…Do we need a GAN for potential actions?…)
 
-# TODO: Assume a full env with bidirectional obs/act communication with our agent (any possible universe can be described as one-step updates): `env(prev,act)→(next,obs)`, where `prev` and `next`s are hidden `state`s.
+# TODO: (…Theoretically, the model could just be `obs→act`, BUT not if we separate queries from data… Was that the correct decision?…)
+#   (With separate queries, the model won't be able to regard human actions as its own, only observe them…)
+#     (Why did we even decide that separate queries were better…)
+#     (…Do we want to… Resurrect that?… For easy human-data integration…)
+#       TODO: What would 'per-cell' goals mean when the only goal that an action could have is a particular action?… Are global-ish goals the only option… Would that be so bad though?…
+
+# …Do actions imitate acts-in-obs, because prediction does?… Or is the action a separate NN?…
+#   …But with embeddings, prediction won't tide us over unless we want to make the predicted-embedding into actions… Definitely need a separate net for actions.
+
+# TODO: Assume a full env with bidirectional obs/act communication with our agent (any possible universe can be discretized as one-step updates): `env(prev,act)→(next,obs)`, where `prev` and `next`s are hidden `state`s.
 #   And we have goal(state)→dst for what `act`s want. (After all, all trajectories end up *somewhere*, so might as well label and learn destinations explicitly.) (This description is complete, and with precise-enough goals, no further intervention on trajectories is needed, so we can just find the shortest path.)
 #   THIS is the real structure that NNs learn, isn't it?
 #   The env forms an infinite graph, and we'd like to find all-to-all paths in it. That's all that agents are.
 #   Agents had better learn a full map of the world. For that, these NNs need:
 #     - Theoretically, the inverted env `(state, obs) → (state, act)`, but it should be split to better model `env`'s exact inputs/outputs, and to allow tampering with inputs/actions/goals:
+#       - TODO: …Can/should we rewrite this with a history-less formulation?…
 #       - `act(src, dst) → act` and `dist(src, act, dst) → dist`.
 #         - `update(history, obs) → src`, because the NN is not blind.
 #         - `env(src, act) → history`, to round out the RNN.
+#           - TODO: (…Yeah, this is the action-incorporation step… No output, right?…)
 #         - (`dst`s of `src`s should be provided when storing samples in the replay buffer. Probably zero-out and/or defer the storage if not available immediately.)
 #   From this, we can infer several equations/losses (like in Noether's theorem, symmetry/equality implies conservation/zero-difference):
 #     - Learning to predict consequences-of-`next_obs` while extracting mutual info (directly, the result of `update`): `history = sg update.copy(history, obs)`, possibly for `next_history` and `next_obs`.
 #       - (Not predicting `obs` directly because its non-determinism leads to smearing.) (No need for another NN for `history`, because the prior `env` call could take care of obs-independent time-keeping.)
-#       - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too egregiously.)
-#       - …Wait: but if we embed observations & queries anyway, then can't we avoid smearing by just predicting those embeddings (with targets being momentum-slowed, exactly like in BYOL)?… (Not inspecting `history` explicitly would mesh with `model/recurrency.py` stuff better too.)
-#     - *Maybe*, backward-prediction too, so that single-step updates can still sense the past despite gradient-descent being unconnected: the autoencoder `reverse_update(obscure(history), obs) = sg history`, possibly reversing `prev_act` and `prev_obs` too.
+#       - (Allows [MuZero](https://arxiv.org/abs/1911.08265)-like no-`obs` planning, in addition to safe exploration AKA randomly proposing an action and evaluating whether distance to a 'safe' goal increases too egregiously. TODO: …But 'safe' exploration can also be done by learning action-dependent distances…)
+#       - TODO: …Wait: but if we embed observations & queries anyway (can't avoid that if data & queries are of different sizes), then can't we avoid smearing by just predicting those embeddings (with targets being momentum-slowed, exactly like in BYOL)?… (Not inspecting `history` explicitly would mesh with `model/recurrency.py` stuff better too.)
 #     - Min-dist actions:
 #       - …The standard methods have proven superior: dist-prediction along real trajectories, [self-imitation](https://arxiv.org/pdf/1806.05635.pdf), possibly DDPG, and a discrete search among actions at unroll-time. And synthetic-gradient for simple learning-through-time.
 #         - Learn not dist mean/median but its min, likely via quantile regression (tilted L1 loss). (Use distributional RL to mine for rare-but-good actions, such as when random trajectory fluctuation only RARELY finds the goal and we need more search there to refine acts.) (Downside: learning the 1/1000th median is 1000 times slower. Which we'll need, in episodic envs with lots of uselessly-big sampled dists.)
-#           - (An alternative didn't work well in a trivial 2D env: gating each next dist-level by either its prev dist-level (dropping targets if more than that) or nothing, so that each is lower. Possibly because that env is a mad chase to first-correctish-dist-map; might work in other envs.)
-#           - May also use a stable (non-self-modifying) approximation to Floyd-Warshall algo to learn min-dists (mine for regret to minimize) that we may not have seen directly: first-level targets are `j-i`, and each next dist-level's target is prev dist-level's `d2(a,b) = min(d(a,m) + d(m,b))` where `d(a,a)=0` and `d(a,b) = min(d(a,b), j-i) if i<j else ∞`, with midpoints from a whole minibatch, and from-replay-buffer actions. For goal-space `b`s, `m` must still be full-space.   At least, each level would turn more-than-mean targets into mean; for convergence speed, may want to mult loss by `pred<target ? 2 : .5` or smth similar.
+#           - OR, simply `next_dist = min(j-i, prev_dist)`, possibly L1, possibly with a per-level ever-decreasing multiplier for the too-big targets (though that again is slower to learn).
 #           - Mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
-#     - Penalize probably-unconnected components (which could mislead optimization if left untreated, especially with Floyd-Warshall search) like a GAN: at unroll, store `dst`, and on replay, maximize distances to `dst`s. This on-policy loss must be weaker than dist-learning loss.
+#     - Penalize probably-unconnected components (which could mislead optimization if left untreated) like a GAN: at unroll, store `dst`, and on replay, maximize distances to `dst`s (TODO: Or should we increase distance when i>j?…). This on-policy loss must be weaker than dist-learning loss.
+#       - TODO: …How can there be unconnected components if we have one lifelong episode, anyway? …Maybe if we've only seen one-way and not the other…
 
 # TODO: With `recurrency.py`, we probably want: obs-labels→obs-pred; obs→nothing; query-labels→actions.
+#   TODO: …Don't we want to also give actions as inputs?…
 #   TODO: …The goal can be given as the 'prefix' (rather than as a hidden extra input to NNs), and if we do so, then it's kinda natural to be able to only specify parts of the observation space as goals…
 #     (Amazing for usability: out of the box, users/envs can either allow the model to explore, or specify what they want; and developer-users don't have to program any new goal-spaces, since users/envs can just expose observations then demand to revisit those.)
 #     TODO: How do we do goal relabeling with this? Start an episode with the initial state and a different goal, possibly any observation cells of anything along the trajectory, and possibly inserting a goal-change token right after the observation that reached the goal, to make the NN able to handle suddenly-changing goals? …I do believe so.
-#     TODO: …But can we really use Floyd-Warshall search if we support non-full-state goals?… Wouldn't we be limited to (critic-regularized) autoregressive modeling and distance prediction (and unroll-time action-search I guess) – because Floyd's needs all-to-all pairwise distances, and appending goal-space dst-cells for all pairs is too expensive?… (…Then again, with multiupdating, it *could* be done relatively quickly, *and* use full-state goals for estimation…)
-#       (…At least dist-prediction can be done both at obs-level and at act-level… TODO: …Wait: but does act-level really know its goal?… …Does our loss just assume one-goal-at-a-time by giving all cells the same distance to the same goal-state?…)
-#       TODO: …How would we, theoretically, implement per-cell goals?… The distance would need to be queried on a per-obs-name basis. Probably need to append the goals to actions, so that distance can know those. …But: this really would be per-cell goals, with no way to specify cell-combination goals and thus no way to do Floyd's… Our actions would learn to minimize the sum of distances to per-cell goals, which isn't necessarily the same as dist to sum-of-cells goal, which is fine for users but not fine for Floyd's…
-#         Do we really need Floyd's…
-#           (Can't the learned-weight-matrices learn to implement search if it's useful, just to minimize distance-mispredictions…)
+#     TODO: …How would we, theoretically, implement per-cell goals?… The distance would need to be queried on a per-obs-name basis. Probably need to append the goals to actions, so that distance can know those. …But: this really would be per-cell goals, with no way to specify cell-combination goals… Our actions would learn to minimize the sum of distances to per-cell goals, which isn't necessarily the same as dist to sum-of-cells goal…
+#       Would it be better for goals to be input-space, or RNN-state-space?… Is input-space enough…
 #     TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
+#       TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
 #       TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
-#       TODO: At replay-time, TODO:.
+#       TODO: At replay-time, TODO: what do we do, exactly?….
 
 # (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
+#   Is this a good idea?
+
+# (…Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…)
+#   TODO: Maybe move `minienv` to `env/`, so that we can safely implement as many environments as we want?…
 
 
 
@@ -166,10 +168,6 @@ import torch.nn as nn
 
 import sensornet as sn
 import minienv
-from model.rnn import RNN # TODO: …Do we even want *this*? Aren't we kinda tired of BPTT? (And even if we aren't, isn't this trivial to implement?)
-#   TODO: …We have the whole `model.recurrency` thing now, so we should remove both this line and the file.
-from model.loss import CrossCorrelationLoss # TODO: No; don't do this.
-#   TODO: This file isn't used anywhere either, and should be removed too, right?
 from model.log import log, clear
 
 
@@ -256,42 +254,14 @@ ev = nn.Sequential( # state → goal.
     h(goal_sz, goal_sz),
 ).to(device)
 next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
-number_loss = CrossCorrelationLoss( # TODO: No.
-    axis=-2,
-    decorrelation_strength=.00,
-    shuffle_invariant=False, # TODO: ...Wait, why is shuffle-invariance like the magic sauce? ...Is it because it makes optimization impossible... Yep. All our results were complete bullshit.
-    also_return_l2=True,
-)
-cell_loss = CrossCorrelationLoss( # TODO: No.
-    axis=-1,
-    decorrelation_strength=1,
-    also_return_l2=True,
-)
-CCL_was, L2_was = 0., 0.
-def loss_func(prev_state, next_state, *_): # TODO: No.
-    global CCL_was, L2_was
-    A, B = norm(ev(prev_state)), norm(ev(next_state))
-    A, B = A.unsqueeze(-2), B.unsqueeze(-2) # TODO:
-    CCL_was, L2_was = cell_loss(A, B) # TODO: Also number_loss, cell_loss. Maybe both at the same time.
-    # TODO: ...Wait, if CCL is so low, then how can L2 still be stuck at 60k...? WHAT IS GOING ON
-    return CCL_was
-model = RNN(
-    transition = next,
-    loss = loss_func,
-    optimizer = lambda p: torch.optim.Adam(p, lr=1e-4),
-    backprop_length = lambda: random.randint(2, 4), # TODO:
-    trace = False, # TODO: (The loss is still not grad-checkpointed, though. ...Maybe `RNN` could allow returning tuples from transitions, and pass all to loss then discard all non-first results? Then we won't need memory, though print_loss will be a bit out of date... As a bonus, we won't have to compute `ev(prev_state)` twice.)
-)
 
 
 
 state = torch.randn(max_state_cells, state_sz, device=device)
 feedback = None
 exploration_peaks = [0.]
-async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
-    # TODO: …We should make `log` be able to use this `sn.torch` directly, so that we avoid the awkwardness of having to manually await each item…
-    CCL, L2 = sn.torch(torch, CCL, True), sn.torch(torch, L2, True)
-    CCL, L2 = await CCL, await L2
+async def print_loss(data_len, query_len, explored, reachable):
+    # TODO: …We should make `log` be able to use this `await sn.torch(torch, x, True)` directly, so that we avoid the awkwardness of having to manually await each item…
     explored = round(explored*100, 2)
     if explored >= exploration_peaks[-1]: exploration_peaks[-1] = explored
     else: exploration_peaks.append(explored)
@@ -301,8 +271,6 @@ async def print_loss(data_len, query_len, explored, reachable, CCL, L2):
     reachable = round(reachable*100, 2)
     # Ignored: `data_len`, `query_len`, `reachable`
     log(explored=explored, explored_avg=explored_avg)
-    log(1, False, CCL=CCL)
-    log(2, False, L2=L2)
 @sn.run
 async def main():
     global state, feedback
@@ -319,9 +287,9 @@ async def main():
         # state = state + torch.rand_like(state)*noise_level*2-1
         # state = norm(state) # ...This is even more counterproductive than expected.
 
-        state = model(state, data, query)
+        state = next(state, data, query)
         feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
 
-        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable(), CCL_was, L2_was))
+        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable()))
 
         # if random.randint(1,200) == 1: state = torch.randn_like(state, requires_grad=True) # TODO: Does this help exploration? ...A bit, I guess? Uniform improvement to ~3%, except when representations collapse or something.

@@ -68,7 +68,7 @@ For explicitly discriminating which action comes earlier (for self-imitation), c
 
 - Train an ensemble of `act`s, and gate meta-action-prediction by how certain the closer-destination action is (such as `act_loss / (-(act1-act2).abs().sum(-1, keepdim=True)).exp().detach()`). (Gives no benefit in this trivial env.)
 
-# This is pretraining for RL ("holy grail")
+# This is pretraining for RL
 
 Goal-state-reaching can actually learn to reach not only goal-states, but arbitrary funcs of them. All we need is to add fake `state→that` transitions to the replay buffer. This way, we can erase as much info as we want.
 

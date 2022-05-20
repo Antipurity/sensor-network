@@ -12,11 +12,7 @@ So, a sensor network without such an algorithm is just a problem looking for a s
 
 Here, in `py`, we test candidates:
 
-- `trivial_exploration_test.py`: we test a hypothesis that predicting a normalized outcome causes exploration. Conclusion: inconclusive.
-
 - `test_board_wanderings.py`: a discrete env with 4 actions, where we try out a hypothesis that exploration is about learning a map from anywhere to anywhere, so that fine-tuning for a specific task can just learn the goal and not how to get to it. Conclusion: a map sure is learned, but there are problems (loss-approximation is hard, actions are too discrete for gradient descent to learn, unable to include past-state and still learn, and the env is specially-constructed for this).
-
-- `test_joint_embedding.py`: …why is it still here? Was testing a hypothesis in a limited way. Not useful.
 
 - `test_board_revisit.py`: really, really tried to not have to learn `(source, destination) → dist` quadratically-many distances. Ended up learning locally-[isometric](https://en.wikipedia.org/wiki/Isomap)[ maps](https://en.wikipedia.org/wiki/Johnson%E2%80%93Lindenstrauss_lemma) (embed `source` and `destination`, and make the L2 distance as required), and using faraway timestamp-aware sampling, and combining solved subtasks wherever going through a midpoint is faster.
 
