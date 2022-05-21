@@ -46,8 +46,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Have param `dist_levels=4`.
-# TODO: Only have one RNN net: input prev-act & next-obs, output, per-cell, next-frame predictions (since it includes prev-action, this is also the action) (these 'predictions' are done with `sample`, so they're `max(cell_shape[-1], 2**bits_per_chunk)` numbers) and prev-frame dists.
+# TODO: Unroll:
 #   TODO: Softly-reset the RNN when unrolling, via the global `with State.Setter(lambda initial, current: initial*.001 + .999*current): ...`.
 #   TODO: On unroll, `sample` next actions.
 #   TODO: On unroll, store in the replay buffer, as a contiguous sequence.
@@ -55,11 +54,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: To predict even the first frame of new obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
 #   (Can do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
 
-# TODO: Have params `bits_per_chunk=8` and `chunks_per_step=1`.
-# TODO: Have `sample(fn, query, start=0, steps=1)` that, `steps` times: (`query` has to be zero-padded to be action-sized, and) does `probs = fn(query)[..., :(2 ** bits_per_step)]`, and does softmax on `probs`, and samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place.
+# TODO: Have `sample(query, start=0, steps=1)` that, `steps` times: (`query` has to be zero-padded to be action-sized, and) does `probs = transition_(query)[0]`, and does softmax on `probs`, and samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place.
 #   (No non-action-cell sampling AKA prediction here, since we won't use that.)
 #   (TODO: Also handle `chunks_per_step` by increasing output-size by that much, and doing softmax/sample/put for that many bit-patterns for every step.)
-# TODO: Have `sample_prob(fn, action, start=0, steps=1)` that, `steps` times: does `probs = fn(query)[..., :(2**bits_per_step)]` (`query` is initially `action` with zeroes in non-name parts), and discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
+# TODO: Have `sample_prob(action, start=0, steps=1)` that, `steps` times: does `probs = transition_(query)[0]` (`query` is initially `action` with zeroes in non-name parts), and discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
 #   (Must treat non-act cells (not all non-name values are -1|1) differently: treat the whole output as a direct prediction instead of probabilities, and add negated L2 loss to the resulting 'probability'. It's still a little autoregressive due to being added many times with different real-prefixes, so learned representations won't be as bad as just smudging-of-targets.)
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
@@ -107,8 +105,7 @@ import asyncio
 import random
 import torch
 import torch.nn as nn
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-#   TODO: What was that way to set this globally, to not bother with devices?
+torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 from model.recurrency import State, SRWM
 
@@ -124,6 +121,9 @@ sn.shape(*cell_shape)
 
 state_sz, goal_sz = 256, 256
 max_state_cells = 256
+
+dist_levels = 2
+bits_per_chunk, chunks_per_step = 8, 1 # How to `sample`.
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
 #   TODO: Should at least make `minienv` work not globally but in a class.
@@ -151,10 +151,18 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
 
 
 transition = nn.Sequential(
-    # TODO: How do we change this? Just different input/mid/output sizes? Which, exactly?
+    # Input prev-actions and next-observations, output info that `sample` can use and distances.
+    #   We predict the next input, thus serving as both an RL agent and a self-supervised learner.
+    #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
+    h(sum(cell_shape), state_sz),
     h(state_sz, state_sz),
-    h(state_sz, state_sz),
-).to(device)
+    h(state_sz, max(cell_shape[-1], chunks_per_step * 2 ** bits_per_chunk) + dist_levels),
+)
+def transition_(x):
+    """Wraps `transition` to return a tuple of `(sample_info, distance)`."""
+    y = transition(x)
+    return y[..., :-dist_levels], y[..., -dist_levels:]
+# TODO: An optimizer for `transition`.
 
 
 
@@ -174,6 +182,7 @@ async def print_loss(data_len, query_len, explored, reachable):
 @sn.run
 async def main():
     feedback = None
+    # TODO: No grad during unroll.
     while True:
         # await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
