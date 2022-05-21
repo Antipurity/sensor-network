@@ -112,8 +112,8 @@ Reminder: URL is simply the `ev(state) = ev(next(state, ev(state)))` loss on an 
 # TODO: Softly-reset the RNN when unrolling, via the global `with State.Setter(lambda initial, current: initial*.001 + .999*current): ...`.
 
 # TODO: Have `sample(fn, query, start=0, steps=1)` that, `steps` times: does `query = fn(query)[..., -query.shape[-1]:]`, and fills in a chunk of `query` based on `torch.rand(…)*2-1 < query[…]`, zeroing-out everything past this chunk.
+#   (Suppose we need to extract B bits of information, via A-options actions (`A-1` NN outputs). What's the optimal `A` to minimize computation, or `comp = (A-1) * steps` in this case? `steps = B / log2(A)` (approximately), so `comp = B * (A-1)/log2(A)`, which increases with `A` without bound; so in conclusion, `A=2` is optimal.)
 # TODO: Have `sample_prob(fn, action, start=0, steps=1)` that, `steps` times: does `query = fn(query)[..., -query.shape[-1]:]`, and adds in-chunk 4-L2 loss between `query` and `action` to the result and replaces `query`'s chunk with `action`'s chunk, zeroing-out everything past this chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
-#   TODO: …What's the time complexity if we relax the bit-per-action restriction, depending on how many options each action represents?… What's the optimum?
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
 # TODO: Loss:
