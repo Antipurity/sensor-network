@@ -46,18 +46,20 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Only have one RNN net: input prev-act & next-obs, output, per-cell, prev-frame dists and next-frame predictions (since it includes prev-action, this is also the action).
+# TODO: Only have one RNN net: input prev-act & next-obs, output, per-cell, prev-frame dists and next-frame predictions (since it includes prev-action, this is also the action) (these 'predictions' are done with `sample`, so they're `max(cell_shape[-1], 2**bits_per_chunk)` numbers).
+#   TODO: Softly-reset the RNN when unrolling, via the global `with State.Setter(lambda initial, current: initial*.001 + .999*current): ...`.
 #   TODO: On unroll, `sample` next actions.
 #   TODO: On unroll, store in the replay buffer, as a contiguous sequence.
 #   TODO: To make next-queries not conflict with prev-queries/actions, pattern-match `sn` tensors via NumPy, and use old indices where names match and create zero-filled 'prev-actions' for new queries. Feedback should read from those indices.
 #   TODO: To predict even the first frame of new obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
 #   (Can do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
 
-# TODO: Softly-reset the RNN when unrolling, via the global `with State.Setter(lambda initial, current: initial*.001 + .999*current): ...`.
-
-# TODO: Have `sample(fn, query, start=0, steps=1)` that, `steps` times: does `query = fn(query)[..., -query.shape[-1]:]`, and fills in a chunk of `query` based on `torch.rand(…)*2-1 < query[…]`, zeroing-out everything past this chunk.
-#   (Suppose we need to extract B bits of information, via A-options actions (`A-1` NN outputs). What's the optimal `A` to minimize computation, or `comp = (A-1) * steps` in this case? `steps = B / log2(A)` (approximately), so `comp = B * (A-1)/log2(A)`, which increases with `A` without bound; so in conclusion, `A=2` is optimal.)
-# TODO: Have `sample_prob(fn, action, start=0, steps=1)` that, `steps` times: does `query = fn(query)[..., -query.shape[-1]:]`, and adds in-chunk 4-L2 loss between `query` and `action` to the result and replaces `query`'s chunk with `action`'s chunk, zeroing-out everything past this chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
+# TODO: Have params `bits_per_chunk=8` and `chunks_per_step=1`.
+# TODO: Have `sample(fn, query, start=0, steps=1)` that, `steps` times: (`query` has to be zero-padded to be action-sized, and) does `probs = fn(query)[..., -(2 ** bits_per_step):]`, and does softmax on `probs`, and samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place.
+#   (No non-action-cell sampling AKA prediction here, since we won't use that.)
+#   (TODO: Also handle `chunks_per_step` by increasing output-size by that much, and doing softmax/sample/put for that many bit-patterns for every step.)
+# TODO: Have `sample_prob(fn, action, start=0, steps=1)` that, `steps` times: does `probs = fn(query)[..., -(2**bits_per_step):]` (`query` is initially `action` with zeroes in non-name parts), and discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
+#   (Must treat non-act cells (not all non-name values are -1|1) differently: treat the whole output as a direct prediction instead of probabilities, and add negated L2 loss to the resulting 'probability'. It's still a little autoregressive due to being added many times with different real-prefixes, so learned representations won't be as bad as just smudging-of-targets.)
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
 # TODO: Loss:
