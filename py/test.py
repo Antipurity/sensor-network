@@ -54,12 +54,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: To predict even the first frame of new obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
 #   (Can do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
 
-# TODO: Have `sample(query, start=0, steps=1)` that, `steps` times: (`query` has to be zero-padded to be action-sized, and) does `probs = transition_(query)[0]`, and does softmax on `probs`, and samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place.
-#   (No non-action-cell sampling AKA prediction here, since we won't use that.)
-#   (TODO: Also handle `chunks_per_step` by increasing output-size by that much, and doing softmax/sample/put for that many bit-patterns for every step.)
-# TODO: Have `sample_prob(action, start=0, steps=1)` that, `steps` times: does `probs = transition_(query)[0]` (`query` is initially `action` with zeroes in non-name parts), and discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
-#   (Must treat non-act cells (not all non-name values are -1|1) differently: treat the whole output as a direct prediction instead of probabilities, and add negated L2 loss to the resulting 'probability'. It's still a little autoregressive due to being added many times with different real-prefixes, so learned representations won't be as bad as just smudging-of-targets.)
-
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
 # TODO: Loss:
 #   TODO: Prediction (maximizing `sample_prob` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
@@ -102,9 +96,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 import asyncio
+import chunk
 import random
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 from model.recurrency import State, SRWM
@@ -147,6 +143,34 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
         nn.ReLU(), nn.LayerNorm(ins), SRWM(ins, ins, heads=2),
         nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs),
     )
+
+def sample(query):
+    """TODO:
+
+    `query` cells has to be zero-padded to the size of actions/observations."""
+    i = sum(cell_shape) - cell_shape[-1]
+    query = query.detach().clone()
+    while i < query.shape[-1]:
+        i += bits_per_chunk * chunks_per_step
+        probs = F.softmax(transition_(query)[0], -1)
+        # TODO: samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place (via slice-assignment).
+        #   (No non-action-cell sampling AKA prediction here, since we won't use that.)
+        #   TODO: …How to turn sampled indices into bit-patterns?…
+        #   TODO: …How to put the bits into `query` properly, even the last chunk?…
+        #     TODO: Do sampled actions need gradient? If not, can't we just write in-place?
+        #     Is assignment-to-a-slice good enough?
+        #   TODO: Also handle `chunks_per_step` by increasing output-size by that much, and doing softmax/sample/put for that many bit-patterns for every step.
+def sample_prob(action):
+    """TODO:"""
+    bits = cell_shape[-1]
+    i = sum(cell_shape) - bits
+    query = torch.cat((action[:, :-bits].detach(), torch.zeros(action.shape[0], action.shape[1] - bits)), -1)
+    while i < action.shape[-1]:
+        i += bits_per_chunk * chunks_per_step
+        probs = F.softmax(transition_(query)[0], -1)
+        # TODO: discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
+        #   TODO: …How to turn bit-patterns into indices?…
+        #   TODO: Treat non-act cells (not all non-name values are -1|1) differently: treat the whole output as a direct prediction instead of probabilities, and add negated L2 loss to the resulting 'probability'. It's still a little autoregressive due to being added many times with different real-prefixes, so learned representations won't be as bad as just smudging-of-targets.
 
 
 
