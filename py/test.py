@@ -46,7 +46,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Only have one RNN net: input prev-act & next-obs, output, per-cell, prev-frame dists and next-frame predictions (since it includes prev-action, this is also the action) (these 'predictions' are done with `sample`, so they're `max(cell_shape[-1], 2**bits_per_chunk)` numbers).
+# TODO: Have param `dist_levels=4`.
+# TODO: Only have one RNN net: input prev-act & next-obs, output, per-cell, next-frame predictions (since it includes prev-action, this is also the action) (these 'predictions' are done with `sample`, so they're `max(cell_shape[-1], 2**bits_per_chunk)` numbers) and prev-frame dists.
 #   TODO: Softly-reset the RNN when unrolling, via the global `with State.Setter(lambda initial, current: initial*.001 + .999*current): ...`.
 #   TODO: On unroll, `sample` next actions.
 #   TODO: On unroll, store in the replay buffer, as a contiguous sequence.
@@ -55,10 +56,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   (Can do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
 
 # TODO: Have params `bits_per_chunk=8` and `chunks_per_step=1`.
-# TODO: Have `sample(fn, query, start=0, steps=1)` that, `steps` times: (`query` has to be zero-padded to be action-sized, and) does `probs = fn(query)[..., -(2 ** bits_per_step):]`, and does softmax on `probs`, and samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place.
+# TODO: Have `sample(fn, query, start=0, steps=1)` that, `steps` times: (`query` has to be zero-padded to be action-sized, and) does `probs = fn(query)[..., :(2 ** bits_per_step)]`, and does softmax on `probs`, and samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place.
 #   (No non-action-cell sampling AKA prediction here, since we won't use that.)
 #   (TODO: Also handle `chunks_per_step` by increasing output-size by that much, and doing softmax/sample/put for that many bit-patterns for every step.)
-# TODO: Have `sample_prob(fn, action, start=0, steps=1)` that, `steps` times: does `probs = fn(query)[..., -(2**bits_per_step):]` (`query` is initially `action` with zeroes in non-name parts), and discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
+# TODO: Have `sample_prob(fn, action, start=0, steps=1)` that, `steps` times: does `probs = fn(query)[..., :(2**bits_per_step)]` (`query` is initially `action` with zeroes in non-name parts), and discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
 #   (Must treat non-act cells (not all non-name values are -1|1) differently: treat the whole output as a direct prediction instead of probabilities, and add negated L2 loss to the resulting 'probability'. It's still a little autoregressive due to being added many times with different real-prefixes, so learned representations won't be as bad as just smudging-of-targets.)
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
@@ -86,6 +87,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # (…Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…)
 #   TODO: Maybe move `minienv` to `env/`, so that we can safely implement as many environments as we want?…
 
+# TODO: …Also save/load the model…
+
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 
 
@@ -104,9 +107,14 @@ import asyncio
 import random
 import torch
 import torch.nn as nn
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+#   TODO: What was that way to set this globally, to not bother with devices?
+
+from model.recurrency import State, SRWM
 
 import sensornet as sn
 import minienv
+
 from model.log import log, clear
 
 
@@ -123,82 +131,35 @@ minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000
 
 
 class SkipConnection(nn.Module):
+    """Linearize gradients, to make learning easier."""
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
     def forward(self, x):
         y = self.fn(x)
-        return y + x if x.shape == y.shape else y # TODO: Why not slicing if too-big?
-class SelfAttention(nn.Module):
-    def __init__(self, *args, **kwargs): super().__init__();  self.fn = nn.MultiheadAttention(*args, **kwargs)
-    def forward(self, x):
-        x = torch.unsqueeze(x, -2)
-        y, _ = self.fn(x, x, x, need_weights=False)
-        return torch.squeeze(y, -2)
-def f(in_sz = state_sz, out_sz = state_sz): # A per-cell transform.
-    # TODO: …Why not a one-liner?
+        return y if x.shape[-1]<y.shape[-1] else x + y if x.shape == y.shape else x[..., :y.shape[-1]] + y
+def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x # TODO: Should use `sn.torch`, and make `log` able to accept futures — or maybe, just make it able to accept PyTorch tensors. Somehow.
+def cat(*a, dim=-1): return torch.cat(a, dim)
+def f(ins = state_sz, outs = ...): # A per-cell transform.
+    if outs is ...: outs = ins
+    return SkipConnection(nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs))
+def h(ins = state_sz, outs = ...): # A cross-cell transform.
+    if outs is ...: outs = ins
     return SkipConnection(
-        nn.LayerNorm(in_sz),
-        nn.ReLU(),
-        nn.Linear(in_sz, out_sz),
+        nn.ReLU(), nn.LayerNorm(ins), SRWM(ins, ins, heads=2),
+        nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs),
     )
-def h(in_sz = state_sz, out_sz = state_sz): # A cross-cell transform.
-    return SkipConnection(
-        nn.LayerNorm(in_sz),
-        nn.ReLU(),
-        SelfAttention(embed_dim=in_sz, num_heads=2),
-        f(in_sz, out_sz), # TODO: …No nested skip-connections, do it properly (it's just 2 one-liners anyway)…
-    )
-def norm(x, axis=None, eps=1e-5):
-    if axis is not None:
-        return (x - x.mean(axis, True)) / (x.std(axis, keepdim=True) + eps)
-    else:
-        return (x - x.mean()) / (x.std() + eps)
-class Next(nn.Module): # TODO: …If we don't use `RNN`, then we don't need `Next` either…
-    """Incorporate observations & queries, and transition the state. Take feedback directly from the resulting state.
-
-    (For stability, would be a good idea to split `data` & `query` if their concatenation is too long and transition for each chunk, to not forget too much of our internal state: let the RNN learn time-dynamics, Transformer is just a reach-extension mechanism for better optimization. Currently not implemented.)"""
-    def __init__(self, embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, goal):
-        super().__init__()
-        self.embed_data = embed_data
-        self.embed_query = embed_query
-        self.max_state_cells = max_state_cells
-        self.transition = transition
-        self.condition_state_on_goal = condition_state_on_goal
-        self.goal = goal
-    def forward(self, state, data, query):
-        data = self.embed_data(torch.as_tensor(data, dtype=torch.float32, device=state.device))
-        query = self.embed_query(torch.as_tensor(query, dtype=torch.float32, device=state.device))
-        state = torch.cat((state, data, query), 0)[-self.max_state_cells:, :]
-        state = self.condition_state_on_goal(torch.cat((state, self.goal(state)), 1))
-        state = self.transition(state)
-        return state
 
 
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-embed_data = nn.Sequential( # data → state (to concat at the end)
-    nn.Linear(sum(cell_shape), state_sz),
-    f(state_sz),
-).to(device)
-embed_query = nn.Sequential( # query → state (to concat at the end)
-    nn.Linear(sum(cell_shape) - cell_shape[-1], state_sz),
-    f(state_sz),
-).to(device)
-condition_state_on_goal = h(state_sz + goal_sz, state_sz).to(device) # TODO: Why does this exist?
-transition = nn.Sequential( # state → state; the differentiable part of the RNN transition.
+transition = nn.Sequential(
+    # TODO: How do we change this? Just different input/mid/output sizes? Which, exactly?
     h(state_sz, state_sz),
     h(state_sz, state_sz),
 ).to(device)
-ev = nn.Sequential( # state → goal.
-    h(state_sz, goal_sz),
-    h(goal_sz, goal_sz),
-).to(device)
-next = Next(embed_data, embed_query, max_state_cells, transition, condition_state_on_goal, ev)
 
 
 
-state = torch.randn(max_state_cells, state_sz, device=device)
-feedback = None
 exploration_peaks = [0.]
+#   (…Is exploration even a good metric to look at, now…)
 async def print_loss(data_len, query_len, explored, reachable):
     # TODO: …We should make `log` be able to use this `await sn.torch(torch, x, True)` directly, so that we avoid the awkwardness of having to manually await each item…
     explored = round(explored*100, 2)
@@ -212,23 +173,18 @@ async def print_loss(data_len, query_len, explored, reachable):
     log(explored=explored, explored_avg=explored_avg)
 @sn.run
 async def main():
-    global state, feedback
-    n = 0
+    feedback = None
     while True:
-        n += 1
-        if n == 1000 or n == 10000: clear()
         # await asyncio.sleep(.05) # TODO: Remove this to go fast.
         data, query, data_error, query_error = await sn.handle(feedback)
-        # import numpy as np;  data = np.concatenate((np.random.randn(10, data.shape[-1]), data)) # TODO: This simple data noise is not a principled approach at all.
-        # TODO: (Also may want to chunk `data` and `query` here, and/or add the error as noise.)
+        # data = data[:max_state_cells, :]
+        # query = query[:max_state_cells, :]
+        #   (Instead of harshly limiting, may want to chunk them instead. At least so that `sn` doesn't complain about shape mismatch.)
 
-        # noise_level = abs(2*(n%500) - n%1000) # Go up, then go down, then repeat.
-        # state = state + torch.rand_like(state)*noise_level*2-1
-        # state = norm(state) # ...This is even more counterproductive than expected.
-
-        state = next(state, data, query)
-        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]])
+        # TODO: Zero-pad `query` to be `data`'s size.
+        state = transition(data, query) # TODO: Input just `data`.
+        # TODO: Sample an action to give as feedback.
+        # TODO: Input the sampled actions.
+        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]]) # Should be the sampled action.
 
         asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable()))
-
-        # if random.randint(1,200) == 1: state = torch.randn_like(state, requires_grad=True) # TODO: Does this help exploration? ...A bit, I guess? Uniform improvement to ~3%, except when representations collapse or something.
