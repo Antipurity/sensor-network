@@ -56,7 +56,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
 # TODO: Loss:
-#   TODO: Prediction (maximizing `sample_prob` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
+#   TODO: Prediction (minimizing `sample_loss` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
 #     TODO: Distances are summed up over *whole* states (prev-act + next-obs), BUT only for those cells where all non-name numbers are -1|1 (to handle act-in-obs the same as our own actions, while not pretending that obs can be sampled).
 #   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
 #   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
@@ -145,6 +145,10 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
     )
 
 # TODO: …Should we maybe extract un/sampling into `model/`, since it's a whole thing?… Or is it too specific, referencing `cell_shape` (for its start) and `bits_per_chunk` and all? …Maybe these can be args to outer closures, so that we still have convenient use.
+#   Maybe a class, with .__call__(self, query) and .loss(self, act)?
+#   TODO: Yes, turn these funcs into a class.
+#     Contrastive learning, GANs, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions
+#     Autoregressive discrete sampling: AWAKEN
 def _bit_pattern(bits, zero=0, one=1):
     """Returns a `(2**bits, bits)`-shaped tensor that contains the written-out bits of the index."""
     x = zero*torch.ones(*[2 for b in bits], bits)
@@ -164,7 +168,7 @@ def sample(query):
     i = sum(cell_shape) - cell_shape[-1]
     query = query.detach().clone()
     if sample.bits is None:
-        sample.bits = _bit_pattern(bits_per_chunk)
+        sample.bits = _bit_pattern(bits_per_chunk, 0, 1)
     while i < query.shape[-1]:
         j = min(query.shape[-1], i + bits_per_chunk)
         indices = F.softmax(transition_(query)[0], -1).multinomial(1)[..., 0]
@@ -172,18 +176,35 @@ def sample(query):
         query[:, i:j] = bits[:, 0:j-i]
         i += j
     return query
-def sample_prob(action):
-    """TODO:"""
-    bits = cell_shape[-1]
-    i = sum(cell_shape) - bits
-    query = torch.cat((action[:, :-bits].detach(), torch.zeros(action.shape[0], action.shape[1] - bits)), -1)
-    while i < action.shape[-1]:
-        i += bits_per_chunk
-        probs = F.softmax(transition_(query)[0], -1)
-        # TODO: discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
-        #   TODO: …How to turn bit-patterns into indices?…
-        #     (Will probably have to multiply the 0/1 bit-pattern by a powers-of-two tensor, won't we…)
-        #   TODO: Treat non-act cells (not all non-name values are -1|1) differently: treat the whole output as a direct prediction instead of probabilities, and add negated L2 loss to the resulting 'probability'. It's still a little autoregressive due to being added many times with different real-prefixes, so learned representations won't be as bad as just smudging-of-targets.
+def sample_loss(act, zero=0, one=1):
+    """Returns a loss that, when minimized, perfectly copies the probability of sampling `act`ions.
+
+    (A perfect copy is possible due to sampling being autoregressive and discrete, .)
+
+    Non-action observations are also supported (detected & predicted) via L2 loss, though they cannot be sampled."""
+    N = cell_shape[-1]
+    i = sum(cell_shape) - N
+    start = i
+    query = torch.cat((act[:, :-N].detach(), torch.zeros(act.shape[0], act.shape[1] - N)), -1)
+    loss = 0.
+    eps = 1e-5
+    is_act = ((act - zero).abs().min((act - one).abs()) < eps)[:, i:].all(-1, keepdim=True)
+    if sample.powers is None:
+        sample.powers = 2 ** torch.linspace(bits_per_chunk-1, 0, bits_per_chunk, dtype=torch.int32)
+    while i < act.shape[-1]:
+        j = min(query.shape[-1], i + bits_per_chunk)
+        logits = transition_(query)[0]
+        obs_target = act[:, start : start+logits.shape[-1]]
+        probs = F.softmax(logits, -1)
+        chunk = act[:, i:j]
+        bits = ((chunk - one).abs() < eps).int()
+        indices = (bits * sample.powers[-bits.shape[-1]:]).sum(-1)
+        act_target = F.one_hot(indices, probs.shape[-1]).float()
+        #   (Yes, L2 loss with a one-hot index does end up copying the probabilities.)
+        loss = torch.where(is_act, probs - act_target, logits - obs_target).square().sum()
+        query[i:j] = act[i:j]
+        i += j
+    return loss
 
 
 
@@ -193,7 +214,7 @@ transition = nn.Sequential(
     #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
     h(sum(cell_shape), state_sz),
     h(state_sz, state_sz),
-    h(state_sz, max(cell_shape[-1], 2 ** bits_per_chunk) + dist_levels),
+    h(state_sz, 2 ** bits_per_chunk + dist_levels),
 )
 def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance)`."""
