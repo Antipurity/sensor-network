@@ -54,6 +54,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
 #   TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
 #     TODO: How do we implement these per-cell extractions of grouped goals?
+#   TODO: When saving unroll-time frames, filter out the cells that match the goal-name.
 #   TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
 #     TODO: At unroll-time, save to the replay buffer.
 #     TODO: At unroll-time, give goals at every step.
@@ -89,6 +90,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 import asyncio
+import random
 import numpy as np
 import torch
 import torch.nn as nn
@@ -222,7 +224,7 @@ class Sampler:
         """
         i = self.start
         query = torch.cat((act[:, :i].detach(), torch.zeros(act.shape[0], act.shape[1] - i)), -1)
-        is_act = ((act - self.zero).abs().min((act - self.one).abs()) < eps)[:, i:].all(-1, keepdim=True)
+        is_act = self._act_mask(act[:, i:])
         loss = 0.
         eps = 1e-5
         while i < act.shape[-1]:
@@ -239,6 +241,8 @@ class Sampler:
             query[i:j] = act[i:j]
             i += j
         return loss
+    def _act_mask(self, act, eps=1e-5):
+        return ((act - self.zero).abs().min((act - self.one).abs()) < eps).all(-1, keepdim=True)
 sample = Sampler(lambda x: transition_(x)[0], bits_per_chunk=bits_per_chunk, start=sum(cell_shape)-cell_shape[-1], zero=-1, one=1)
 
 
@@ -258,17 +262,33 @@ def transition_(x):
 optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
-def replay(optim, steps=8):
+
+def loss(sample, prev_frame, frame):
     """TODO:"""
-    # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
-    #   (Give `dst` to *every* step, right? Yeah, why not.)
     # TODO: Loss:
-    #   TODO: Prediction (minimizing `sample_loss` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
-    #     TODO: Distances are summed up over *whole* states (prev-act + next-obs), BUT only for those cells where all non-name numbers are -1|1 (to handle act-in-obs the same as our own actions, while not pretending that obs can be sampled).
-    #     (Could also plot the filtered-through percentage.)
+    #   TODO: Prediction via minimizing `sample.loss(frame) * (dist_replay < dist_policy).float()`): action-prediction filtered by advantage. The policy-action is `sample`d, and the distances are computed within their branching `State.Episode`s.
+    #     TODO: Also preserve & plot `(dist_replay < dist_policy).float().mean()`.
     #   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
+    #     (…If we end up going with forward-mode differentiation, we may have to do "prev dist is next dist plus 1", counting on just-in-time goal-switching to cut off the +1 cycle. …But we don't have precise 'did we reach this' criteria, so we can't cut off properly, and this won't work, unless MAYBE we ground in one-step transitions have dist=1…)
+    #       (We don't have ground, because the downside of learning online is the inability to relabel goals.)
+    #         (…If we save RNN states (with forward-derivatives still stored) & frames intermittently, then can't we put (a subsample of) our current frame as the past-goal and just predict the timestamp-difference? In fact, isn't this enough to learn *all* distances? So we *kinda* have a replay buffer though not contiguous, and suitable for prioritized-goal-sampling.)
     #   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
     #   (It's a simple loss, but quite general.)
+
+def replay(optim, steps=8):
+    """TODO:"""
+
+    start, end = random.randrange(len(replay_buffer)), random.randrange(len(replay_buffer))
+    if start > end: start, end = end, start
+    src = replay_buffer[start]
+    dst = replay_buffer[end]
+
+    # TODO: Name `dst` with the `'goal'`-mark.
+    # TODO: BPTT, in the State.Episode associated with `src`.
+    #   TODO: …Shouldn't this episode not take on the post-episode values after it's done?
+    #     Do we want an extra param to `State.Episode`?…
+    #   TODO: Append `dst` to every step's input.
+    #   TODO: Compute the `loss` at every step.
 
     # (…We can technically compute a loss during unroll, for the previous frame, by comparing the sampled action to a second sampled action… Is it better to try and implement [directional gradient descent](https://openreview.net/pdf?id=5i7lJLuhTm) that doesn't have a window-size limitation, than to use a replay buffer yet again?)
     #   (At least our PyTorch version seems to support forward-mode, despite saying that it's v1.9.0.)
@@ -277,6 +297,7 @@ def replay(optim, steps=8):
     #     with fw.dual_level():
     #       x = fw.make_dual(x, tangent)
     #       tangent = fw.unpack_dual(x).tangent
+    #       detached = fw.unpack_dual(x).primal
     #   It's complex enough to need its own `model/` file, though. Unless it's super-easy.
     #   (`from torch.nn.utils._stateless import functional_call` for giving tangent vectors to params.) https://pytorch.org/tutorials/intermediate/forward_ad_usage.html
     #   How does the paper actually update the weights?
@@ -284,7 +305,7 @@ def replay(optim, steps=8):
     #     What does it give tangents to, exactly? Do RNN states receive custom tangents each step? Do weights?
     #       …If we have a lifelong forward-derivative context, then RNN states will *automatically* get the tangents they need, right?
     #       First estimate `direction` to be the moving-average of `grad`, normalized to L2=1, possibly random initially.
-    #         (…Can we use the `grad` below for estimates?)
+    #         (…Can we use the `grad` below for estimates? [Another paper](https://arxiv.org/pdf/2202.08587.pdf) achieves good results even just with random directions. But their nets *are* small.)
     #       grad = fw.unpack_dual(loss).tangent * direction (set this as .grad of parameters, and perform an optim step.)
     #        (That tangent is just 1 number. We really do need a good `direction`.)
     #           Should really try this in the REPL. …Just summing a tensor is enough to test, right?
@@ -292,6 +313,9 @@ def replay(optim, steps=8):
     #             Matmul: "Trying to use forward AD with unsqueeze that does not support it."
     #               "Trying to use forward AD with mm that does not support it."
     #                 (*well how are we supposed to compute any gradients then*)
+    # TODO: Make Anaconda stop lying to us and make it update PyTorch to 1.11.0. Can't do forward-mode otherwise.
+
+    # TODO: Make action-sampling use `fw.unpack_dual(query).primal` on `query` to not compute its forward-mode gradients.
 
 
 
