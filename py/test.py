@@ -46,18 +46,13 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Unroll:
-#   TODO: On unroll, `sample` next actions.
-#   TODO: On unroll, store in the replay buffer, as a contiguous sequence.
-#   TODO: To make next-queries not conflict with prev-queries/actions, pattern-match `sn` tensors via NumPy, and use old indices where names match and create zero-filled 'prev-actions' for new queries. Feedback should read from those indices.
-#   TODO: To predict even the first frame of new obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
-#   (Can do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
 #   (Give `dst` to *every* step, right?)
 # TODO: Loss:
 #   TODO: Prediction (minimizing `sample_loss` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
 #     TODO: Distances are summed up over *whole* states (prev-act + next-obs), BUT only for those cells where all non-name numbers are -1|1 (to handle act-in-obs the same as our own actions, while not pretending that obs can be sampled).
+#     (Could also plot the filtered-through percentage.)
 #   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
 #   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
 #   (It's a simple loss, but quite general.)
@@ -115,7 +110,6 @@ cell_shape = (8,8,8,8, 64)
 sn.shape(*cell_shape)
 
 state_sz, goal_sz = 256, 256
-max_state_cells = 256
 
 dist_levels = 2
 bits_per_chunk = 8 # How to `sample`.
@@ -267,7 +261,7 @@ optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 exploration_peaks = [0.]
 #   (…Is exploration even a good metric to look at, now…)
-async def print_loss(data_len, query_len, explored, reachable):
+def print_loss(data_len, query_len, explored, reachable):
     # TODO: …We should make `log` be able to use this `await sn.torch(torch, x, True)` directly, so that we avoid the awkwardness of having to manually await each item…
     explored = round(explored*100, 2)
     if explored >= exploration_peaks[-1]: exploration_peaks[-1] = explored
@@ -284,16 +278,21 @@ async def main():
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
         with torch.no_grad():
             while True:
-                # await asyncio.sleep(.05) # TODO: Remove this to go fast.
+                # TODO: On unroll, store in the replay buffer, as a contiguous sequence.
+                # TODO: To make next-queries not conflict with prev-queries/actions, pattern-match `sn` tensors via NumPy, and use old indices where names match and create zero-filled 'prev-actions' for new queries. Feedback should read from those indices.
+                #   …Huh? What does "conflict" here mean?
+                # TODO: To predict even the first frame of new-name obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
+                await asyncio.sleep(.05) # TODO: Remove this to go fast.
                 data, query, data_error, query_error = await sn.handle(feedback)
-                # data = data[:max_state_cells, :]
-                # query = query[:max_state_cells, :]
-                #   (Instead of harshly limiting, may want to chunk them instead. At least so that `sn` doesn't complain about shape mismatch.)
+                #   (If CPU RAM > GPU VRAM, might want to chunk data/query processing.)
+                # Zero-pad `query` to be action-sized.
+                query = torch.cat((query, torch.zeros(query.shape[0], data.shape[1] - query.shape[1])), -1)
 
-                # TODO: Zero-pad `query` to be `data`'s size.
-                state = transition(data, query) # TODO: Input just `data`.
-                # TODO: Sample an action to give as feedback.
-                # TODO: Input the sampled actions.
-                feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]]) # Should be the sampled action.
+                # Give data, sample action, give action.
+                transition_(data)
+                action = sample(query)
+                #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
+                transition_(action)
+                feedback = sn.torch(torch, action)
 
-                asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable()))
+                print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable())
