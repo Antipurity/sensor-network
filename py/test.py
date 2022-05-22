@@ -47,7 +47,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Unroll:
-#   TODO: Softly-reset the RNN when unrolling, via the global `with State.Setter(lambda initial, current: initial*.001 + .999*current): ...`.
 #   TODO: On unroll, `sample` next actions.
 #   TODO: On unroll, store in the replay buffer, as a contiguous sequence.
 #   TODO: To make next-queries not conflict with prev-queries/actions, pattern-match `sn` tensors via NumPy, and use old indices where names match and create zero-filled 'prev-actions' for new queries. Feedback should read from those indices.
@@ -55,6 +54,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   (Can do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
+#   (Give `dst` to *every* step, right?)
 # TODO: Loss:
 #   TODO: Prediction (minimizing `sample_loss` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
 #     TODO: Distances are summed up over *whole* states (prev-act + next-obs), BUT only for those cells where all non-name numbers are -1|1 (to handle act-in-obs the same as our own actions, while not pretending that obs can be sampled).
@@ -81,6 +81,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: …Also save/load the model…
 
+# TODO: …May also want to implement importing the modules that the command line has requested, for easy env-switching…
+
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 
 
@@ -96,8 +98,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 import asyncio
-import chunk
-import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -106,7 +106,6 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available(
 from model.recurrency import State, SRWM
 
 import sensornet as sn
-import minienv
 
 from model.log import log, clear
 
@@ -121,6 +120,36 @@ max_state_cells = 256
 dist_levels = 2
 bits_per_chunk = 8 # How to `sample`.
 
+
+
+class ReplayBuffer:
+    """Stores the in-order sequence of most-recent events. Needs `max_len`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`."""
+    __slots__ = ('buffer', 'head', 'max_len')
+    def __init__(self, max_len):
+        self.buffer, self.head, self.max_len = [], 0, max_len
+    def __len__(self):
+        """How many data-samples are currently contained. Use this to decide the indices to sample at."""
+        return len(self.buffer)
+    def append(self, data):
+        """Appends a data-sample to the replay buffer."""
+        if len(self.buffer) == self.max_len:
+            self.buffer[self.head] = data
+        else:
+            self.buffer.append(data)
+        self.head = (self.head + 1) % self.max_len
+    def __getitem__(self, index):
+        """Returns the sample at the given index. For example, use `random.randrange(len(replay_buffer))`.
+
+        Consecutive indices are guaranteed to be a part of a contiguous sequence."""
+        assert isinstance(index, int)
+        return self.buffer[(self.head + index) % len(self)]
+    def __iter__(self):
+        for i in range(len(self)): yield self[i]
+replay_buffer = ReplayBuffer(1024)
+
+
+
+import minienv
 minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
 #   TODO: Should at least make `minienv` work not globally but in a class.
 
@@ -151,7 +180,7 @@ class Sampler:
     GANs, VAEs, contrastive learning, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions    
     Autoregressive discrete sampling: AWAKEN
 
-    Uses a `(cells, action_size) → (cells, 2**bits_per_chunk)` RNN (with hidden `State`) to sample from bit sequences, without averaging in-action correlations away, as compute-efficiently as possible (vary `bits_per_chunk` depending on RNN's size).
+    Uses a `cells × action_size → cells × 2**bits_per_chunk` RNN (with hidden `State`) to sample from bit sequences, without averaging in-action correlations away, as compute-efficiently as possible (vary `bits_per_chunk` depending on RNN's size).
 
     Same idea as in language modeling, and [Gato](https://arxiv.org/abs/2205.06175), though per-cell and with explicit bits.
     """
@@ -194,6 +223,8 @@ class Sampler:
         The result is `(cells, 1)`-shaped; `.sum()` it before `.backward()`.
 
         Non-action observations are also supported (detected & predicted) via L2 loss, though they cannot be sampled, and are outcome-averaged.
+
+        (Does the same RNN calls with the same RNN inputs as sampling `act` would, so computation graphs match exactly.)
         """
         i = self.start
         query = torch.cat((act[:, :i].detach(), torch.zeros(act.shape[0], act.shape[1] - i)), -1)
@@ -230,7 +261,7 @@ def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance)`."""
     y = transition(x)
     return y[..., :-dist_levels], y[..., -dist_levels:]
-# TODO: An optimizer for `transition`.
+optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
 
@@ -250,18 +281,19 @@ async def print_loss(data_len, query_len, explored, reachable):
 @sn.run
 async def main():
     feedback = None
-    # TODO: No grad during unroll.
-    while True:
-        # await asyncio.sleep(.05) # TODO: Remove this to go fast.
-        data, query, data_error, query_error = await sn.handle(feedback)
-        # data = data[:max_state_cells, :]
-        # query = query[:max_state_cells, :]
-        #   (Instead of harshly limiting, may want to chunk them instead. At least so that `sn` doesn't complain about shape mismatch.)
+    with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
+        with torch.no_grad():
+            while True:
+                # await asyncio.sleep(.05) # TODO: Remove this to go fast.
+                data, query, data_error, query_error = await sn.handle(feedback)
+                # data = data[:max_state_cells, :]
+                # query = query[:max_state_cells, :]
+                #   (Instead of harshly limiting, may want to chunk them instead. At least so that `sn` doesn't complain about shape mismatch.)
 
-        # TODO: Zero-pad `query` to be `data`'s size.
-        state = transition(data, query) # TODO: Input just `data`.
-        # TODO: Sample an action to give as feedback.
-        # TODO: Input the sampled actions.
-        feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]]) # Should be the sampled action.
+                # TODO: Zero-pad `query` to be `data`'s size.
+                state = transition(data, query) # TODO: Input just `data`.
+                # TODO: Sample an action to give as feedback.
+                # TODO: Input the sampled actions.
+                feedback = sn.torch(torch, state[(-query.shape[0] or max_state_cells):, :data.shape[-1]]) # Should be the sampled action.
 
-        asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable()))
+                asyncio.ensure_future(print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable()))
