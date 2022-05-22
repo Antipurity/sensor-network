@@ -94,6 +94,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 import asyncio
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -268,28 +269,38 @@ async def main():
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
         with torch.no_grad():
             action = None
+            prev_names, names = None, None
             prev_frame, frame = None, None
+            time = 0
             while True:
                 await asyncio.sleep(.05) # TODO: Remove this to go fast.
 
                 obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
                 #   (If getting out-of-memory, might want to chunk data/query processing.)
+                prev_names, names = names, np.concatenate((query, obs[:, :query.shape[1]]), 0)
 
                 # Zero-pad `query` to be action-sized.
                 obs, query = torch.tensor(obs), torch.tensor(query)
                 query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
+
+                # Append prev frame to replay-buffer.
+                if prev_frame is not None:
+                    new_names = np.compress((prev_names.expand_dims(0) == names).all(-1).any(0), names, 0) # O(N**2)
+                    #   (NumPy doesn't give a native way to search in 2D sorted arrays unless you want to hash to 1D.)
+                    if new_names.shape[0] > 0:
+                        # Ensure that new names are zero-filled in prev frames, so that even the first occurences of names are predicted.
+                        n = torch.tensor(new_names)
+                        n = torch.cat((n, torch.zeros(n.shape[0], prev_frame.shape[1] - n.shape[1])), -1)
+                        prev_frame = torch.cat((prev_frame, n), 0)
+                    replay_buffer.append((
+                        torch.tensor(time, dtype=torch.int32),
+                        prev_frame,
+                        'and the RNN state should go here', # TODO: How do we get a snapshot of this, exactly?
+                    ))
 
                 # Give prev-action & next-observation, and sample next action.
                 prev_frame, frame = frame, (torch.cat((action, obs), 0) if action is not None else obs)
                 transition_(frame)
                 action = sample(query)
                 #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
-
-                # TODO: On unroll, store in the replay buffer, as a contiguous sequence.
-                #   TODO: …How to store the RNN state…
-                #   TODO: What do we store, exactly?
-                #     `prev_frame`
-                #     …And nothing else? Only these two things?
-                # TODO: To predict even the first frame of new-name obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
-                #   …For this, want to preserve NumPy-side `prev_names` and `names`, don't we…
-                #   TODO: …How do we do this, exactly…
+                time += 1
