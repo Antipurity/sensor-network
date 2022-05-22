@@ -119,7 +119,7 @@ state_sz, goal_sz = 256, 256
 max_state_cells = 256
 
 dist_levels = 2
-bits_per_chunk, chunks_per_step = 8, 1 # How to `sample`.
+bits_per_chunk = 8 # How to `sample`.
 
 minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
 #   TODO: Should at least make `minienv` work not globally but in a class.
@@ -144,32 +144,45 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
         nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs),
     )
 
+# TODO: …Should we maybe extract un/sampling into `model/`, since it's a whole thing?… Or is it too specific, referencing `cell_shape` (for its start) and `bits_per_chunk` and all? …Maybe these can be args to outer closures, so that we still have convenient use.
+def _bit_pattern(bits, zero=0, one=1):
+    """Returns a `(2**bits, bits)`-shaped tensor that contains the written-out bits of the index."""
+    x = zero*torch.ones(*[2 for b in bits], bits)
+    all = slice(None)
+    ind = [all] * (bits+1)
+    for b in bits: # x[:,:,:,1,...,b] = 1
+        ind[b], ind[-1] = 1, b
+        x[ind] = one
+        ind[b] = all
+    return x.reshape(2**bits, bits)
 def sample(query):
-    """TODO:
+    """From an RNN, samples a bit-sequence.
 
-    `query` cells has to be zero-padded to the size of actions/observations."""
+    `query` cells has to be zero-padded to the size of actions/observations.
+
+    (No non-action-cell sampling AKA L2-prediction here, since we won't use that.)"""
     i = sum(cell_shape) - cell_shape[-1]
     query = query.detach().clone()
+    if sample.bits is None:
+        sample.bits = _bit_pattern(bits_per_chunk)
     while i < query.shape[-1]:
-        i += bits_per_chunk * chunks_per_step
-        probs = F.softmax(transition_(query)[0], -1)
-        # TODO: samples the index and turns it into a bit-pattern, and puts that bit-pattern into `query` at the next formerly-zero place (via slice-assignment).
-        #   (No non-action-cell sampling AKA prediction here, since we won't use that.)
-        #   TODO: …How to turn sampled indices into bit-patterns?…
-        #   TODO: …How to put the bits into `query` properly, even the last chunk?…
-        #     TODO: Do sampled actions need gradient? If not, can't we just write in-place?
-        #     Is assignment-to-a-slice good enough?
-        #   TODO: Also handle `chunks_per_step` by increasing output-size by that much, and doing softmax/sample/put for that many bit-patterns for every step.
+        j = min(query.shape[-1], i + bits_per_chunk)
+        indices = F.softmax(transition_(query)[0], -1).multinomial(1)[..., 0]
+        bits = sample.bits[indices]
+        query[:, i:j] = bits[:, 0:j-i]
+        i += j
+    return query
 def sample_prob(action):
     """TODO:"""
     bits = cell_shape[-1]
     i = sum(cell_shape) - bits
     query = torch.cat((action[:, :-bits].detach(), torch.zeros(action.shape[0], action.shape[1] - bits)), -1)
     while i < action.shape[-1]:
-        i += bits_per_chunk * chunks_per_step
+        i += bits_per_chunk
         probs = F.softmax(transition_(query)[0], -1)
         # TODO: discretizes `action`'s bit-pattern and maximizes the probability at that index in `probs`, and replaces `query`'s chunk with `action`'s chunk. (Real sample-probability is the product of probabilities, but L2 *may* work too, *and* also support not-actually-`sample`d observations.)
         #   TODO: …How to turn bit-patterns into indices?…
+        #     (Will probably have to multiply the 0/1 bit-pattern by a powers-of-two tensor, won't we…)
         #   TODO: Treat non-act cells (not all non-name values are -1|1) differently: treat the whole output as a direct prediction instead of probabilities, and add negated L2 loss to the resulting 'probability'. It's still a little autoregressive due to being added many times with different real-prefixes, so learned representations won't be as bad as just smudging-of-targets.
 
 
@@ -180,7 +193,7 @@ transition = nn.Sequential(
     #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
     h(sum(cell_shape), state_sz),
     h(state_sz, state_sz),
-    h(state_sz, max(cell_shape[-1], chunks_per_step * 2 ** bits_per_chunk) + dist_levels),
+    h(state_sz, max(cell_shape[-1], 2 ** bits_per_chunk) + dist_levels),
 )
 def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance)`."""
