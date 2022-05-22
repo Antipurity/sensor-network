@@ -48,13 +48,14 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
-#   (Give `dst` to *every* step, right?)
+#   (Give `dst` to *every* step, right? Yeah, why not.)
 # TODO: Loss:
 #   TODO: Prediction (minimizing `sample_loss` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
 #     TODO: Distances are summed up over *whole* states (prev-act + next-obs), BUT only for those cells where all non-name numbers are -1|1 (to handle act-in-obs the same as our own actions, while not pretending that obs can be sampled).
 #     (Could also plot the filtered-through percentage.)
 #   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
 #   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
+#     TODO: …Isn't this unnecessary if sampling-probabilities are indeed copied correctly? Wouldn't on-policy rollouts correct our mistakes? …But what if there *aren't* on-policy rollouts.
 #   (It's a simple loss, but quite general.)
 
 # TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
@@ -103,6 +104,7 @@ from model.recurrency import State, SRWM
 import sensornet as sn
 
 from model.log import log, clear
+#   TODO: Make `log` able to accept PyTorch tensors, awaiting their values async.
 
 
 
@@ -177,6 +179,8 @@ class Sampler:
     Uses a `cells × action_size → cells × 2**bits_per_chunk` RNN (with hidden `State`) to sample from bit sequences, without averaging in-action correlations away, as compute-efficiently as possible (vary `bits_per_chunk` depending on RNN's size).
 
     Same idea as in language modeling, and [Gato](https://arxiv.org/abs/2205.06175), though per-cell and with explicit bits.
+
+    (This adds autoregressive in-cell sampling. Cells are still processed in parallel, because envs should make cells independent of each other by design. And cell-groups are already autoregressively processed by RNNs.)
     """
     def __init__(self, fn, bits_per_chunk, start, zero=0, one=1):
         bits = bits_per_chunk
@@ -259,40 +263,33 @@ optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
 
-exploration_peaks = [0.]
-#   (…Is exploration even a good metric to look at, now…)
-def print_loss(data_len, query_len, explored, reachable):
-    # TODO: …We should make `log` be able to use this `await sn.torch(torch, x, True)` directly, so that we avoid the awkwardness of having to manually await each item…
-    explored = round(explored*100, 2)
-    if explored >= exploration_peaks[-1]: exploration_peaks[-1] = explored
-    else: exploration_peaks.append(explored)
-    if len(exploration_peaks) > 17:
-        exploration_peaks[:-16] = [sum(exploration_peaks[:-16]) / len(exploration_peaks[:-16])]
-    explored_avg = sum(exploration_peaks) / len(exploration_peaks)
-    reachable = round(reachable*100, 2)
-    # Ignored: `data_len`, `query_len`, `reachable`
-    log(explored=explored, explored_avg=explored_avg)
 @sn.run
 async def main():
-    feedback = None
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
         with torch.no_grad():
+            action = None
+            prev_frame, frame = None, None
             while True:
-                # TODO: On unroll, store in the replay buffer, as a contiguous sequence.
-                # TODO: To make next-queries not conflict with prev-queries/actions, pattern-match `sn` tensors via NumPy, and use old indices where names match and create zero-filled 'prev-actions' for new queries. Feedback should read from those indices.
-                #   …Huh? What does "conflict" here mean?
-                # TODO: To predict even the first frame of new-name obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
                 await asyncio.sleep(.05) # TODO: Remove this to go fast.
-                data, query, data_error, query_error = await sn.handle(feedback)
-                #   (If CPU RAM > GPU VRAM, might want to chunk data/query processing.)
-                # Zero-pad `query` to be action-sized.
-                query = torch.cat((query, torch.zeros(query.shape[0], data.shape[1] - query.shape[1])), -1)
 
-                # Give data, sample action, give action.
-                transition_(data)
+                obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
+                #   (If getting out-of-memory, might want to chunk data/query processing.)
+
+                # Zero-pad `query` to be action-sized.
+                obs, query = torch.tensor(obs), torch.tensor(query)
+                query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
+
+                # Give prev-action & next-observation, and sample next action.
+                prev_frame, frame = frame, (torch.cat((action, obs), 0) if action is not None else obs)
+                transition_(frame)
                 action = sample(query)
                 #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
-                transition_(action)
-                feedback = sn.torch(torch, action)
 
-                print_loss(data.shape[0], query.shape[0], minienv.explored(), minienv.reachable())
+                # TODO: On unroll, store in the replay buffer, as a contiguous sequence.
+                #   TODO: …How to store the RNN state…
+                #   TODO: What do we store, exactly?
+                #     `prev_frame`
+                #     …And nothing else? Only these two things?
+                # TODO: To predict even the first frame of new-name obs, when storing to the replay buffer, pattern-match the labels of prev & next frames, and insert the missing zero-padded next-frame labels into prev-frame.
+                #   …For this, want to preserve NumPy-side `prev_names` and `names`, don't we…
+                #   TODO: …How do we do this, exactly…
