@@ -144,67 +144,77 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
         nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs),
     )
 
-# TODO: …Should we maybe extract un/sampling into `model/`, since it's a whole thing?… Or is it too specific, referencing `cell_shape` (for its start) and `bits_per_chunk` and all? …Maybe these can be args to outer closures, so that we still have convenient use.
-#   Maybe a class, with .__call__(self, query) and .loss(self, act)?
-#   TODO: Yes, turn these funcs into a class.
-#     Contrastive learning, GANs, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions
-#     Autoregressive discrete sampling: AWAKEN
-def _bit_pattern(bits, zero=0, one=1):
-    """Returns a `(2**bits, bits)`-shaped tensor that contains the written-out bits of the index."""
-    x = zero*torch.ones(*[2 for b in bits], bits)
-    all = slice(None)
-    ind = [all] * (bits+1)
-    for b in bits: # x[:,:,:,1,...,b] = 1
-        ind[b], ind[-1] = 1, b
-        x[ind] = one
-        ind[b] = all
-    return x.reshape(2**bits, bits)
-def sample(query):
-    """From an RNN, samples a bit-sequence.
 
-    `query` cells has to be zero-padded to the size of actions/observations.
 
-    (No non-action-cell sampling AKA L2-prediction here, since we won't use that.)"""
-    i = sum(cell_shape) - cell_shape[-1]
-    query = query.detach().clone()
-    if sample.bits is None:
-        sample.bits = _bit_pattern(bits_per_chunk, 0, 1)
-    while i < query.shape[-1]:
-        j = min(query.shape[-1], i + bits_per_chunk)
-        indices = F.softmax(transition_(query)[0], -1).multinomial(1)[..., 0]
-        bits = sample.bits[indices]
-        query[:, i:j] = bits[:, 0:j-i]
-        i += j
-    return query
-def sample_loss(act, zero=0, one=1):
-    """Returns a loss that, when minimized, perfectly copies the probability of sampling `act`ions.
+class Sampler:
+    """
+    GANs, VAEs, contrastive learning, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions    
+    Autoregressive discrete sampling: AWAKEN
 
-    (A perfect copy is possible due to sampling being autoregressive and discrete, .)
+    Uses a `(cells, action_size) → (cells, 2**bits_per_chunk)` RNN (with hidden `State`) to sample from bit sequences, without averaging in-action correlations away, as compute-efficiently as possible (vary `bits_per_chunk` depending on RNN's size).
 
-    Non-action observations are also supported (detected & predicted) via L2 loss, though they cannot be sampled."""
-    N = cell_shape[-1]
-    i = sum(cell_shape) - N
-    start = i
-    query = torch.cat((act[:, :-N].detach(), torch.zeros(act.shape[0], act.shape[1] - N)), -1)
-    loss = 0.
-    eps = 1e-5
-    is_act = ((act - zero).abs().min((act - one).abs()) < eps)[:, i:].all(-1, keepdim=True)
-    if sample.powers is None:
-        sample.powers = 2 ** torch.linspace(bits_per_chunk-1, 0, bits_per_chunk, dtype=torch.int32)
-    while i < act.shape[-1]:
-        j = min(query.shape[-1], i + bits_per_chunk)
-        logits = transition_(query)[0]
-        obs_target = act[:, start : start+logits.shape[-1]]
-        probs = F.softmax(logits, -1)
-        chunk = act[:, i:j]
-        bits = ((chunk - one).abs() < eps).int()
-        indices = (bits * sample.powers[-bits.shape[-1]:]).sum(-1)
-        act_target = F.one_hot(indices, probs.shape[-1]).float()
-        #   (Yes, L2 loss with a one-hot index does end up copying the probabilities.)
-        loss = torch.where(is_act, probs - act_target, logits - obs_target).square().sum()
-        query[i:j] = act[i:j]
-        i += j
-    return loss
+    Same idea as in language modeling, and [Gato](https://arxiv.org/abs/2205.06175), though per-cell and with explicit bits.
+    """
+    def __init__(self, fn, bits_per_chunk, start, zero=0, one=1):
+        bits = bits_per_chunk
+        self.fn, self.bits_per_chunk, self.start, self.zero, self.one = fn, bits, start, zero, one
+        # Create a `(bits,)`-shaped tensor, for converting bit-patterns to indices (via mult-and-sum).
+        self._powers = 2 ** torch.linspace(bits-1, 0, bits, dtype=torch.int32)
+        # Create a `(2**bits, bits)`-shaped tensor, for converting indices to their bit-patterns.
+        x = zero*torch.ones(*[2 for _ in range(bits)], bits)
+        all = slice(None)
+        ind = [all] * (bits+1)
+        for b in range(bits): # x[:,:,:,1,...,b] = 1
+            ind[b], ind[-1] = 1, b
+            x[ind] = one
+            ind[b] = all
+        self._bits = x.reshape(2**bits, bits)
+    def __call__(self, query):
+        """Given a `query` that's zero-padded to be action-sized, samples a binary action.
+
+        Non-differentiable; to make an action more likely to be sampled, use `.loss`.
+
+        This should advance RNN `State`, so do `State.Episode` shenanigans if unwanted.
+
+        (No non-action-cell sampling AKA L2-prediction here, since we won't use that. Though in theory, could use the outcome-averaged approximation, and complicate the interface by having a per-cell bitmask of whether it's an action.)"""
+        with torch.no_grad():
+            query = query.clone()
+            i = self.start
+            while i < query.shape[-1]:
+                j = min(query.shape[-1], i + bits_per_chunk)
+                indices = F.softmax(self.fn(query), -1).multinomial(1)[..., 0]
+                bits = self._bits[indices]
+                query[:, i:j] = bits[:, 0:j-i]
+                i += j
+            return query
+    def loss(self, act):
+        """
+        Returns a loss that, when minimized, perfectly copies the probability of sampling seen `act`ions.
+
+        The result is `(cells, 1)`-shaped; `.sum()` it before `.backward()`.
+
+        Non-action observations are also supported (detected & predicted) via L2 loss, though they cannot be sampled, and are outcome-averaged.
+        """
+        i = self.start
+        query = torch.cat((act[:, :i].detach(), torch.zeros(act.shape[0], act.shape[1] - i)), -1)
+        is_act = ((act - self.zero).abs().min((act - self.one).abs()) < eps)[:, i:].all(-1, keepdim=True)
+        loss = 0.
+        eps = 1e-5
+        while i < act.shape[-1]:
+            j = min(query.shape[-1], i + bits_per_chunk)
+            logits = self.fn(query)
+            obs_target = act[:, self.start : self.start+logits.shape[-1]]
+            probs = F.softmax(logits, -1)
+            chunk = act[:, i:j]
+            bits = ((chunk - self.one).abs() < eps).int()
+            indices = (bits * self._powers[-bits.shape[-1]:]).sum(-1)
+            act_target = F.one_hot(indices, probs.shape[-1]).float()
+            #   (Yes, L2 loss with a one-hot index does end up copying the probabilities.)
+            loss = torch.where(is_act, probs - act_target, logits - obs_target).square().sum(-1, keepdim=True)
+            query[i:j] = act[i:j]
+            i += j
+        return loss
+sample = Sampler(lambda x: transition_(x)[0], bits_per_chunk=bits_per_chunk, start=sum(cell_shape)-cell_shape[-1], zero=-1, one=1)
 
 
 
