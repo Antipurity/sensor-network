@@ -47,24 +47,16 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
-#   (Give `dst` to *every* step, right? Yeah, why not.)
-# TODO: Loss:
-#   TODO: Prediction (minimizing `sample_loss` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
-#     TODO: Distances are summed up over *whole* states (prev-act + next-obs), BUT only for those cells where all non-name numbers are -1|1 (to handle act-in-obs the same as our own actions, while not pretending that obs can be sampled).
-#     (Could also plot the filtered-through percentage.)
-#   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
-#   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
-#     TODO: …Isn't this unnecessary if sampling-probabilities are indeed copied correctly? Wouldn't on-policy rollouts correct our mistakes? …But what if there *aren't* on-policy rollouts.
-#   (It's a simple loss, but quite general.)
 
 # TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
+#   Wouldn't this make the replay buffer not contiguous anymore, though?
 
 # TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
 #   TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
 #     TODO: How do we implement these per-cell extractions of grouped goals?
 #   TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
 #     TODO: At unroll-time, save to the replay buffer.
+#     TODO: At unroll-time, give goals at every step.
 #   TODO: At replay-time, TODO: what do we do, exactly?… How to learn per-cell goals?…
 #     TODO: At replay-time, inside an episode: should pick a starting point (from which the episode-copy should be taken), sample a faraway goal from the future (preferably) and put it at the start, and unroll several from the starting point steps, applying the loss.
 
@@ -78,6 +70,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: …Also save/load the model…
 
 # TODO: …May also want to implement importing the modules that the command line has requested, for easy env-switching…
+
+# TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
+#   Maybe even fully turn `sn` over to discrete actions, and only ever have 1 NN call per step, demanding that envs adapt instead…
 
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 
@@ -263,6 +258,42 @@ def transition_(x):
 optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
+def replay(optim, steps=8):
+    """TODO:"""
+    # TODO: On replay, sample src & dst, then give `dst` to the RNN as its goal, and unroll several steps of tBPTT of the RNN with loss.
+    #   (Give `dst` to *every* step, right? Yeah, why not.)
+    # TODO: Loss:
+    #   TODO: Prediction (minimizing `sample_loss` of next-frame, *not* L2 loss directly), filtered by advantage (`(dist_replay.sum() < dist_policy.sum()).float()`). The policy-action is `sample`d.
+    #     TODO: Distances are summed up over *whole* states (prev-act + next-obs), BUT only for those cells where all non-name numbers are -1|1 (to handle act-in-obs the same as our own actions, while not pretending that obs can be sampled).
+    #     (Could also plot the filtered-through percentage.)
+    #   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
+    #   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
+    #   (It's a simple loss, but quite general.)
+
+    # (…We can technically compute a loss during unroll, for the previous frame, by comparing the sampled action to a second sampled action… Is it better to try and implement [directional gradient descent](https://openreview.net/pdf?id=5i7lJLuhTm) that doesn't have a window-size limitation, than to use a replay buffer yet again?)
+    #   (At least our PyTorch version seems to support forward-mode, despite saying that it's v1.9.0.)
+    #     (Or was the impl not implement anything useful back then…)
+    #     import torch.autograd.forward_ad as fw
+    #     with fw.dual_level():
+    #       x = fw.make_dual(x, tangent)
+    #       tangent = fw.unpack_dual(x).tangent
+    #   It's complex enough to need its own `model/` file, though. Unless it's super-easy.
+    #   (`from torch.nn.utils._stateless import functional_call` for giving tangent vectors to params.) https://pytorch.org/tutorials/intermediate/forward_ad_usage.html
+    #   How does the paper actually update the weights?
+    #     Doesn't it need an estimator of the gradient, such as truncated BPTT?
+    #     What does it give tangents to, exactly? Do RNN states receive custom tangents each step? Do weights?
+    #       …If we have a lifelong forward-derivative context, then RNN states will *automatically* get the tangents they need, right?
+    #       First estimate `direction` to be the moving-average of `grad`, normalized to L2=1, possibly random initially.
+    #         (…Can we use the `grad` below for estimates?)
+    #       grad = fw.unpack_dual(loss).tangent * direction (set this as .grad of parameters, and perform an optim step.)
+    #        (That tangent is just 1 number. We really do need a good `direction`.)
+    #           Should really try this in the REPL. …Just summing a tensor is enough to test, right?
+    #             Sum: "Trying to use forward AD with sum that does not support it."
+    #             Matmul: "Trying to use forward AD with unsqueeze that does not support it."
+    #               "Trying to use forward AD with mm that does not support it."
+    #                 (*well how are we supposed to compute any gradients then*)
+
+
 
 @sn.run
 async def main():
@@ -303,4 +334,8 @@ async def main():
                 transition_(frame)
                 action = sample(query)
                 #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
+                #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
+
+                replay(optim)
+
                 time += 1
