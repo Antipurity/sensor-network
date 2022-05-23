@@ -53,7 +53,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: At each step, draw a random past replay-sample and minimize the `loss`, with dst being the current frame.
 
 # TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
-#   Wouldn't this make the replay buffer not contiguous anymore, though?
+#   Wouldn't this make the replay buffer not contiguous anymore, though? …Maybe it's fine.
+#   …How would this prioritization be implemented? Do we send the regret to CPU, and when it arrives, sort a few? Or can/should we update RNN states & frames on-GPU?
 
 # TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
 #   TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
@@ -75,6 +76,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: …Also save/load the model…
 
 # TODO: …May also want to implement importing the modules that the command line has requested, for easy env-switching…
+#   TODO: …Maybe implement & use a copy-task, initially, to test our implementation…
 
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 #   TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
@@ -264,6 +266,46 @@ optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
 
+def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
+    """
+    Implements [directional gradient descent](https://openreview.net/pdf?id=5i7lJLuhTm): pick a direction, compute a forward-derivative for it, receive a scalar feedback to correct it, and assign the gradients.
+
+    Needs `loss_fn(…)→loss` and `model` for parameters. Do an optimizer step on those parameters yourself.
+    """
+    responsibility = []
+    sz = 0
+    for mod in model.modules():
+        responsibility.append(mod, [])
+        for name, param in mod.named_parameters(recursive=False):
+            responsibility[-1].append((name, param))
+            sz += param.numel()
+    def loss_wrapper(*args, **kwargs):
+        direction = direction_fn(sz)
+
+        direction = (direction - direction.mean()) / (direction.std() + 1e-8)
+        n = 0
+        # Give the `direction` to `model`'s parameters.
+        for mod, ps in responsibility:
+            for name, param in ps:
+                assert getattr(mod, name) is param
+                tangent = direction[n : n+param.numel()].reshape(*param.shape)
+                delattr(mod, name)
+                setattr(mod, name, fw.make_dual(param, tangent))
+                n += param.numel()
+        loss = loss_fn(*args, **kwargs)
+        loss_tangent = fw.unpack_dual(loss).tangent
+        # Approximate the gradient by multiplying forward-gradient by the `loss_tangent` number.
+        for mod, ps in responsibility:
+            for name, param in ps:
+                d = fw.unpack_dual(getattr(mod, name))
+                grad = d.tangent * loss_tangent
+                param.grad = grad if param.grad is None else param.grad + grad
+                delattr(mod, name)
+                setattr(mod, name, param)
+    return loss_wrapper
+
+
+
 def detach(x):
     return fw.unpack_dual(x).primal.detach()
 def loss(prev_ep, frame, dst, timediff):
@@ -275,9 +317,6 @@ def loss(prev_ep, frame, dst, timediff):
     - `frame` is the immediately-next prev-action and next-observation cells.
     - `dst` is some faraway goal.
     - `timediff` is the distance to that goal, as a `(cells, 1)`-shaped int32 tensor."""
-
-    # TODO: Decide on a unit-vector direction (randomly), and temporarily replace all the weights with their tangent-augmented fw versions.
-    #   (…Maybe in the DODGE wrapper function.)
 
     with prev_ep:
         loss = 0.
@@ -315,9 +354,6 @@ def loss(prev_ep, frame, dst, timediff):
 
         return loss
 
-    # TODO: Read the loss's tangent, multiply it by direction and set .grad of RNN weights, and perform an optimizer step.
-    #   (…Or should we have a separate function for performing DODGE? A wrapper of another func, maybe?)
-
 def replay(optim, steps=8):
     """TODO:"""
 
@@ -349,8 +385,7 @@ def replay(optim, steps=8):
     #       First estimate `direction` to be the moving-average of `grad`, normalized to L2=1, OR possibly [a random unit vector](https://arxiv.org/pdf/2202.08587.pdf) to see whether this works at all.
     #       grad = fw.unpack_dual(loss).tangent * direction (set this as .grad of parameters, and perform an optim step.)
 
-    # TODO: …Do we want to first implement an RNN that learns through forward-mode AD in a separate file?
-    #   Or will we just implement a very-simple env (like the copy-task), and test on that?
+    # TODO: Use `loss` within `DODGE`, then step the optimizer.
 
 
 
@@ -386,7 +421,7 @@ async def main():
                     replay_buffer.append((
                         torch.tensor(time, dtype=torch.int32),
                         prev_frame,
-                        'and the RNN state should go here', # TODO: How do we get a snapshot of this, exactly?
+                        'and the RNN state should go here', # TODO: How do we get a snapshot of this, exactly? (.clone(), sure, but what about a snapshot that won't update its state when exited-from again?)
                     ))
 
                 # Give prev-action & next-observation, and sample next action.
