@@ -104,7 +104,6 @@ from model.recurrency import State, SRWM
 import sensornet as sn
 
 from model.log import log, clear
-#   TODO: Make `log` able to accept PyTorch tensors, awaiting their values async.
 
 
 
@@ -294,7 +293,7 @@ def loss(frame):
     #         TODO: So does dist-learning belong in `loss`? Or should it be separate, since it samples another `prev_frame` from a distant past?
     # TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
 
-    log(0, False, improvement = mask - (~sample._act_mask(frame)).float().mean()) # TODO: (`log` really needs to be able to accept PyTorch tensors.)
+    log(0, False, torch, improvement = mask - (~sample._act_mask(frame)).float().mean())
 
     return loss
 
