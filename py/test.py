@@ -49,6 +49,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# TODO: Save prev RNN states and next frames at unroll.
+# TODO: At each step, draw a random past replay-sample and minimize the `loss`, with dst being the current frame.
+
 # TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
 #   Wouldn't this make the replay buffer not contiguous anymore, though?
 
@@ -73,10 +76,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: …May also want to implement importing the modules that the command line has requested, for easy env-switching…
 
-# TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
-#   Maybe even fully turn `sn` over to discrete actions, and only ever have 1 NN call per step, demanding that envs adapt instead…
-
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
+#   TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
+#     Maybe even fully turn `sn` over to discrete actions, and only ever have 1 NN call per step, demanding that envs adapt instead…
+
 
 
 
@@ -156,11 +159,7 @@ class SkipConnection(nn.Module):
     def forward(self, x):
         y = self.fn(x)
         return y if x.shape[-1]<y.shape[-1] else x + y if x.shape == y.shape else x[..., :y.shape[-1]] + y
-def to_np(x): return x.detach().cpu().numpy() if isinstance(x, torch.Tensor) else x # TODO: Should use `sn.torch`, and make `log` able to accept futures — or maybe, just make it able to accept PyTorch tensors. Somehow.
 def cat(*a, dim=-1): return torch.cat(a, dim)
-def f(ins = state_sz, outs = ...): # A per-cell transform.
-    if outs is ...: outs = ins
-    return SkipConnection(nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs))
 def h(ins = state_sz, outs = ...): # A cross-cell transform.
     if outs is ...: outs = ins
     return SkipConnection(
@@ -204,7 +203,8 @@ class Sampler:
 
         (No non-action-cell sampling AKA L2-prediction here, since we won't use that. Though in theory, could use the outcome-averaged approximation, and complicate the interface by having a per-cell bitmask of whether it's an action.)"""
         with torch.no_grad():
-            query = query.clone()
+            query = detach(query).clone()
+            #   No forward-derivative either, and prepare to write to `query` in-place.
             i = self.start
             while i < query.shape[-1]:
                 j = min(query.shape[-1], i + bits_per_chunk)
@@ -264,38 +264,59 @@ optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
 
-def loss(frame):
-    """Predicts the `prev_frame`→`frame` transition IF it's closer to the goal than what we can sample.
+def detach(x):
+    return fw.unpack_dual(x).primal.detach()
+def loss(prev_ep, frame, dst, timediff):
+    """`loss(prev_ep, frame, dst, timediff)`
 
-    Must be called in the RNN-context of the `prev_frame`."""
+    Predicts the `prev_frame`→`frame` transition IF it's closer to the goal than what we can sample.
 
-    # What to contrast `frame` with.
-    with State.Episode(start_from_initial=False):
-        vals = cell_shape[-1]
-        frame_query = torch.cat((frame[:, :-vals], torch.zeros(frame.shape[0], vals)), -1)
-        frame_pred = sample(frame_query)
+    - `prev_ep` is the context that knows `prev_frame`.
+    - `frame` is the immediately-next prev-action and next-observation cells.
+    - `dst` is some faraway goal.
+    - `timediff` is the distance to that goal, as a `(cells, 1)`-shaped int32 tensor."""
 
-    # Distances of `frame` and `frame_pred` to contrast.
-    with State.Episode(start_from_initial=False):
-        frame_dist = transition_(frame)[1]
-    with State.Episode(start_from_initial=False):
-        frame_pred_dist = transition_(frame_pred)[1]
+    # TODO: Decide on a unit-vector direction (randomly), and temporarily replace all the weights with their tangent-augmented fw versions.
+    #   (…Maybe in the DODGE wrapper function.)
 
-    # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
-    dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
-    mask = (dist_is_better | ~sample._act_mask(frame)).float()
-    loss = (sample.loss(frame) * mask).sum()
+    with prev_ep:
+        loss = 0.
 
-    # TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
-    #   (…If we end up going with forward-mode differentiation, we may have to do "prev dist is next dist plus 1", counting on just-in-time goal-switching to cut off the +1 cycle. …But we don't have precise 'did we reach this' criteria, so we can't cut off properly, and this won't work, unless MAYBE we ground in one-step transitions have dist=1…)
-    #     (We don't have ground, because the downside of learning online is the inability to relabel goals.)
-    #       (…If we save RNN states (with forward-derivatives still stored) & frames intermittently, then can't we put (a subsample of) our current frame as the past-goal and just predict the timestamp-difference? In fact, isn't this enough to learn *all* distances? So we *kinda* have a replay buffer though not contiguous, and suitable for prioritized-goal-sampling. Probably updated via drawing 2 pasts and comparing their regret.)
-    #         TODO: So does dist-learning belong in `loss`? Or should it be separate, since it samples another `prev_frame` from a distant past?
-    # TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
+        # TODO: Name `dst` with goal-related name parts.
+        frame = torch.cat((dst, frame), 0)
 
-    log(0, False, torch, improvement = mask - (~sample._act_mask(frame)).float().mean())
+        # What to contrast `frame` with.
+        with State.Episode(start_from_initial=False):
+            vals = cell_shape[-1]
+            frame_query = torch.cat((frame[:, :-vals], torch.zeros(frame.shape[0], vals)), -1)
+            frame_pred = sample(frame_query)
 
-    return loss
+        # Distances of `frame` and `frame_pred` to contrast.
+        with State.Episode(start_from_initial=False):
+            frame_dist = transition_(frame)[1]
+        with State.Episode(start_from_initial=False):
+            frame_pred_dist = transition_(frame_pred)[1]
+
+        # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
+        dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
+        mask = (dist_is_better | ~sample._act_mask(frame)).float()
+        loss = loss + (sample.loss(frame) * mask).sum()
+
+        # Critic regression: `dist = sg timediff`
+        #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
+        #     (Worst-case, can also try tilted L1 loss.)
+        dist_limit = torch.cat((timediff, frame_dist[:, :-1]), -1)
+        loss = loss + (frame_dist - detach(timediff.min(dist_limit))).square().sum()
+
+        # GAN-like penalization of ungrounded plans.
+        loss = loss + (frame_pred_dist - detach(frame_pred_dist)*1.05).square().sum()
+
+        log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
+
+        return loss
+
+    # TODO: Read the loss's tangent, multiply it by direction and set .grad of RNN weights, and perform an optimizer step.
+    #   (…Or should we have a separate function for performing DODGE? A wrapper of another func, maybe?)
 
 def replay(optim, steps=8):
     """TODO:"""
@@ -330,8 +351,6 @@ def replay(optim, steps=8):
 
     # TODO: …Do we want to first implement an RNN that learns through forward-mode AD in a separate file?
     #   Or will we just implement a very-simple env (like the copy-task), and test on that?
-
-    # TODO: Make action-sampling use `fw.unpack_dual(query).primal` on `query` to not compute its forward-mode gradients.
 
 
 
