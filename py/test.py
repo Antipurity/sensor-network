@@ -49,8 +49,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Save prev RNN states and next frames at unroll.
-# TODO: At each step, draw a random past replay-sample and minimize the `loss`, with dst being the current frame.
 
 # TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
 #   Wouldn't this make the replay buffer not contiguous anymore, though? …Maybe it's fine.
@@ -268,7 +266,7 @@ optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
     """
-    Implements [directional gradient descent](https://openreview.net/pdf?id=5i7lJLuhTm): pick a direction, compute a forward-derivative for it, receive a scalar feedback to correct it, and assign the gradients.
+    Implements [directional gradient descent](https://openreview.net/forum?id=5i7lJLuhTm): pick a direction [(a random unit vector by default)](https://arxiv.org/abs/2202.08587), compute a forward-derivative for it, receive a scalar feedback to correct it, and assign the gradients.
 
     Needs `loss_fn(…)→loss` and `model` for parameters. Do an optimizer step on those parameters yourself.
     """
@@ -353,85 +351,71 @@ def loss(prev_ep, frame, dst, timediff):
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
 
         return loss
+loss_fn = DODGE(loss, transition)
 
-def replay(optim, steps=8):
+def replay(optim, current_frame, current_time):
     """TODO:"""
+    if len(replay_buffer) < 8: return
 
-    start, end = random.randrange(len(replay_buffer)), random.randrange(len(replay_buffer))
-    if start > end: start, end = end, start
-    src = replay_buffer[start]
-    dst = replay_buffer[end]
+    src = random.choice(replay_buffer)
 
-    # TODO: Name `dst` with the `'goal'`-mark.
-    # TODO: BPTT, in the State.Episode associated with `src`.
-    #   TODO: …Shouldn't this episode not take on the post-episode values after it's done?
-    #     Do we want an extra param to `State.Episode`?…
-    #   TODO: Append `dst` to every step's input.
-    #   TODO: Compute the `loss` at every step.
-    #   …Now that we've set our sights on forward-mode learning, I don't think BPTT will be used…
+    # TODO: Call the `loss_fn`, with dst being the current frame.
+    #   …Need to make the replay-buffer samples correct, though…
 
-    # (…We can technically compute a loss during unroll, for the previous frame, by comparing the sampled action to a second sampled action… Is it better to try and implement [directional gradient descent](https://openreview.net/pdf?id=5i7lJLuhTm) that doesn't have a window-size limitation, than to use a replay buffer yet again?)
-    #     import torch.autograd.forward_ad as fw
-    #     with fw.dual_level():
-    #       x = fw.make_dual(x, tangent)
-    #       tangent = fw.unpack_dual(x).tangent
-    #       detached = fw.unpack_dual(x).primal
-    #   It's complex enough to need its own `model/` file, though. Unless it's super-easy.
-    #   (`from torch.nn.utils._stateless import functional_call` for giving tangent vectors to params.) https://pytorch.org/tutorials/intermediate/forward_ad_usage.html
-    #   How does the paper actually update the weights?
-    #     Doesn't it need an estimator of the gradient, such as truncated BPTT?
-    #     What does it give tangents to, exactly? Do RNN states receive custom tangents each step? Do weights?
-    #       …If we have a lifelong forward-derivative context, then RNN states will *automatically* get the tangents they need, right? (Though it doesn't sit right with me that all that past was computed with completely different directions…)
-    #       First estimate `direction` to be the moving-average of `grad`, normalized to L2=1, OR possibly [a random unit vector](https://arxiv.org/pdf/2202.08587.pdf) to see whether this works at all.
-    #       grad = fw.unpack_dual(loss).tangent * direction (set this as .grad of parameters, and perform an optim step.)
-
-    # TODO: Use `loss` within `DODGE`, then step the optimizer.
+    optim.step();  optim.zero_grad(True)
 
 
 
 @sn.run
 async def main():
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
-        with torch.no_grad():
-            action = None
-            prev_names, names = None, None
-            prev_frame, frame = None, None
-            time = 0
-            while True:
-                await asyncio.sleep(.05) # TODO: Remove this to go fast.
+        with State.Episode() as life:
+            with torch.no_grad():
+                action = None
+                prev_names, names = None, None
+                prev_frame, frame = None, None
+                time = 0
+                while True:
+                    await asyncio.sleep(.05) # TODO: Remove this to go fast.
 
-                obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
-                #   (If getting out-of-memory, might want to chunk data/query processing.)
-                prev_names, names = names, np.concatenate((query, obs[:, :query.shape[1]]), 0)
+                    obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
+                    #   (If getting out-of-memory, might want to chunk data/query processing.)
+                    prev_names, names = names, np.concatenate((query, obs[:, :query.shape[1]]), 0)
 
-                # Zero-pad `query` to be action-sized.
-                obs, query = torch.tensor(obs), torch.tensor(query)
-                query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
+                    # Zero-pad `query` to be action-sized.
+                    obs, query = torch.tensor(obs), torch.tensor(query)
+                    query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
 
-                # Append prev frame to replay-buffer.
-                if prev_frame is not None:
-                    # Ensure that new names are zero-filled in prev frames, so that even the first occurences of names are predicted.
-                    new_names = np.compress((prev_names.expand_dims(0) == names).all(-1).any(0), names, 0) # O(N**2)
-                    #   (NumPy doesn't give a native way to search in 2D sorted arrays unless you want to hash to 1D.)
-                    if new_names.shape[0] > 0:
-                        n = torch.tensor(new_names)
-                        n = torch.cat((n, torch.zeros(n.shape[0], prev_frame.shape[1] - n.shape[1])), -1)
-                        prev_frame = torch.cat((prev_frame, n), 0)
+                    # Append prev frame to replay-buffer.
+                    if prev_frame is not None:
+                        # TODO: …Now that we will only have prev-RNN-state and next-frame, do we even need to any prev-frame padding?…
 
-                    replay_buffer.append((
-                        torch.tensor(time, dtype=torch.int32),
-                        prev_frame,
-                        'and the RNN state should go here', # TODO: How do we get a snapshot of this, exactly? (.clone(), sure, but what about a snapshot that won't update its state when exited-from again?)
-                    ))
+                        # Ensure that new names are zero-filled in prev frames, so that even the first occurences of names are predicted.
+                        new_names = np.compress((prev_names.expand_dims(0) == names).all(-1).any(0), names, 0) # O(N**2)
+                        #   (NumPy doesn't give a native way to search in 2D sorted arrays unless you want to hash to 1D.)
+                        if new_names.shape[0] > 0:
+                            n = torch.tensor(new_names)
+                            n = torch.cat((n, torch.zeros(n.shape[0], prev_frame.shape[1] - n.shape[1])), -1)
+                            prev_frame = torch.cat((prev_frame, n), 0)
 
-                # Give prev-action & next-observation, and sample next action.
-                prev_frame, frame = frame, (torch.cat((action, obs), 0) if action is not None else obs)
-                transition_(frame)
-                with State.Episode(start_from_initial=False):
-                    action = sample(query)
-                    #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
-                    #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
+                        # TODO: Save prev RNN states and next frames at unroll.
+                        replay_buffer.append((
+                            torch.tensor(time-1, dtype=torch.int32),
+                            prev_frame,
+                            life.clone(remember_on_exit=False),
+                            # TODO: …We now want prev-RNN-state and next-frame for our `loss` to function properly, not this…
+                        ))
 
-                replay(optim)
+                    # Give prev-action & next-observation, and sample next action.
+                    prev_frame, frame = frame, (torch.cat((action, obs), 0) if action is not None else obs)
+                    # TODO: Append `goal` to every step's input, unless it already has `'goal'`-named cells.
+                    #   (…Once we actually have goals.)
+                    transition_(frame)
+                    with State.Episode(start_from_initial=False):
+                        action = sample(query)
+                        #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
+                        #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
 
-                time += 1
+                    replay(optim, frame, time)
+
+                    time += 1

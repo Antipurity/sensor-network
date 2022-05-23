@@ -76,7 +76,7 @@ class State(nn.Module):
             State._losses[-1] = State._losses[-1] + reset.sum()
 
     class Episode:
-        """`with State.Episode(start_from_initial = True) as ep: ...`
+        """`with State.Episode(start_from_initial = True, remember_on_exit = True) as ep: ...`
 
         Represents one trajectory, unrolled so that learning can happen on it. Each `State` starts at its initial value within it.
 
@@ -85,20 +85,23 @@ class State(nn.Module):
 
         Params:
         - `start_from_initial`: can be `False` to make the episode act as a simple checkpoint within another episode, restoring `State`s when done; or can be `lambda initial, current: current.detach()` to act like `False` but also modify the initial states.
+        - `remember_on_exit`: if `False`, re-entering the episode will act like it was never entered, instead of continuing from where it left off.
 
         Methods:
         - `ep.update(lambda initial, current: current.detach())`: for TBPTT.
         - `ep.clone(start_from_initial = True)`: for preserving the current RNN state.
         - `ep.remove(state)`: encountered `State`s are not garbage-collected automatically, so use this if required.
         """
-        __slots__ = ('state_obj', 'state_old', 'restorable', 'active', 'start_from_initial')
-        def __init__(self, start_from_initial=True):
+        __slots__ = ('state_obj', 'state_old', 'restorable', 'active', 'start_from_initial', 'remember_on_exit')
+        def __init__(self, start_from_initial=True, remember_on_exit=True):
             assert isinstance(start_from_initial, bool) or callable(start_from_initial)
+            assert isinstance(remember_on_exit, bool)
             self.state_obj = {} # id → State
             self.state_old = {} # id → current
             self.restorable = set()
             self.active = False
             self.start_from_initial = start_from_initial
+            self.remember_on_exit = remember_on_exit
         def __enter__(self):
             assert not self.active, "Recursive re-entry is not allowed, so express it with normal re-entry"
             self.active = True # No recursive re-entry.
@@ -111,11 +114,15 @@ class State(nn.Module):
             L = State._losses.pop()
             if isinstance(L, torch.Tensor): L.backward()
             self.active = False # Allow non-recursive re-entry.
-            # Reset all values to pre-entry states.
+            # Reset all values to pre-entry states
             objs, olds = self.state_obj, self.state_old
             for id, s in self.state_obj.items():
-                s.current, olds[id] = olds[id], s.current
-            self.restorable.update(objs.keys())
+                if self.remember_on_exit:
+                    s.current, olds[id] = olds[id], s.current
+                else:
+                    s.current = olds[id]
+            if self.remember_on_exit:
+                self.restorable.update(objs.keys())
 
         def __getstate__(self):
             if self.active:
@@ -139,9 +146,9 @@ class State(nn.Module):
                 else:
                     self.state_old[id] = fn(self.state_old[id])
             return self
-        def clone(self, start_from_initial=True):
+        def clone(self, start_from_initial=True, remember_on_exit=True):
             """Copies the current RNN state."""
-            ep = State.Episode(start_from_initial)
+            ep = State.Episode(start_from_initial, remember_on_exit)
             for id, s in self.state_obj.items():
                 if self.active: self._register(s)
                 current = s.current if self.active else self.state_old[id]
