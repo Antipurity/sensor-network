@@ -26,6 +26,7 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
+# (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
 
 
 
@@ -95,6 +96,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.autograd.forward_ad as fw
 torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 from model.recurrency import State, SRWM
@@ -263,17 +265,38 @@ optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
 
-def loss(sample, prev_frame, frame):
-    """TODO:"""
-    # TODO: Loss:
-    #   TODO: Prediction via minimizing `sample.loss(frame) * (dist_replay < dist_policy).float()`): action-prediction filtered by advantage. The policy-action is `sample`d, and the distances are computed within their branching `State.Episode`s.
-    #     TODO: Also preserve & plot `(dist_replay < dist_policy).float().mean()`.
-    #   TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
-    #     (…If we end up going with forward-mode differentiation, we may have to do "prev dist is next dist plus 1", counting on just-in-time goal-switching to cut off the +1 cycle. …But we don't have precise 'did we reach this' criteria, so we can't cut off properly, and this won't work, unless MAYBE we ground in one-step transitions have dist=1…)
-    #       (We don't have ground, because the downside of learning online is the inability to relabel goals.)
-    #         (…If we save RNN states (with forward-derivatives still stored) & frames intermittently, then can't we put (a subsample of) our current frame as the past-goal and just predict the timestamp-difference? In fact, isn't this enough to learn *all* distances? So we *kinda* have a replay buffer though not contiguous, and suitable for prioritized-goal-sampling.)
-    #   TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
-    #   (It's a simple loss, but quite general.)
+def loss(frame):
+    """Predicts the `prev_frame`→`frame` transition IF it's closer to the goal than what we can sample.
+
+    Must be called in the RNN-context of the `prev_frame`."""
+
+    # What to contrast `frame` with.
+    with State.Episode(start_from_initial=False):
+        vals = cell_shape[-1]
+        frame_query = torch.cat((frame[:, :-vals], torch.zeros(frame.shape[0], vals)), -1)
+        frame_pred = sample(frame_query)
+
+    # Distances of `frame` and `frame_pred` to contrast.
+    with State.Episode(start_from_initial=False):
+        frame_dist = transition_(frame)[1]
+    with State.Episode(start_from_initial=False):
+        frame_pred_dist = transition_(frame_pred)[1]
+
+    # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
+    dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
+    mask = (dist_is_better | ~sample._act_mask(frame)).float()
+    loss = (sample.loss(frame) * mask).sum()
+
+    # TODO: Min-dist learning: try `next_dist_replay = where(i<j, min(j-i, prev_dist_replay), next_dist*1.1)`. (Worst-case, can try tilted L1 loss.) (Storing `dst` in replays in increasing dist-to-it is *probably* not worth it.)
+    #   (…If we end up going with forward-mode differentiation, we may have to do "prev dist is next dist plus 1", counting on just-in-time goal-switching to cut off the +1 cycle. …But we don't have precise 'did we reach this' criteria, so we can't cut off properly, and this won't work, unless MAYBE we ground in one-step transitions have dist=1…)
+    #     (We don't have ground, because the downside of learning online is the inability to relabel goals.)
+    #       (…If we save RNN states (with forward-derivatives still stored) & frames intermittently, then can't we put (a subsample of) our current frame as the past-goal and just predict the timestamp-difference? In fact, isn't this enough to learn *all* distances? So we *kinda* have a replay buffer though not contiguous, and suitable for prioritized-goal-sampling. Probably updated via drawing 2 pasts and comparing their regret.)
+    #         TODO: So does dist-learning belong in `loss`? Or should it be separate, since it samples another `prev_frame` from a distant past?
+    # TODO: Maybe, `dist_policy = sg dist_policy*1.1` for GAN-like penalization of ungrounded plans.
+
+    log(0, False, improvement = mask - (~sample._act_mask(frame)).float().mean()) # TODO: (`log` really needs to be able to accept PyTorch tensors.)
+
+    return loss
 
 def replay(optim, steps=8):
     """TODO:"""
@@ -289,10 +312,9 @@ def replay(optim, steps=8):
     #     Do we want an extra param to `State.Episode`?…
     #   TODO: Append `dst` to every step's input.
     #   TODO: Compute the `loss` at every step.
+    #   …Now that we've set our sights on forward-mode learning, I don't think BPTT will be used…
 
     # (…We can technically compute a loss during unroll, for the previous frame, by comparing the sampled action to a second sampled action… Is it better to try and implement [directional gradient descent](https://openreview.net/pdf?id=5i7lJLuhTm) that doesn't have a window-size limitation, than to use a replay buffer yet again?)
-    #   (At least our PyTorch version seems to support forward-mode, despite saying that it's v1.9.0.)
-    #     (Or was the impl not implement anything useful back then…)
     #     import torch.autograd.forward_ad as fw
     #     with fw.dual_level():
     #       x = fw.make_dual(x, tangent)
@@ -303,17 +325,12 @@ def replay(optim, steps=8):
     #   How does the paper actually update the weights?
     #     Doesn't it need an estimator of the gradient, such as truncated BPTT?
     #     What does it give tangents to, exactly? Do RNN states receive custom tangents each step? Do weights?
-    #       …If we have a lifelong forward-derivative context, then RNN states will *automatically* get the tangents they need, right?
-    #       First estimate `direction` to be the moving-average of `grad`, normalized to L2=1, possibly random initially.
-    #         (…Can we use the `grad` below for estimates? [Another paper](https://arxiv.org/pdf/2202.08587.pdf) achieves good results even just with random directions. But their nets *are* small.)
+    #       …If we have a lifelong forward-derivative context, then RNN states will *automatically* get the tangents they need, right? (Though it doesn't sit right with me that all that past was computed with completely different directions…)
+    #       First estimate `direction` to be the moving-average of `grad`, normalized to L2=1, OR possibly [a random unit vector](https://arxiv.org/pdf/2202.08587.pdf) to see whether this works at all.
     #       grad = fw.unpack_dual(loss).tangent * direction (set this as .grad of parameters, and perform an optim step.)
-    #        (That tangent is just 1 number. We really do need a good `direction`.)
-    #           Should really try this in the REPL. …Just summing a tensor is enough to test, right?
-    #             Sum: "Trying to use forward AD with sum that does not support it."
-    #             Matmul: "Trying to use forward AD with unsqueeze that does not support it."
-    #               "Trying to use forward AD with mm that does not support it."
-    #                 (*well how are we supposed to compute any gradients then*)
-    # TODO: Make Anaconda stop lying to us and make it update PyTorch to 1.11.0. Can't do forward-mode otherwise.
+
+    # TODO: …Do we want to first implement an RNN that learns through forward-mode AD in a separate file?
+    #   Or will we just implement a very-simple env (like the copy-task), and test on that?
 
     # TODO: Make action-sampling use `fw.unpack_dual(query).primal` on `query` to not compute its forward-mode gradients.
 
@@ -340,13 +357,14 @@ async def main():
 
                 # Append prev frame to replay-buffer.
                 if prev_frame is not None:
+                    # Ensure that new names are zero-filled in prev frames, so that even the first occurences of names are predicted.
                     new_names = np.compress((prev_names.expand_dims(0) == names).all(-1).any(0), names, 0) # O(N**2)
                     #   (NumPy doesn't give a native way to search in 2D sorted arrays unless you want to hash to 1D.)
                     if new_names.shape[0] > 0:
-                        # Ensure that new names are zero-filled in prev frames, so that even the first occurences of names are predicted.
                         n = torch.tensor(new_names)
                         n = torch.cat((n, torch.zeros(n.shape[0], prev_frame.shape[1] - n.shape[1])), -1)
                         prev_frame = torch.cat((prev_frame, n), 0)
+
                     replay_buffer.append((
                         torch.tensor(time, dtype=torch.int32),
                         prev_frame,
@@ -356,9 +374,10 @@ async def main():
                 # Give prev-action & next-observation, and sample next action.
                 prev_frame, frame = frame, (torch.cat((action, obs), 0) if action is not None else obs)
                 transition_(frame)
-                action = sample(query)
-                #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
-                #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
+                with State.Episode(start_from_initial=False):
+                    action = sample(query)
+                    #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
+                    #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
 
                 replay(optim)
 
