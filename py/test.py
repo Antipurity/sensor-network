@@ -354,13 +354,14 @@ def loss(prev_ep, frame, dst, timediff):
 loss_fn = DODGE(loss, transition)
 
 def replay(optim, current_frame, current_time):
-    """TODO:"""
+    """Remembers a frame from a distant past, so that the NN can reinforce actions and observations when it needs to go to the present."""
     if len(replay_buffer) < 8: return
 
-    src = random.choice(replay_buffer)
+    time, ep, frame = random.choice(replay_buffer)
 
-    # TODO: Call the `loss_fn`, with dst being the current frame.
-    #   …Need to make the replay-buffer samples correct, though…
+    # TODO: Maybe select only a subsample of `current_frame`'s cells to use as a goal.
+    loss_fn(ep, frame, current_frame, current_time - time)
+    #   TODO: The time should become a (cells,1) tensor.
 
     optim.step();  optim.zero_grad(True)
 
@@ -372,42 +373,27 @@ async def main():
         with State.Episode() as life:
             with torch.no_grad():
                 action = None
-                prev_names, names = None, None
-                prev_frame, frame = None, None
+                frame = None
                 time = 0
                 while True:
                     await asyncio.sleep(.05) # TODO: Remove this to go fast.
 
                     obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
                     #   (If getting out-of-memory, might want to chunk data/query processing.)
-                    prev_names, names = names, np.concatenate((query, obs[:, :query.shape[1]]), 0)
 
                     # Zero-pad `query` to be action-sized.
                     obs, query = torch.tensor(obs), torch.tensor(query)
                     query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
 
-                    # Append prev frame to replay-buffer.
-                    if prev_frame is not None:
-                        # TODO: …Now that we will only have prev-RNN-state and next-frame, do we even need to any prev-frame padding?…
-
-                        # Ensure that new names are zero-filled in prev frames, so that even the first occurences of names are predicted.
-                        new_names = np.compress((prev_names.expand_dims(0) == names).all(-1).any(0), names, 0) # O(N**2)
-                        #   (NumPy doesn't give a native way to search in 2D sorted arrays unless you want to hash to 1D.)
-                        if new_names.shape[0] > 0:
-                            n = torch.tensor(new_names)
-                            n = torch.cat((n, torch.zeros(n.shape[0], prev_frame.shape[1] - n.shape[1])), -1)
-                            prev_frame = torch.cat((prev_frame, n), 0)
-
-                        # TODO: Save prev RNN states and next frames at unroll.
-                        replay_buffer.append((
-                            torch.tensor(time-1, dtype=torch.int32),
-                            prev_frame,
-                            life.clone(remember_on_exit=False),
-                            # TODO: …We now want prev-RNN-state and next-frame for our `loss` to function properly, not this…
-                        ))
+                    # Append prev-RNN-state and next-frame to the replay-buffer.
+                    replay_buffer.append((
+                        time,
+                        life.clone(remember_on_exit=False),
+                        frame,
+                    ))
 
                     # Give prev-action & next-observation, and sample next action.
-                    prev_frame, frame = frame, (torch.cat((action, obs), 0) if action is not None else obs)
+                    frame = torch.cat((action, obs), 0) if action is not None else obs
                     # TODO: Append `goal` to every step's input, unless it already has `'goal'`-named cells.
                     #   (…Once we actually have goals.)
                     transition_(frame)
