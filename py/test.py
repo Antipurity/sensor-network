@@ -52,9 +52,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: For goals, use PyTorch-backend `sn.Namer` and `sn.Matcher`, which puts `'goal'` in the -2nd spot. (Goal-group ID would be the -1st spot.)
 #   TODO: At replay-time, learn multigroup partial goals (AND/OR goals): pick a group ID; subsample `dst` randomly (to support partial goals) and set their group-ID; select a subset of `frame` cells that would try to reach `dst` and set their group-ID, and set every other cell's group ID randomly, and only learn the losses at the selected subset.
-#   TODO: When saving unroll-time frames, filter out the cells that match the goal-name.
 #   TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
-#     TODO: At unroll-time, save to the replay buffer.
+#     …What about multigroup unroll-time goals though?
+#       Are we supposed to maintain a set of goal-groups via NumPy analysis, and sample & update each goal-group independently?
 #     TODO: At unroll-time, give goals at every step.
 
 # TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
@@ -141,6 +141,13 @@ class ReplayBuffer:
     def __iter__(self):
         for i in range(len(self)): yield self[i]
 replay_buffer = ReplayBuffer(1024)
+
+
+
+# Our interface to multigroup partial goals (AND/OR goals): the last 2 name parts are ('goal', 'group_id').
+goal_filter = sn.Filter([*[None for _ in cell_shape[:-3]], 'goal', ...])
+goal_name = torch.tensor(goal_filter.template(cell_shape))
+goal_name = torch.cat((goal_name, torch.full((cell_shape[-1],), float('nan'))), -1)
 
 
 
@@ -316,7 +323,9 @@ def loss(prev_ep, frame, dst, timediff):
     with prev_ep:
         loss = 0.
 
-        # TODO: Name `dst` with goal-related name parts.
+        # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
+        dst = torch.where(goal_name == goal_name, goal_name, dst)
+        #   (…Currently not specifying the group ID, though.)
         frame = torch.cat((dst, frame), 0)
 
         # What to contrast `frame` with.
@@ -343,7 +352,8 @@ def loss(prev_ep, frame, dst, timediff):
         loss = loss + (frame_dist - detach(timediff.min(dist_limit))).square().sum()
 
         # GAN-like penalization of ungrounded plans.
-        loss = loss + (frame_pred_dist - detach(frame_pred_dist)*1.05).square().sum()
+        dist_penalty = 1.05
+        loss = loss + (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square().sum()
 
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
 
@@ -356,9 +366,10 @@ def replay(optim, current_frame, current_time):
 
     time, ep, frame = random.choice(replay_buffer)
 
-    # TODO: Maybe select only a subsample of `current_frame`'s cells to use as a goal.
-    loss_fn(ep, frame, current_frame, current_time - time)
-    #   TODO: The time should become a (cells,1) tensor.
+    # TODO: At replay-time, learn multigroup partial goals (AND/OR goals): pick a group ID; subsample `dst` randomly (to support partial goals) and set their group-ID; select a subset of `frame` cells that would try to reach `dst` and set their group-ID, and set every other cell's group ID randomly, and only learn the losses at the selected subset.
+
+    # TODO: Maybe select only a subsample of `current_frame`'s cells to use as a goal (to learn OR goals).
+    loss_fn(ep, frame, dst = current_frame, timediff = torch.full((current_frame.shape[0], 1), float(current_time - time)))
 
     optim.step();  optim.zero_grad(True)
 
@@ -366,6 +377,7 @@ def replay(optim, current_frame, current_time):
 
 @sn.run
 async def main():
+    import numpy as np
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
         with State.Episode() as life:
             with torch.no_grad():
@@ -378,21 +390,25 @@ async def main():
                     obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
                     #   (If getting out-of-memory, might want to chunk data/query processing.)
 
+                    # (The replay buffer won't want to know any user-specified goals.)
+                    goal_cells = goal_filter(np.concatenate((query, obs[:, :query.shape[1]]), -1), cell_shape=cell_shape)
+
                     # Zero-pad `query` to be action-sized.
                     obs, query = torch.tensor(obs), torch.tensor(query)
                     query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
+                    frame = torch.cat((action, obs), 0) if action is not None else obs
 
                     # Append prev-RNN-state and next-frame to the replay-buffer.
                     replay_buffer.append((
                         time,
                         life.clone(remember_on_exit=False),
-                        frame,
+                        frame[goal_cells],
                     ))
 
                     # Give prev-action & next-observation, and sample next action.
-                    frame = torch.cat((action, obs), 0) if action is not None else obs
-                    # TODO: Append `goal` to every step's input, unless it already has `'goal'`-named cells.
-                    #   (…Once we actually have goals.)
+                    # TODO: Append `goal` to `frame`, unless it already has `'goal'`-named cells.
+                    #   (Per-goal-group, preferably.)
+                    #   (…Once we actually have `goal`s.)
                     transition_(frame)
                     with State.Episode(start_from_initial=False):
                         action = sample(query)

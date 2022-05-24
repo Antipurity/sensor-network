@@ -349,13 +349,15 @@ class Namer:
 
     An optimization opportunity: wrapping a name in this and reusing this object is faster than passing the name tuple directly to `handler.send(name=...)` (which re-constructs this object each time).
 
+    This class is an allocator of 1D arrays onto 2D named cells.
+
     ---
 
     To achieve position-invariance of `handler.send`, data cells need names.
 
     Naming data first flattens then transforms it into a 2D array, sized `cells×sum(cell_shape)`.
 
-    Numeric names are split into fixed-size *parts*. `cell_shape[-2]` is where `Namer` puts its parts, so ensure that `cell_shape` has space for a few. Each part can be:
+    Numeric names are split into fixed-size *parts*. `cell_shape[:-1]` is where `Namer` puts its parts, so ensure that `cell_shape` has space for a few. Each part can be:
     - A string: MD5-hashed, and the resulting 16 bytes are put into one part, shifted and rescaled to -1…1.
     - `None` or `...`: anything goes here.
     - A tuple:
@@ -435,29 +437,30 @@ class Namer:
 class Filter:
     """`Filter(name, func, backend=numpy)`
 
-    Wraps a `func(data, error, cell_shape)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
+    Wraps a `func(data, error=None, cell_shape)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
 
     Example uses: getting a global reward from the env; getting [CLIP](https://cliport.github.io/)-embedding goals from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
 
-    `func`'s `data` and `error` 2D arrays will already be lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
+    `func`:
+    - `None`: a call will simply return a per-cell bit-mask of whether the name fits.
+    - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
-    `func` is not called if there are no matches."""
+    If needed for manually naming cells, `fltr.template(cell_shape)` is a 1D NumPy array with `nan`s for `None`s and numbers for name-parts."""
     def __init__(self, name, func, backend=np):
+        assert func is None or callable(func)
         self.name = name
         self.func = func
         self.cell_shape = None
         self.templ = None
         self.backend = backend
-    def __call__(self, data, error, cell_shape):
+    def __call__(self, data, error=None, cell_shape=()):
         np = self.backend
-        # Reconstruct the template if needed.
-        if cell_shape != self.cell_shape:
-            self.templ = _name_template(self.name, cell_shape, np)
-            self.cell_shape = cell_shape
         # Match.
-        template, func_indices, part_sizes = self.templ
+        template = self.template(cell_shape)
         matches = (template != template) | (np.abs(data[:, :-cell_shape[-1]] - template) <= (error if error is not None else 0.) + 1e-5)
         matches = matches.all(-1)
+        if self.func is None:
+            return matches
         data = data[matches]
         inds = np.lexsort(data.T[::-1])
         data = data[inds]
@@ -465,6 +468,14 @@ class Filter:
         # Call.
         if data.size > 0:
             return self.func(data, error, cell_shape)
+    def template(self, cell_shape):
+        """Returns a 1D template that's responsible for matching the name."""
+        # Reconstruct the template if needed.
+        if cell_shape != self.cell_shape:
+            self.templ = _name_template(self.name, cell_shape, np)
+            self.cell_shape = cell_shape
+        template, func_indices, part_sizes = self.templ
+        return template
 
 
 
@@ -568,7 +579,7 @@ def _concat_error(main, error, length, np):
 def _name_template(name, cell_shape, np):
     """Converts a name into `(template, func_indices, part_sizes)`.
 
-    - `template`: a NumPy array of shape `(sum(cell_shape),)`, with `nan`s wherever the value doesn't matter.
+    - `template`: a NumPy array of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
     - `func_indices`: a list of `(index_to_write_at, func_to_write_the_result_of)`.
     - `part_sizes`: a list of name-part sizes, always equal to `cell_shape[p]` unless the part has a func, for `_fill`ing."""
     _shape_ok(cell_shape)
