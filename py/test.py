@@ -50,19 +50,16 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
-#   Wouldn't this make the replay buffer not contiguous anymore, though? …Maybe it's fine.
-#   …How would this prioritization be implemented? Do we send the regret to CPU, and when it arrives, sort a few? Or can/should we update RNN states & frames on-GPU?
-
-# TODO: For goals, use a PyTorch-backend `sn.Namer`, which puts `'goal'` in the last spot.
-#   TODO: …Should we make the -2th slot the group id, so that we can specify per-group goals?… It's the best way to support both AND and OR for goals, isn't it…
-#     TODO: How do we implement these per-cell extractions of grouped goals?
+# TODO: For goals, use PyTorch-backend `sn.Namer` and `sn.Matcher`, which puts `'goal'` in the -2nd spot. (Goal-group ID would be the -1st spot.)
+#   TODO: At replay-time, learn multigroup partial goals (AND/OR goals): pick a group ID; subsample `dst` randomly (to support partial goals) and set their group-ID; select a subset of `frame` cells that would try to reach `dst` and set their group-ID, and set every other cell's group ID randomly, and only learn the losses at the selected subset.
 #   TODO: When saving unroll-time frames, filter out the cells that match the goal-name.
 #   TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
 #     TODO: At unroll-time, save to the replay buffer.
 #     TODO: At unroll-time, give goals at every step.
-#   TODO: At replay-time, TODO: what do we do, exactly?… How to learn per-cell goals?…
-#     TODO: At replay-time, inside an episode: should pick a starting point (from which the episode-copy should be taken), sample a faraway goal from the future (preferably) and put it at the start, and unroll several from the starting point steps, applying the loss.
+
+# TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
+#   Wouldn't this make the replay buffer not contiguous anymore, though? …Maybe it's fine.
+#   …How would this prioritization be implemented? Do we send the regret to CPU, and when it arrives, sort a few? Or can/should we update RNN states & frames on-GPU?
 
 # (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
 #   Is this a good idea?
