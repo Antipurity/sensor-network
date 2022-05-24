@@ -158,8 +158,8 @@ goal_name = torch.cat((goal_name, torch.full((cell_shape[-1],), float('nan'))), 
 
 
 def goal_group_ids(frame):
-    """Returns the `set` of all goal-group IDs contained in the `frame`, as a list of byte-objects, suitable for indexing a dictionary with."""
-    return [name.tobytes() for name in np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)]
+    """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
+    return set(name.tobytes() for name in np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0))
 
 
 
@@ -395,7 +395,8 @@ async def main():
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
         with State.Episode() as life:
             with torch.no_grad():
-                action, frame = None, None
+                prev_q, action, frame = None, None, None
+                goals = {} # goal_group_id → (gpu_goal_cells, cpu_expiration_time)
                 time = 0
                 while True:
                     await asyncio.sleep(.05) # TODO: Remove this to go fast.
@@ -403,16 +404,12 @@ async def main():
                     obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
                     #   (If getting out-of-memory, might want to chunk data/query processing.)
 
-                    # TODO: At unroll-time, generate observation-cell/s (sampling from the replay-buffer) and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
-                    #   …What about multigroup unroll-time goals though?
-                    #     Are we supposed to maintain a set of goal-groups via NumPy analysis, and sample & update each goal-group independently?
-                    #       …Pretty sure, yes…
-                    #       Using `goal_group_ids`, store the current goals in a dict, updated/deleted each step.
-                    #         …How do we generate those goals, doing distance-predictions and swapping them when they run out (which we'd need GPU→CPU synchronization for, since cell-counts are different, and we'd like slicing anyway)? …What, just some code right here?…
-                    #   (The generated goal itself is probably just a random (subsample of a) frame from the replay buffer.)
-
                     # (The replay buffer won't want to know any user-specified goals.)
-                    goal_cells = goal_filter(np.concatenate((query, obs[:, :query.shape[1]]), -1), cell_shape=cell_shape)
+                    #   (And to set goals that the env hasn't set, we need to know goal-group IDs.)
+                    frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
+                    goal_cells = goal_filter(frame_names, cell_shape=cell_shape)
+                    prev_q = query
+                    groups = goal_group_ids(frame_names) - goal_group_ids(frame_names[goal_cells])
 
                     # Zero-pad `query` to be action-sized.
                     obs, query = torch.tensor(obs), torch.tensor(query)
@@ -426,11 +423,22 @@ async def main():
                         frame[goal_cells],
                     ))
 
+                    # TODO: Using the IDs in `groups`, update/delete the current `goals`.
+                    #   (The generated goal itself is likely just a random (subsample of a) frame from the replay buffer.)
+                    #   (Delete whenever `time > expiration_time`. After that, update when a group in `groups` is not in our dict.)
+                    #     TODO: To update, for each in `groups`:
+                    #       TODO: Pick a random replay-sample, and get a random subsample of its cells.
+                    #         TODO: Name it with `goal_name` already.
+                    #       TODO: Create a one-number CPU tensor to hold the distance, initially `time+100`.
+                    #       TODO: Store the tuple in `goals`.
+
                     # Give prev-action & next-observation, and sample next action.
-                    # TODO: Append `goal` to `frame`, unless it already has `'goal'`-named cells.
-                    #   (Per-goal-group, preferably.)
-                    #   (…Once we actually have `goal`s.)
+                    # TODO: Append `goals` to `frame`. (Also want to remember the cell-indices that these appendages span.)
                     transition_(frame)
+                    #   TODO: If we've just updated (…kept track of *where* exactly…), do a non-blocking copy of the distance that we've got here into its CPU scalar.
+                    #     TODO: `time`, plus ceil of distance when giving the RNN the `frame` and the new goal (luckily, we already have a call like that), and `.mean()` of dists of the newly-generated/updated goal-cells.
+                    #     …If we can just do non-blocking copies, and we're computing distances at every step anyway, then can we update the distance each step?…
+                    #       Would this be related to mining for regret, as in, if we've improved more than we thought we would, then we abandon the search quicker (via min of all predictions)?… Not sure about regret, but it *might* be a good idea anyway…
                     with State.Episode(start_from_initial=False):
                         action = sample(query)
                         #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
