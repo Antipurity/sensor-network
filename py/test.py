@@ -50,7 +50,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: At replay-time, learn multigroup partial goals (AND/OR goals): pick a group ID; subsample `dst` randomly (to support partial goals) and set their group-ID; select a subset of `frame` cells that would try to reach `dst` and set their group-ID, and set every other cell's group ID randomly, and only learn the losses at the selected subset.
 # TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
 #   …What about multigroup unroll-time goals though?
 #     Are we supposed to maintain a set of goal-groups via NumPy analysis, and sample & update each goal-group independently?
@@ -322,9 +321,17 @@ def loss(prev_ep, frame, dst, timediff):
     with prev_ep:
         loss = 0.
 
+        # Multigroup ("AND") goals, where many threads of experience (with their group IDs) can pursue separate goals.
+        #   (The group ID replaces the last name-part.)
+        is_learned = torch.rand(dst.shape[0], 1) < (.1+.9*random.random())
+        dst_group_id = torch.rand(1, cell_shape[-2])*2-1
+        src_group_id = torch.where(is_learned, dst_group_id, torch.rand(frame.shape[0], cell_shape[-2]*2-1))
+        frame = torch.cat((frame[:, :sum(cell_shape[:-2])], src_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
+        dst_group_id = dst_group_id.expand(dst.shape[0], cell_shape[-2])
+        dst = torch.cat((dst[:, :sum(cell_shape[:-2])], dst_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
+
         # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
         dst = torch.where(goal_name == goal_name, goal_name, dst)
-        #   (…Currently not specifying the group ID, though.)
         frame = torch.cat((dst, frame), 0)
 
         # What to contrast `frame` with.
@@ -342,17 +349,17 @@ def loss(prev_ep, frame, dst, timediff):
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
         dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
         mask = (dist_is_better | ~sample._act_mask(frame)).float()
-        loss = loss + (sample.loss(frame) * mask).sum()
+        loss = loss + (is_learned.float() * sample.loss(frame) * mask).sum()
 
         # Critic regression: `dist = sg timediff`
         #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
         #     (Worst-case, can also try tilted L1 loss.)
         dist_limit = torch.cat((timediff, frame_dist[:, :-1]), -1)
-        loss = loss + (frame_dist - detach(timediff.min(dist_limit))).square().sum()
+        loss = loss + (is_learned.float() * (frame_dist - detach(timediff.min(dist_limit))).square()).sum()
 
         # GAN-like penalization of ungrounded plans.
         dist_penalty = 1.05
-        loss = loss + (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square().sum()
+        loss = loss + (is_learned.float() * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum()
 
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
 
@@ -365,10 +372,11 @@ def replay(optim, current_frame, current_time):
 
     time, ep, frame = random.choice(replay_buffer)
 
-    # TODO: At replay-time, learn multigroup partial goals (AND/OR goals): pick a group ID; subsample `dst` randomly (to support partial goals) and set their group-ID; select a subset of `frame` cells that would try to reach `dst` and set their group-ID, and set every other cell's group ID randomly, and only learn the losses at the selected subset.
+    # Learn partial ("OR") goals, by omitting some cells.
+    dst_is_picked = np.random.rand() < (.05+.95*random.random())
+    dst = current_frame[dst_is_picked]
 
-    # TODO: Maybe select only a subsample of `current_frame`'s cells to use as a goal (to learn OR goals).
-    loss_fn(ep, frame, dst = current_frame, timediff = torch.full((current_frame.shape[0], 1), float(current_time - time)))
+    loss_fn(ep, frame, dst = dst, timediff = torch.full((dst.shape[0], 1), float(current_time - time)))
 
     optim.step();  optim.zero_grad(True)
 
@@ -376,7 +384,6 @@ def replay(optim, current_frame, current_time):
 
 @sn.run
 async def main():
-    import numpy as np
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
         with State.Episode() as life:
             with torch.no_grad():
@@ -388,6 +395,10 @@ async def main():
 
                     obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
                     #   (If getting out-of-memory, might want to chunk data/query processing.)
+
+                    # TODO: At unroll-time, generate observation-cell/s (sampling from the replay-buffer) and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
+                    #   …What about multigroup unroll-time goals though?
+                    #     Are we supposed to maintain a set of goal-groups via NumPy analysis, and sample & update each goal-group independently?
 
                     # (The replay buffer won't want to know any user-specified goals.)
                     goal_cells = goal_filter(np.concatenate((query, obs[:, :query.shape[1]]), -1), cell_shape=cell_shape)
