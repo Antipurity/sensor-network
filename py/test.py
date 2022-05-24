@@ -105,6 +105,7 @@ from model.log import log, clear
 
 
 
+# Hyperparameters.
 cell_shape = (8,8,8,8, 64)
 sn.shape(*cell_shape)
 
@@ -112,6 +113,13 @@ state_sz, goal_sz = 256, 256
 
 dist_levels = 2
 bits_per_chunk = 8 # How to `sample`.
+
+
+
+# Environments.
+import minienv
+minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
+#   TODO: Should at least make `minienv` work not globally but in a class.
 
 
 
@@ -142,32 +150,16 @@ replay_buffer = ReplayBuffer(1024)
 
 
 
-# Our interface to multigroup partial goals (AND/OR goals): the last 2 name parts are ('goal', 'group_id').
+# Our interface to multigroup partial goals (AND/OR goals): the last 2 name parts are ('goal', group_id).
 goal_filter = sn.Filter([*[None for _ in cell_shape[:-3]], 'goal', ...])
 goal_name = torch.tensor(goal_filter.template(cell_shape))
 goal_name = torch.cat((goal_name, torch.full((cell_shape[-1],), float('nan'))), -1)
 
 
 
-import minienv
-minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
-#   TODO: Should at least make `minienv` work not globally but in a class.
-
-
-
-class SkipConnection(nn.Module):
-    """Linearize gradients, to make learning easier."""
-    def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
-    def forward(self, x):
-        y = self.fn(x)
-        return y if x.shape[-1]<y.shape[-1] else x + y if x.shape == y.shape else x[..., :y.shape[-1]] + y
-def cat(*a, dim=-1): return torch.cat(a, dim)
-def h(ins = state_sz, outs = ...): # A cross-cell transform.
-    if outs is ...: outs = ins
-    return SkipConnection(
-        nn.ReLU(), nn.LayerNorm(ins), SRWM(ins, ins, heads=2),
-        nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs),
-    )
+def goal_group_ids(frame):
+    """Returns the `set` of all goal-group IDs contained in the `frame`, as a list of byte-objects, suitable for indexing a dictionary with."""
+    return [name.tobytes() for name in np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)]
 
 
 
@@ -247,6 +239,22 @@ class Sampler:
     def _act_mask(self, act, eps=1e-5):
         return ((act - self.zero).abs().min((act - self.one).abs()) < eps).all(-1, keepdim=True)
 sample = Sampler(lambda x: transition_(x)[0], bits_per_chunk=bits_per_chunk, start=sum(cell_shape)-cell_shape[-1], zero=-1, one=1)
+
+
+
+def cat(*a, dim=-1): return torch.cat(a, dim)
+class SkipConnection(nn.Module):
+    """Linearize gradients, to make learning easier."""
+    def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
+    def forward(self, x):
+        y = self.fn(x)
+        return y if x.shape[-1]<y.shape[-1] else x + y if x.shape == y.shape else x[..., :y.shape[-1]] + y
+def h(ins = state_sz, outs = ...): # A cross-cell transform.
+    if outs is ...: outs = ins
+    return SkipConnection(
+        nn.ReLU(), nn.LayerNorm(ins), SRWM(ins, ins, heads=2),
+        nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs),
+    )
 
 
 
@@ -387,8 +395,7 @@ async def main():
     with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
         with State.Episode() as life:
             with torch.no_grad():
-                action = None
-                frame = None
+                action, frame = None, None
                 time = 0
                 while True:
                     await asyncio.sleep(.05) # TODO: Remove this to go fast.
@@ -399,6 +406,10 @@ async def main():
                     # TODO: At unroll-time, generate observation-cell/s (sampling from the replay-buffer) and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
                     #   …What about multigroup unroll-time goals though?
                     #     Are we supposed to maintain a set of goal-groups via NumPy analysis, and sample & update each goal-group independently?
+                    #       …Pretty sure, yes…
+                    #       Using `goal_group_ids`, store the current goals in a dict, updated/deleted each step.
+                    #         …How do we generate those goals, doing distance-predictions and swapping them when they run out (which we'd need GPU→CPU synchronization for, since cell-counts are different, and we'd like slicing anyway)? …What, just some code right here?…
+                    #   (The generated goal itself is probably just a random (subsample of a) frame from the replay buffer.)
 
                     # (The replay buffer won't want to know any user-specified goals.)
                     goal_cells = goal_filter(np.concatenate((query, obs[:, :query.shape[1]]), -1), cell_shape=cell_shape)
