@@ -51,10 +51,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
-#   Is this a good idea?
-#   TODO: Do we maybe want to learn multiple metrics-about learning, such as misprediction? Which, exactly?
-#   TODO: Where would we use learned regret?
 
 # (…Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…)
 #   TODO: Maybe move `minienv` to `env/`, so that we can safely implement as many environments as we want?…
@@ -103,6 +99,7 @@ cell_shape = (8,8,8,8, 64)
 sn.shape(*cell_shape)
 
 state_sz, goal_sz = 256, 256
+slow_mode = .05 # Artificial delay per step.
 
 dist_levels = 2
 bits_per_chunk = 8 # How to `sample`.
@@ -237,12 +234,12 @@ transition = nn.Sequential(
     #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
     h(sum(cell_shape), state_sz),
     h(state_sz, state_sz),
-    h(state_sz, 2 ** bits_per_chunk + dist_levels),
+    h(state_sz, 2 ** bits_per_chunk + dist_levels + 1),
 )
 def transition_(x):
-    """Wraps `transition` to return a tuple of `(sample_info, distance)`."""
+    """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
     y = transition(x)
-    return y[..., :-dist_levels], 2 ** y[..., -dist_levels:]
+    return y[..., :-(dist_levels+1)], 2 ** y[..., -(dist_levels+1):-1], 2 ** y[..., -1:]
 optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
@@ -300,8 +297,6 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
     - `timediff` is the distance to that goal, as a `(cells, 1)`-shaped int32 tensor."""
 
     with prev_ep:
-        loss = 0.
-
         # Multigroup ("AND") goals, where many threads of experience (with their group IDs) can pursue separate goals.
         #   (The group ID replaces the last name-part.)
         is_learned = torch.rand(frame.shape[0], 1) < (.1+.9*random.random())
@@ -324,31 +319,36 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # Distances of `frame` and `frame_pred` to contrast.
         with State.Episode(start_from_initial=False):
-            frame_dist = transition_(frame)[1]
+            _, frame_dist, _ = transition_(frame)[1]
         with State.Episode(start_from_initial=False):
-            frame_pred_dist = transition_(frame_pred)[1]
+            _, frame_pred_dist, frame_pred_regret = transition_(frame_pred)[1]
 
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
         dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
         mask = (dist_is_better | ~sample._act_mask(frame)).float()
-        loss = loss + (is_learned * sample.loss(frame) * mask).sum()
+        predict_loss = (is_learned * sample.loss(frame) * mask).sum()
 
         # Remember our regret of not being the `frame`. *Only* remember what we regret.
-        regret = (is_learned * (frame_dist[:, -1:] - timediff)).sum() / (is_learned.sum() + 1e-2)
+        regret = (is_learned * (frame_pred_dist[:, -1:] - frame_dist[:, -1:])).sum() / (is_learned.sum() + 1e-2)
         regret_cpu.copy_(regret, non_blocking=True)
+
+        # Learn the regret, since estimating prediction-error by training several copies of the model is too expensive.
+        regret_loss = (is_learned * (frame_pred_regret.log() - detach(regret).clamp(0.).log()).square()).sum()
 
         # Critic regression: `dist = sg timediff`
         #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
         #     (Worst-case, can also try tilted L1 loss.)
         dist_limit = torch.cat((timediff, frame_dist[:, :-1]), -1)
-        loss = loss + (is_learned * (frame_dist.log2() - detach(timediff.min(dist_limit)).log2()).square()).sum()
+        dist_loss = (is_learned * (frame_dist.log2() - detach(timediff.min(dist_limit)).log2()).square()).sum()
 
         # GAN-like penalization of ungrounded plans.
         dist_penalty = 1.05
-        loss = loss + (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum()
+        ungrounded_dist_loss = (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum()
 
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
+        log(1, False, torch, predict_loss=predict_loss, regret_loss=regret_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss)
 
+        loss = predict_loss + regret_loss + dist_loss + ungrounded_dist_loss
         return loss
 loss_fn = DODGE(loss, transition)
 
@@ -361,9 +361,13 @@ def replay(optim, current_frame, current_time):
         time, ep, frame, regret = random.choice(replay_buffer)
 
         # Learn partial ("OR") goals, by omitting some cells.
+        #   (Note: it's possible to sample several goals and pick a 'best' one, [like AdaGoal does](https://arxiv.org/abs/2111.12045). But that works best with a measure of 'error' to maximize, and our replay-buffer already kinda maximizes regret.)
+        #     (Could be done with either the `regret` output of `transition_`, or by keeping several `transition`s to measure ensemble disagreement. Could also [train some generative model](http://proceedings.mlr.press/v100/nair20a/nair20a.pdf), but those are hard to train, hence the sampling.)
+        #       (All of which is too expensive.)
         dst_is_picked = np.random.rand() < (.05+.95*random.random())
         dst = current_frame[dst_is_picked]
 
+        # Learn.
         loss_fn(ep, frame, dst=dst, timediff = torch.full((dst.shape[0], 1), float(current_time - time)), regret=regret)
 
         # If our replay buffer gets too big, leave only max-regret samples.
@@ -385,7 +389,8 @@ async def main():
                 goals = {} # goal_group_id → (gpu_goal_cells, cpu_expiration_time)
                 time = 0 # Hopefully this doesn't get above 2**31-1.
                 while True:
-                    await asyncio.sleep(.05) # TODO: Remove this to go fast.
+                    if slow_mode > 0:
+                        await asyncio.sleep(slow_mode)
 
                     obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
                     #   (If getting out-of-memory, might want to chunk data/query processing.)
@@ -430,7 +435,7 @@ async def main():
                     if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
 
                     # Give prev-action & next-observation, remember distance estimates, and sample next action.
-                    _, dist = transition_(frame)
+                    _, dist, regret = transition_(frame)
                     n = 0
                     for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
                         # (If we do better than expected, we leave early.)
