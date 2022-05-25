@@ -50,14 +50,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: At unroll-time, generate observation-cell/s and estimate time-to-reach-it; at every step, append named-as-goal cells to obs (*unless there are any goal-cells in observations*); and when the prev estimated time runs out, pick new goal-cells and update the estimated time.
-#   …What about multigroup unroll-time goals though?
-#     Are we supposed to maintain a set of goal-groups via NumPy analysis, and sample & update each goal-group independently?
-#   TODO: At unroll-time, give goals at every step.
-
 # TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
 #   Wouldn't this make the replay buffer not contiguous anymore, though? …Maybe it's fine.
 #   …How would this prioritization be implemented? Do we send the regret to CPU, and when it arrives, sort a few? Or can/should we update RNN states & frames on-GPU?
+#     …Or maybe we can store regret in a CPU-side scalar tensor, initially very high, and do non-blocking copies into it when we touch a sample, and occasionally sort all samples by regret…
+#       (Doesn't this seem reasonable?)
 
 # (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
 #   Is this a good idea?
@@ -423,18 +420,21 @@ async def main():
                         frame[goal_cells],
                     ))
 
-                    # TODO: Using the IDs in `groups`, update/delete the current `goals`.
-                    #   (The generated goal itself is likely just a random (subsample of a) frame from the replay buffer.)
-                    #   (Delete whenever `time > expiration_time`. After that, update when a group in `groups` is not in our dict.)
-                    #     TODO: To update, for each in `groups`:
-                    #       TODO: Pick a random replay-sample, and get a random subsample of its cells.
-                    #         TODO: Name it with `goal_name` already.
-                    #       TODO: Create a one-number CPU tensor to hold the distance, initially `time+100`.
-                    #       TODO: Store the tuple in `goals`.
+                    # Delete/update our `goals`.
+                    for group, (cells, expiration) in goals.copy().items():
+                        if time > expiration:
+                            del goals[group]
+                    for group in groups:
+                        if group not in goals:
+                            goal = random.choice(replay_buffer)
+                            goal = goal[np.random.rand() < (.05+.95*random.random())]
+                            goal = torch.where(goal_name == goal_name, goal_name, goal)
+                            dist = torch.tensor(time+100, device='cpu')
+                            goals[group] = (goal, dist)
 
                     # Give prev-action & next-observation, and sample next action.
                     # TODO: Append `goals` to `frame`. (Also want to remember the cell-indices that these appendages span.)
-                    transition_(frame)
+                    _, dist = transition_(frame)
                     #   TODO: If we've just updated (…kept track of *where* exactly…), do a non-blocking copy of the distance that we've got here into its CPU scalar.
                     #     TODO: `time`, plus ceil of distance when giving the RNN the `frame` and the new goal (luckily, we already have a call like that), and `.mean()` of dists of the newly-generated/updated goal-cells.
                     #     …If we can just do non-blocking copies, and we're computing distances at every step anyway, then can we update the distance each step?…
