@@ -50,15 +50,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Maybe, mine for regret harder: replay-buffer prioritization of max-regret (of `b`: mean/max `dist(a,b) - (j-i)` among `a`) samples for fastest spreading of the influence of discovered largest shortcuts. At unroll, always overwrite the last sample; at replay, sample that plus randoms, and sort by minibatch-regret and write-back that sorted data. (Also good for easily sampling good unroll-time goals, getting more data in most-promising AKA max-regret areas.)
-#   Wouldn't this make the replay buffer not contiguous anymore, though? …Maybe it's fine.
-#   …How would this prioritization be implemented? Do we send the regret to CPU, and when it arrives, sort a few? Or can/should we update RNN states & frames on-GPU?
-#     …Or maybe we can store regret in a CPU-side scalar tensor, initially very high, and do non-blocking copies into it when we touch a sample, and occasionally sort all samples by regret…
-#       (Doesn't this seem reasonable?)
 
 # (…We could also make the distance-network learn not only distance but its own prediction-regret (or maybe regret-per-step), so that goal-generation can maximize (a learned measure of) regret, at least by considering a few goals…)
 #   Is this a good idea?
 #   TODO: Do we maybe want to learn multiple metrics-about learning, such as misprediction? Which, exactly?
+#   TODO: Where would we use learned regret?
 
 # (…Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…)
 #   TODO: Maybe move `minienv` to `env/`, so that we can safely implement as many environments as we want?…
@@ -111,6 +107,9 @@ state_sz, goal_sz = 256, 256
 dist_levels = 2
 bits_per_chunk = 8 # How to `sample`.
 
+replays_per_step = 2
+max_replay_buffer_len = 1024
+
 
 
 # Environments.
@@ -120,30 +119,7 @@ minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000
 
 
 
-class ReplayBuffer:
-    """Stores the in-order sequence of most-recent events. Needs `max_len`. Supports `len(rb)`, `rb.append(data)`, `rb[index]`."""
-    __slots__ = ('buffer', 'head', 'max_len')
-    def __init__(self, max_len):
-        self.buffer, self.head, self.max_len = [], 0, max_len
-    def __len__(self):
-        """How many data-samples are currently contained. Use this to decide the indices to sample at."""
-        return len(self.buffer)
-    def append(self, data):
-        """Appends a data-sample to the replay buffer."""
-        if len(self.buffer) == self.max_len:
-            self.buffer[self.head] = data
-        else:
-            self.buffer.append(data)
-        self.head = (self.head + 1) % self.max_len
-    def __getitem__(self, index):
-        """Returns the sample at the given index. For example, use `random.randrange(len(replay_buffer))`.
-
-        Consecutive indices are guaranteed to be a part of a contiguous sequence."""
-        assert isinstance(index, int)
-        return self.buffer[(self.head + index) % len(self)]
-    def __iter__(self):
-        for i in range(len(self)): yield self[i]
-replay_buffer = ReplayBuffer(1024)
+replay_buffer = []
 
 
 
@@ -266,7 +242,7 @@ transition = nn.Sequential(
 def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance)`."""
     y = transition(x)
-    return y[..., :-dist_levels], y[..., -dist_levels:]
+    return y[..., :-dist_levels], 2 ** y[..., -dist_levels:]
 optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
 
 
@@ -313,7 +289,7 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
 
 def detach(x):
     return fw.unpack_dual(x).primal.detach()
-def loss(prev_ep, frame, dst, timediff):
+def loss(prev_ep, frame, dst, timediff, regret_cpu):
     """`loss(prev_ep, frame, dst, timediff)`
 
     Predicts the `prev_frame`→`frame` transition IF it's closer to the goal than what we can sample.
@@ -338,7 +314,7 @@ def loss(prev_ep, frame, dst, timediff):
         # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
         dst = torch.where(goal_name == goal_name, goal_name, dst)
         frame = torch.cat((dst, frame), 0)
-        is_learned = torch.cat((torch.full((dst.shape[0], 1), True), is_learned), 0)
+        is_learned = torch.cat((torch.full((dst.shape[0], 1), True), is_learned), 0).float()
 
         # What to contrast `frame` with.
         with State.Episode(start_from_initial=False):
@@ -355,17 +331,21 @@ def loss(prev_ep, frame, dst, timediff):
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
         dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
         mask = (dist_is_better | ~sample._act_mask(frame)).float()
-        loss = loss + (is_learned.float() * sample.loss(frame) * mask).sum()
+        loss = loss + (is_learned * sample.loss(frame) * mask).sum()
+
+        # Remember our regret of not being the `frame`. *Only* remember what we regret.
+        regret = (is_learned * (frame_dist[:, -1:] - timediff)).sum() / (is_learned.sum() + 1e-2)
+        regret_cpu.copy_(regret, non_blocking=True)
 
         # Critic regression: `dist = sg timediff`
         #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
         #     (Worst-case, can also try tilted L1 loss.)
         dist_limit = torch.cat((timediff, frame_dist[:, :-1]), -1)
-        loss = loss + (is_learned.float() * (frame_dist - detach(timediff.min(dist_limit))).square()).sum()
+        loss = loss + (is_learned * (frame_dist.log2() - detach(timediff.min(dist_limit)).log2()).square()).sum()
 
         # GAN-like penalization of ungrounded plans.
         dist_penalty = 1.05
-        loss = loss + (is_learned.float() * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum()
+        loss = loss + (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum()
 
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
 
@@ -376,14 +356,22 @@ def replay(optim, current_frame, current_time):
     """Remembers a frame from a distant past, so that the NN can reinforce actions and observations when it needs to go to the present."""
     if len(replay_buffer) < 8: return
 
-    time, ep, frame = random.choice(replay_buffer)
+    for _ in range(replays_per_step):
 
-    # Learn partial ("OR") goals, by omitting some cells.
-    dst_is_picked = np.random.rand() < (.05+.95*random.random())
-    dst = current_frame[dst_is_picked]
+        time, ep, frame, regret = random.choice(replay_buffer)
 
-    loss_fn(ep, frame, dst = dst, timediff = torch.full((dst.shape[0], 1), float(current_time - time)))
+        # Learn partial ("OR") goals, by omitting some cells.
+        dst_is_picked = np.random.rand() < (.05+.95*random.random())
+        dst = current_frame[dst_is_picked]
 
+        loss_fn(ep, frame, dst=dst, timediff = torch.full((dst.shape[0], 1), float(current_time - time)), regret=regret)
+
+        # If our replay buffer gets too big, leave only max-regret samples.
+        if len(replay_buffer) > max_replay_buffer_len:
+            replay_buffer.sort(key = lambda sample: sample[3], reverse=True)
+            del replay_buffer[-(max_replay_buffer_len // 2):]
+
+    # Optimize NN params.
     optim.step();  optim.zero_grad(True)
 
 
@@ -419,6 +407,7 @@ async def main():
                         time,
                         life.clone(remember_on_exit=False),
                         frame[goal_cells],
+                        torch.tensor(1000., device='cpu'),
                     ))
 
                     # Delete/update our `goals` when we think we reached them.
@@ -427,7 +416,7 @@ async def main():
                             del goals[group]
                     for group in groups:
                         if group not in goals:
-                            goal = random.choice(replay_buffer)
+                            goal = random.choice(replay_buffer)[2]
                             goal = goal[np.random.rand() < (.05+.95*random.random())]
                             goal = torch.where(goal_name == goal_name, goal_name, goal)
                             expiration_cpu = torch.tensor(time+10000, device='cpu').int()
@@ -457,6 +446,7 @@ async def main():
                         #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
                         #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
 
+                    # Learn.
                     replay(optim, frame, time)
 
                     time += 1
