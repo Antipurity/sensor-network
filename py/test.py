@@ -55,8 +55,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # (…Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…)
 #   TODO: Maybe move `minienv` to `env/`, so that we can safely implement as many environments as we want?…
 
-# TODO: …Also save/load the model…
-
 # TODO: …May also want to implement importing the modules that the command line has requested, for easy env-switching…
 #   TODO: …Maybe implement & use a copy-task, initially, to test our implementation…
 
@@ -106,6 +104,9 @@ bits_per_chunk = 8 # How to `sample`.
 
 replays_per_step = 2
 max_replay_buffer_len = 1024
+
+save_load = ''
+steps_per_save = 1000
 
 
 
@@ -228,14 +229,18 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
 
 
 
-transition = nn.Sequential(
-    # Input prev-actions and next-observations, output info that `sample` can use and distances.
-    #   We predict the next input, thus serving as both an RL agent and a self-supervised learner.
-    #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
-    h(sum(cell_shape), state_sz),
-    h(state_sz, state_sz),
-    h(state_sz, 2 ** bits_per_chunk + dist_levels + 1),
-)
+try:
+    if not save_load: raise FileNotFoundError()
+    transition = torch.load(save_load)
+except FileNotFoundError:
+    transition = nn.Sequential(
+        # Input prev-actions and next-observations, output info that `sample` can use and distances.
+        #   We predict the next input, thus serving as both an RL agent and a self-supervised learner.
+        #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
+        h(sum(cell_shape), state_sz),
+        h(state_sz, state_sz),
+        h(state_sz, 2 ** bits_per_chunk + dist_levels + 1),
+    )
 def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
     y = transition(x)
@@ -453,5 +458,8 @@ async def main():
 
                     # Learn.
                     replay(optim, frame, time)
+
+                    if save_load and time % steps_per_save == 0:
+                        torch.save(transition, save_load)
 
                     time += 1
