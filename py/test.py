@@ -328,7 +328,7 @@ def loss(prev_ep, frame, dst, timediff):
 
         # Multigroup ("AND") goals, where many threads of experience (with their group IDs) can pursue separate goals.
         #   (The group ID replaces the last name-part.)
-        is_learned = torch.rand(dst.shape[0], 1) < (.1+.9*random.random())
+        is_learned = torch.rand(frame.shape[0], 1) < (.1+.9*random.random())
         dst_group_id = torch.rand(1, cell_shape[-2])*2-1
         src_group_id = torch.where(is_learned, dst_group_id, torch.rand(frame.shape[0], cell_shape[-2]*2-1))
         frame = torch.cat((frame[:, :sum(cell_shape[:-2])], src_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
@@ -338,6 +338,7 @@ def loss(prev_ep, frame, dst, timediff):
         # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
         dst = torch.where(goal_name == goal_name, goal_name, dst)
         frame = torch.cat((dst, frame), 0)
+        is_learned = torch.cat((torch.full((dst.shape[0], 1), True), is_learned), 0)
 
         # What to contrast `frame` with.
         with State.Episode(start_from_initial=False):
@@ -394,7 +395,7 @@ async def main():
             with torch.no_grad():
                 prev_q, action, frame = None, None, None
                 goals = {} # goal_group_id → (gpu_goal_cells, cpu_expiration_time)
-                time = 0
+                time = 0 # Hopefully this doesn't get above 2**31-1.
                 while True:
                     await asyncio.sleep(.05) # TODO: Remove this to go fast.
 
@@ -420,7 +421,7 @@ async def main():
                         frame[goal_cells],
                     ))
 
-                    # Delete/update our `goals`.
+                    # Delete/update our `goals` when we think we reached them.
                     for group, (cells, expiration) in goals.copy().items():
                         if time > expiration:
                             del goals[group]
@@ -429,16 +430,28 @@ async def main():
                             goal = random.choice(replay_buffer)
                             goal = goal[np.random.rand() < (.05+.95*random.random())]
                             goal = torch.where(goal_name == goal_name, goal_name, goal)
-                            dist = torch.tensor(time+100, device='cpu')
-                            goals[group] = (goal, dist)
+                            expiration_cpu = torch.tensor(time+10000, device='cpu').int()
+                            expiration_gpu = torch.tensor(time+10000).int()
+                            goals[group] = (goal, expiration_cpu, expiration_gpu)
 
-                    # Give prev-action & next-observation, and sample next action.
-                    # TODO: Append `goals` to `frame`. (Also want to remember the cell-indices that these appendages span.)
+                    # Give goals to the RNN.
+                    extra_cells = []
+                    for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
+                        extra_cells.append(cells)
+                    if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
+
+                    # Give prev-action & next-observation, remember distance estimates, and sample next action.
                     _, dist = transition_(frame)
-                    #   TODO: If we've just updated (…kept track of *where* exactly…), do a non-blocking copy of the distance that we've got here into its CPU scalar.
-                    #     TODO: `time`, plus ceil of distance when giving the RNN the `frame` and the new goal (luckily, we already have a call like that), and `.mean()` of dists of the newly-generated/updated goal-cells.
-                    #     …If we can just do non-blocking copies, and we're computing distances at every step anyway, then can we update the distance each step?…
-                    #       Would this be related to mining for regret, as in, if we've improved more than we thought we would, then we abandon the search quicker (via min of all predictions)?… Not sure about regret, but it *might* be a good idea anyway…
+                    n = 0
+                    for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
+                        # (If we do better than expected, we leave early.)
+                        if cells.shape[0] > 0:
+                            group_dist = (time + dist.detach()[n : n+cells.shape[0], -1].mean() + 1).int().min(expiration_gpu)
+                            expiration_cpu.copy_(group_dist, non_blocking=True)
+                            expiration_gpu.copy_(group_dist)
+                        else:
+                            expiration_cpu[:] = 0
+                        n += cells.shape[0]
                     with State.Episode(start_from_initial=False):
                         action = sample(query)
                         #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
