@@ -53,9 +53,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # (…Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…)
-#   TODO: Maybe move `minienv` to `env/`, so that we can safely implement as many environments as we want?…
 
 # TODO: …May also want to implement importing the modules that the command line has requested, for easy env-switching…
+#   Just pass us the name of a folder/file in `env/`, right? We'll import it and call a reset function in it if needed…
 #   TODO: …Maybe implement & use a copy-task, initially, to test our implementation…
 
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
@@ -111,9 +111,9 @@ steps_per_save = 1000
 
 
 # Environments.
-import minienv
-minienv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
-#   TODO: Should at least make `minienv` work not globally but in a class.
+import env.graphenv as graphenv
+graphenv.reset(can_reset_the_world = False, allow_suicide = False, max_nodes=1000)
+#   TODO: Make `minienv` work not globally but in a class.
 
 
 
