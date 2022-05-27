@@ -59,6 +59,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Implement and try solving a copy-task in `env/copy.py`, to test our implementation.
 #   TODO: Make `sn.sensors` be able to be async, in which case they're launched in parallel (never blocking).
 #   TODO: Have a func-decorator in `sn` (…`Namer`?…), which makes all calls to the func (both sync and async) transform the names with the specified function.
+#     …But how would it carry the info across async calls? Can't just build up a stack in global variables, since we can have many async threads like this…
+#       Should we demand callbacks after all (and no `sn` interaction within them)?
+#     (A single class should be able to serve as both a context manager and a decorator, probably.)
 #     TODO: Here, use that decorator when creating envs, so that they themselves don't have to differentiate from each other (allocate consistent group IDs for them), nor do complicated things to specify their own goals.
 #   TODO: Also have per-env `.metrics()`, and `log` them at each step.
 

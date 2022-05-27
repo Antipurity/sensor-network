@@ -69,12 +69,12 @@ class Handler:
     ```python
     Handler().shape(8,8,8, 64)
     Handler(8,8,8, 64)
-    Handler(*cell_shape, sensors=None, listeners=None, backend=numpy)
+    Handler(*cell_shape, sensors=None, listeners=None, backend=numpy, namer_cache_size=1024)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
 
-    All data is split into fixed-size cells, each of which has a numeric name and a part of data. Handlers (AI models) should be position-invariant.
+    All data is split into fixed-size cells, each of which has numeric name parts (`cell_shape[:-1]`) and data (`cell_shape[-1]`). Handlers (AI models) should be position-invariant.
 
     Inputs:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
@@ -84,7 +84,7 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, sensors=None, listeners=None, backend=np):
+    def __init__(self, *cell_shape, sensors=None, listeners=None, backend=np, namer_cache_size=1024):
         self._query_cell = 0
         self._data = []
         self._query = []
@@ -93,6 +93,7 @@ class Handler:
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self._wait_for_requests = None # asyncio.Future()
+        self._namers_cache = {}
         x = sensors if sensors is not None else []
         self.sensors = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
         x = listeners if listeners is not None else []
@@ -100,6 +101,7 @@ class Handler:
         self.cell_shape = ()
         self.cell_size = 0
         self.backend = backend
+        self.namer_cache_size = namer_cache_size
         if len(cell_shape):
             self.shape(*cell_shape)
     def shape(self, *cell_shape):
@@ -121,20 +123,29 @@ class Handler:
         Sends named data to the handler. Receives nothing; see `.query`.
 
         Args:
-        - `name`, such as `('image', .25, .5)` or `Namer('image', .25, .5)`:
-            - If a tuple/list of strings and `None`/`...` and tuples of either -1…1 numbers or functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, then `name` is converted to a `Namer`.
-            - If a `Namer`, it is used.
-            - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
+        - `name`, such as `('image', .25, .5)`:
+            - If a string, or a tuple/list of strings or per-part tuples, then it's used to turn the 1D data array into a 2D array.
+            - If `None`, `data` & `error` must already incorporate the name and be sized `cells×sum(cell_shape)`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
         - `data`: a list, or a NumPy 1D array of numbers, preferably -1…1.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
+
+        More details on names:
+        - A string: MD5-hashed, and the resulting 16 bytes are put into one part, sliced, and shifted and rescaled to -1…1.
+        - `None` or `...`: anything goes here (zeros when naming).
+        - A tuple:
+            - A number, -1…1: put into a part directly.
+            - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
+                - For example, `lambda start, end, total: start/total*2-1` puts a number, from -1 (inclusive) to 1 (exclusive).
+                - For example, `lambda start, end, total: end / total*2-1` puts a number, from -1 (exclusive) to 1 (inclusive).
+                - (Good idea to always include at least something dynamic, unless data only occupies one cell.)
         """
         np = self.backend
-        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name, backend=np)
-        elif isinstance(name, str): name = Namer(name, backend=np)
+        if isinstance(name, tuple) or isinstance(name, list): name = self._namer(name)
+        elif isinstance(name, str): name = self._namer((name,))
         if isinstance(error, float): error = np.full_like(data, error)
         if isinstance(data, list): data = np.array(data, dtype=np.float32)
 
-        assert name is None or isinstance(name, Namer)
+        assert name is None or isinstance(name, _Namer)
         assert isinstance(data, np.ndarray)
         assert error is None or isinstance(error, np.ndarray) and data.shape == error.shape
 
@@ -168,11 +179,11 @@ class Handler:
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         """
         np = self.backend
-        if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name, backend=np)
-        elif isinstance(name, str): name = Namer(name, backend=np)
+        if isinstance(name, tuple) or isinstance(name, list): name = self._namer(name)
+        elif isinstance(name, str): name = self._namer((name,))
         if callback is None: callback = asyncio.Future()
 
-        assert name is None or isinstance(name, Namer)
+        assert name is None or isinstance(name, _Namer)
         assert isinstance(query, np.ndarray) if name is None else (isinstance(query, int) or isinstance(query, tuple))
         assert isinstance(callback, asyncio.Future) or callable(callback)
 
@@ -341,32 +352,23 @@ class Handler:
                         break
                     await asyncio.sleep(.003)
         return self._take_data()
+    def _namer(self, name):
+        hash, cache = _name_hash(name), self._namers_cache
+        if hash not in cache:
+            cache[hash] = _Namer(*name, backend=self.backend)
+        if len(cache) > self.namer_cache_size: # pragma: no cover
+            cache.popitem()
+        return cache[hash]
 
 
 
-class Namer:
+class _Namer:
     """
-    `Namer(*name, backend=numpy)`
+    `_Namer(*name, backend=numpy)`
 
-    An optimization opportunity: wrapping a name in this and reusing this object is faster than passing the name tuple directly to `handler.send(name=...)` (which re-constructs this object each time).
-
-    This class is an allocator of 1D arrays onto 2D named cells.
+    The allocator of 1D arrays onto 2D named cells.
 
     ---
-
-    To achieve position-invariance of `handler.send`, data cells need names.
-
-    Naming data first flattens then transforms it into a 2D array, sized `cells×sum(cell_shape)`.
-
-    Numeric names are split into fixed-size *parts*. `cell_shape[:-1]` is where `Namer` puts its parts, so ensure that `cell_shape` has space for a few. Each part can be:
-    - A string: MD5-hashed, and the resulting 16 bytes are put into one part, shifted and rescaled to -1…1.
-    - `None` or `...`: anything goes here.
-    - A tuple:
-        - A number, -1…1: put into a part directly.
-        - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
-            - For example, `lambda start, end, total: start/total*2-1` puts a number, from -1 (inclusive) to 1 (exclusive).
-            - For example, `lambda start, end, total: end / total*2-1` puts a number, from -1 (exclusive) to 1 (inclusive).
-            - (Good idea to always include at least something dynamic, unless data only occupies one cell.)
 
     Neural networks are good at classification but are poor at regression. So numbers are repeatedly folded via `x → 1 - 2*abs(x)` until a part has no free space, to increase AI-model sensitivity. Handlers can also un/fold or apply I/FFT if needed.
     """
@@ -612,6 +614,15 @@ def _name_template(name, cell_shape, np):
             raise TypeError("Names must consist of strings, `None`/`...`, and tuples of either numbers or number-returning functions")
         at += sz
     return template, func_indices, tuple(part_sizes)
+def _name_hash(name):
+    if callable(name): return id(name)
+    if not isinstance(name, tuple) and not isinstance(name, list): return name
+    result = name
+    for i in range(len(name)):
+        v1, v2 = name[i], _name_hash(name[i])
+        if result is name and v1 is not v2: result = list(name)
+        if v1 is not v2: result[i] = v2
+    return tuple(result)
 
 
 

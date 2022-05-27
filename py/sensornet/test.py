@@ -146,7 +146,7 @@ def test8():
     sn.shape(8,8,8,8, 64)
     assert sn.cell_shape == (8,8,8,8, 64)
     assert sn.cell_size == 96
-    name = sn.Namer('test')
+    name = ('test',)
     n = 0
     finished = 0
     async def request_data(h, maybe=False):
@@ -258,7 +258,7 @@ async def benchmark(N=64*10):
     randn_src = h.backend.random if not hasattr(h.backend, 'randn') else h.backend
     send_data = randn_src.randn(N)
     start, duration = time.monotonic(), 10.
-    name = sn.Namer('benchmark', backend=h.backend)
+    name = ('benchmark',)
     while time.monotonic() - start < duration:
         h.data(name, data=send_data)
         # asyncio.ensure_future(await_feedback(h.query(name, 64))) # 15% slowdown.
