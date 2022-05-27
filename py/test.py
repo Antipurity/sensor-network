@@ -27,7 +27,7 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env(sensornet)`.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)`.)
 
 
 
@@ -56,8 +56,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Implement and try solving a copy-task, to test our implementation.
-#   TODO: `env/copy.py`, `Env(sn)` class: every step: 5% to observe an important bit, 90% to observe rubbish, 5% to ask for the last important bit and then give either "NO" or "OK".
+# TODO: Implement and try solving a copy-task in `env/copy.py`, to test our implementation.
+#   TODO: Make `sn.sensors` be able to be async, in which case they're launched in parallel (never blocking).
+#   TODO: Have a func-decorator in `sn` (…`Namer`?…), which makes all calls to the func (both sync and async) transform the names with the specified function.
+#     TODO: Here, use that decorator when creating envs, so that they themselves don't have to differentiate from each other (allocate consistent group IDs for them), nor do complicated things to specify their own goals.
+#   TODO: Also have per-env `.metrics()`, and `log` them at each step.
 
 # TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
 
@@ -121,7 +124,7 @@ import importlib
 envs = ['graphenv'] if len(sys.argv) < 2 else sys.argv[1:]
 for env in envs:
     mod = importlib.import_module('env.' + env)
-    if hasattr(mod, 'Env'): mod.Env(sn)
+    if hasattr(mod, 'Env'): sn.sensors.append(mod.Env())
 
 
 

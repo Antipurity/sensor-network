@@ -50,7 +50,7 @@ def test0():
     """No shape, so no handling."""
     h = sn.Handler()
     assert h.handle(None, None)[0].shape == (0,0)
-    h.data('a', data=np.array([1.]))
+    h.data('a', data=[1.])
     h.query('b', query=1, callback=lambda fb: ...)
     h.query('c', query=1)
     assert h.handle(None, None)[0].shape == (0,0)
@@ -241,6 +241,7 @@ async def test13():
     h.data(name=('this one', 'does not match'), data=np.array([.1, .2, .5]))
     data, query, data_error, query_error = await h.handle()
     assert good.b
+    assert sn.Filter((None, 'this one'))(data, cell_shape=h.cell_shape).sum() == 1
     h.listeners[0](data, data_error, h.cell_shape)
 print('Tests OK')
 

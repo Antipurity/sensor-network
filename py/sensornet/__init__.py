@@ -82,7 +82,7 @@ class Handler:
     - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
     - `backend`: the NumPy object.
 
-    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/write `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
     def __init__(self, *cell_shape, sensors=None, listeners=None, backend=np):
         self._query_cell = 0
@@ -125,13 +125,14 @@ class Handler:
             - If a tuple/list of strings and `None`/`...` and tuples of either -1…1 numbers or functions to -1…1 numbers from start-number & end-number & total-numbers NumPy arrays, then `name` is converted to a `Namer`.
             - If a `Namer`, it is used.
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×cell_size`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
-        - `data`: a NumPy array of numbers, preferably -1…1.
+        - `data`: a list, or a NumPy 1D array of numbers, preferably -1…1.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
         """
         np = self.backend
         if isinstance(name, tuple) or isinstance(name, list): name = Namer(*name, backend=np)
         elif isinstance(name, str): name = Namer(name, backend=np)
         if isinstance(error, float): error = np.full_like(data, error)
+        if isinstance(data, list): data = np.array(data, dtype=np.float32)
 
         assert name is None or isinstance(name, Namer)
         assert isinstance(data, np.ndarray)
@@ -446,7 +447,7 @@ class Filter:
     - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
     If needed for manually naming cells, `fltr.template(cell_shape)` is a 1D NumPy array with `nan`s for `None`s and numbers for name-parts."""
-    def __init__(self, name, func, backend=np):
+    def __init__(self, name, func = None, backend=np):
         assert func is None or callable(func)
         self.name = name
         self.func = func
@@ -454,6 +455,7 @@ class Filter:
         self.templ = None
         self.backend = backend
     def __call__(self, data, error=None, cell_shape=()):
+        assert len(cell_shape), 'Specify the cell-shape too'
         np = self.backend
         # Match.
         template = self.template(cell_shape)
