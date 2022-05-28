@@ -284,7 +284,7 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
     sz = 0
     for mod in model.modules():
         responsibility.append((mod, []))
-        for name, param in mod.named_parameters(recursive=False):
+        for name, param in mod.named_parameters(recurse=False):
             responsibility[-1].append((name, param))
             sz += param.numel()
     def loss_wrapper(*args, **kwargs):
