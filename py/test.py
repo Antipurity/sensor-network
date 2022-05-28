@@ -27,7 +27,7 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks and `'goal'` at the end for constraint-specification.)
 
 
 
@@ -57,7 +57,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Implement and try solving a copy-task in `env/copy.py`, to test our implementation.
-#   TODO: Here, use a decorator that makes `modify_name` know the env's name when creating envs (error if not in a sensor's context, else set that as the last spot, and if the last elem is `'goal'`, put it in the -2nd spot instead), so that they themselves don't have to differentiate from each other (allocate consistent group IDs for them), nor do complicated things to specify their own goals.
 #   TODO: Also have per-env `.metrics()`, and `log` them at each step.
 
 # TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
@@ -119,10 +118,28 @@ steps_per_save = 1000
 # Environments, from the command line.
 import sys
 import importlib
-envs = ['graphenv'] if len(sys.argv) < 2 else sys.argv[1:]
-for env in envs:
-    mod = importlib.import_module('env.' + env)
-    if hasattr(mod, 'Env'): sn.sensors.append(mod.Env())
+def prepare_env(path):
+    mod = importlib.import_module('env.' + path)
+    assert hasattr(mod, 'Env')
+    sensor = mod.Env()
+    def sensor_with_name(*a, **kw):
+        try:
+            modify_name.ctx = path
+            return sensor(*a, **kw)
+        finally:
+            modify_name.ctx = None
+    sn.sensors.append(sensor_with_name)
+    return mod
+def modify_name(name):
+    assert modify_name.ctx is not None, "Sending data not in an env's sensor; don't send it in callbacks of queries, instead remember to send it on the next step"
+    res = [name[i] if i < len(name) else None for i in range(len(cell_shape) - 1)]
+    res[-1] = modify_name.ctx
+    if name[-1] == 'goal':
+        res[len(name) - 1] = None
+        res[-2] = 'goal'
+    return res
+sn.modify_name = modify_name
+envs = [prepare_env('graphenv')] if len(sys.argv) < 2 else [prepare_env(e) for e in sys.argv[1:]]
 
 
 
