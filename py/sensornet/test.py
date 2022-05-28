@@ -243,6 +243,13 @@ async def test13():
     assert good.b
     assert sn.Filter((None, 'this one'))(data, cell_shape=h.cell_shape).sum() == 1
     h.listeners[0](data, data_error, h.cell_shape)
+@sn.run
+async def test14():
+    """Modifying names."""
+    h = sn.Handler(8,8,8,8, 64, modify_name = lambda name: ('z',))
+    h.data(name='btgrnonets', data=[1., 2.])
+    data, query, data_error, query_error = await h.handle()
+    assert sn.Filter(('z',))(data, cell_shape=h.cell_shape).sum() == 1
 print('Tests OK')
 
 

@@ -57,8 +57,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Implement and try solving a copy-task in `env/copy.py`, to test our implementation.
-#   TODO: Make `Handler` have the `modify_name=None` param, which is called whenever a Namer is fetched (`self._namer(name)`).
-#     TODO: Here, use a decorator that makes `modify_name` know the env's name when creating envs (error if not in a sensor's context, else set that as the last spot, and if the last elem is `'goal'`, put it in the -2nd spot instead), so that they themselves don't have to differentiate from each other (allocate consistent group IDs for them), nor do complicated things to specify their own goals.
+#   TODO: Here, use a decorator that makes `modify_name` know the env's name when creating envs (error if not in a sensor's context, else set that as the last spot, and if the last elem is `'goal'`, put it in the -2nd spot instead), so that they themselves don't have to differentiate from each other (allocate consistent group IDs for them), nor do complicated things to specify their own goals.
 #   TODO: Also have per-env `.metrics()`, and `log` them at each step.
 
 # TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…

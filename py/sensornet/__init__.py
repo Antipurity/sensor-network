@@ -69,7 +69,7 @@ class Handler:
     ```python
     Handler().shape(8,8,8, 64)
     Handler(8,8,8, 64)
-    Handler(*cell_shape, sensors=None, listeners=None, backend=numpy, namer_cache_size=1024)
+    Handler(*cell_shape, sensors=None, listeners=None, backend=numpy, namer_cache_size=1024, modify_name=None)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -81,10 +81,13 @@ class Handler:
     - `sensors`: function/s that take this handler, to prepare data to handle.
     - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
     - `backend`: the NumPy object.
+    - `namer_cache_size`: info that is associated with names is cached for speed.
+    - `modify_name`: a func from name to name, with singular strings already wrapped in a one-item tuple.
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, sensors=None, listeners=None, backend=np, namer_cache_size=1024):
+    def __init__(self, *cell_shape, sensors=None, listeners=None, backend=np, namer_cache_size=1024, modify_name=None):
+        assert modify_name is None or callable(modify_name)
         self._query_cell = 0
         self._data = []
         self._query = []
@@ -102,6 +105,7 @@ class Handler:
         self.cell_size = 0
         self.backend = backend
         self.namer_cache_size = namer_cache_size
+        self.modify_name = modify_name
         if len(cell_shape):
             self.shape(*cell_shape)
     def shape(self, *cell_shape):
@@ -142,10 +146,10 @@ class Handler:
         np = self.backend
         if isinstance(name, tuple) or isinstance(name, list): name = self._namer(name)
         elif isinstance(name, str): name = self._namer((name,))
+        else: assert name is None
         if isinstance(error, float): error = np.full_like(data, error)
         if isinstance(data, list): data = np.array(data, dtype=np.float32)
 
-        assert name is None or isinstance(name, _Namer)
         assert isinstance(data, np.ndarray)
         assert error is None or isinstance(error, np.ndarray) and data.shape == error.shape
 
@@ -181,9 +185,9 @@ class Handler:
         np = self.backend
         if isinstance(name, tuple) or isinstance(name, list): name = self._namer(name)
         elif isinstance(name, str): name = self._namer((name,))
+        else: assert name is None
         if callback is None: callback = asyncio.Future()
 
-        assert name is None or isinstance(name, _Namer)
         assert isinstance(query, np.ndarray) if name is None else (isinstance(query, int) or isinstance(query, tuple))
         assert isinstance(callback, asyncio.Future) or callable(callback)
 
@@ -353,6 +357,8 @@ class Handler:
                     await asyncio.sleep(.003)
         return self._take_data()
     def _namer(self, name):
+        if self.modify_name is not None:
+            name = self.modify_name(name)
         hash, cache = _name_hash(name), self._namers_cache
         if hash not in cache:
             cache[hash] = _Namer(*name, backend=self.backend)
