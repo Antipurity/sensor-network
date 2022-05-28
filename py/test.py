@@ -283,7 +283,7 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
     responsibility = []
     sz = 0
     for mod in model.modules():
-        responsibility.append(mod, [])
+        responsibility.append((mod, []))
         for name, param in mod.named_parameters(recursive=False):
             responsibility[-1].append((name, param))
             sz += param.numel()
