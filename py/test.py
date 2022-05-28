@@ -27,7 +27,7 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks and `'goal'` at the end for constraint-specification.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks and `'goal'` at the end for constraint-specification and `.metric()` for logging a dict.)
 
 
 
@@ -56,8 +56,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Implement and try solving a copy-task in `env/copy.py`, to test our implementation.
-#   TODO: Also have per-env `.metrics()`, and `log` them at each step.
+# TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
 
 # TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
 
@@ -378,6 +377,11 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
         log(1, False, torch, predict_loss=predict_loss, regret_loss=regret_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss)
+        n = 2
+        for env in envs:
+            if hasattr(env, 'metric'):
+                log(n, False, torch, **env.metric())
+                n += 1
 
         loss = predict_loss + regret_loss + dist_loss + ungrounded_dist_loss
         return loss
