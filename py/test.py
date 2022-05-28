@@ -34,9 +34,14 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: …Should we make `DST` RNN-state-space in our impl too, and to bridge from obs-space to state-space, have a NN from obs to RNN-state, possibly just a single episode of the main NN with just the desired-obs inputted?
 #   TODO: But how would this model partial goals, AKA "we don't care about any of the other cells"? Can the RNN-state even do that?
+#     Actually, if we have per-cell goal-embeddings, then we could condition only on some.
 #   TODO: Since RNN state is unwieldy to actually condition on, should we learn a separate cell type just for goals, outputted by the main RNN per-cell? How is it learned, exactly? …Need to store the unroll's goal-cells in the replay-buffer, so that we can use them as `dst`s…
 #     …But if it's per-cell, then could it really be called RNN state?
 #     …If it's a form of self-supervised learning, then what is reinforced here?
+#       Need a latent (what to condition the generator on), and latent-conditioned prediction (as in VAE), and the distance could be the sum of L2 distances in latent space… (http://proceedings.mlr.press/v100/nair20a/nair20a.pdf)
+#         For non-replay-buffer goal-sampling, must be able to sample from the latent space.
+#           …Can it be binary, and sampled like an action?
+#             For this, would we duplicate cells (under a different name)? Our discrete sampling *kinda* breaks the differentiability chain of VAEs, though self-imitation may reinforce the sampled actions anyway… It's kinda the same, so, maybe?
 
 
 
@@ -285,7 +290,7 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
     for mod in model.modules():
         responsibility.append((mod, []))
         for name, param in mod.named_parameters(recurse=False):
-            responsibility[-1].append((name, param))
+            responsibility[-1][1].append((name, param))
             sz += param.numel()
     def loss_wrapper(*args, **kwargs):
         direction = direction_fn(sz)
