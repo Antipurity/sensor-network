@@ -2,7 +2,7 @@ import random
 
 
 
-name = 'trivial_copy_task'
+name = 'trivial_copy_task' # TODO: Don't need this.
 
 
 

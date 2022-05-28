@@ -27,7 +27,7 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)`.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks.)
 
 
 
@@ -57,12 +57,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Implement and try solving a copy-task in `env/copy.py`, to test our implementation.
-#   TODO: Make `sn.sensors` be able to be async, in which case they're launched in parallel (never blocking).
-#   TODO: Have a func-decorator in `sn` (…`Namer`?…), which makes all calls to the func (both sync and async) transform the names with the specified function.
-#     …But how would it carry the info across async calls? Can't just build up a stack in global variables, since we can have many async threads like this…
-#       Should we demand callbacks after all (and no `sn` interaction within them)?
-#     (A single class should be able to serve as both a context manager and a decorator, probably.)
-#     TODO: Here, use that decorator when creating envs, so that they themselves don't have to differentiate from each other (allocate consistent group IDs for them), nor do complicated things to specify their own goals.
+#   TODO: Make `Handler` have the `modify_name=None` param, which is called whenever a Namer is fetched (`self._namer(name)`).
+#     TODO: Here, use a decorator that makes `modify_name` know the env's name when creating envs (error if not in a sensor's context, else set that as the last spot, and if the last elem is `'goal'`, put it in the -2nd spot instead), so that they themselves don't have to differentiate from each other (allocate consistent group IDs for them), nor do complicated things to specify their own goals.
 #   TODO: Also have per-env `.metrics()`, and `log` them at each step.
 
 # TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
@@ -415,11 +411,11 @@ async def main():
                     #   (If getting out-of-memory, might want to chunk data/query processing.)
 
                     # (The replay buffer won't want to know any user-specified goals.)
-                    #   (And to set goals that the env hasn't set, we need to know goal-group IDs.)
+                    #   (And fetch goal-group IDs to add constraints for exploration, even if the env has set some goals.)
                     frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
                     goal_cells = goal_filter(frame_names, cell_shape=cell_shape)
                     prev_q = query
-                    groups = goal_group_ids(frame_names) - goal_group_ids(frame_names[goal_cells])
+                    groups = goal_group_ids(frame_names)
 
                     # Zero-pad `query` to be action-sized.
                     obs, query = torch.tensor(obs), torch.tensor(query)
