@@ -418,7 +418,7 @@ def replay(optim, current_frame, current_time):
 
 @sn.run
 async def main():
-    with State.Setter(lambda initial, current: initial*.001 + .999*current): # Soft-reset.
+    with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
         with State.Episode() as life:
             with torch.no_grad():
                 prev_q, action, frame = None, None, None
@@ -456,7 +456,6 @@ async def main():
                     for group, (cells, expiration) in goals.copy().items():
                         if time > expiration:
                             del goals[group]
-                    print(groups) # TODO: …Wait, why is it 0s anyway? Aren't we supposed to be putting `'copy'` in the copy-env's group ID?
                     for group in groups:
                         if group not in goals:
                             goal = random.choice(replay_buffer)[2]
