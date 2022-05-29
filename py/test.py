@@ -195,10 +195,8 @@ class Sampler:
 
         (No non-action-cell sampling AKA L2-prediction here, since we won't use that. Though in theory, could use the outcome-averaged approximation, and complicate the interface by having a per-cell bitmask of whether it's an action.)"""
         with torch.no_grad():
-            print('query', query) # TODO: It's a tensor…
-            print('query unpack_dual', fw.unpack_dual(query)) # TODO: It's a tensor…
-            query = detach(query).clone() # TODO: Why can't we detach the `query`?
-            #   No forward-derivative either, and prepare to write to `query` in-place.
+            query = detach(query).clone() # (No forward-derivative, and prepare to overwrite it in-place.)
+
             i = self.start
             while i < query.shape[-1]:
                 j = min(query.shape[-1], i + bits_per_chunk)
@@ -305,12 +303,12 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
                 setattr(mod, name, fw.make_dual(param, tangent))
                 n += param.numel()
         loss = loss_fn(*args, **kwargs)
-        loss_tangent = fw.unpack_dual(loss).tangent
+        _, loss_tangent = fw.unpack_dual(loss)
         # Approximate the gradient by multiplying forward-gradient by the `loss_tangent` number.
         for mod, ps in responsibility:
             for name, param in ps:
-                d = fw.unpack_dual(getattr(mod, name))
-                grad = d.tangent * loss_tangent
+                _, d = fw.unpack_dual(getattr(mod, name))
+                grad = d * loss_tangent
                 param.grad = grad if param.grad is None else param.grad + grad
                 delattr(mod, name)
                 setattr(mod, name, param)
@@ -319,7 +317,7 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
 
 
 def detach(x):
-    return fw.unpack_dual(x).primal.detach()
+    return fw.unpack_dual(x)[0].detach()
 def loss(prev_ep, frame, dst, timediff, regret_cpu):
     """`loss(prev_ep, frame, dst, timediff)`
 
