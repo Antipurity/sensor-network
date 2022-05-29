@@ -246,7 +246,7 @@ async def test13():
 @sn.run
 async def test14():
     """Modifying names."""
-    h = sn.Handler(8,8,8,8, 64, modify_name = lambda name: ('z',))
+    h = sn.Handler(8,8,8,8, 64, modify_name = [lambda name: ('z',)])
     h.data(name='btgrnonets', data=[1., 2.])
     data, query, data_error, query_error = await h.handle()
     assert sn.Filter(('z',))(data, cell_shape=h.cell_shape).sum() == 1

@@ -138,7 +138,7 @@ def modify_name(name):
         res[len(name) - 1] = None
         res[-2] = 'goal'
     return res
-sn.modify_name = modify_name
+sn.modify_name.append(modify_name)
 envs = [prepare_env('graphenv')] if len(sys.argv) < 2 else [prepare_env(e) for e in sys.argv[1:]]
 
 

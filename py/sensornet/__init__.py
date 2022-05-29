@@ -19,8 +19,7 @@ import numpy as np
 
 h = sn.Handler(8,8,8,8, 64) # First name-parts, then data, in a cell.
 # OR, simply use the global `sn` as if it's a handler:
-sn.shape(8,8,8,8, 64)
-h = sn
+h = sn.shape(8,8,8,8, 64)
 ```
 
 Then send/receive data:
@@ -80,14 +79,16 @@ class Handler:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
     - `sensors`: function/s that take this handler, to prepare data to handle.
     - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
+    - `modify_name`: a list of funcs from name to name, with singular strings already wrapped in a one-item tuple.
     - `backend`: the NumPy object.
     - `namer_cache_size`: info that is associated with names is cached for speed.
-    - `modify_name`: a func from name to name, with singular strings already wrapped in a one-item tuple.
 
-    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, sensors=None, listeners=None, backend=np, namer_cache_size=1024, modify_name=None):
-        assert modify_name is None or callable(modify_name)
+    def __init__(self, *cell_shape, sensors=None, listeners=None, modify_name=None, backend=np, namer_cache_size=1024):
+        assert sensors is None or isinstance(sensors, list)
+        assert listeners is None or isinstance(listeners, list)
+        assert modify_name is None or isinstance(modify_name, list)
         self._query_cell = 0
         self._data = []
         self._query = []
@@ -105,13 +106,15 @@ class Handler:
         self.cell_size = 0
         self.backend = backend
         self.namer_cache_size = namer_cache_size
-        self.modify_name = modify_name
+        self.modify_name = modify_name if modify_name is not None else []
         if len(cell_shape):
             self.shape(*cell_shape)
     def shape(self, *cell_shape):
         """`sn.shape(*cell_shape)`
 
-        Changes the current shape, where the last number is data, the rest split the name into parts. Safe to call whenever."""
+        Changes the current shape, where the last number is data, the rest split the name into parts. Safe to call whenever.
+
+        Returns the `sn` handler for convenience."""
         _shape_ok(cell_shape)
         if self.cell_shape == cell_shape:
             return self
@@ -357,8 +360,8 @@ class Handler:
                     await asyncio.sleep(.003)
         return self._take_data()
     def _namer(self, name):
-        if self.modify_name is not None:
-            name = self.modify_name(name)
+        for fn in self.modify_name:
+            name = fn(name)
         hash, cache = _name_hash(name), self._namers_cache
         if hash not in cache:
             cache[hash] = _Namer(*name, backend=self.backend)
@@ -668,31 +671,19 @@ def run(fn, *args, **kwargs):
 
 default = Handler()
 sensors = default.sensors
+listeners = default.listeners
+modify_name = default.modify_name
 cell_shape, cell_size = default.cell_shape, default.cell_size
 def shape(*k, **kw):
     global cell_shape, cell_size
     r = default.shape(*k, **kw)
     cell_shape, cell_size = default.cell_shape, default.cell_size
     return r
-def data(*k, **kw):
-    return default.data(*k, **kw)
-def query(*k, **kw):
-    return default.query(*k, **kw)
-def pipe(*k, **kw):
-    return default.pipe(*k, **kw)
-def get(*k, **kw):
-    return default.get(*k, **kw)
-def handle(*k, **kw):
-    return default.handle(*k, **kw)
-def commit():
-    return default.commit()
-def discard():
-    return default.discard()
 shape.__doc__ = Handler.shape.__doc__
-data.__doc__ = Handler.data.__doc__
-query.__doc__ = Handler.query.__doc__
-pipe.__doc__ = Handler.pipe.__doc__
-get.__doc__ = Handler.get.__doc__
-handle.__doc__ = Handler.handle.__doc__
-commit.__doc__ = Handler.commit.__doc__
-discard.__doc__ = Handler.discard.__doc__
+data = default.data
+query = default.query
+pipe = default.pipe
+get = default.get
+handle = default.handle
+commit = default.commit
+discard = default.discard

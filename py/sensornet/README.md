@@ -30,8 +30,7 @@ import numpy as np
 
 h = sn.Handler(8,8,8,8, 64) # First name-parts, then data, in a cell.
 # OR, simply use the global `sn` as if it's a handler:
-sn.shape(8,8,8,8, 64)
-h = sn
+h = sn.shape(8,8,8,8, 64)
 ```
 
 Then send/receive data:
