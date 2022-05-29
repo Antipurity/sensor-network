@@ -32,20 +32,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Should we make `DST` RNN-state-space in our impl too, and to bridge from obs-space to state-space, have a NN from obs to RNN-state, possibly just a single episode of the main NN with just the desired-obs inputted?
-#   TODO: But how would this model partial goals, AKA "we don't care about any of the other cells"? Can the RNN-state even do that?
-#     Actually, if we have per-cell goal-embeddings, then we could condition only on some.
-#   TODO: Since RNN state is unwieldy to actually condition on, should we learn a separate cell type just for goals, outputted by the main RNN per-cell? How is it learned, exactly? …Need to store the unroll's goal-cells in the replay-buffer, so that we can use them as `dst`s…
-#     …But if it's per-cell, then could it really be called RNN state?
-#     …If it's a form of self-supervised learning, then what is reinforced here?
-#       Need a latent (what to condition the generator on), and latent-conditioned prediction (as in VAE), and the distance could be the sum of L2 distances in latent space… (http://proceedings.mlr.press/v100/nair20a/nair20a.pdf)
-#         For non-replay-buffer goal-sampling, must be able to sample from the latent space.
-#           …Can it be binary, and sampled like an action?
-#             For this, would we duplicate cells (under a different name)? Our discrete sampling *kinda* breaks the differentiability chain of VAEs, though self-imitation may reinforce the sampled actions anyway… It's kinda the same, so, maybe?
-
-
-
-
 
 
 
@@ -65,11 +51,21 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
 
-# TODO: Make `minienv` work not globally but in a class.
+# TODO: Make `graphenv` work not globally but in a class.
 
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 #   TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
-#     Maybe even fully turn `sn` over to discrete actions, and only ever have 1 NN call per step, demanding that envs adapt instead…
+
+
+
+# TODO: Make goals the full-RNN-states (latents), not the inputs, like in http://proceedings.mlr.press/v100/nair20a/nair20a.pdf but with discrete-sampling instead of CC-VAEs:
+#   TODO: Alloc SRC `'-goal-src-state-'` and DST `'-goal-dst-state-'` for personal use. (Maybe make `modify_name` assert that these are unused.) (The current `'goal'` could probably act as SRC.)
+#   TODO: On unroll, in a throwaway episode, rename the frame to DST and sample and put the result into the replay buffer.
+#   TODO: On unroll, to pick a goal, fetch some random subset of cells from the replay buffer, rename to SRC and 0-fill their values, and in a throwaway episode, sample (possibly for all goal-groups at once) and set as the goal.
+#   TODO: On replay, select random subsets (to support partial goals) of faraway latents as destinations, not of inputs.
+#     TODO: Have a 50/50 chance to select either faraway-latents or inputs as dst, so that we don't lose the ability for envs to specify goals.
+#   TODO: On replay, in a throwaway episode, self-imitate (if regret is positive, max the sample-probability of) faraway-dst's SRC-cells given DST-renamed and 0-filled versions of them.
+#     TODO: Also, there, self-imitate random subsets of SRC-renamed frames given their cell-name-only versions.
 
 
 
@@ -446,12 +442,14 @@ async def main():
                     obs, query = torch.tensor(obs), torch.tensor(query)
                     query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
                     frame = torch.cat((action, obs), 0) if action is not None else obs
+                    print('frame', frame.shape) # TODO:
 
                     # Append prev-RNN-state and next-frame to the replay-buffer.
                     replay_buffer.append((
                         time,
                         life.clone(remember_on_exit=False),
-                        frame[goal_cells],
+                        frame[goal_cells], # TODO: …Don't we want to save only NOT goal cells?…
+                        #   TODO: …Do we need `sn.Filter` to have `invert=False` for this?…
                         torch.tensor(1000., device='cpu'),
                     ))
 
@@ -459,11 +457,15 @@ async def main():
                     for group, (cells, expiration) in goals.copy().items():
                         if time > expiration:
                             del goals[group]
+                    print(groups) # TODO:
                     for group in groups:
                         if group not in goals:
                             goal = random.choice(replay_buffer)[2]
+                            print('goal1', goal.shape) # TODO: …Why is it 0×96 already?
                             goal = goal[np.random.rand() < (.05+.95*random.random())]
+                            print('goal2', goal.shape) # TODO: Why is even *this* 0*0*96? Why does indexing with NumPy bools create a dimension?…
                             goal = torch.where(goal_name == goal_name, goal_name, goal)
+                            print('goal3', goal.shape) # TODO: …What is this shape…
                             expiration_cpu = torch.tensor(time+10000, device='cpu').int()
                             expiration_gpu = torch.tensor(time+10000).int()
                             goals[group] = (goal, expiration_cpu, expiration_gpu)
@@ -472,7 +474,8 @@ async def main():
                     extra_cells = []
                     for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
                         extra_cells.append(cells)
-                    if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
+                    print(*[c.shape for c in extra_cells], frame.shape) # TODO: Why are `cells` 3D, with the first 2 dimensions 0s? What went wrong with `goals`, and maybe `groups`?
+                    if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0) # TODO: Why does this error?
 
                     # Give prev-action & next-observation, remember distance estimates, and sample next action.
                     _, dist, regret = transition_(frame)
