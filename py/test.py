@@ -64,6 +64,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: On unroll, to pick a goal, fetch some random subset of cells from the replay buffer, rename to SRC and 0-fill their values, and in a throwaway episode, sample (possibly for all goal-groups at once) and set as the goal.
 #   TODO: On replay, select random subsets (to support partial goals) of faraway latents as destinations, not of inputs.
 #     TODO: Have a 50/50 chance to select either faraway-latents or inputs as dst, so that we don't lose the ability for envs to specify goals.
+#       (With this, the interface will unify not only obs-and-act and obs-and-goal, but also allow training to reach other agents' full-RNN-state goals, by simply exposing their inner states as observations. "The individual is obsolete", mm.)
 #   TODO: On replay, in a throwaway episode, self-imitate (if regret is positive, max the sample-probability of) faraway-dst's SRC-cells given DST-renamed and 0-filled versions of them.
 #     TODO: Also, there, self-imitate random subsets of SRC-renamed frames given their cell-name-only versions.
 
@@ -194,7 +195,9 @@ class Sampler:
 
         (No non-action-cell sampling AKA L2-prediction here, since we won't use that. Though in theory, could use the outcome-averaged approximation, and complicate the interface by having a per-cell bitmask of whether it's an action.)"""
         with torch.no_grad():
-            query = detach(query).clone()
+            print('query', query) # TODO: It's a tensor…
+            print('query unpack_dual', fw.unpack_dual(query)) # TODO: It's a tensor…
+            query = detach(query).clone() # TODO: Why can't we detach the `query`?
             #   No forward-derivative either, and prepare to write to `query` in-place.
             i = self.start
             while i < query.shape[-1]:
@@ -481,7 +484,7 @@ async def main():
                             expiration_cpu.copy_(group_dist, non_blocking=True)
                             expiration_gpu.copy_(group_dist)
                         else:
-                            expiration_cpu[:] = 0
+                            expiration_cpu.fill_(0)
                         n += cells.shape[0]
                     with State.Episode(start_from_initial=False):
                         action = sample(query)
