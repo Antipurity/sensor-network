@@ -454,8 +454,8 @@ async def main():
                     ))
 
                     # Delete/update our `goals` when we think we reached them.
-                    for group, (cells, expiration) in goals.copy().items():
-                        if time > expiration:
+                    for group, (cells, expiration_cpu, expiration_gpu) in goals.copy().items():
+                        if time > expiration_cpu:
                             del goals[group]
                     for group in groups:
                         if group not in goals:
