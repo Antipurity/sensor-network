@@ -400,7 +400,7 @@ def replay(optim, current_frame, current_time):
         #   (Note: it's possible to sample several goals and pick a 'best' one, [like AdaGoal does](https://arxiv.org/abs/2111.12045). But that works best with a measure of 'error' to maximize, and our replay-buffer already kinda maximizes regret.)
         #     (Could be done with either the `regret` output of `transition_`, or by keeping several `transition`s to measure ensemble disagreement. Could also [train some generative model](http://proceedings.mlr.press/v100/nair20a/nair20a.pdf), but those are hard to train, hence the sampling.)
         #       (All of which is too expensive.)
-        dst_is_picked = np.random.rand() < (.05+.95*random.random())
+        dst_is_picked = np.random.rand(current_frame.shape[0]) < (.05+.95*random.random())
         dst = current_frame[dst_is_picked]
 
         # Learn.
@@ -443,7 +443,6 @@ async def main():
                     obs, query = torch.tensor(obs), torch.tensor(query)
                     query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
                     frame = torch.cat((action, obs), 0) if action is not None else obs
-                    print('frame', frame.shape) # TODO:
 
                     # Append prev-RNN-state and next-frame to the replay-buffer.
                     replay_buffer.append((
@@ -457,16 +456,12 @@ async def main():
                     for group, (cells, expiration) in goals.copy().items():
                         if time > expiration:
                             del goals[group]
-                    print(groups) # TODO:
+                    print(groups) # TODO: …Wait, why is it 0s anyway? Aren't we supposed to be putting `'copy'` in the copy-env's group ID?
                     for group in groups:
                         if group not in goals:
                             goal = random.choice(replay_buffer)[2]
-                            print('goal1', goal.shape) # TODO: …Why is it 0×96 already?
-                            goal = goal[np.random.rand() < (.05+.95*random.random())]
-                            #   TODO: …The `np.random.rand()` call must pass in the cell-count…
-                            print('goal2', goal.shape) # TODO: Why is even *this* 0*0*96? Why does indexing with NumPy bools create a dimension?…
+                            goal = goal[np.random.rand(goal.shape[0]) < (.05+.95*random.random())]
                             goal = torch.where(goal_name == goal_name, goal_name, goal)
-                            print('goal3', goal.shape) # TODO: …What is this shape…
                             expiration_cpu = torch.tensor(time+10000, device='cpu').int()
                             expiration_gpu = torch.tensor(time+10000).int()
                             goals[group] = (goal, expiration_cpu, expiration_gpu)
@@ -475,8 +470,7 @@ async def main():
                     extra_cells = []
                     for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
                         extra_cells.append(cells)
-                    print(*[c.shape for c in extra_cells], frame.shape) # TODO: Why are `cells` 3D, with the first 2 dimensions 0s? What went wrong with `goals`, and maybe `groups`?
-                    if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0) # TODO: Why does this error?
+                    if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
 
                     # Give prev-action & next-observation, remember distance estimates, and sample next action.
                     _, dist, regret = transition_(frame)
