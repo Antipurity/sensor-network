@@ -435,6 +435,7 @@ async def main():
                     #   (And fetch goal-group IDs to add constraints for exploration, even if the env has set some goals.)
                     frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
                     goal_cells = goal_filter(frame_names, cell_shape=cell_shape)
+                    not_goal_cells = goal_filter(frame_names, cell_shape=cell_shape, invert=True)
                     prev_q = query
                     groups = goal_group_ids(frame_names)
 
@@ -448,8 +449,7 @@ async def main():
                     replay_buffer.append((
                         time,
                         life.clone(remember_on_exit=False),
-                        frame[goal_cells], # TODO: …Don't we want to save only NOT goal cells?…
-                        #   TODO: …Do we need `sn.Filter` to have `invert=False` for this?…
+                        frame[not_goal_cells],
                         torch.tensor(1000., device='cpu'),
                     ))
 
@@ -463,6 +463,7 @@ async def main():
                             goal = random.choice(replay_buffer)[2]
                             print('goal1', goal.shape) # TODO: …Why is it 0×96 already?
                             goal = goal[np.random.rand() < (.05+.95*random.random())]
+                            #   TODO: …The `np.random.rand()` call must pass in the cell-count…
                             print('goal2', goal.shape) # TODO: Why is even *this* 0*0*96? Why does indexing with NumPy bools create a dimension?…
                             goal = torch.where(goal_name == goal_name, goal_name, goal)
                             print('goal3', goal.shape) # TODO: …What is this shape…

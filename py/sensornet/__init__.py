@@ -462,14 +462,14 @@ class Filter:
         self.cell_shape = None
         self.templ = None
         self.backend = backend
-    def __call__(self, data, error=None, cell_shape=()):
+    def __call__(self, data, error=None, cell_shape=(), invert=False):
         assert len(cell_shape), 'Specify the cell-shape too'
         np = self.backend
         # Match.
         template = self.template(cell_shape)
         name_sz = sum(cell_shape) - cell_shape[-1]
         matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= (error if error is not None else 0.) + 1e-5)
-        matches = matches.all(-1)
+        matches = matches.all(-1) if not invert else ~(matches.all(-1))
         if self.func is None:
             return matches
         data = data[matches]
