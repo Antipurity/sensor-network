@@ -172,6 +172,34 @@ def goal_group_ids(frame):
 
 
 
+class LayerNorm(nn.Module):
+    """A re-implementation of PyTorch's layer-norm, done so that forward-diff can work with older PyTorch versions."""
+    def __init__(self, sz):
+        super().__init__()
+        self.mult = nn.parameter.Parameter(torch.ones(sz), requires_grad=True)
+        self.add = nn.parameter.Parameter(torch.zeros(sz), requires_grad=True)
+    def forward(self, x):
+        x = x - x.mean()
+        y = x / (x.square().sum().sqrt() + 1e-5)
+        return y * self.mult + self.add
+class Softmax(nn.Module):
+    """A re-implementation of PyTorch's softmax, done so that forward-diff can work with older PyTorch versions."""
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+    def forward(self, x):
+        if x.numel() > 0:
+            x = x - x.max()
+        x = x.exp()
+        return x / (x.sum(self.dim, keepdim=True) + 1e-5)
+class ReLU(nn.Module):
+    """A re-implementation of PyTorch's relu, done so that forward-diff can work with older PyTorch versions."""
+    def __init__(self): super().__init__()
+    def forward(self, x):
+        return (detach(x) > 0.).float() * x
+
+
+
 class Sampler:
     """
     GANs, VAEs, contrastive learning, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions    
@@ -197,6 +225,7 @@ class Sampler:
             x[ind] = one
             ind[b] = all
         self._bits = x.reshape(2**bits, bits)
+        self.softmax = Softmax(-1)
     def __call__(self, query):
         """Given a `query` that's zero-padded to be action-sized, samples a binary action.
 
@@ -211,7 +240,7 @@ class Sampler:
             i = self.start
             while i < query.shape[-1]:
                 j = min(query.shape[-1], i + bits_per_chunk)
-                indices = F.softmax(self.fn(query), -1).multinomial(1)[..., 0]
+                indices = self.softmax(detach(self.fn(query))).multinomial(1)[..., 0]
                 bits = self._bits[indices]
                 query[:, i:j] = bits[:, 0:j-i]
                 i += j
@@ -248,34 +277,6 @@ class Sampler:
     def _act_mask(self, act, eps=1e-5):
         return ((act - self.zero).abs().min((act - self.one).abs()) < eps).all(-1, keepdim=True)
 sample = Sampler(lambda x: transition_(x)[0], bits_per_chunk=bits_per_chunk, start=sum(cell_shape)-cell_shape[-1], zero=-1, one=1)
-
-
-
-class LayerNorm(nn.Module):
-    """A re-implementation of PyTorch's layer-norm, done so that forward-diff can work with older PyTorch versions."""
-    def __init__(self, sz):
-        super().__init__()
-        self.mult = nn.parameter.Parameter(torch.ones(sz), requires_grad=True)
-        self.add = nn.parameter.Parameter(torch.zeros(sz), requires_grad=True)
-    def forward(self, x):
-        x = x - x.mean()
-        y = x / (x.square().sum().sqrt() + 1e-5)
-        return y * self.mult + self.add
-class Softmax(nn.Module):
-    """A re-implementation of PyTorch's softmax, done so that forward-diff can work with older PyTorch versions."""
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-    def forward(self, x):
-        if x.numel() > 0:
-            x = x - x.max()
-        x = x.exp()
-        return x / (x.sum(self.dim, keepdim=True) + 1e-5)
-class ReLU(nn.Module):
-    """A re-implementation of PyTorch's relu, done so that forward-diff can work with older PyTorch versions."""
-    def __init__(self): super().__init__()
-    def forward(self, x):
-        return (detach(x) > 0.).float() * x
 
 
 
