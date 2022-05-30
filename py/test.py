@@ -258,7 +258,8 @@ class LayerNorm(nn.Module):
         self.mult = nn.parameter.Parameter(torch.ones(sz), requires_grad=True)
         self.add = nn.parameter.Parameter(torch.zeros(sz), requires_grad=True)
     def forward(self, x):
-        y = (x - x.mean()) / (x.std() + 1e-5)
+        x = x - x.mean()
+        y = x / (x.square().sum().sqrt() + 1e-5)
         return y * self.mult + self.add
 class Softmax(nn.Module):
     """A re-implementation of PyTorch's softmax, done so that forward-diff can work with older PyTorch versions."""
@@ -270,11 +271,11 @@ class Softmax(nn.Module):
             x = x - x.max()
         x = x.exp()
         return x / (x.sum(self.dim, keepdim=True) + 1e-5)
-# TODO: …PyTorch 1.10.2 forward-mode AD apparently doesn't support relu either…
-#   Does it at least support `torch.where`?
-#     …Why doesn't it support `>`… …Nor `torch.where`…
-#       Can we use `detach` and bool-to-float and multiplication? Yes.
-#         TODO: Implement and use this ReLU.
+class ReLU(nn.Module):
+    """A re-implementation of PyTorch's relu, done so that forward-diff can work with older PyTorch versions."""
+    def __init__(self): super().__init__()
+    def forward(self, x):
+        return (detach(x) > 0.).float() * x
 
 
 
@@ -288,8 +289,8 @@ class SkipConnection(nn.Module):
 def h(ins = state_sz, outs = ...): # A cross-cell transform.
     if outs is ...: outs = ins
     return SkipConnection(
-        nn.ReLU(), LayerNorm(ins), SRWM(ins, ins, heads=2, Softmax=Softmax),
-        nn.ReLU(), LayerNorm(ins), nn.Linear(ins, outs),
+        ReLU(), LayerNorm(ins), SRWM(ins, ins, heads=2, Softmax=Softmax),
+        ReLU(), LayerNorm(ins), nn.Linear(ins, outs),
     )
 
 
