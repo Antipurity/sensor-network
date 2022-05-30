@@ -25,7 +25,7 @@ class Env:
             sn.data('remember', [self.bit])
         else: # Recall the previous important bit.
             bit = bool(self.bit)
-            def callback(fb, sn):
+            def callback(fb):
                 self.reward = 1 if (fb[0] > 0) == bit else -1
                 self.reward_metric = self.reward_metric * .99 + .01 * self.reward
             sn.query('recall', 1, callback=callback)

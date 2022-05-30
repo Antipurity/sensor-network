@@ -38,7 +38,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # (BMIs with even futuristic levels of tech can't do anything like downloading knowledge into your brain or capturing and controlling bodily functions for a full-dive into virtual worlds. Even write-access (computer-to-brain) is very hard to make out, and may in fact need years of training. But read-access (brain-to-computer) can explore a human's internal reactions, so that the human can revisit those reactions at will without having to expend effort. And maybe you'd need RTX 6090 to run the AI part in real-time, since it may be Gato-sized.)
 #   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.)
-#     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war and murder become routine and one global superpower emerges since the only price of destruction is now some resources.)
+#     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war and murder become routine and one global superpower emerges since the only price of destruction is now some resources; creating new ideas rather than spreading existing ones becomes nearly impossible.)
 #   (…Didn't we write this down already?…)
 
 
@@ -345,9 +345,16 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         is_learned = torch.rand(frame.shape[0], 1) < (.1+.9*random.random())
         dst_group_id = torch.rand(1, cell_shape[-2])*2-1
         src_group_id = torch.where(is_learned, dst_group_id, torch.rand(frame.shape[0], cell_shape[-2])*2-1)
+        print('pre-frame-reassignment', frame.shape, sum(cell_shape[-1:])) # TODO:
+        print(frame[:, :sum(cell_shape[:-2])].shape, src_group_id.shape, frame[:, sum(cell_shape[-1:]):].shape) # TODO:
         frame = torch.cat((frame[:, :sum(cell_shape[:-2])], src_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
+        print('post-frame-reassignment', frame.shape, dst.shape) # TODO: …Why is the reassignment swallowing 32 numbers?
         dst_group_id = dst_group_id.expand(dst.shape[0], cell_shape[-2])
+        #   TODO: …Wait, why is `frame` 1*64?… Isn't it supposed to have names…
+        print(dst[:, :sum(cell_shape[:-2])].shape, dst_group_id.shape, frame[:, sum(cell_shape[-1:]):].shape) # TODO: …Why are the shapes 0*24 and 0*8 and 1*0?…
+        #   TODO: Why are we mixing `dst` and `frame` to compute `dst`? Shouldn't. `frame`'s an oversight.
         dst = torch.cat((dst[:, :sum(cell_shape[:-2])], dst_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
+        #   TODO: …What's wrong with *these* tensors?
 
         # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
         dst = torch.where(goal_name == goal_name, goal_name, dst)

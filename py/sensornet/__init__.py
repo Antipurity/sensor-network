@@ -174,7 +174,7 @@ class Handler:
         """
         ```python
         await sn.query(name, query: int|tuple)
-        sn.query(name, query: int|tuple, *, callback = lambda feedback, sn: ...)
+        sn.query(name, query: int|tuple, *, callback = lambda feedback: ...)
         ```
 
         From the handler, asks for a NumPy array, or `None` (usually on transmission errors).
