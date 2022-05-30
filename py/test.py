@@ -345,16 +345,9 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         is_learned = torch.rand(frame.shape[0], 1) < (.1+.9*random.random())
         dst_group_id = torch.rand(1, cell_shape[-2])*2-1
         src_group_id = torch.where(is_learned, dst_group_id, torch.rand(frame.shape[0], cell_shape[-2])*2-1)
-        print('pre-frame-reassignment', frame.shape, sum(cell_shape[-1:])) # TODO:
-        print(frame[:, :sum(cell_shape[:-2])].shape, src_group_id.shape, frame[:, sum(cell_shape[-1:]):].shape) # TODO:
-        frame = torch.cat((frame[:, :sum(cell_shape[:-2])], src_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
-        print('post-frame-reassignment', frame.shape, dst.shape) # TODO: …Why is the reassignment swallowing 32 numbers?
+        frame = torch.cat((frame[:, :sum(cell_shape[:-2])], src_group_id, frame[:, sum(cell_shape[:-1]):]), -1)
         dst_group_id = dst_group_id.expand(dst.shape[0], cell_shape[-2])
-        #   TODO: …Wait, why is `frame` 1*64?… Isn't it supposed to have names…
-        print(dst[:, :sum(cell_shape[:-2])].shape, dst_group_id.shape, frame[:, sum(cell_shape[-1:]):].shape) # TODO: …Why are the shapes 0*24 and 0*8 and 1*0?…
-        #   TODO: Why are we mixing `dst` and `frame` to compute `dst`? Shouldn't. `frame`'s an oversight.
-        dst = torch.cat((dst[:, :sum(cell_shape[:-2])], dst_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
-        #   TODO: …What's wrong with *these* tensors?
+        dst = torch.cat((dst[:, :sum(cell_shape[:-2])], dst_group_id, dst[:, sum(cell_shape[:-1]):]), -1)
 
         # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
         dst = torch.where(goal_name == goal_name, goal_name, dst)
