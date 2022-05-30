@@ -394,9 +394,9 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # Distances of `frame` and `frame_pred` to contrast.
         with State.Episode(start_from_initial=False):
-            _, frame_dist, _ = transition_(frame)[1]
+            _, frame_dist, _ = transition_(frame)
         with State.Episode(start_from_initial=False):
-            _, frame_pred_dist, frame_pred_regret = transition_(frame_pred)[1]
+            _, frame_pred_dist, frame_pred_regret = transition_(frame_pred)
 
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
         dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
