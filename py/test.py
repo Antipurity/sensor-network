@@ -344,7 +344,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         #   (The group ID replaces the last name-part.)
         is_learned = torch.rand(frame.shape[0], 1) < (.1+.9*random.random())
         dst_group_id = torch.rand(1, cell_shape[-2])*2-1
-        src_group_id = torch.where(is_learned, dst_group_id, torch.rand(frame.shape[0], cell_shape[-2]*2-1))
+        src_group_id = torch.where(is_learned, dst_group_id, torch.rand(frame.shape[0], cell_shape[-2])*2-1)
         frame = torch.cat((frame[:, :sum(cell_shape[:-2])], src_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
         dst_group_id = dst_group_id.expand(dst.shape[0], cell_shape[-2])
         dst = torch.cat((dst[:, :sum(cell_shape[:-2])], dst_group_id, frame[:, sum(cell_shape[-1:]):]), -1)
