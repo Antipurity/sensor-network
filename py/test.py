@@ -36,6 +36,17 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# (BMIs with even futuristic levels of tech can't do anything like downloading knowledge into your brain or capturing and controlling bodily functions for a full-dive into virtual worlds. Even write-access (computer-to-brain) is very hard to make out, and may in fact need years of training. But read-access (brain-to-computer) can explore a human's internal reactions, so that the human can revisit those reactions at will without having to expend effort. And maybe you'd need RTX 6090 to run the AI part in real-time, since it may be Gato-sized.)
+#   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.)
+#     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war becomes routine and one global superpower emerges since the only price of destruction is now some resources.)
+#   (…Didn't we write this down already?…)
+
+
+
+
+
+
+
 
 
 
@@ -419,80 +430,80 @@ def replay(optim, current_frame, current_time):
 
 @sn.run
 async def main():
-    with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
-        with State.Episode() as life:
-            with torch.no_grad():
-                prev_q, action, frame = None, None, None
-                goals = {} # goal_group_id → (gpu_goal_cells, cpu_expiration_time)
-                time = 0 # Hopefully this doesn't get above 2**31-1.
-                while True:
-                    if slow_mode > 0:
-                        await asyncio.sleep(slow_mode)
+    with fw.dual_level():
+        with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
+            with State.Episode() as life:
+                with torch.no_grad():
+                    prev_q, action, frame = None, None, None
+                    goals = {} # goal_group_id → (gpu_goal_cells, cpu_expiration_time)
+                    time = 0 # Hopefully this doesn't get above 2**31-1.
+                    while True:
+                        if slow_mode > 0:
+                            await asyncio.sleep(slow_mode)
 
-                    obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
-                    #   (If getting out-of-memory, might want to chunk data/query processing.)
+                        obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
+                        #   (If getting out-of-memory, might want to chunk data/query processing.)
 
-                    # (The replay buffer won't want to know any user-specified goals.)
-                    #   (And fetch goal-group IDs to add constraints for exploration, even if the env has set some goals.)
-                    frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
-                    goal_cells = goal_filter(frame_names, cell_shape=cell_shape)
-                    not_goal_cells = goal_filter(frame_names, cell_shape=cell_shape, invert=True)
-                    prev_q = query
-                    groups = goal_group_ids(frame_names)
+                        # (The replay buffer won't want to know any user-specified goals.)
+                        #   (And fetch goal-group IDs to add constraints for exploration, even if the env has set some goals.)
+                        frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
+                        not_goal_cells = goal_filter(frame_names, cell_shape=cell_shape, invert=True)
+                        prev_q = query
+                        groups = goal_group_ids(frame_names)
 
-                    # Zero-pad `query` to be action-sized.
-                    obs, query = torch.tensor(obs), torch.tensor(query)
-                    query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
-                    frame = torch.cat((action, obs), 0) if action is not None else obs
+                        # Zero-pad `query` to be action-sized.
+                        obs, query = torch.tensor(obs), torch.tensor(query)
+                        query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
+                        frame = torch.cat((action, obs), 0) if action is not None else obs
 
-                    # Append prev-RNN-state and next-frame to the replay-buffer.
-                    replay_buffer.append((
-                        time,
-                        life.clone(remember_on_exit=False),
-                        frame[not_goal_cells],
-                        torch.tensor(1000., device='cpu'),
-                    ))
+                        # Append prev-RNN-state and next-frame to the replay-buffer.
+                        replay_buffer.append((
+                            time,
+                            life.clone(remember_on_exit=False),
+                            frame[not_goal_cells],
+                            torch.tensor(1000., device='cpu'),
+                        ))
 
-                    # Delete/update our `goals` when we think we reached them.
-                    for group, (cells, expiration_cpu, expiration_gpu) in goals.copy().items():
-                        if time > expiration_cpu:
-                            del goals[group]
-                    for group in groups:
-                        if group not in goals:
-                            goal = random.choice(replay_buffer)[2]
-                            goal = goal[np.random.rand(goal.shape[0]) < (.05+.95*random.random())]
-                            goal = torch.where(goal_name == goal_name, goal_name, goal)
-                            expiration_cpu = torch.tensor(time+10000, device='cpu').int()
-                            expiration_gpu = torch.tensor(time+10000).int()
-                            goals[group] = (goal, expiration_cpu, expiration_gpu)
+                        # Delete/update our `goals` when we think we reached them.
+                        for group, (cells, expiration_cpu, expiration_gpu) in goals.copy().items():
+                            if time > expiration_cpu:
+                                del goals[group]
+                        for group in groups:
+                            if group not in goals:
+                                goal = random.choice(replay_buffer)[2]
+                                goal = goal[np.random.rand(goal.shape[0]) < (.05+.95*random.random())]
+                                goal = torch.where(goal_name == goal_name, goal_name, goal)
+                                expiration_cpu = torch.tensor(time+10000, device='cpu').int()
+                                expiration_gpu = torch.tensor(time+10000).int()
+                                goals[group] = (goal, expiration_cpu, expiration_gpu)
 
-                    # Give goals to the RNN.
-                    extra_cells = []
-                    for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
-                        extra_cells.append(cells)
-                    if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
+                        # Give goals to the RNN.
+                        extra_cells = []
+                        for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
+                            extra_cells.append(cells)
+                        if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
 
-                    # Give prev-action & next-observation, remember distance estimates, and sample next action.
-                    _, dist, regret = transition_(frame)
-                    n = 0
-                    for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
-                        # (If we do better than expected, we leave early.)
-                        if cells.shape[0] > 0:
-                            group_dist = (time + dist.detach()[n : n+cells.shape[0], -1].mean() + 1).int().min(expiration_gpu)
-                            expiration_cpu.copy_(group_dist, non_blocking=True)
-                            expiration_gpu.copy_(group_dist)
-                        else:
-                            expiration_cpu.fill_(0)
-                        n += cells.shape[0]
-                    with State.Episode(start_from_initial=False):
-                        action = sample(query)
-                        #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
-                        #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
+                        # Give prev-action & next-observation, remember distance estimates, and sample next action.
+                        _, dist, regret = transition_(frame)
+                        n = 0
+                        for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
+                            # (If we do better than expected, we leave early.)
+                            if cells.shape[0] > 0:
+                                group_dist = (time + dist.detach()[n : n+cells.shape[0], -1].mean() + 1).int().min(expiration_gpu)
+                                expiration_cpu.copy_(group_dist, non_blocking=True)
+                                expiration_gpu.copy_(group_dist)
+                            else:
+                                expiration_cpu.fill_(0)
+                            n += cells.shape[0]
+                        with State.Episode(start_from_initial=False):
+                            action = sample(query)
+                            #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
+                            #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
 
-                    # Learn.
-                    replay(optim, frame, time)
+                        # Learn.
+                        replay(optim, frame, time)
 
-                    if save_load and time % steps_per_save == 0:
-                        torch.save(transition, save_load)
+                        if save_load and time % steps_per_save == 0:
+                            torch.save(transition, save_load)
 
-                    time += 1
+                        time += 1
