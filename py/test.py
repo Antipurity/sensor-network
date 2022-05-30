@@ -399,7 +399,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
             _, frame_pred_dist, frame_pred_regret = transition_(frame_pred)
 
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
-        dist_is_better = frame_dist[:, -1:] < frame_pred_dist[:, -1:]
+        dist_is_better = detach(frame_dist)[:, -1:] < detach(frame_pred_dist)[:, -1:]
         mask = (dist_is_better | ~sample._act_mask(frame)).float()
         predict_loss = (is_learned * sample.loss(frame) * mask).sum()
 
