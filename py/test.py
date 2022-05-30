@@ -264,7 +264,7 @@ class Sampler:
             j = min(query.shape[-1], i + bits_per_chunk)
             logits = self.fn(query)
             obs_target = act[:, self.start : self.start+logits.shape[-1]]
-            probs = F.softmax(logits, -1)
+            probs = self.softmax(logits)
             chunk = act[:, i:j]
             bits = ((chunk - self.one).abs() < eps).int()
             indices = (bits * self._powers[-bits.shape[-1]:]).sum(-1)
