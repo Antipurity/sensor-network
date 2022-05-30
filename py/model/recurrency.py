@@ -230,7 +230,7 @@ class DeltaNet(nn.Module):
     (The sequence of input vectors has to be presented not in parallel, but one-by-one. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, update_count, ins)`; `update_count` can be used to perform many updates at once at the cost of correctness.)
 
     Use `State.Episode` to train this."""
-    def __init__(self, ins, outs=..., heads=1, device=None):
+    def __init__(self, ins, outs=..., heads=1, device=None, Softmax=nn.Softmax):
         assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
         assert outs % heads == 0, "Head-count must divide output-size; slice the output or something"
         if outs is ...: outs = ins
@@ -241,7 +241,7 @@ class DeltaNet(nn.Module):
         self.slow = nn.parameter.Parameter(torch.randn(h, ins//h, sum(self.split_sz), device=device))
         self.fast = State((h, ins//h, outs//h), device=device)
         self.sigmoid = nn.Sigmoid()
-        self.softmax = nn.Softmax(-1)
+        self.softmax = Softmax(-1)
     def forward(self, x):
         h, si, sm = self.heads, self.sigmoid, self.softmax
 
@@ -263,7 +263,7 @@ class SRWM(nn.Module):
 
     See `DeltaNet` for params & docs.
     """
-    def __init__(self, ins, outs=..., heads=1, device=None):
+    def __init__(self, ins, outs=..., heads=1, device=None, Softmax=nn.Softmax):
         assert ins % heads == 0, "Head-count must divide input-size; zero-pad the input or something"
         assert outs % heads == 0, "Head-count must divide output-size; slice the output or something"
         if outs is ...: outs = ins
@@ -273,7 +273,7 @@ class SRWM(nn.Module):
         self.W = State((heads, ins//heads, sum(self.split_sz)), device=device)
         #   (Here, just 1 global learning rate, unlike in the paper.)
         self.sigmoid = nn.Sigmoid()
-        self.softmax = nn.Softmax(-1)
+        self.softmax = Softmax(-1)
     def __call__(self, x):
         # This is less efficient than https://github.com/IDSIA/modern-srwm/blob/main/reinforcement_learning/torchbeast/self_ref_v1/self_ref_v1.cu
         #   But are these 10 lines more comprehensible than those 1671?

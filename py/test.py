@@ -251,6 +251,31 @@ sample = Sampler(lambda x: transition_(x)[0], bits_per_chunk=bits_per_chunk, sta
 
 
 
+class LayerNorm(nn.Module):
+    """A re-implementation of PyTorch's layer-norm, done so that forward-diff can work with older PyTorch versions."""
+    def __init__(self, sz):
+        super().__init__()
+        self.mult = nn.parameter.Parameter(torch.ones(sz), requires_grad=True)
+        self.add = nn.parameter.Parameter(torch.zeros(sz), requires_grad=True)
+    def forward(self, x):
+        y = (x - x.mean()) / (x.std() + 1e-5)
+        return y * self.mult + self.add
+class Softmax(nn.Module):
+    """A re-implementation of PyTorch's softmax, done so that forward-diff can work with older PyTorch versions."""
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+    def forward(self, x):
+        if x.numel() > 0:
+            x = x - x.max()
+        x = x.exp()
+        return x / (x.sum(self.dim, keepdim=True) + 1e-5)
+# TODO: …PyTorch 1.10.2 forward-mode AD apparently doesn't support split_with_sizes (used in DeltaNet and SRWM) either…
+#   TODO: Maybe use slicing there instead?…
+#   TODO: …Try harder to update?…
+
+
+
 def cat(*a, dim=-1): return torch.cat(a, dim)
 class SkipConnection(nn.Module):
     """Linearize gradients, to make learning easier."""
@@ -261,8 +286,8 @@ class SkipConnection(nn.Module):
 def h(ins = state_sz, outs = ...): # A cross-cell transform.
     if outs is ...: outs = ins
     return SkipConnection(
-        nn.ReLU(), nn.LayerNorm(ins), SRWM(ins, ins, heads=2),
-        nn.ReLU(), nn.LayerNorm(ins), nn.Linear(ins, outs),
+        nn.ReLU(), LayerNorm(ins), SRWM(ins, ins, heads=2, Softmax=Softmax),
+        nn.ReLU(), LayerNorm(ins), nn.Linear(ins, outs),
     )
 
 
@@ -327,6 +352,9 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
 
 
 
+# TODO: …So how do we get around LayerNorm not being supported by our PyTorch?
+#   TODO: Can we find an alternative to `LayerNorm`?
+#     TODO: Try implementing it ourselves: (x-x.mean()) / (x.std() + 1e-5), then multiply-by and add learned parameter vectors.
 def detach(x):
     return fw.unpack_dual(x)[0].detach()
 def loss(prev_ep, frame, dst, timediff, regret_cpu):
