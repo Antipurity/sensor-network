@@ -38,7 +38,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # (BMIs with even futuristic levels of tech can't do anything like downloading knowledge into your brain or capturing and controlling bodily functions for a full-dive into virtual worlds. Even write-access (computer-to-brain) is very hard to make out, and may in fact need years of training. But read-access (brain-to-computer) can explore a human's internal reactions, so that the human can revisit those reactions at will without having to expend effort. And maybe you'd need RTX 6090 to run the AI part in real-time, since it may be Gato-sized.)
 #   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.)
-#     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war becomes routine and one global superpower emerges since the only price of destruction is now some resources.)
+#     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war and murder become routine and one global superpower emerges since the only price of destruction is now some resources.)
 #   (…Didn't we write this down already?…)
 
 
@@ -406,7 +406,7 @@ def replay(optim, current_frame, current_time):
 
     for _ in range(replays_per_step):
 
-        time, ep, frame, regret = random.choice(replay_buffer)
+        time, ep, frame, regret_cpu = random.choice(replay_buffer)
 
         # Learn partial ("OR") goals, by omitting some cells.
         #   (Note: it's possible to sample several goals and pick a 'best' one, [like AdaGoal does](https://arxiv.org/abs/2111.12045). But that works best with a measure of 'error' to maximize, and our replay-buffer already kinda maximizes regret.)
@@ -416,7 +416,7 @@ def replay(optim, current_frame, current_time):
         dst = current_frame[dst_is_picked]
 
         # Learn.
-        loss_fn(ep, frame, dst=dst, timediff = torch.full((dst.shape[0], 1), float(current_time - time)), regret=regret)
+        loss_fn(ep, frame, dst=dst, timediff = torch.full((dst.shape[0], 1), float(current_time - time)), regret_cpu=regret_cpu)
 
         # If our replay buffer gets too big, leave only max-regret samples.
         if len(replay_buffer) > max_replay_buffer_len:
