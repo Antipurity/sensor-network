@@ -238,6 +238,9 @@ class DeltaNet(nn.Module):
         super().__init__()
         self.ins, self.outs, self.heads = ins, outs, h
         self.split_sz = (ins//h, outs//h, ins//h, 1)
+        from itertools import accumulate
+        offs = tuple(accumulate(self.split_sz))
+        self.slices = tuple((..., slice(offs[i-1] if i>0 else 0, offs[i])) for i in range(4))
         self.slow = nn.parameter.Parameter(torch.randn(h, ins//h, sum(self.split_sz), device=device))
         self.fast = State((h, ins//h, outs//h), device=device)
         self.sigmoid = nn.Sigmoid()
@@ -247,7 +250,8 @@ class DeltaNet(nn.Module):
 
         W = self.fast()
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
-        k, v1, q, lr = torch.split(sm(x) @ self.slow, self.split_sz, -1)
+        full, sl = sm(x) @ self.slow, self.slices
+        k, v1, q, lr = full[sl[0]], full[sl[1]], full[sl[2]], full[sl[3]]
         k, q = sm(k), sm(q)
         v2 = k @ W
         self.fast(W + si(lr) * k.transpose(-2,-1) @ (v1 - v2))
@@ -270,6 +274,9 @@ class SRWM(nn.Module):
         super().__init__()
         self.ins, self.outs, self.heads = ins, outs, heads
         self.split_sz = (outs//heads, ins//heads, ins//heads, 1)
+        from itertools import accumulate
+        offs = tuple(accumulate(self.split_sz))
+        self.slices = tuple((..., slice(offs[i-1] if i>0 else 0, offs[i])) for i in range(4))
         self.W = State((heads, ins//heads, sum(self.split_sz)), device=device)
         #   (Here, just 1 global learning rate, unlike in the paper.)
         self.sigmoid = nn.Sigmoid()
@@ -281,7 +288,8 @@ class SRWM(nn.Module):
 
         W = self.W()
         x = x.reshape(*x.shape[:-1], h, x.shape[-1]//h).transpose(-2,-3) # Per-head.
-        y, k, q, lr = torch.split(sm(x) @ W, self.split_sz, -1)
+        full, sl = sm(x) @ W, self.slices
+        y, k, q, lr = full[sl[0]], full[sl[1]], full[sl[2]], full[sl[3]]
         k, q, lr = sm(k), sm(q), si(lr)
         kt = k.transpose(-2,-1)
         update = kt @ ((lr * (q - k)) @ W) if x.shape[-2] < self.ins else kt @ (lr * (q - k)) @ W
