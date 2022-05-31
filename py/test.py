@@ -415,10 +415,8 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         # Critic regression: `dist = sg timediff`
         #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
         #     (Worst-case, can also try tilted L1 loss.)
-        dist_limit = torch.cat((timediff, frame_dist[:, :-1]), -1)
-        print(is_learned.shape, '*', frame_dist.shape, '-', timediff.shape, 'min', dist_limit.shape) # TODO:
+        dist_limit = torch.cat((timediff, detach(frame_dist)[:, :-1]), -1)
         dist_loss = (is_learned * (frame_dist.log2() - detach(timediff.min(dist_limit)).log2()).square()).sum()
-        #   TODO: Why "expected scalar type double but found float"?
 
         # GAN-like penalization of ungrounded plans.
         dist_penalty = 1.05
@@ -429,6 +427,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         n = 2
         for env in envs:
             if hasattr(env, 'metric'):
+                # TODO: Should probably append the env's name to each metric, to avoid conflicts.
                 log(n, False, torch, **env.metric())
                 n += 1
 
