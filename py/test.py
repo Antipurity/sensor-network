@@ -257,7 +257,7 @@ class Sampler:
         """
         i = self.start
         query = torch.cat((act[:, :i].detach(), torch.zeros(act.shape[0], act.shape[1] - i)), -1)
-        is_act = self._act_mask(detach(act)[:, i:])
+        is_act = self._act_mask(detach(act)[:, i:]).float()
         loss = 0.
         eps = 1e-5
         while i < act.shape[-1]:
@@ -272,8 +272,7 @@ class Sampler:
             indices = (bits * self._powers[-bits.shape[-1]:]).sum(-1)
             act_target = F.one_hot(indices, probs.shape[-1]).float()
             #   (Yes, L2 loss on `probs` with a one-hot index does end up copying the probabilities.)
-            loss = torch.where(is_act, probs - act_target, logits - obs_target).square().sum(-1, keepdim=True)
-            #   TODO: …Don't use `torch.where`, instead do multiplications…
+            loss = (is_act * (probs - act_target) + (1 - is_act) * (logits - obs_target)).square().sum(-1, keepdim=True)
             query[i:j] = act[i:j]
             i += j
         return loss
