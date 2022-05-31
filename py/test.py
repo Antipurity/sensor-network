@@ -371,7 +371,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
     - `prev_ep` is the context that knows `prev_frame`.
     - `frame` is the immediately-next prev-action and next-observation cells.
     - `dst` is some faraway goal.
-    - `timediff` is the distance to that goal, as a `(cells, 1)`-shaped int32 tensor."""
+    - `timediff` is the distance to that goal, as a `(frame_cells + dst_cells, 1)`-shaped int32 tensor."""
 
     with prev_ep:
         # Multigroup ("AND") goals, where many threads of experience (with their group IDs) can pursue separate goals.
@@ -416,7 +416,9 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
         #     (Worst-case, can also try tilted L1 loss.)
         dist_limit = torch.cat((timediff, frame_dist[:, :-1]), -1)
+        print(is_learned.shape, '*', frame_dist.shape, '-', timediff.shape, 'min', dist_limit.shape) # TODO:
         dist_loss = (is_learned * (frame_dist.log2() - detach(timediff.min(dist_limit)).log2()).square()).sum()
+        #   TODO: Why "expected scalar type double but found float"?
 
         # GAN-like penalization of ungrounded plans.
         dist_penalty = 1.05
@@ -450,7 +452,8 @@ def replay(optim, current_frame, current_time):
         dst = current_frame[dst_is_picked]
 
         # Learn.
-        loss_fn(ep, frame, dst=dst, timediff = torch.full((dst.shape[0], 1), float(current_time - time)), regret_cpu=regret_cpu)
+        timediff = torch.full((frame.shape[0] + dst.shape[0], 1), float(current_time - time))
+        loss_fn(ep, frame, dst=dst, timediff=timediff, regret_cpu=regret_cpu)
 
         # If our replay buffer gets too big, leave only max-regret samples.
         if len(replay_buffer) > max_replay_buffer_len:
