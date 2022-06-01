@@ -151,7 +151,8 @@ def modify_name(name):
         res[-2] = 'goal'
     return res
 sn.modify_name.append(modify_name)
-envs = [prepare_env('graphenv')] if len(sys.argv) < 2 else [prepare_env(e) for e in sys.argv[1:]]
+envs = ['graphenv'] if len(sys.argv) < 2 else sys.argv[1:]
+envs = { e: prepare_env(e) for e in envs }
 
 
 
@@ -425,10 +426,9 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
         log(1, False, torch, predict_loss=predict_loss, regret_loss=regret_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss)
         n = 2
-        for env in envs:
+        for name, env in envs.items():
             if hasattr(env, 'metric'):
-                # TODO: Should probably append the env's name to each metric, to avoid conflicts.
-                log(n, False, torch, **env.metric())
+                log(n, False, torch, **{name+'.'+k: v for k,v in env.metric().items()})
                 n += 1
 
         loss = predict_loss + regret_loss + dist_loss + ungrounded_dist_loss
