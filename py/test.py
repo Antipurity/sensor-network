@@ -406,11 +406,10 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # Remember our regret of not being the `frame`. *Only* remember what we regret.
         regret = (is_learned * (frame_pred_dist[:, -1:] - frame_dist[:, -1:])).sum() / (is_learned.sum() + 1e-2)
-        regret_cpu.copy_(regret, non_blocking=True)
+        regret_cpu.copy_(detach(regret), non_blocking=True)
 
         # Learn the regret, since estimating prediction-error by training several copies of the model is too expensive.
-        regret_loss = 0 # (is_learned * (frame_pred_regret.log() - detach(regret).clamp(0.).log()).square()).sum() # TODO:
-        #   TODO: (Also use `.log2()`.)
+        regret_loss = 0 # (is_learned * (frame_pred_regret.log2() - detach(regret).clamp(1e-5).log2()).square()).sum() # TODO:
 
         # Critic regression: `dist = sg timediff`
         #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
@@ -461,7 +460,7 @@ def replay(optim, current_frame, current_time):
         # If our replay buffer gets too big, leave only max-regret samples.
         if len(replay_buffer) > max_replay_buffer_len:
             replay_buffer.sort(key = lambda sample: sample[3], reverse=True)
-            del replay_buffer[-(max_replay_buffer_len // 2):]
+            del replay_buffer[(max_replay_buffer_len // 2):]
 
     # Optimize NN params.
     optim.step();  optim.zero_grad(True)
