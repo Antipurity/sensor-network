@@ -116,9 +116,10 @@ sn.shape(*cell_shape)
 state_sz, goal_sz = 256, 256
 slow_mode = .05 # Artificial delay per step.
 
-dist_levels = 2
+dist_levels = 1 # TODO: At least 2.
 bits_per_chunk = 8 # How to `sample`.
 
+lr = 1e-3
 replays_per_step = 2
 max_replay_buffer_len = 1024
 
@@ -315,7 +316,7 @@ def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
     y = transition(x)
     return y[..., :-(dist_levels+1)], 2 ** y[..., -(dist_levels+1):-1], 2 ** y[..., -1:]
-optim = torch.optim.Adam(transition.parameters(), lr=1e-3)
+optim = torch.optim.Adam(transition.parameters(), lr=lr)
 
 
 
@@ -359,9 +360,6 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
 
 
 
-# TODO: …So how do we get around LayerNorm not being supported by our PyTorch?
-#   TODO: Can we find an alternative to `LayerNorm`?
-#     TODO: Try implementing it ourselves: (x-x.mean()) / (x.std() + 1e-5), then multiply-by and add learned parameter vectors.
 def detach(x):
     return fw.unpack_dual(x)[0].detach()
 def loss(prev_ep, frame, dst, timediff, regret_cpu):
@@ -372,7 +370,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
     - `prev_ep` is the context that knows `prev_frame`.
     - `frame` is the immediately-next prev-action and next-observation cells.
     - `dst` is some faraway goal.
-    - `timediff` is the distance to that goal, as a `(frame_cells + dst_cells, 1)`-shaped int32 tensor."""
+    - `timediff` is the distance to that goal, as a `(frame_cells + dst_cells, 1)`-shaped int32 tensor. Must always be *more* than 0."""
 
     with prev_ep:
         # Multigroup ("AND") goals, where many threads of experience (with their group IDs) can pursue separate goals.
@@ -411,7 +409,8 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         regret_cpu.copy_(regret, non_blocking=True)
 
         # Learn the regret, since estimating prediction-error by training several copies of the model is too expensive.
-        regret_loss = (is_learned * (frame_pred_regret.log() - detach(regret).clamp(0.).log()).square()).sum()
+        regret_loss = 0 # (is_learned * (frame_pred_regret.log() - detach(regret).clamp(0.).log()).square()).sum() # TODO:
+        #   TODO: (Also use `.log2()`.)
 
         # Critic regression: `dist = sg timediff`
         #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
@@ -421,15 +420,20 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # GAN-like penalization of ungrounded plans.
         dist_penalty = 1.05
-        ungrounded_dist_loss = (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum()
+        ungrounded_dist_loss = 0 # (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum() # TODO:
 
         log(0, False, torch, improvement = mask.mean() - (~sample._act_mask(frame)).float().mean())
+        #   TODO: Why is improvement always 0, even though `predict_loss` is not? …Wait, is it `nan` sometimes, from looking at the plots?…
+        #     (From looking at the plot, it's `nan` sometimes in the beginning, but not in the end.)
         log(1, False, torch, predict_loss=predict_loss, regret_loss=regret_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss)
         n = 2
         for name, env in envs.items():
             if hasattr(env, 'metric'):
                 log(n, False, torch, **{name+'.'+k: v for k,v in env.metric().items()})
                 n += 1
+        # TODO: …How can we possibly fix the loss not decreasing?… We have too many moving parts, don't we…
+        #   TODO: …Test DODGE separately, maybe?… Maybe `model/dodge.py`…
+        #   TODO: …Should we try disabling some losses, and/or gating?… …Doesn't seem to help us any…
 
         loss = predict_loss + regret_loss + dist_loss + ungrounded_dist_loss
         return loss
@@ -491,27 +495,22 @@ async def main():
                         obs, query = torch.tensor(obs), torch.tensor(query)
                         query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
                         frame = torch.cat((action, obs), 0) if action is not None else obs
-
-                        # Append prev-RNN-state and next-frame to the replay-buffer.
-                        replay_buffer.append((
-                            time,
-                            life.clone(remember_on_exit=False),
-                            frame[not_goal_cells],
-                            torch.tensor(1000., device='cpu'),
-                        ))
+                        frame_to_save = frame[not_goal_cells]
+                        life_to_save = life.clone(remember_on_exit=False)
 
                         # Delete/update our `goals` when we think we reached them.
                         for group, (cells, expiration_cpu, expiration_gpu) in goals.copy().items():
                             if time > expiration_cpu:
                                 del goals[group]
-                        for group in groups:
-                            if group not in goals:
-                                goal = random.choice(replay_buffer)[2]
-                                goal = goal[np.random.rand(goal.shape[0]) < (.05+.95*random.random())]
-                                goal = torch.where(goal_name == goal_name, goal_name, goal)
-                                expiration_cpu = torch.tensor(time+10000, device='cpu').int()
-                                expiration_gpu = torch.tensor(time+10000).int()
-                                goals[group] = (goal, expiration_cpu, expiration_gpu)
+                        if len(replay_buffer):
+                            for group in groups:
+                                if group not in goals:
+                                    goal = random.choice(replay_buffer)[2]
+                                    goal = goal[np.random.rand(goal.shape[0]) < (.05+.95*random.random())]
+                                    goal = torch.where(goal_name == goal_name, goal_name, goal)
+                                    expiration_cpu = torch.tensor(time+10000, device='cpu').int()
+                                    expiration_gpu = torch.tensor(time+10000).int()
+                                    goals[group] = (goal, expiration_cpu, expiration_gpu)
 
                         # Give goals to the RNN.
                         extra_cells = []
@@ -536,9 +535,16 @@ async def main():
                             #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
                             #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
 
-                        # Learn.
+                        # Learn. (Distance is always non-0.)
                         replay(optim, frame, time)
 
+                        # Save. (Both replay-buffer and disk.)
+                        replay_buffer.append((
+                            time,
+                            life_to_save,
+                            frame_to_save,
+                            torch.tensor(1000., device='cpu'),
+                        ))
                         if save_load and time % steps_per_save == 0:
                             torch.save(transition, save_load)
 
