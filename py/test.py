@@ -66,6 +66,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 #   TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
+#     …If we embrace the digital nature of the output (and no longer have 8 calls per step, instead reversing & zero-padding the bit patterns (reversing so that simply resizing the cells and action-sizes preserves *all* semantics), so everything is 8× faster), then we could write reliable allocators, as classes to be used with `sn.data` and `sn.query` (bidirectional for consistency, maybe via `.data(sn)` and `await .query(sn)` and `await .get(sn)`) (to preserve autoregressive correctness guarantees, if one cell isn't enough, then don't use many parallel-cells but use many sequential-steps): ints (obviously), floats (probably mu-encoded), strings (with a tokenizer), even raw byte sequences and whatever we can imagine (arrays of allocators?) — all without even a single bit wasted unless we want to…
+#       Isn't this so much better than analog?
 
 
 
@@ -78,6 +80,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #       (With this, the interface will unify not only obs-and-act and obs-and-goal, but also allow training to reach other agents' full-RNN-state goals, by simply exposing their inner states as observations. "The individual is obsolete", mm.)
 #   TODO: On replay, in a throwaway episode, self-imitate (if regret is positive, max the sample-probability of) faraway-dst's SRC-cells given DST-renamed and 0-filled versions of them.
 #     TODO: Also, there, self-imitate random subsets of SRC-renamed frames given their cell-name-only versions.
+#   …Hold on: if we allow *actions* to be parts of goals, and allow (maybe enforce) a few untethered actions per step, then does this automatically do full-RNN-state goals (with both goal-striving-by-src and goal-self-imitation-by-dst)?…
 
 
 
@@ -102,6 +105,7 @@ import torch.autograd.forward_ad as fw
 torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 from model.recurrency import State, SRWM
+from model.dodge import DODGE
 
 import sensornet as sn
 
@@ -317,46 +321,6 @@ def transition_(x):
     y = transition(x)
     return y[..., :-(dist_levels+1)], 2 ** y[..., -(dist_levels+1):-1], 2 ** y[..., -1:]
 optim = torch.optim.Adam(transition.parameters(), lr=lr)
-
-
-
-def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
-    """
-    Implements [directional gradient descent](https://openreview.net/forum?id=5i7lJLuhTm): pick a direction [(a random unit vector by default)](https://arxiv.org/abs/2202.08587), compute a forward-derivative for it, receive a scalar feedback to correct it, and assign the gradients.
-
-    Needs `loss_fn(…)→loss` and `model` for parameters. Do an optimizer step on those parameters yourself.
-    """
-    responsibility = []
-    sz = 0
-    for mod in model.modules():
-        responsibility.append((mod, []))
-        for name, param in mod.named_parameters(recurse=False):
-            responsibility[-1][1].append((name, param))
-            sz += param.numel()
-    def loss_wrapper(*args, **kwargs):
-        direction = direction_fn(sz)
-
-        direction = (direction - direction.mean()) / (direction.std() + 1e-8)
-        n = 0
-        # Give the `direction` to `model`'s parameters.
-        for mod, ps in responsibility:
-            for name, param in ps:
-                assert getattr(mod, name) is param
-                tangent = direction[n : n+param.numel()].reshape(*param.shape)
-                delattr(mod, name)
-                setattr(mod, name, fw.make_dual(param, tangent))
-                n += param.numel()
-        loss = loss_fn(*args, **kwargs)
-        _, loss_tangent = fw.unpack_dual(loss)
-        # Approximate the gradient by multiplying forward-gradient by the `loss_tangent` number.
-        for mod, ps in responsibility:
-            for name, param in ps:
-                _, d = fw.unpack_dual(getattr(mod, name))
-                grad = d * loss_tangent
-                param.grad = grad if param.grad is None else param.grad + grad
-                delattr(mod, name)
-                setattr(mod, name, param)
-    return loss_wrapper
 
 
 
