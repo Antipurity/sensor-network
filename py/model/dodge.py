@@ -64,7 +64,7 @@ if __name__ == '__main__': # pragma: no cover
         SkipConnection(nn.ReLU(), nn.LayerNorm(n), nn.Linear(32, 32)),
         SkipConnection(nn.ReLU(), nn.LayerNorm(n), nn.Linear(32, 32)),
     )
-    opt = torch.optim.Adam(net.parameters(), le=1e-3)
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
     initial_state = torch.randn(1, n, requires_grad=True)
     state = torch.randn(1, n)
     past_bits = [0]
