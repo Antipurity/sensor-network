@@ -14,11 +14,13 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
     """
     Implements [directional gradient descent](https://openreview.net/forum?id=5i7lJLuhTm): pick a direction [(a random unit vector by default)](https://arxiv.org/abs/2202.08587), compute a forward-derivative for it, receive a scalar feedback to correct it, and assign the gradients.
 
-    Needs `loss_fn(…)→loss` and `model` for parameters. Do an optimizer step on those parameters yourself.
+    …However: learning of dependencies between `DODGE` calls (such as in a long-running RNN) is not possible because directions are different.
 
-    `loss_fn` can also return a `(loss, ...)` tuple, if extra return info is desired.
+    Calls to this must be within `with torch.no_grad(): with torch.autograd.forward_ad.dual_level(): ...`.
 
-    The `model` arg can be a dict of learnable params and `torch.nn.Module`s (or just one module). `loss` must access learnable params through this dict, or modules.
+    Inputs:
+    - `loss_fn(…)→loss`: . Can also return a `(loss, ...)` tuple, if extra return info is desired.
+    - `model`: can be a dict of learnable params and `torch.nn.Module`s (or just one module). `loss` must access learnable params through this dict, or modules. (We don't do optimizer steps on `model`; do them yourself.)
     """
     sz = 0
     if not isinstance(model, dict): model = {'model': model}
@@ -36,7 +38,6 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
     def loss_wrapper(*args, **kwargs):
         direction = direction_fn(sz)
 
-        direction = (direction - direction.mean()) / (direction.std() + 1e-8)
         n = 0
         # Give the `direction` to `model`'s parameters.
         for mod, ps in responsibility:
@@ -50,7 +51,7 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
                 n += param.numel()
         result = loss_fn(*args, **kwargs)
         loss = result[0] if isinstance(result, tuple) else result
-        _, loss_tangent = fw.unpack_dual(loss)
+        _, loss_tangent = fw.unpack_dual(fw_unnan(loss))
         assert loss_tangent is not None, "The computation doesn't use learnable params, so we can't optimize it"
         # Approximate the gradient by multiplying forward-gradient by the `loss_tangent` number.
         for mod, ps in responsibility:
@@ -59,13 +60,13 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
                 _, d = fw.unpack_dual(dual)
                 grad = d * loss_tangent
                 param.grad = grad if param.grad is None else param.grad + grad
-                if isinstance(mod, dict):
-                    mod[name] = param
-                    # TODO: …Wait, if we handle RNN state like this, then should we also leave in the forward-gradient of params, and just re-assign it on the next iteration?… …But commenting this resetting out doesn't seem to help any…
-                    #   TODO: …Eh, remove this resetting, both for efficiency and for preserving the "params got updated" semantics.
-                else:
-                    delattr(mod, name)
-                    setattr(mod, name, param)
+                # if isinstance(mod, dict):
+                #     mod[name] = param
+                #     # TODO: …Wait, if we handle RNN state like this, then should we also leave in the forward-gradient of params, and just re-assign it on the next iteration?… …But commenting this resetting out doesn't seem to help any…
+                #     #   TODO: …Eh, remove this resetting, both for efficiency and for preserving the "params got updated" semantics.
+                # else:
+                #     delattr(mod, name)
+                #     setattr(mod, name, param)
         return result
     return loss_wrapper
 
@@ -98,6 +99,10 @@ class ReLU(nn.Module):
         return (detach(x) > 0.).float() * x
 def detach(x):
     return fw.unpack_dual(x)[0].detach()
+def fw_unnan(x):
+    """Removes `nan`s from `x`'s tangents (forward-gradient)."""
+    primal, tangent = fw.unpack_dual(x)
+    return fw.make_dual(primal, torch.nan_to_num(tangent))
 
 
 
@@ -113,6 +118,7 @@ if __name__ == '__main__': # pragma: no cover
     p = .1
     lr = 1e-3
     net = nn.Sequential(
+        SkipConnection(nn.Linear(n, n)),
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
     )
@@ -144,15 +150,17 @@ if __name__ == '__main__': # pragma: no cover
         with torch.no_grad():
             for iter in range(50000):
                 l2, state = loss(state)
+                state = fw_unnan(state)
 
-                print(str(iter).rjust(5), 'L2', l2, fw.unpack_dual(state)[1].abs().sum()) # TODO:
+                print(str(iter).rjust(5), 'L2', l2, state[0,0])
                 opt.step();  opt.zero_grad(True)
-    # TODO: (…If this soft-resetting fails, should we try episodes? …And then, should we try episodes-in-`loss`, which should definitely be mathematically grounded since direction is the same?…)
-    #   …Same-bit prediction now works… But…
-    #   …Loss settles to a bit below (inconsistent) 1 in the current configuration, for predicting the 1-step-past bit… Something is definitely wrong…
-    #   TODO: Why does loss eventually go to `nan` when we don't converge (`recall_len>0`)?…
-    #     TODO: …Why does it kinda look like it's starting to learn before that happens?… …Though on that one time where it didn't `nan`, L2 was only able to reach unstable .5 (then revert to stable 1 at 40k), nothing like .001 of more-steps-in-`loss` — hardly suitable for optimization…
+    # TODO: (…If this soft-resetting fails, should we try episodes? …And then, should we try episodes-in-`loss`, which should definitely be mathematically grounded since direction is the same?… …Only episodes-in-`loss` work. `DODGE` fails at what we wanted it for.)
     # TODO: …If we make `loss` do 2 steps inside itself, then we can learn 1-in-the-past dependencies, albeit very slowly (at 10k) — but 2-in-the-past remain out of reach (L2 is 2 at 50k) — which 3-steps-in-`loss` can learn, super-slowly (at 45k)…
+    #   (And if we cache the direction with `@functools.lru_cache` to make DODGE updates mathematically-valid, all `recall_len`s (even 0) perform equally very-slightly-better-than-avg. Can't just do that.)
     #   w e l l   w h a t   g o o d   i s   d o d g e   t h e n
     #   d o   w e   n e e d   r e p t i l e   a f t e r   a l l
-    #   TODO: Re-read the DODGE paper to confirm this understanding.
+
+    # TODO: Implement the `DODGE`-like `Reptile(loss_fn, model, steps=3, optim=...)` decorator, which remembers ALL initial parameters, does several steps of computing the loss and minimizing it, then resets the optimizer state and sets params to initial-nudged-to-final (or sets to initial and sets grad and does an optimizer step).
+    #   (With Reptile, pretty sure that forward-unrolling has to perform one-step SGD updates too, though only of next-step-prediction/enforcement. Doable, I suppose.)
+    # TODO: Try to make Reptile work here.
+    # (TODO: Abandon DODGE in `test.py`.)
