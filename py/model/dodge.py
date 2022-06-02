@@ -15,6 +15,8 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
     Implements [directional gradient descent](https://openreview.net/forum?id=5i7lJLuhTm): pick a direction [(a random unit vector by default)](https://arxiv.org/abs/2202.08587), compute a forward-derivative for it, receive a scalar feedback to correct it, and assign the gradients.
 
     Needs `loss_fn(…)→loss` and `model` for parameters. Do an optimizer step on those parameters yourself.
+
+    `loss_fn` can also return a `(loss, ...)` tuple, if extra return info is desired.
     """
     responsibility = []
     sz = 0
@@ -36,8 +38,10 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
                 delattr(mod, name)
                 setattr(mod, name, fw.make_dual(param, tangent))
                 n += param.numel()
-        loss = loss_fn(*args, **kwargs)
+        result = loss_fn(*args, **kwargs)
+        loss = result[0] if isinstance(result, tuple) else result
         _, loss_tangent = fw.unpack_dual(loss)
+        assert loss_tangent is not None, "The computation doesn't use learnable params, so we can't optimize it"
         # Approximate the gradient by multiplying forward-gradient by the `loss_tangent` number.
         for mod, ps in responsibility:
             for name, param in ps:
@@ -46,6 +50,7 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
                 param.grad = grad if param.grad is None else param.grad + grad
                 delattr(mod, name)
                 setattr(mod, name, param)
+        return result
     return loss_wrapper
 
 
@@ -61,26 +66,32 @@ if __name__ == '__main__': # pragma: no cover
     n = 32
     p = .001
     net = nn.Sequential(
+        # TODO: …Non-native layer norm…
         SkipConnection(nn.ReLU(), nn.LayerNorm(n), nn.Linear(32, 32)),
         SkipConnection(nn.ReLU(), nn.LayerNorm(n), nn.Linear(32, 32)),
     )
-    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
     initial_state = torch.randn(1, n, requires_grad=True)
+    #   TODO: (…Wait: wouldn't `DODGE` want to optimize this too?… …How do we do that…)
+    opt = torch.optim.Adam([initial_state, *net.parameters()], lr=1e-3)
     state = torch.randn(1, n)
     past_bits = [0]
-    def loss(pred, target):
-        return (pred - target).square().sum()
+    def loss(state, past_bit, next_bit):
+        state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
+        state = net(state)
+        state = initial_state*p + (1-p)*state # Soft-resetting.
+
+        pred = past_bit
+        return (pred - past_bit).square().sum()
     loss = DODGE(loss, net)
     with fw.dual_level():
         for _ in range(50000):
             bit = random.randint(0,1)
 
-            state = torch.cat((torch.full((state.shape[0], 1), bit), state[..., 1:]), -1)
-            state = net(state)
-            state = initial_state*p + (1-p)*state # Soft-resetting.
+            l2, state = loss(state, past_bits[0], bit)
 
-            print('L2', loss(state[0], past_bits[0]))
+            print('L2', l2)
             opt.step();  opt.zero_grad(True)
 
             past_bits.append(bit)
             if len(past_bits) > recall_len: del past_bits[0]
+    # TODO: (…If this soft-resetting fails, should we try episodes? …And then, should we try episodes-in-`loss`, which should definitely be mathematically grounded?…)
