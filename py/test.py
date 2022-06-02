@@ -107,7 +107,7 @@ import torch.autograd.forward_ad as fw
 torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 from model.recurrency import State, SRWM
-from model.dodge import DODGE
+from model.dodge import DODGE, LayerNorm, Softmax, ReLU, detach
 
 import sensornet as sn
 
@@ -177,34 +177,6 @@ goal_name = torch.cat((goal_name, torch.full((cell_shape[-1],), float('nan'))), 
 def goal_group_ids(frame):
     """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
     return set(name.tobytes() for name in np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0))
-
-
-
-class LayerNorm(nn.Module):
-    """A re-implementation of PyTorch's layer-norm, done so that forward-diff can work with older PyTorch versions."""
-    def __init__(self, sz):
-        super().__init__()
-        self.mult = nn.parameter.Parameter(torch.ones(sz), requires_grad=True)
-        self.add = nn.parameter.Parameter(torch.zeros(sz), requires_grad=True)
-    def forward(self, x):
-        x = x - x.mean()
-        y = x / (x.square().sum().sqrt() + 1e-5)
-        return y * self.mult + self.add
-class Softmax(nn.Module):
-    """A re-implementation of PyTorch's softmax, done so that forward-diff can work with older PyTorch versions."""
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-    def forward(self, x):
-        if x.numel() > 0:
-            x = x - x.max()
-        x = x.exp()
-        return x / (x.sum(self.dim, keepdim=True) + 1e-5)
-class ReLU(nn.Module):
-    """A re-implementation of PyTorch's relu, done so that forward-diff can work with older PyTorch versions."""
-    def __init__(self): super().__init__()
-    def forward(self, x):
-        return (detach(x) > 0.).float() * x
 
 
 
@@ -328,8 +300,6 @@ optim = torch.optim.Adam(transition.parameters(), lr=lr)
 
 
 
-def detach(x):
-    return fw.unpack_dual(x)[0].detach()
 def loss(prev_ep, frame, dst, timediff, regret_cpu):
     """`loss(prev_ep, frame, dst, timediff)`
 
