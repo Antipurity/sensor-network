@@ -110,35 +110,49 @@ if __name__ == '__main__': # pragma: no cover
         def forward(self, x): return self.fn(x)
     recall_len = 1 # 0 for the current bit, 1 for the 1-step-ago bit, etc. # TODO:
     n = 8
-    p = .001
+    p = .1
     lr = 1e-3
     net = nn.Sequential(
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
     )
-    initial_state = torch.randn(1, n, requires_grad=True)
-    opt = torch.optim.Adam([initial_state, *net.parameters()], lr=lr)
+    params = {
+        'initial_state': torch.randn(1, n, requires_grad=True),
+        'net': net,
+    }
+    opt = torch.optim.Adam([params['initial_state'], *net.parameters()], lr=lr)
     state = torch.randn(1, n)
     past_bits = []
-    def loss(state, past_bit, next_bit):
-        state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
-        state = net(state)
-        pred = state[..., 0] # Only the first number predicts.
-        state = initial_state*p + (1-p)*state # Soft-resetting.
-        return (pred - past_bit).square().sum(), state
-    loss = DODGE(loss, net)
+    def loss(state):
+        loss = 0
+
+        for _ in range(1):
+            next_bit = 1 if random.randint(0,1)==1 else -1
+            past_bits.append(next_bit)
+            if len(past_bits) > recall_len+1: del past_bits[0]
+            past_bit = past_bits[0]
+
+            state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
+            state = net(state)
+            pred = state[..., 0] # Only the first number predicts.
+            state = params['initial_state']*p + (1-p)*state # Soft-resetting.
+            loss = loss + (pred - past_bit).square().sum()
+
+        return loss, state
+    loss = DODGE(loss, params)
     with fw.dual_level():
         with torch.no_grad():
             for iter in range(50000):
-                bit = 1 if random.randint(0,1)==1 else -1
-                past_bits.append(bit)
-                if len(past_bits) > recall_len+1: del past_bits[0]
+                l2, state = loss(state)
 
-                l2, state = loss(state, past_bits[0], bit)
-
-                print(str(iter).rjust(5), 'L2', l2, state[0,0]) # TODO:
+                print(str(iter).rjust(5), 'L2', l2, fw.unpack_dual(state)[1].abs().sum()) # TODO:
                 opt.step();  opt.zero_grad(True)
     # TODO: (…If this soft-resetting fails, should we try episodes? …And then, should we try episodes-in-`loss`, which should definitely be mathematically grounded since direction is the same?…)
     #   …Same-bit prediction now works… But…
     #   …Loss settles to a bit below (inconsistent) 1 in the current configuration, for predicting the 1-step-past bit… Something is definitely wrong…
-    # TODO: Why does loss eventually go to `nan` when we don't converge (`recall_len>0`)?…
+    #   TODO: Why does loss eventually go to `nan` when we don't converge (`recall_len>0`)?…
+    #     TODO: …Why does it kinda look like it's starting to learn before that happens?… …Though on that one time where it didn't `nan`, L2 was only able to reach unstable .5 (then revert to stable 1 at 40k), nothing like .001 of more-steps-in-`loss` — hardly suitable for optimization…
+    # TODO: …If we make `loss` do 2 steps inside itself, then we can learn 1-in-the-past dependencies, albeit very slowly (at 10k) — but 2-in-the-past remain out of reach (L2 is 2 at 50k) — which 3-steps-in-`loss` can learn, super-slowly (at 45k)…
+    #   w e l l   w h a t   g o o d   i s   d o d g e   t h e n
+    #   d o   w e   n e e d   r e p t i l e   a f t e r   a l l
+    #   TODO: Re-read the DODGE paper to confirm this understanding.
