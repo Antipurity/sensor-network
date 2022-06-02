@@ -4,6 +4,7 @@ TODO:
 
 
 
+from importlib.metadata import requires
 import torch
 import torch.autograd.forward_ad as fw
 
@@ -50,5 +51,36 @@ def DODGE(loss_fn, model, direction_fn = lambda sz: torch.randn(sz)):
 
 
 if __name__ == '__main__': # pragma: no cover
-    0
-    # TODO: Test: a 32→32 simple RNN with a skip connection and soft-resetting of state; every step, we input a bit, and ask to output the bit from 8 steps ago. No backprop, only forward-prop.
+    # Every step, we input a bit, then ask the `net` to output the bit from 8 steps ago.
+    import torch.nn as nn
+    import random
+    class SkipConnection(nn.Module):
+        def __init__(self, *fns): super().__init__();  self.fn = nn.Sequential(*fns)
+        def forward(self, x): return self.fn(x)
+    recall_len = 8
+    n = 32
+    p = .001
+    net = nn.Sequential(
+        SkipConnection(nn.ReLU(), nn.LayerNorm(n), nn.Linear(32, 32)),
+        SkipConnection(nn.ReLU(), nn.LayerNorm(n), nn.Linear(32, 32)),
+    )
+    opt = torch.optim.Adam(net.parameters(), le=1e-3)
+    initial_state = torch.randn(1, n, requires_grad=True)
+    state = torch.randn(1, n)
+    past_bits = [0]
+    def loss(pred, target):
+        return (pred - target).square().sum()
+    loss = DODGE(loss, net)
+    with fw.dual_level():
+        for _ in range(50000):
+            bit = random.randint(0,1)
+
+            state = torch.cat((torch.full((state.shape[0], 1), bit), state[..., 1:]), -1)
+            state = net(state)
+            state = initial_state*p + (1-p)*state # Soft-resetting.
+
+            print('L2', loss(state[0], past_bits[0]))
+            opt.step();  opt.zero_grad(True)
+
+            past_bits.append(bit)
+            if len(past_bits) > recall_len: del past_bits[0]

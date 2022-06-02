@@ -66,8 +66,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 #   TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
-#     …If we embrace the digital nature of the output (and no longer have 8 calls per step, instead reversing & zero-padding the bit patterns (reversing so that simply resizing the cells and action-sizes preserves *all* semantics), so everything is 8× faster), then we could write reliable allocators, as classes to be used with `sn.data` and `sn.query` (bidirectional for consistency, maybe via `.data(sn)` and `await .query(sn)` and `await .get(sn)`) (to preserve autoregressive correctness guarantees, if one cell isn't enough, then don't use many parallel-cells but use many sequential-steps): ints (obviously), floats (probably mu-encoded), strings (with a tokenizer), even raw byte sequences and whatever we can imagine (arrays of allocators?) — all without even a single bit wasted unless we want to…
+#     …If we embrace the digital nature of the output (and no longer have 8 calls per step, instead reversing & zero-padding the bit patterns (reversing so that simply resizing the cells and action-sizes preserves *all* semantics), so everything is 8× faster), then we could write reliable allocators, as classes to be used with `sn.data` and `sn.query` (bidirectional for consistency, maybe via `.data(sn)` and `await .query(sn)` and `await .get(sn)`) (to preserve autoregressive correctness guarantees, if one cell isn't enough, then don't use many parallel-cells but use many sequential-steps): ints (obviously), floats (probably mu-encoded), strings (with a tokenizer) (both fixed-size and dynamic-size), even raw byte sequences and whatever we can imagine (N-d arrays of allocators?) — all without even a single bit wasted unless we want to…
+#       (POSSIBLY: querying should shuffle its (*uniquely-named*) cell-requests and do them in-order, with `.get` re-doing `None`-result cell-requests until settled — shuffled so that NNs can handle dropped packets without recomputing whole sequences, and have an easier time tracking the boundaries of requests.)
 #       Isn't this so much better than analog?
+#         (We can even remove our crummy number-sequence allocator, which is autoregressively incorrect since it allocates all cells in parallel.)
 
 
 
@@ -312,6 +314,8 @@ except FileNotFoundError:
         # Input prev-actions and next-observations, output info that `sample` can use and distances.
         #   We predict the next input, thus serving as both an RL agent and a self-supervised learner.
         #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
+        # TODO: …Since `h` does a ReLU first, which can cut off observations, should we do an nn.Linear first?
+        #   TODO: Or just put LayerNorm first, so that it can *maybe* learn to pass-through observations?
         h(sum(cell_shape), state_sz),
         h(state_sz, state_sz),
         h(state_sz, 2 ** bits_per_chunk + dist_levels + 1),
