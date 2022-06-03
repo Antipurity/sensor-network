@@ -47,6 +47,19 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# TODO: Update the DODGE in `test.py` to use the new class-interface. Do very-long DODGE unrolls, though only for online self-imitation (distances *have* to be learned via a replay buffer).
+#   (TODO: …Also, should we *maybe* allow non-digital queries (controlled by a special name-part), for potential image generation?… If we don't, generating the correct bytes would likely be too expensive…)
+#     (…Maybe even allow `sn` instances to have arbitrary metadata attached, like a string "label cells with 'discrete', and querying them give you a discrete value"… (Even though this is kinda growing into "can attach arbitrary de/serialization code" for efficiency of digital transfers…))
+#       (…And, can GANs be measured not by a separate 0|1 NN, but by distance? …In fact, can't self-imitation be turned into GAN-like learning via adding DDPG that minimizes distance — if it's not done already? And by giving random noise as input, of course… Is this all we need for a unified analog/digital interface…)
+#     (…Maybe have not just the `'goal'` name-part, but make it 'analog'|'analog_goal'|'digital'|'digital_goal'…)
+#   (…Also, shouldn't reverse the zero-padded bit patterns, since that makes it *less* robust to changes in bits-per-cell, not *more*.)
+#   (…Also, `data = np.nan_to_num(data.clip(-1., 1.), copy=False)`.)
+#   (…Also, at least make a note to create trivial non-digital-action environments.)
+#   (…Also, probably make non-1-cell data/queries reserve a spot in the name, because otherwise, not only would we have to always perform a full query even if a result midway is `None`, but also, dynamically-sized queries are impossible because the end-of-sequence action may become `None`. …Meaning that we may indeed want to shuffle queries, and be able to do filling-in-of-`None`s.)
+#   (…Maybe self-imitation *could* learn good-for-remembering actions as if they were RNN state, saving us from having to do a perfect solution… Like an explicit notepad of facts and to-do tasks… Analogous to how humans use language to augment their learning, and aren't natively super-intelligences…)
+
+
+
 
 
 
