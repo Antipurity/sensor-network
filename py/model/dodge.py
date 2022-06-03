@@ -102,7 +102,7 @@ def detach(x):
 def fw_unnan(x):
     """Removes `nan`s from `x`'s tangents (forward-gradient)."""
     primal, tangent = fw.unpack_dual(x)
-    return fw.make_dual(primal, torch.nan_to_num(tangent) if tangent is not None else None)
+    return fw.make_dual(primal, torch.nan_to_num(tangent)) if tangent is not None else primal
 
 
 
@@ -117,16 +117,18 @@ def make_functional(model, params=...):
     def fn(params, *a, **kw):
         assert len(orig_params) == len(params)
         old_params = []
-        for i in range(len(params)):
-            old_params.append(orig_params[i].clone())
-            orig_params[i].detach_().copy_(params[i])
-            orig_params[i].requires_grad_(True)
+        with torch.no_grad():
+            for i in range(len(params)):
+                old_params.append(orig_params[i].clone())
+                orig_params[i].copy_(params[i])
+                orig_params[i].requires_grad_(True)
         out = model(*a, **kw)
-        for i in range(len(params)):
-            params[i].grad, orig_params[i].grad = orig_params[i].grad, None
-            orig_params[i].detach_()
-            params[i].copy_(orig_params[i])
-            orig_params[i].copy_(old_params[i])
+        with torch.no_grad():
+            for i in range(len(params)):
+                params[i].grad, orig_params[i].grad = orig_params[i].grad, None
+                orig_params[i].detach_()
+                params[i].copy_(orig_params[i])
+                orig_params[i].copy_(old_params[i])
         return out
     return fn, orig_params
 
@@ -136,8 +138,9 @@ def SGD(lr):
     def do_SGD(params):
         with torch.no_grad():
             for p in params:
-                p.data += lr * p.grad
-                p.grad = None
+                if p.grad is not None:
+                    p.data += lr * p.grad
+                    p.grad = None
     return do_SGD
 def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=None):
     """
@@ -145,7 +148,7 @@ def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=None):
 
     Implements [Reptile](https://openai.com/blog/reptile/), which performs at least 2 gradient updates then updates initial parameters toward final ones.
 
-    (A simple meta-learning algorithm, AKA a recurrent-optimizer optimizer, which simply ignores the gradient from the inner update for speed.)
+    (A simple meta-learning algorithm, AKA an "RNN"-optimizer optimizer, which simply ignores the gradient from the inner update for speed.)
 
     Call the resulting func as `fn(*a, **kw)`, and `loss_fn(*a, **kw)→loss` (must not be `make_functional`) will be called `steps` times, and `params` will get updated in-place. No result.
     """
@@ -214,6 +217,8 @@ if __name__ == '__main__': # pragma: no cover
 
         # Do a Reptile update.
         train_loss(state, past_bit, next_bit)
+        # TODO: Why does loss quickly go to `nan` without warning?
+        #   Except for the one time where we endlessly oscillate between 1.2726 and 0.7602…
 
         # Do an SGD update, and soft-reset the params.
         l2, state = step_loss(cur_params, state, past_bit, next_bit)
