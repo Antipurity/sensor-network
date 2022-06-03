@@ -138,9 +138,9 @@ def SGD(lr):
                 p.data += lr * p.grad
                 p.grad = None
     return do_SGD
-def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=SGD(.1)):
+def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=None):
     """
-    `Reptile(loss_fn, params, steps=3, inner_optim=SGD(lr=.01), outer_optim=SGD(lr=.1))`
+    `Reptile(loss_fn, params, steps=3, inner_optim=SGD(lr=.01), outer_optim=None)`
 
     Implements [Reptile](https://openai.com/blog/reptile/), which performs at least 2 gradient updates then updates initial parameters toward final ones.
 
@@ -149,7 +149,8 @@ def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=SGD(.1))
     Call the resulting func as `fn(*a, **kw)`, and `loss_fn(*a, **kw)→loss` (must not be `make_functional`) will be called `steps` times, and `params` will get updated in-place. No result.
     """
     def optimize_loss_fn(*a, **kw):
-        loss = loss_fn(*a, **kw)
+        result = loss_fn(*a, **kw)
+        loss = result[0] if isinstance(result, tuple) else result
         loss.backward()
     optimize_loss_fn = make_functional(optimize_loss_fn, params=params)
     def do_reptile(*a, **kw):
@@ -159,7 +160,7 @@ def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=SGD(.1))
             inner_optim(params_now)
         for i in range(len(params)):
             params[i].grad = params[i] - params_now[i]
-        outer_optim(params)
+        if outer_optim is not None: outer_optim(params)
     return do_reptile
 
 
@@ -180,39 +181,50 @@ if __name__ == '__main__': # pragma: no cover
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
     )
-    # TODO: How to use Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=SGD(.1))?…
-    params = {
-        'initial_state': torch.randn(1, n, requires_grad=True),
-        'net': net,
-    }
-    opt = torch.optim.Adam([params['initial_state'], *net.parameters()], lr=lr)
+    initial_state = torch.nn.parameter.Parameter(torch.randn(1, n, requires_grad=True))
+    initial_params = [initial_state, *net.parameters()]
+    opt = torch.optim.Adam(initial_params, lr=lr)
     state = torch.randn(1, n)
     past_bits = []
-    def loss(state):
+    def loss(state, past_bit, next_bit):
         loss = 0
 
         for _ in range(1):
-            next_bit = 1 if random.randint(0,1)==1 else -1
-            past_bits.append(next_bit)
-            if len(past_bits) > recall_len+1: del past_bits[0]
-            past_bit = past_bits[0]
-
             state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
             state = net(state)
             pred = state[..., 0] # Only the first number predicts.
-            state = params['initial_state']*p + (1-p)*state # Soft-resetting.
+            state = initial_state*p + (1-p)*state # Soft-resetting.
             loss = loss + (pred - past_bit).square().sum()
 
+        state = fw_unnan(state)
         return loss, state
-    loss = DODGE(loss, params)
-    with fw.dual_level():
-        with torch.no_grad():
-            for iter in range(50000):
-                l2, state = loss(state)
-                state = fw_unnan(state)
+    def loss_with_backward(*a, **kw):
+        result = loss(*a, **kw)
+        result[0].backward()
+        return result
+    train_loss = Reptile(loss, initial_params, steps=3, inner_optim=SGD(1e-3))
+    step_loss = make_functional(loss_with_backward, initial_params)
+    cur_params = [p.clone() for p in initial_params]
+    for iter in range(50000):
+        next_bit = 1 if random.randint(0,1)==1 else -1
+        past_bits.append(next_bit)
+        if len(past_bits) > recall_len+1: del past_bits[0]
+        past_bit = past_bits[0]
 
-                print(str(iter).rjust(5), 'L2', l2, state[0,0])
-                opt.step();  opt.zero_grad(True)
+        # Do a Reptile update.
+        train_loss(state, past_bit, next_bit)
+
+        # Do an SGD update, and soft-reset the params.
+        l2, state = step_loss(cur_params, state, past_bit, next_bit)
+        with torch.no_grad():
+            for i, p in enumerate(cur_params):
+                p *= 1-p
+                p += p * initial_params[i]
+
+        print(str(iter).rjust(5), 'L2', l2, state[0,0])
+        opt.step();  opt.zero_grad(True)
+
+        state = state.detach()
     # TODO: (…If this soft-resetting fails, should we try episodes? …And then, should we try episodes-in-`loss`, which should definitely be mathematically grounded since direction is the same?… …Only episodes-in-`loss` work. `DODGE` fails at what we wanted it for.)
     # TODO: …If we make `loss` do 2 steps inside itself, then we can learn 1-in-the-past dependencies, albeit very slowly (at 10k) — but 2-in-the-past remain out of reach (L2 is 2 at 50k) — which 3-steps-in-`loss` can learn, super-slowly (at 45k)…
     #   (And if we cache the direction with `@functools.lru_cache` to make DODGE updates mathematically-valid, all `recall_len`s (even 0) perform equally very-slightly-better-than-avg. Can't just do that.)
@@ -222,8 +234,8 @@ if __name__ == '__main__': # pragma: no cover
     # TODO: Implement the `DODGE`-like `Reptile(loss_fn, model, steps=3, optim=...)` [decorator](https://openai.com/blog/reptile/), which remembers ALL initial parameters, does several steps of computing the loss and minimizing it, then resets the optimizer state and sets params to initial-nudged-to-final (or sets to initial and sets grad and does an optimizer step).
     #   (With Reptile, pretty sure that forward-unrolling has to perform one-step SGD updates too, though only of next-step-prediction/enforcement. Doable, I suppose.)
     # TODO: Try to make Reptile work here. (`loss` would have to stop modifying the bits.) (To evaluate, would have to perform SGD steps too. …Possibly with soft-resetting too…)
-    #   (If it can't work without backprop through the inner loop, uh…)
-    #   Do we want a polyfill of params-as-args modules for this? (How else would we implement soft-resetting without extremely ugly hacks?)
+    #   (If it can't work without backprop through the inner loop, uh… I guess we'd need to consider alternate routes, such as super-long DODGE…)
+    #   (Honestly, I don't see how Reptile could possibly succeed at learning long-range dependencies.)
     # (TODO: Abandon DODGE in `test.py`. Use Reptile probably, though maybe only for self-imitation/prediction. …And might want to do soft-resetting like we did with RNNs, toward the meta-learned values and away from current values…)
     #   (TODO: …Also, should we *maybe* allow non-digital queries (controlled by a special name-part), for potential image generation?…)
     #     (…Maybe even allow `sn` instances to have arbitrary metadata attached, like a string "label cells with 'discrete', and querying them give you a discrete value"… (Even though this is kinda growing into "can attach arbitrary de/serialization code" for efficiency of digital transfers…))
@@ -235,3 +247,46 @@ if __name__ == '__main__': # pragma: no cover
 
     # TODO: …Or can we repurpose `DODGE` to do very-long unrolls? …How would we know the targets during these unrolls though, particularly, distances? Not like we can retroactively relabel anything if learning online, so computing losses at goal-switching won't be enough… And very-long-unrolls-of-the-past can't scale to millions of timesteps anyway…
     #   (…Maybe self-imitation *could* learn good-for-remembering actions as if they were RNN state, saving us from having to do a perfect solution… Like an explicit notepad of facts and to-do tasks…)
+
+
+
+
+
+
+
+
+
+
+    # TODO: (If Reptile fails, restore DODGE here.)
+    # params = {
+    #     'initial_state': torch.randn(1, n, requires_grad=True),
+    #     'net': net,
+    # }
+    # opt = torch.optim.Adam([params['initial_state'], *net.parameters()], lr=lr)
+    # state = torch.randn(1, n)
+    # past_bits = []
+    # def loss(state):
+    #     loss = 0
+
+    #     for _ in range(1):
+    #         next_bit = 1 if random.randint(0,1)==1 else -1
+    #         past_bits.append(next_bit)
+    #         if len(past_bits) > recall_len+1: del past_bits[0]
+    #         past_bit = past_bits[0]
+
+    #         state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
+    #         state = net(state)
+    #         pred = state[..., 0] # Only the first number predicts.
+    #         state = params['initial_state']*p + (1-p)*state # Soft-resetting.
+    #         loss = loss + (pred - past_bit).square().sum()
+
+    #     return loss, state
+    # loss = DODGE(loss, params)
+    # with fw.dual_level():
+    #     with torch.no_grad():
+    #         for iter in range(50000):
+    #             l2, state = loss(state)
+    #             state = fw_unnan(state)
+
+    #             print(str(iter).rjust(5), 'L2', l2, state[0,0])
+    #             opt.step();  opt.zero_grad(True)
