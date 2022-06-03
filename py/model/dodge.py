@@ -20,7 +20,7 @@ class DODGE:
 
     It's a memory-less alternative to backpropagation, suitable for unrolling very long RNNs.
 
-    Use this within `with torch.no_grad(): with torch.autograd.forward_ad.dual_level(): ...`.
+    Use this within `with torch.no_grad(): with torch.autograd.forward_ad.dual_level(): ...`. Probably in a very long loop, which always does `.minimize(...)` and sometimes does `.restart(...)`.
 
     Parameters:
     - `model` can be a dict of learnable params and `torch.nn.Module`s, or just one module. `loss` must access learnable params through this dict, or modules.
@@ -136,7 +136,7 @@ if __name__ == '__main__': # pragma: no cover
         def __init__(self, *fns): super().__init__();  self.fn = nn.Sequential(*fns)
         def forward(self, x): return self.fn(x)
     recall_len = 1 # 0 for the current bit, 1 for the 1-step-ago bit, etc.
-    truncation_len = 1 # Has to be at least one more than `recall_len` to learn.
+    truncation_len = 2 # Has to be at least one more than `recall_len` to learn.
     n = 8
     p = .1
     lr = 1e-3
@@ -153,11 +153,13 @@ if __name__ == '__main__': # pragma: no cover
     state = torch.randn(1, n)
     past_bits = []
     def loss(state):
+        # Env.
         next_bit = 1 if random.randint(0,1)==1 else -1
         past_bits.append(next_bit)
         if len(past_bits) > recall_len+1: del past_bits[0]
         past_bit = past_bits[0]
 
+        # RNN.
         state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
         state = net(state)
         pred = state[..., 0] # Only the first number predicts.
@@ -173,7 +175,8 @@ if __name__ == '__main__': # pragma: no cover
                 state = fw_unnan(state)
 
                 dodge.minimize(l2)
-                if iter % truncation_len == 0: dodge.restart()
+                if iter % truncation_len == 0:
+                    dodge.restart()
 
                 print(str(iter).rjust(5), 'L2', l2, state[0,0])
                 opt.step();  opt.zero_grad(True)
