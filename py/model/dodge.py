@@ -162,8 +162,9 @@ def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=None):
         for _ in range(steps):
             optimize_loss_fn(params_now, *a, **kw)
             inner_optim(params_now)
-        for i in range(len(params)):
-            params[i].grad = params[i] - params_now[i]
+        with torch.no_grad():
+            for i in range(len(params)):
+                params[i].grad = params[i] - params_now[i]
         if outer_optim is not None: outer_optim(params)
     return do_reptile
 
@@ -176,10 +177,11 @@ if __name__ == '__main__': # pragma: no cover
     class SkipConnection(nn.Module):
         def __init__(self, *fns): super().__init__();  self.fn = nn.Sequential(*fns)
         def forward(self, x): return self.fn(x)
-    recall_len = 1 # 0 for the current bit, 1 for the 1-step-ago bit, etc. # TODO:
+    recall_len = 0 # 0 for the current bit, 1 for the 1-step-ago bit, etc. # TODO:
+    #   TODO: Okay, why is Reptile unable to learn even same-step targets?
     n = 8
     p = .1
-    lr = 1e-3
+    lr = 1e-1
     net = nn.Sequential(
         SkipConnection(nn.Linear(n, n)),
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
@@ -193,12 +195,11 @@ if __name__ == '__main__': # pragma: no cover
     def loss(state, past_bit, next_bit):
         loss = 0
 
-        for _ in range(1):
-            state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
-            state = net(state)
-            pred = state[..., 0] # Only the first number predicts.
-            state = initial_state*p + (1-p)*state # Soft-resetting.
-            loss = loss + (pred - past_bit).square().sum()
+        state = torch.cat((torch.full((state.shape[0], 1), next_bit), state[..., 1:]), -1)
+        state = net(state)
+        pred = state[..., 0] # Only the first number predicts.
+        state = initial_state*p + (1-p)*state # Soft-resetting.
+        loss = loss + (pred - past_bit).square().sum()
 
         state = fw_unnan(state)
         return loss, state
@@ -206,7 +207,7 @@ if __name__ == '__main__': # pragma: no cover
         result = loss(*a, **kw)
         result[0].backward()
         return result
-    train_loss = Reptile(loss, initial_params, steps=3, inner_optim=SGD(1e-3))
+    train_loss = Reptile(loss, initial_params, steps=3, inner_optim=SGD(1e-1))
     step_loss = make_functional(loss_with_backward, initial_params)[0]
     cur_params = [p.clone() for p in initial_params]
     for iter in range(50000):
@@ -217,18 +218,16 @@ if __name__ == '__main__': # pragma: no cover
 
         # Do a Reptile update.
         train_loss(state, past_bit, next_bit)
-        # TODO: Why does loss quickly go to `nan` without warning?
-        #   Except for the one time where we endlessly oscillate between 1.2726 and 0.7602…
 
         # Do an SGD update, and soft-reset the params.
         l2, state = step_loss(cur_params, state, past_bit, next_bit)
         with torch.no_grad():
-            for i, p in enumerate(cur_params):
-                p *= 1-p
-                p += p * initial_params[i]
+            for i, param in enumerate(cur_params):
+                param *= 1-p
+                param += p * initial_params[i]
 
         print(str(iter).rjust(5), 'L2', l2, state[0,0])
-        opt.step();  opt.zero_grad(True)
+        # opt.step();  opt.zero_grad(True) # TODO: …Why, even without this, do we still `nan`?…
 
         state = state.detach()
     # TODO: (…If this soft-resetting fails, should we try episodes? …And then, should we try episodes-in-`loss`, which should definitely be mathematically grounded since direction is the same?… …Only episodes-in-`loss` work. `DODGE` fails at what we wanted it for.)
@@ -246,6 +245,7 @@ if __name__ == '__main__': # pragma: no cover
     #   (TODO: …Also, should we *maybe* allow non-digital queries (controlled by a special name-part), for potential image generation?…)
     #     (…Maybe even allow `sn` instances to have arbitrary metadata attached, like a string "label cells with 'discrete', and querying them give you a discrete value"… (Even though this is kinda growing into "can attach arbitrary de/serialization code" for efficiency of digital transfers…))
     #       (…And, can GANs be measured not by a separate 0|1 NN, but by distance? …In fact, can't self-imitation be turned into GAN-like learning via adding DDPG that minimizes distance — if it's not done already? And by giving random noise as input, of course… Is this all we need for a unified analog/digital interface…)
+    #     (…Maybe have not just the `'goal'` name-part, but make it 'analog'|'analog_goal'|'digital'|'digital_goal'…)
     #   (…Also, shouldn't reverse the zero-padded bit patterns, since that makes it *less* robust to changes in bits-per-cell, not *more*.)
     #   (…Also, `data = np.nan_to_num(data.clip(-1., 1.), copy=False)`.)
     #   (…Also, at least make a note to create trivial non-digital-action environments.)
