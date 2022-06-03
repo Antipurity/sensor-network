@@ -106,11 +106,14 @@ def fw_unnan(x):
 
 
 
-def make_functional(model):
-    """A polyfill of functorch.make_functional: `make_functional(model) → fn, params`, where `out = model(*a, **kw)` becomes `out = fn(params, *a, **kw)`. `model` can't mutate its params, but `params` will be treated as differentiable and gain `.grad` unless within `with torch.no_grad(): ...`.
+def make_functional(model, params=...):
+    """A polyfill of `functorch.make_functional`: `make_functional(model) → fn, params`, where `out = model(*a, **kw)` becomes `out = fn(params, *a, **kw)`. `model` can't mutate its params, but `params` will be treated as differentiable and get any set-inside-the-call `.grad` copied to outside unless within `with torch.no_grad(): ...`.
+
+    Optionally pass the `params` arg (`model.parameters()` by default) to override the parameter-list.
 
     Convenient if advanced `params` manipulations are necessary (including soft-resetting, weighted averages, etc)."""
-    orig_params = list(model.parameters())
+    if params is ...: params = model.parameters()
+    orig_params = list(params)
     def fn(params, *a, **kw):
         assert len(orig_params) == len(params)
         old_params = []
@@ -128,11 +131,36 @@ def make_functional(model):
 
 
 
-def Reptile(loss_fn, ): # Reptile(loss_fn, model, steps=3, optim=...)
-    """TODO:"""
-    0 # TODO: How do we do this?
-    #   TODO: Is Reptile easier to implement with stateless-modules? Making the Reptile step inside such a module (with optimizer steps), then giving gradient-toward-final-values and doing an optim step…
-    #     TODO: With `make_functional`, do we really need the `model` arg?
+def SGD(lr):
+    def do_SGD(params):
+        with torch.no_grad():
+            for p in params:
+                p.data += lr * p.grad
+                p.grad = None
+    return do_SGD
+def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=SGD(.1)):
+    """
+    `Reptile(loss_fn, params, steps=3, inner_optim=SGD(lr=.01), outer_optim=SGD(lr=.1))`
+
+    Implements [Reptile](https://openai.com/blog/reptile/), which performs at least 2 gradient updates then updates initial parameters toward final ones.
+
+    (A simple meta-learning algorithm, AKA a recurrent-optimizer optimizer, which simply ignores the gradient from the inner update for speed.)
+
+    Call the resulting func as `fn(*a, **kw)`, and `loss_fn(*a, **kw)→loss` (must not be `make_functional`) will be called `steps` times, and `params` will get updated in-place. No result.
+    """
+    def optimize_loss_fn(*a, **kw):
+        loss = loss_fn(*a, **kw)
+        loss.backward()
+    optimize_loss_fn = make_functional(optimize_loss_fn, params=params)
+    def do_reptile(*a, **kw):
+        params_now = [p.clone() for p in params]
+        for _ in range(steps):
+            optimize_loss_fn(params_now, *a, **kw)
+            inner_optim(params_now)
+        for i in range(len(params)):
+            params[i].grad = params[i] - params_now[i]
+        outer_optim(params)
+    return do_reptile
 
 
 
@@ -152,6 +180,7 @@ if __name__ == '__main__': # pragma: no cover
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
     )
+    # TODO: How to use Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=SGD(.1))?…
     params = {
         'initial_state': torch.randn(1, n, requires_grad=True),
         'net': net,
