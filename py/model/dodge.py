@@ -152,7 +152,7 @@ def Reptile(loss_fn, params, steps=3, inner_optim=SGD(.01), outer_optim=None):
         result = loss_fn(*a, **kw)
         loss = result[0] if isinstance(result, tuple) else result
         loss.backward()
-    optimize_loss_fn = make_functional(optimize_loss_fn, params=params)
+    optimize_loss_fn = make_functional(optimize_loss_fn, params=params)[0]
     def do_reptile(*a, **kw):
         params_now = [p.clone() for p in params]
         for _ in range(steps):
@@ -203,7 +203,7 @@ if __name__ == '__main__': # pragma: no cover
         result[0].backward()
         return result
     train_loss = Reptile(loss, initial_params, steps=3, inner_optim=SGD(1e-3))
-    step_loss = make_functional(loss_with_backward, initial_params)
+    step_loss = make_functional(loss_with_backward, initial_params)[0]
     cur_params = [p.clone() for p in initial_params]
     for iter in range(50000):
         next_bit = 1 if random.randint(0,1)==1 else -1
