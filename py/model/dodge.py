@@ -106,6 +106,36 @@ def fw_unnan(x):
 
 
 
+def make_functional(model):
+    """A polyfill of functorch.make_functional: `make_functional(model) → fn, params`, where `out = model(*a, **kw)` becomes `out = fn(params, *a, **kw)`. `model` can't mutate its params, but `params` will be treated as differentiable and gain `.grad` unless within `with torch.no_grad(): ...`.
+
+    Convenient if advanced `params` manipulations are necessary (including soft-resetting, weighted averages, etc)."""
+    orig_params = list(model.parameters())
+    def fn(params, *a, **kw):
+        assert len(orig_params) == len(params)
+        old_params = []
+        for i in range(len(params)):
+            old_params[i].append(orig_params[i].clone())
+            orig_params[i].copy_(params[i])
+        out = model(*a, **kw)
+        for i in range(len(params)):
+            params[i].grad, orig_params[i].grad = orig_params[i].grad, None
+            orig_params[i].detach_()
+            params[i].copy_(orig_params[i])
+            orig_params[i].copy_(old_params[i])
+        return out
+    return fn, orig_params
+
+
+
+def Reptile(loss_fn, ): # Reptile(loss_fn, model, steps=3, optim=...)
+    """TODO:"""
+    0 # TODO: How do we do this?
+    #   TODO: Is Reptile easier to implement with stateless-modules? Making the Reptile step inside such a module (with optimizer steps), then giving gradient-toward-final-values and doing an optim step…
+    #     TODO: With `make_functional`, do we really need the `model` arg?
+
+
+
 if __name__ == '__main__': # pragma: no cover
     # Every step, we input a bit, then ask the `net` to output the bit from 8 steps ago.
     #   Loss is 1 if no learning, else lower.
@@ -160,7 +190,19 @@ if __name__ == '__main__': # pragma: no cover
     #   w e l l   w h a t   g o o d   i s   d o d g e   t h e n
     #   d o   w e   n e e d   r e p t i l e   a f t e r   a l l
 
-    # TODO: Implement the `DODGE`-like `Reptile(loss_fn, model, steps=3, optim=...)` decorator, which remembers ALL initial parameters, does several steps of computing the loss and minimizing it, then resets the optimizer state and sets params to initial-nudged-to-final (or sets to initial and sets grad and does an optimizer step).
+    # TODO: Implement the `DODGE`-like `Reptile(loss_fn, model, steps=3, optim=...)` [decorator](https://openai.com/blog/reptile/), which remembers ALL initial parameters, does several steps of computing the loss and minimizing it, then resets the optimizer state and sets params to initial-nudged-to-final (or sets to initial and sets grad and does an optimizer step).
     #   (With Reptile, pretty sure that forward-unrolling has to perform one-step SGD updates too, though only of next-step-prediction/enforcement. Doable, I suppose.)
-    # TODO: Try to make Reptile work here.
-    # (TODO: Abandon DODGE in `test.py`.)
+    # TODO: Try to make Reptile work here. (`loss` would have to stop modifying the bits.) (To evaluate, would have to perform SGD steps too. …Possibly with soft-resetting too…)
+    #   (If it can't work without backprop through the inner loop, uh…)
+    #   Do we want a polyfill of params-as-args modules for this? (How else would we implement soft-resetting without extremely ugly hacks?)
+    # (TODO: Abandon DODGE in `test.py`. Use Reptile probably, though maybe only for self-imitation/prediction. …And might want to do soft-resetting like we did with RNNs, toward the meta-learned values and away from current values…)
+    #   (TODO: …Also, should we *maybe* allow non-digital queries (controlled by a special name-part), for potential image generation?…)
+    #     (…Maybe even allow `sn` instances to have arbitrary metadata attached, like a string "label cells with 'discrete', and querying them give you a discrete value"… (Even though this is kinda growing into "can attach arbitrary de/serialization code" for efficiency of digital transfers…))
+    #       (…And, can GANs be measured not by a separate 0|1 NN, but by distance? …In fact, can't self-imitation be turned into GAN-like learning via adding DDPG that minimizes distance — if it's not done already? And by giving random noise as input, of course… Is this all we need for a unified analog/digital interface…)
+    #   (…Also, shouldn't reverse the zero-padded bit patterns, since that makes it *less* robust to changes in bits-per-cell, not *more*.)
+    #   (…Also, `data = np.nan_to_num(data.clip(-1., 1.), copy=False)`.)
+    #   (…Also, at least make a note to create trivial non-digital-action environments.)
+    #   (…Also, probably make non-1-cell data/queries reserve a spot in the name, because otherwise, not only would we have to always perform a full query even if a result midway is `None`, but also, dynamically-sized queries are impossible because the end-of-sequence action may become `None`. …Meaning that we may indeed want to shuffle queries, and be able to do filling-in-of-`None`s.)
+
+    # TODO: …Or can we repurpose `DODGE` to do very-long unrolls? …How would we know the targets during these unrolls though, particularly, distances? Not like we can retroactively relabel anything if learning online, so computing losses at goal-switching won't be enough… And very-long-unrolls-of-the-past can't scale to millions of timesteps anyway…
+    #   (…Maybe self-imitation *could* learn good-for-remembering actions as if they were RNN state, saving us from having to do a perfect solution… Like an explicit notepad of facts and to-do tasks…)
