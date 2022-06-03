@@ -179,9 +179,11 @@ if __name__ == '__main__': # pragma: no cover
         def forward(self, x): return self.fn(x)
     recall_len = 0 # 0 for the current bit, 1 for the 1-step-ago bit, etc. # TODO:
     #   TODO: Okay, why is Reptile unable to learn even same-step targets?
+    #     …Maybe the better question is: do we care?…
+    #       Would we really end up using Reptile for anything in the end, when we already have SRWM for meta-learning?
     n = 8
     p = .1
-    lr = 1e-1
+    lr = 1e-3
     net = nn.Sequential(
         SkipConnection(nn.Linear(n, n)),
         SkipConnection(ReLU(), LayerNorm(n), nn.Linear(n, n)),
@@ -207,7 +209,7 @@ if __name__ == '__main__': # pragma: no cover
         result = loss(*a, **kw)
         result[0].backward()
         return result
-    train_loss = Reptile(loss, initial_params, steps=3, inner_optim=SGD(1e-1))
+    train_loss = Reptile(loss, initial_params, steps=3, inner_optim=SGD(1e-3), outer_optim=SGD(1e-3))
     step_loss = make_functional(loss_with_backward, initial_params)[0]
     cur_params = [p.clone() for p in initial_params]
     for iter in range(50000):
@@ -221,13 +223,13 @@ if __name__ == '__main__': # pragma: no cover
 
         # Do an SGD update, and soft-reset the params.
         l2, state = step_loss(cur_params, state, past_bit, next_bit)
+        opt.step();  opt.zero_grad(True)
         with torch.no_grad():
             for i, param in enumerate(cur_params):
                 param *= 1-p
                 param += p * initial_params[i]
 
         print(str(iter).rjust(5), 'L2', l2, state[0,0])
-        # opt.step();  opt.zero_grad(True) # TODO: …Why, even without this, do we still `nan`?…
 
         state = state.detach()
     # TODO: (…If this soft-resetting fails, should we try episodes? …And then, should we try episodes-in-`loss`, which should definitely be mathematically grounded since direction is the same?… …Only episodes-in-`loss` work. `DODGE` fails at what we wanted it for.)
