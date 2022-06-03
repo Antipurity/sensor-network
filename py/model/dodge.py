@@ -102,7 +102,7 @@ def detach(x):
 def fw_unnan(x):
     """Removes `nan`s from `x`'s tangents (forward-gradient)."""
     primal, tangent = fw.unpack_dual(x)
-    return fw.make_dual(primal, torch.nan_to_num(tangent))
+    return fw.make_dual(primal, torch.nan_to_num(tangent) if tangent is not None else None)
 
 
 
@@ -118,8 +118,9 @@ def make_functional(model, params=...):
         assert len(orig_params) == len(params)
         old_params = []
         for i in range(len(params)):
-            old_params[i].append(orig_params[i].clone())
-            orig_params[i].copy_(params[i])
+            old_params.append(orig_params[i].clone())
+            orig_params[i].detach_().copy_(params[i])
+            orig_params[i].requires_grad_(True)
         out = model(*a, **kw)
         for i in range(len(params)):
             params[i].grad, orig_params[i].grad = orig_params[i].grad, None
