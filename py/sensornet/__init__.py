@@ -68,7 +68,7 @@ class Handler:
     ```python
     Handler().shape(8,8,8, 64)
     Handler(8,8,8, 64)
-    Handler(*cell_shape, sensors=None, listeners=None, backend=numpy, namer_cache_size=1024, modify_name=None)
+    Handler(*cell_shape, sensors=None, listeners=None, info=None, backend=numpy, namer_cache_size=1024, modify_name=None)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -79,16 +79,18 @@ class Handler:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
     - `sensors`: function/s that take this handler, to prepare data to handle.
     - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
+    - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else.
     - `modify_name`: a list of funcs from name to name, with singular strings already wrapped in a one-item tuple.
     - `backend`: the NumPy object.
     - `namer_cache_size`: info that is associated with names is cached for speed.
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, sensors=None, listeners=None, modify_name=None, backend=np, namer_cache_size=1024):
+    def __init__(self, *cell_shape, sensors=None, listeners=None, info=None, modify_name=None, backend=np, namer_cache_size=1024):
         assert sensors is None or isinstance(sensors, list)
         assert listeners is None or isinstance(listeners, list)
         assert modify_name is None or isinstance(modify_name, list)
+        import json;  json.dumps(info) # Just for error-checking.
         self._query_cell = 0
         self._data = []
         self._query = []
@@ -109,6 +111,7 @@ class Handler:
         self.modify_name = modify_name if modify_name is not None else []
         if len(cell_shape):
             self.shape(*cell_shape)
+        self.info = info
     def shape(self, *cell_shape):
         """`sn.shape(*cell_shape)`
 
@@ -674,6 +677,7 @@ sensors = default.sensors
 listeners = default.listeners
 modify_name = default.modify_name
 cell_shape, cell_size = default.cell_shape, default.cell_size
+info = None
 def shape(*k, **kw):
     global cell_shape, cell_size
     r = default.shape(*k, **kw)

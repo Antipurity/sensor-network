@@ -47,11 +47,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Always only have 1 step of sampling.
+# TODO: Always only have 1 step of sampling; zero-pad the rest.
 
-# TODO: Make the `sn.Handler` constructor also accept `info=None`, which should be a JSON-serializable human-readable information about this handler. (To check JSON-ability, do `import json;  json.dumps(obj)`, which will throw if it fails.)
-#   TODO: Here, write about goals and goal-groups, and about digital and analog observations/actions.
-#     TODO: And expose bits-per-cell, and the fact that we support analog input but not output.
 # TODO: Rename the `.data` method of handlers to `.set`, for consistency with `.get`.
 # TODO: Have the `type` arg after the `data`. And, `.query`/`.get` should name their "main" arg the type.
 #   TODO: If `type` is not `None`, assert hasattr of our method, then defer to it (though in `.get`, overriding of `get` should be optional, so that it can fall back to `query`). Else, both name and type must be `None`, and data must be 2D and cell-sized.
@@ -159,13 +156,23 @@ slow_mode = .05 # Artificial delay per step.
 
 dist_levels = 1 # TODO: At least 2.
 bits_per_chunk = 8 # How to `sample`.
+#   TODO: Should be `bits_per_cell`, none of that "chunk" business.
 
 lr = 1e-3
 replays_per_step = 2
 max_replay_buffer_len = 1024
 
-save_load = ''
+save_load = '' # A filename, if saving/loading occurs.
 steps_per_save = 1000
+
+sn.info = {
+    'docs': """TODO:""",
+    'analog':{
+    },
+    'digital':{
+        'bits_per_cell': bits_per_chunk,
+    },
+}
 
 
 
