@@ -36,7 +36,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# (BMIs with even futuristic levels of tech can't do anything like downloading knowledge into your brain or capturing and controlling bodily functions for a full-dive into virtual worlds. Even write-access (computer-to-brain) is very hard to make out, and may in fact need years of training. But read-access (brain-to-computer) can explore a human's internal reactions, so that the human can revisit those reactions at will without having to expend effort. And maybe you'd need RTX 6090 to run the AI part in real-time, since it may be Gato-sized.)
+# (BMIs with even futuristic levels of tech can't do anything like downloading knowledge into your brain or capturing and controlling bodily functions for a full-dive into virtual worlds. Even write-access (computer-to-brain) is very hard to make out, and may in fact need years of training. But read-access (brain-to-computer) can explore a human's internal reactions, so that the human can revisit those reactions at will without having to expend effort; in addition, predicting neural-input could be useful for learning good represetations. And maybe you'd need RTX 6090 to run the AI part in real-time, since it may be Gato-sized.)
 #   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.)
 #     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war and murder become routine and one global superpower emerges since the only price of destruction is now some resources; creating new ideas rather than spreading existing ones becomes nearly impossible.)
 #   (…Didn't we write this down already?…)
@@ -47,18 +47,38 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Update the DODGE in `test.py` to use the new class-interface. Do very-long DODGE unrolls, though only for online self-imitation (distances *have* to be learned via a replay buffer).
-#   (TODO: …Also, should we *maybe* allow non-digital queries (controlled by a special name-part), for potential image generation?… If we don't, generating the correct bytes would likely be too expensive…)
-#     (…Maybe even allow `sn` instances to have arbitrary metadata attached, like a string "label cells with 'discrete', and querying them give you a discrete value"… (Even though this is kinda growing into "can attach arbitrary de/serialization code" for efficiency of digital transfers…))
-#       (…And, can GANs be measured not by a separate 0|1 NN, but by distance? …In fact, can't self-imitation be turned into GAN-like learning via adding DDPG that minimizes distance — if it's not done already? And by giving random noise as input, of course… Is this all we need for a unified analog/digital interface…)
-#     (…Maybe have not just the `'goal'` name-part, but make it 'analog'|'analog_goal'|'digital'|'digital_goal'…)
-#   (…Also, at least make a note to create trivial non-digital-action environments.)
-#     (Possibly, make the goal a random image (plus "at the final-state"), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state?)
-#   (…Also, probably make non-1-cell data/queries reserve a spot in the name, because otherwise, not only would we have to always perform a full query even if a result midway is `None`, but also, dynamically-sized queries are impossible because the end-of-sequence action may become `None`. …Meaning that we may indeed want to shuffle queries, and be able to do filling-in-of-`None`s.)
-#   (…Maybe self-imitation *could* learn good-for-remembering actions as if they were RNN state, saving us from having to do a perfect solution… Like an explicit notepad of facts and to-do tasks… Analogous to how humans use language to augment their learning, and aren't natively super-intelligences…)
-#   TODO: …Do we want the base class `_DataType`, with at least `await .get()` pre-defined (query until not `None`)?…
-# TODO: Make the `sn.Handler` constructor also accept `info=None`, which should be a JSON-serializable human-readable information about this handler.
+# TODO: Update the DODGE in `test.py` to use the new class-interface (with `DODGE(model).restart()` and `.minimize(loss)` and the rare `.restart()`). Do very-long DODGE unrolls, though only for online self-imitation (distances *have* to be learned via a replay buffer).
+
+# TODO: Make the `sn.Handler` constructor also accept `info=None`, which should be a JSON-serializable human-readable information about this handler. (To check JSON-ability, do `import json;  json.dumps(obj)`, which will throw if it fails.)
 #   TODO: Here, write about goals and goal-groups, and about digital and analog observations/actions.
+#     TODO: And expose bits-per-cell, and the fact that we support analog input but not output.
+# TODO: Rename the `.data` method of handlers to `.set`, for consistency with `.get`.
+# TODO: Have the `type` arg after the `data`. And, `.query`/`.get` should name their "main" arg the type.
+#   TODO: If `type` is not `None`, assert hasattr of our method, then defer to it (though in `.get`, overriding of `get` should be optional, so that it can fall back to `query`). Else, both name and type must be `None`, and data must be 2D and cell-sized.
+#   TODO: Raw-int and tuple-of-ints in `type` should become `Int(that)`.
+# TODO: Have `Int(*shape, int_or_int_tuple)`: set autoregressively and in a random order, queried autoregressively (by installing our own into `sn.sensors`) and in a random order (failing on the first concrete `None` result), with getting-mode which immediately re-queries `None`s.
+#   TODO: Handle `(2,2,2,…,2)`-at-the-end specially, by simply putting the bits into cells as they come, aware of `sn.info['bits_per_cell']` (which must exist and be at least 1).
+#     TODO: Defer all other end-sizes to this, by putting each number's bit-pattern separately.
+#   TODO: Each cell's name should have a unique number, signifying the progress within the pattern.
+#   TODO: How to support `...`s/funcs at shapes' beginnings (dynamically-sized sequences) (`.query` fails for those, since end-of-stream is not guaranteed to arrive)?…
+# TODO: …Same for floats, except unlike ints, floats only have `shape`, and if dynamically-sized, have to expose binary actions for end/continue — AND, they are queried in parallel…
+#   (Floats should throw if info says that the env doesn't support analog getting/setting…)
+# TODO: What datatypes do we want? Particularly, the basic datatypes? Need at least the digital "sequence of ints" (queried autoregressively) (if shape is `...` or a function, should only support `.get` and add 1 action for "end-of-stream" and only stop when end-of-stream) and the analog "sequence of floats" (queried in parallel) (if shape has `...` or a function at the beginning, only support `.get` and add a digital "end of stream" action for each step), right?
+#   TODO: The `Goal(datatype)` datatype, which appends `'goal'` to the name and defers to the datatype.
+#     TODO: The final naming should handle these `'goal'`-at-the-end cells by setting the "is this a goal-cell" bit.
+#     TODO: Instead of taking up different name-parts for digital/analog/goal/progress, we should merge that with the "progress inside the set/query/get method" number: much more efficient. (And, we will no longer need to use `sn.Filter` to filter out the goal-cells, we can just do a much more direct equality-check. …We'd only need the filter for potential debugging of sensors then, right…)
+#   TODO: Also support strings and image-patches. (The most important 'convenience' datatypes.)
+#   TODO: Also support mu-encoded floats-in-ints.
+#   TODO: So what's the exact interface for datatype methods? Exactly the same as the main methods, but with `sn` at the front (so that datatypes can defer to 2D-impl of their base methods), with the assumption that names will be taken care of?
+#   TODO: Also remove all support for namers, right?… Does this include filters?… …Does this include funcs-in-names, since datatypes can just prepare name-parts directly with numbers (…string-hashing should probably have an LRU cache)?…
+# TODO: Maybe, have `.metrics()` on handlers, and have one metric: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data).
+
+
+
+# TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
+#   TODO: …Try not L2 prediction but a GAN, with the 'discriminator' being the distance network (in other words, only do self-imitation for digital cells, and do DDPG for analog cells instead — after giving random noise as an extra input)?
+#     TODO: …Or is it sufficient to expose a ghost digital query, which will get reinforced when on correct paths for enhanced L2 prediction of the correct path?… (This *might* even be usable as 'full-RNN-state' goals, with zero effort on our side…) (A bit like humans using language/thoughts to augment their learning.)
+# TODO: …Is it possible to have an analog-reward-goal which isn't ever actually encountered, but is set to 1 so that the model always maximizes reward? What would we need for this? The unroll-time measured-distance-to-analog-goal, which is 0…1 and is only there for higher precision?… …But how would we detect if cells are same-named, and what would we do if we don't actually have a same-name observation cell…
 
 
 
