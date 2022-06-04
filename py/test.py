@@ -52,11 +52,13 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #     (…Maybe even allow `sn` instances to have arbitrary metadata attached, like a string "label cells with 'discrete', and querying them give you a discrete value"… (Even though this is kinda growing into "can attach arbitrary de/serialization code" for efficiency of digital transfers…))
 #       (…And, can GANs be measured not by a separate 0|1 NN, but by distance? …In fact, can't self-imitation be turned into GAN-like learning via adding DDPG that minimizes distance — if it's not done already? And by giving random noise as input, of course… Is this all we need for a unified analog/digital interface…)
 #     (…Maybe have not just the `'goal'` name-part, but make it 'analog'|'analog_goal'|'digital'|'digital_goal'…)
-#   (…Also, shouldn't reverse the zero-padded bit patterns, since that makes it *less* robust to changes in bits-per-cell, not *more*.)
-#   (…Also, `data = np.nan_to_num(data.clip(-1., 1.), copy=False)`.)
 #   (…Also, at least make a note to create trivial non-digital-action environments.)
+#     (Possibly, make the goal a random image (plus "at the final-state"), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state?)
 #   (…Also, probably make non-1-cell data/queries reserve a spot in the name, because otherwise, not only would we have to always perform a full query even if a result midway is `None`, but also, dynamically-sized queries are impossible because the end-of-sequence action may become `None`. …Meaning that we may indeed want to shuffle queries, and be able to do filling-in-of-`None`s.)
 #   (…Maybe self-imitation *could* learn good-for-remembering actions as if they were RNN state, saving us from having to do a perfect solution… Like an explicit notepad of facts and to-do tasks… Analogous to how humans use language to augment their learning, and aren't natively super-intelligences…)
+#   TODO: …Do we want the base class `_DataType`, with at least `await .get()` pre-defined (query until not `None`)?…
+# TODO: Make the `sn.Handler` constructor also accept `info=None`, which should be a JSON-serializable human-readable information about this handler.
+#   TODO: Here, write about goals and goal-groups, and about digital and analog observations/actions.
 
 
 
@@ -79,7 +81,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
 #   TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
-#     …If we embrace the digital nature of the output (and no longer have 8 calls per step, instead reversing & zero-padding the bit patterns (reversing so that simply resizing the cells and action-sizes preserves *all* semantics), so everything is 8× faster), then we could write reliable allocators, as classes to be used with `sn.data` and `sn.query` (bidirectional for consistency, maybe via `.data(sn)` and `await .query(sn)` and `await .get(sn)`) (to preserve autoregressive correctness guarantees, if one cell isn't enough, then don't use many parallel-cells but use many sequential-steps): ints (obviously), floats (probably mu-encoded), strings (with a tokenizer) (both fixed-size and dynamic-size), even raw byte sequences and whatever we can imagine (N-d arrays of allocators?) — all without even a single bit wasted unless we want to…
+#     …If we embrace the digital nature of the output (and no longer have 8 calls per step, instead zero-padding the bit patterns, so everything is 8× faster), then we could write reliable allocators, as classes to be used with `sn.data` and `sn.query` (bidirectional for consistency, maybe via `.data(sn)` and `await .query(sn)` and `await .get(sn)`) (to preserve autoregressive correctness guarantees, if one cell isn't enough, then don't use many parallel-cells but use many sequential-steps): ints (obviously), floats (probably mu-encoded), strings (with a tokenizer) (both fixed-size and dynamic-size), even raw byte sequences and whatever we can imagine (N-d arrays of allocators?) — all without even a single bit wasted unless we want to…
 #       (POSSIBLY: querying should shuffle its (*uniquely-named*) cell-requests and do them in-order, with `.get` re-doing `None`-result cell-requests until settled — shuffled so that NNs can handle dropped packets without recomputing whole sequences, and have an easier time tracking the boundaries of requests.)
 #       Isn't this so much better than analog?
 #         (We can even remove our crummy number-sequence allocator, which is autoregressively incorrect since it allocates all cells in parallel.)
@@ -432,6 +434,8 @@ async def main():
                             await asyncio.sleep(slow_mode)
 
                         obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
+                        obs   = np.nan_to_num(  obs.clip(-1., 1.), copy=False)
+                        query = np.nan_to_num(query.clip(-1., 1.), copy=False)
                         #   (If getting out-of-memory, might want to chunk data/query processing.)
 
                         # (The replay buffer won't want to know any user-specified goals.)
