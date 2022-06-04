@@ -47,7 +47,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Update the DODGE in `test.py` to use the new class-interface (with `DODGE(model).restart()` and `.minimize(loss)` and the rare `.restart()`). Do very-long DODGE unrolls, though only for online self-imitation (distances *have* to be learned via a replay buffer).
+# TODO: Always only have 1 step of sampling.
 
 # TODO: Make the `sn.Handler` constructor also accept `info=None`, which should be a JSON-serializable human-readable information about this handler. (To check JSON-ability, do `import json;  json.dumps(obj)`, which will throw if it fails.)
 #   TODO: Here, write about goals and goal-groups, and about digital and analog observations/actions.
@@ -215,7 +215,7 @@ def goal_group_ids(frame):
 
 
 
-class Sampler:
+class Sampler: # TODO: So do we just kill this? How to replace this with its one-step-sampling version?
     """
     GANs, VAEs, contrastive learning, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions    
     Autoregressive discrete sampling: AWAKEN
@@ -331,6 +331,7 @@ def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
     y = transition(x)
     return y[..., :-(dist_levels+1)], 2 ** y[..., -(dist_levels+1):-1], 2 ** y[..., -1:]
+dodge = DODGE(transition)
 optim = torch.optim.Adam(transition.parameters(), lr=lr)
 
 
@@ -403,18 +404,16 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
             if hasattr(env, 'metric'):
                 log(n, False, torch, **{name+'.'+k: v for k,v in env.metric().items()})
                 n += 1
-        # TODO: …How can we possibly fix the loss not decreasing?… We have too many moving parts, don't we…
-        #   TODO: …Test DODGE separately, maybe?… Maybe `model/dodge.py`…
-        #   TODO: …Should we try disabling some losses, and/or gating?… …Doesn't seem to help us any…
+        # TODO: …How can we possibly fix the loss not decreasing?…
 
         loss = predict_loss + regret_loss + dist_loss + ungrounded_dist_loss
         return loss
-loss_fn = DODGE(loss, transition)
 
 def replay(optim, current_frame, current_time):
     """Remembers a frame from a distant past, so that the NN can reinforce actions and observations when it needs to go to the present."""
     if len(replay_buffer) < 8: return
 
+    L = 0
     for _ in range(replays_per_step):
 
         time, ep, frame, regret_cpu = random.choice(replay_buffer)
@@ -428,7 +427,7 @@ def replay(optim, current_frame, current_time):
 
         # Learn.
         timediff = torch.full((frame.shape[0] + dst.shape[0], 1), float(current_time - time))
-        loss_fn(ep, frame, dst=dst, timediff=timediff, regret_cpu=regret_cpu)
+        L = L + loss(ep, frame, dst=dst, timediff=timediff, regret_cpu=regret_cpu)
 
         # If our replay buffer gets too big, leave only max-regret samples.
         if len(replay_buffer) > max_replay_buffer_len:
@@ -436,6 +435,7 @@ def replay(optim, current_frame, current_time):
             del replay_buffer[(max_replay_buffer_len // 2):]
 
     # Optimize NN params.
+    dodge.minimize(L)
     optim.step();  optim.zero_grad(True)
 
 
@@ -444,6 +444,7 @@ def replay(optim, current_frame, current_time):
 async def main():
     with fw.dual_level():
         with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
+            dodge.restart()
             with State.Episode() as life:
                 with torch.no_grad():
                     prev_q, action, frame = None, None, None
@@ -485,6 +486,12 @@ async def main():
                                     expiration_cpu = torch.tensor(time+10000, device='cpu').int()
                                     expiration_gpu = torch.tensor(time+10000).int()
                                     goals[group] = (goal, expiration_cpu, expiration_gpu)
+                                    # And change DODGE direction when changing the goal.
+                                    if random.randint(1, len(goals)) == 1:
+                                        dodge.restart()
+
+                        # TODO: Here is the perfect place to predict `frame`'s data from its zeroed-out-data version, if we DODGE-predict online. (Though, might want to remove the goal-cells.) (Replays can still do prediction, just, one-step.)
+                        #   (Gating the prediction by improvement is easy here, because we'll have 2 distances: of prediction and of `frame` a bit below. And even of the `action` from the previous step…)
 
                         # Give goals to the RNN.
                         extra_cells = []
