@@ -24,9 +24,11 @@ h = sn.shape(8,8,8,8, 64)
 
 Then send/receive data:
 
+TODO: Update the mini-tutorial with datatypes.
+
 ```python
 def set():
-    h.data('name', np.random.rand(32)*2-1)
+    h.set('name', np.random.rand(32)*2-1)
 
 async def get():
     nums = await h.get('name', 32)
@@ -126,9 +128,9 @@ class Handler:
         self.cell_size = sum(cell_shape)
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
         return self
-    def data(self, name=None, data=None, error=None):
+    def set(self, name=None, data=None, error=None):
         """
-        `sn.data(name, data, error=None)`
+        `sn.set(name, data, error=None)`
 
         Sends named data to the handler. Receives nothing; see `.query`.
 
@@ -183,7 +185,7 @@ class Handler:
         From the handler, asks for a NumPy array, or `None` (usually on transmission errors).
 
         Args:
-        - `name`: see `.data`.
+        - `name`: see `.set`.
         - `query`: the shape of the feedback that you want to receive.
         - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
@@ -234,7 +236,7 @@ class Handler:
 
         Useful if NumPy arrays have to be transferred manually, such as over the Internet.
         """
-        self.data(None, data, data_error)
+        self.set(None, data, data_error)
         return self.query(None, query, query_error, callback)
     async def get(self, name, query, error=None):
         """
@@ -684,7 +686,7 @@ def shape(*k, **kw):
     cell_shape, cell_size = default.cell_shape, default.cell_size
     return r
 shape.__doc__ = Handler.shape.__doc__
-data = default.data
+set = default.set
 query = default.query
 pipe = default.pipe
 get = default.get

@@ -49,7 +49,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Always only have 1 step of sampling; zero-pad the rest.
 
-# TODO: Rename the `.data` method of handlers to `.set`, for consistency with `.get`.
 # TODO: Have the `type` arg after the `data`. And, `.query`/`.get` should name their "main" arg the type.
 #   TODO: If `type` is not `None`, assert hasattr of our method, then defer to it (though in `.get`, overriding of `get` should be optional, so that it can fall back to `query`). Else, both name and type must be `None`, and data must be 2D and cell-sized.
 #   TODO: Raw-int and tuple-of-ints in `type` should become `Int(that)`.
@@ -453,7 +452,7 @@ async def main():
         with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
             dodge.restart()
             with State.Episode() as life:
-                with torch.no_grad():
+                with torch.no_grad(): # TODO: This should only apply to the parts where we aren't learning from the replay buffer.
                     prev_q, action, frame = None, None, None
                     goals = {} # goal_group_id → (gpu_goal_cells, cpu_expiration_time)
                     time = 0 # Hopefully this doesn't get above 2**31-1.
