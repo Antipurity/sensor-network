@@ -49,9 +49,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Always only have 1 step of sampling; zero-pad the rest.
 
-# TODO: Have the `type` arg after the `data`. And, `.query`/`.get` should name their "main" arg the type.
-#   TODO: If `type` is not `None`, assert hasattr of our method, then defer to it (though in `.get`, overriding of `get` should be optional, so that it can fall back to `query`). Else, both name and type must be `None`, and data must be 2D and cell-sized.
-#   TODO: Raw-int and tuple-of-ints in `type` should become `Int(that)`.
 # TODO: Have `Int(*shape, int_or_int_tuple)`: set autoregressively and in a random order, queried autoregressively (by installing our own into `sn.sensors`) and in a random order (failing on the first concrete `None` result), with getting-mode which immediately re-queries `None`s.
 #   TODO: Handle `(2,2,2,…,2)`-at-the-end specially, by simply putting the bits into cells as they come, aware of `sn.info['bits_per_cell']` (which must exist and be at least 1).
 #     TODO: Defer all other end-sizes to this, by putting each number's bit-pattern separately.

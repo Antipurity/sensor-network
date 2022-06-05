@@ -71,7 +71,7 @@ class Handler:
     ```python
     Handler().shape(8,8,8, 64)
     Handler(8,8,8, 64)
-    Handler(*cell_shape, sensors=None, listeners=None, info=None, modify_name=None, backend=numpy, name_cache_size=1024)
+    Handler(*cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -80,20 +80,21 @@ class Handler:
 
     Inputs:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
-    - `sensors`: function/s that take this handler, to prepare data to handle.
-    - `listeners`: function/s that take handler & data & error, when data is ready to handle. `Filter` instances are good candidates for this.
     - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else.
-    - `modify_name`: a list of funcs from name to name, with singular strings already wrapped in a one-item tuple.
+    - `sensors`: `set` of functions that take this handler, to prepare data to handle.
+    - `listeners`: `set` of functions that take handler & data & error, when data is ready to handle. `Filter` instances are good candidates for this.
+    - `modify_name`: `list` of funcs from name to name, with singular strings already wrapped in a one-item tuple.
     - `backend`: the NumPy object.
     - `name_cache_size`: info that is associated with names is cached for speed.
 
-    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, sensors=None, listeners=None, info=None, modify_name=None, backend=np, name_cache_size=1024):
-        assert sensors is None or isinstance(sensors, list)
-        assert listeners is None or isinstance(listeners, list)
+    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=np, name_cache_size=1024):
+        from builtins import set
         assert modify_name is None or isinstance(modify_name, list)
         import json;  json.dumps(info) # Just for error-checking.
+        sensors = set(sensors) if sensors is not None else set()
+        listeners = set(listeners) if listeners is not None else set()
         self._query_cell = 0
         self._data = []
         self._query = []
@@ -103,10 +104,9 @@ class Handler:
         self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
         self._wait_for_requests = None # asyncio.Future()
         self._namers_cache = {}
-        x = sensors if sensors is not None else []
-        self.sensors = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
-        x = listeners if listeners is not None else []
-        self.listeners = [x] if callable(x) else list(x) if isinstance(x, tuple) else x
+        self.info = info
+        self.sensors = sensors
+        self.listeners = listeners
         self.cell_shape = ()
         self.cell_size = 0
         self.backend = backend
@@ -116,7 +116,6 @@ class Handler:
         self._name = None
         if len(cell_shape):
             self.shape(*cell_shape)
-        self.info = info
     def name(self, name):
         """`sn.name(name)`
 
@@ -363,6 +362,22 @@ class Handler:
                         break
                     await asyncio.sleep(.003)
         return self._take_data()
+
+    class Int:
+        """
+        TODO:
+        """
+        def __init__(self, *shape):
+            s, o = shape[:-1], shape[-1]
+            self.shape, self.opts = s, o
+            assert all(isinstance(n, int) for n in s)
+            assert isinstance(o, int) or isinstance(o, tuple) and all(isinstance(n, int) for n in o)
+            # TODO: Do we want to pre-create the class for bit-streaming, which we can defer to, already?
+        # TODO: The `Int(*shape, options)` type.
+        #   TODO: A method for setting.
+        #     …Autoregression via adding one global sensor for all the handler's future data, right?…
+        #   TODO: A method with a bool to switch between querying and getting.
+        #     (…For autoregressive querying, we want to add a listener, right?)
 
 
 
