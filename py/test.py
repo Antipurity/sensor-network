@@ -61,13 +61,17 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   (Floats should throw if info says that the env doesn't support analog getting/setting…)
 # TODO: What datatypes do we want? Particularly, the basic datatypes? Need at least the digital "sequence of ints" (queried autoregressively) (if shape is `...` or a function, should only support `.get` and add 1 action for "end-of-stream" and only stop when end-of-stream) and the analog "sequence of floats" (queried in parallel) (if shape has `...` or a function at the beginning, only support `.get` and add a digital "end of stream" action for each step), right?
 #   TODO: The `Goal(datatype)` datatype, which appends `'goal'` to the name and defers to the datatype.
-#     TODO: The final naming should handle these `'goal'`-at-the-end cells by setting the "is this a goal-cell" bit.
-#     TODO: Instead of taking up different name-parts for digital/analog/goal/progress, we should merge that with the "progress inside the set/query/get method" number: much more efficient. (And, we will no longer need to use `sn.Filter` to filter out the goal-cells, we can just do a much more direct equality-check. …We'd only need the filter for potential debugging of sensors then, right…)
+#     TODO: Make `Goal` set a global bool variable like a context manager. `Int` and `Float` should check that variable.
+#     TODO: Instead of taking up different name-parts for digital/analog/goal/progress, we should merge that with the "progress inside the set/query/get method" number: much more efficient. Prepend a tuple of 3 numbers in `Int`/`Float`. (And, we will no longer need to use `sn.Filter` to filter out the goal-cells, we can just do a much more direct equality-check. …We'd only need the filter for potential debugging of sensors then, right…)
 #   TODO: Also support strings and image-patches. (The most important 'convenience' datatypes.)
 #   TODO: Also support mu-encoded floats-in-ints.
 #   TODO: So what's the exact interface for datatype methods? Exactly the same as the main methods, but with `sn` at the front (so that datatypes can defer to 2D-impl of their base methods), with the assumption that names will be taken care of?
 #   TODO: Also remove all support for namers, right?… Does this include filters?… …Does this include funcs-in-names, since datatypes can just prepare name-parts directly with numbers (…string-hashing should probably have an LRU cache)?…
 # TODO: Maybe, have `.metrics()` on handlers, and have one metric: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data).
+
+
+
+# TODO: Also, here, in `modify_name`, should not just *set* the group-ID but *add* to it (and return result mod -1…1), so that envs can actually specify sub-envs.
 
 
 
@@ -209,7 +213,7 @@ replay_buffer = []
 
 
 # Our interface to multigroup partial goals (AND/OR goals): the last 2 name parts are ('goal', group_id).
-goal_filter = sn.Filter([*[None for _ in cell_shape[:-3]], 'goal', ...])
+goal_filter = sn.Filter([*[None for _ in cell_shape[:-3]], 'goal', ...]) # TODO: Just check the goal-bit with the new system.
 goal_name = torch.tensor(goal_filter.template(cell_shape))
 goal_name = torch.cat((goal_name, torch.full((cell_shape[-1],), float('nan'))), -1)
 

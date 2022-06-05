@@ -24,7 +24,7 @@ h = sn.shape(8,8,8,8, 64)
 
 Then send/receive data:
 
-TODO: Update the mini-tutorial with datatypes.
+TODO: Update the mini-tutorial with datatypes. Once we have them.
 
 ```python
 def set():
@@ -62,6 +62,7 @@ This module implements this basic protocol, and does not include anything [else]
 import numpy as np
 import hashlib
 import asyncio
+import functools
 
 
 
@@ -80,7 +81,7 @@ class Handler:
     Inputs:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
     - `sensors`: function/s that take this handler, to prepare data to handle.
-    - `listeners`: function/s that take data & error & cell-shape, when data is ready to handle. See `Filter`.
+    - `listeners`: function/s that take handler & data & error, when data is ready to handle. `Filter` instances are good candidates for this.
     - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else.
     - `modify_name`: a list of funcs from name to name, with singular strings already wrapped in a one-item tuple.
     - `backend`: the NumPy object.
@@ -111,9 +112,22 @@ class Handler:
         self.backend = backend
         self.namer_cache_size = namer_cache_size
         self.modify_name = modify_name if modify_name is not None else []
+        self._str_to_floats = functools.lru_cache(namer_cache_size)(functools.partial(_str_to_floats, backend))
+        self._name = None
         if len(cell_shape):
             self.shape(*cell_shape)
         self.info = info
+    def name(self, name):
+        """`sn.name(name)`
+
+        Converts a Python name to a NumPy template, of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
+
+        Names are tuples of either strings (which are MD5-hashed with the 16 bytes converted to -1…1 numbers), `None`s, and/or tuples of either numbers or `None`s."""
+        if isinstance(name, str): name = (name,)
+        for fn in self.modify_name:
+            name = fn(name)
+        assert isinstance(name, tuple)
+        return self._name(name)
     def shape(self, *cell_shape):
         """`sn.shape(*cell_shape)`
 
@@ -127,6 +141,8 @@ class Handler:
         self.cell_shape = cell_shape
         self.cell_size = sum(cell_shape)
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
+        # Also create the cached Python-name-to-NumPy-name method.
+        self._name = functools.lru_cache(self.namer_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
         return self
     def set(self, name=None, data=None, error=None):
         """
@@ -136,40 +152,25 @@ class Handler:
 
         Args:
         - `name`, such as `('image', .25, .5)`:
-            - If a string, or a tuple/list of strings or per-part tuples, then it's used to turn the 1D data array into a 2D array.
+            - If a string, or a tuple/list of strings or per-part tuples, then it's used to turn the 1D data array into a 2D array. See `.name`. TODO: …Won't be the case with datatypes, right?
             - If `None`, `data` & `error` must already incorporate the name and be sized `cells×sum(cell_shape)`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
         - `data`: a list, or a NumPy 1D array of numbers, preferably -1…1.
         - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
-
-        More details on names:
-        - A string: MD5-hashed, and the resulting 16 bytes are put into one part, sliced, and shifted and rescaled to -1…1.
-        - `None` or `...`: anything goes here (zeros when naming).
-        - A tuple:
-            - A number, -1…1: put into a part directly.
-            - A function `f(start, end, total)` for dynamic cell naming. The arguments refer to indices in the data; the result is a number.
-                - For example, `lambda start, end, total: start/total*2-1` puts a number, from -1 (inclusive) to 1 (exclusive).
-                - For example, `lambda start, end, total: end / total*2-1` puts a number, from -1 (exclusive) to 1 (inclusive).
-                - (Good idea to always include at least something dynamic, unless data only occupies one cell.)
         """
         np = self.backend
-        if isinstance(name, tuple) or isinstance(name, list): name = self._namer(name)
-        elif isinstance(name, str): name = self._namer((name,))
-        else: assert name is None
         if isinstance(error, float): error = np.full_like(data, error)
-        if isinstance(data, list): data = np.array(data, dtype=np.float32)
+        if isinstance(data, list): data = np.array(data, dtype=np.float32) # TODO: …The datatype should handle even this, right?
+
+        # TODO: If `type` is not None, it must have the `'set'` attribute; defer `data` and `error` to that. (Datatypes could `sn.name(name)` to get data's templates, and 0-fill error's name.)
+        # TODO: …Maybe, emit a warning when `_name_template` encounters names that are too long for the cell-shape?
+        assert name is None
 
         assert isinstance(data, np.ndarray)
+        assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
         assert error is None or isinstance(error, np.ndarray) and data.shape == error.shape
 
         if not self.cell_size: return
 
-        if name is not None:
-            if len(data.shape) != 1: data = data.flatten()
-            data = name.name(data, data.shape[0], self.cell_shape, None)
-            if error is not None:
-                if len(error.shape) != 1: error = error.flatten()
-                error = name.name(error, error.shape[0], self.cell_shape, 0.)
-        assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
         self._data.append(data)
         self._data_error.append(error)
         if self._wait_for_requests is not None:
@@ -179,7 +180,7 @@ class Handler:
         """
         ```python
         await sn.query(name, query: int|tuple)
-        sn.query(name, query: int|tuple, *, callback = lambda feedback: ...)
+        sn.query(name, query: int|tuple, *, callback = lambda feedback: ...) TODO: Is there a more acceptable way to specify a func-type?
         ```
 
         From the handler, asks for a NumPy array, or `None` (usually on transmission errors).
@@ -191,10 +192,10 @@ class Handler:
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         """
         np = self.backend
-        if isinstance(name, tuple) or isinstance(name, list): name = self._namer(name)
-        elif isinstance(name, str): name = self._namer((name,))
-        else: assert name is None
         if callback is None: callback = asyncio.Future()
+
+        # TODO: If `type` is not `None`, assert that it has the `'query'` attribute, and defer to that.
+        assert name is None
 
         assert isinstance(query, np.ndarray) if name is None else (isinstance(query, int) or isinstance(query, tuple))
         assert isinstance(callback, asyncio.Future) or callable(callback)
@@ -209,13 +210,7 @@ class Handler:
                 return f
 
         length = None
-        shape = query
-        if name is not None:
-            length = 1 if isinstance(query, tuple) else query
-            if isinstance(query, tuple):
-                for n in query: length *= n
-            assert isinstance(length, int) and length > 0
-            query = name.name(None, length, self.cell_shape, None)
+        shape = query # TODO: …With datatypes, the datatype should be responsible for checking/ensuring shape…
         assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
         assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
         self._query.append(query)
@@ -244,8 +239,9 @@ class Handler:
 
         Gets feedback, guaranteed.
 
-        Never returns `None`, instead re-querying until a numeric result is available.
+        Never returns `None`, instead re-querying until a result is available.
         """
+        # TODO: If `type` has the `'get'` attribute, defer to that, else do what we're doing here.
         while True:
             fb = await self.query(name, query, error)
             if fb is not None: return fb
@@ -336,7 +332,7 @@ class Handler:
         self._prev_fb.append([False, self._next_fb, self.cell_shape, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
-        for l in self.listeners: l(data, data_error, self.cell_shape)
+        for l in self.listeners: l(self, data, data_error)
         return data, query, data_error, query_error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
         """
@@ -364,97 +360,13 @@ class Handler:
                         break
                     await asyncio.sleep(.003)
         return self._take_data()
-    def _namer(self, name):
-        for fn in self.modify_name:
-            name = fn(name)
-        hash, cache = _name_hash(name), self._namers_cache
-        if hash not in cache:
-            cache[hash] = _Namer(*name, backend=self.backend)
-        if len(cache) > self.namer_cache_size: # pragma: no cover
-            cache.popitem()
-        return cache[hash]
-
-
-
-class _Namer:
-    """
-    `_Namer(*name, backend=numpy)`
-
-    The allocator of 1D arrays onto 2D named cells.
-
-    ---
-
-    Neural networks are good at classification but are poor at regression. So numbers are repeatedly folded via `x → 1 - 2*abs(x)` until a part has no free space, to increase AI-model sensitivity. Handlers can also un/fold or apply I/FFT if needed.
-    """
-    def __init__(self, *name, backend=np):
-        self.named = name
-        self.templ = None
-        self.cell_shape = None
-        self.cell_size = None
-        self.last_cells, self.last_name = None, None
-        self.backend = backend
-    def name(self, data, length, cell_shape, fill=None):
-        """
-        1D to 2D.
-        """
-        np = self.backend
-        assert data is None or len(data.shape) == 1
-        if cell_shape != self.cell_shape: # Update what needs to be done.
-            self.templ = _name_template(self.named, cell_shape, np)
-            self.templ = np.nan_to_num(self.templ[0]), self.templ[1], self.templ[2]
-            self.cell_shape = cell_shape
-            self.cell_size = sum(cell_shape)
-            self.last_cells, self.last_name = None, None
-        # Pad & reshape `data`.
-        data_size = cell_shape[-1]
-        name_size = self.cell_size - data_size
-        cells = -(-length // data_size)
-        total = cells * data_size
-        if data is not None:
-            data = _pad(data, total, np=np)
-            data = np.reshape(data, (cells, data_size))
-        # Finalize the name, then concat it before `data`.
-        if fill is not None:
-            name = np.full((cells, name_size), fill)
-            return np.concatenate((name, data), 1)
-        if self.last_cells != cells: # Cache.
-            # Do what `_name_template` implies: use template, fill func-indices, and `_fill` parts.
-            template, func_indices, part_sizes = self.templ
-            name = np.repeat(np.expand_dims(template, 0), cells, 0)
-            #   (Not using NumPy's x.repeat(…) is a mild slowdown, but we care about compatibility with PyTorch more.)
-            start = np.expand_dims(np.arange(0, total, data_size, dtype=np.float32), -1)
-            end = np.minimum(start + data_size, length)
-            #   (`np.clip(↑, length, None)` is much slower.)
-            if len(func_indices):
-                for at, fn in func_indices:
-                    name[:, at:at+1] = fn(start, end, total)
-                at = 0
-                for i, part in enumerate(part_sizes):
-                    sz = cell_shape[i]
-                    if part != sz:
-                        name[:, at : at+sz] = _fill(name[:, at : at+part], sz, np=np)
-                    at += sz
-            self.last_name, self.last_cells = name, cells
-        else:
-            name = self.last_name
-        name = _fill(name, name_size, np=np)
-        return np.concatenate((name, data), 1) if data is not None else name
-    def unname(self, feedback, length, cell_shape):
-        """
-        Reverses `.name`.
-        """
-        # Ignore the name, only heed data.
-        np = self.backend
-        assert len(feedback.shape) == 2 and feedback.shape[-1] == sum(cell_shape)
-        feedback = feedback[:, -cell_shape[-1]:]
-        return _pad(feedback.flatten(), length, np=np)
 
 
 
 class Filter:
-    """`Filter(name, func, backend=numpy)`
+    """`Filter(name, func=None)`
 
-    Wraps a `func(data, error=None, cell_shape)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
+    Wraps a `func(sn, data, error=None)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
 
     Example uses: getting a global reward from the env; getting [CLIP](https://cliport.github.io/)-embedding goals from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
 
@@ -463,18 +375,16 @@ class Filter:
     - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
     If needed for manually naming cells, `fltr.template(cell_shape)` is a 1D NumPy array with `nan`s for `None`s and numbers for name-parts."""
-    def __init__(self, name, func = None, backend=np):
+    def __init__(self, name, func = None):
         assert func is None or callable(func)
         self.name = name
         self.func = func
-        self.cell_shape = None
-        self.templ = None
-        self.backend = backend
-    def __call__(self, data, error=None, cell_shape=(), invert=False):
+    def __call__(self, sn: Handler, data, error=None, invert=False):
+        cell_shape = sn.cell_shape
         assert len(cell_shape), 'Specify the cell-shape too'
-        np = self.backend
+        np = sn.backend
         # Match.
-        template = self.template(cell_shape)
+        template = sn.name(self.name)
         name_sz = sum(cell_shape) - cell_shape[-1]
         matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= (error if error is not None else 0.) + 1e-5)
         matches = matches.all(-1) if not invert else ~(matches.all(-1))
@@ -487,20 +397,13 @@ class Filter:
         # Call.
         if data.size > 0:
             return self.func(data, error, cell_shape)
-    def template(self, cell_shape):
-        """Returns a 1D template that's responsible for matching the name."""
-        # Reconstruct the template if needed.
-        if cell_shape != self.cell_shape:
-            self.templ = _name_template(self.name, cell_shape, np)
-            self.cell_shape = cell_shape
-        template, func_indices, part_sizes = self.templ
-        return template
 
 
 
 class Torch: # pragma: no cover
     """A [PyTorch](https://pytorch.org/) backend. Often [slower](https://github.com/pytorch/pytorch/issues/9873) than NumPy, even on GPU, so, not recommended."""
     __slots__ = ('torch', 'nan', 'uint8', 'ndarray', 'float32')
+    # TODO: Re-inspect which methods we're still using.
     def __init__(self, autogpu=False):
         import torch
         if autogpu and torch.cuda.is_available():
@@ -544,23 +447,17 @@ def _shape_ok(cell_shape: tuple):
     assert isinstance(cell_shape, tuple)
     assert all(isinstance(s, int) and s>=0 for s in cell_shape)
     assert cell_shape[-1] > 0
-def _str_to_floats(string: str, np):
+def _str_to_floats(np, string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
     return np.array(np.frombuffer(hash, dtype=np.uint8), np.float32)/255.*2. - 1.
-def _pad(x, size, np=...): # → y
-    """Ensures that the 1D NumPy array `x` has the appropriate `size` by slicing or zero-padding, returning `y`. Can undo itself."""
-    assert len(x.shape) == 1
-    if x.shape[0] == size: return x
-    if x.shape[0] > size: return x[:size]
-    z = np.zeros((size - x.shape[0],), dtype=np.float32)
-    return np.concatenate((x, z), 0)
-def _fill(x, size, np=...): # → y
+def _fill(np, x, size): # → y
     """
     Ensures that the last axis of a NumPy array `x` has the appropriate `size`, returning `y`.
 
     If it's too small, fractally folds `x` via repeated `x → 1 - 2*abs(x)` to increase AI-model sensitivity where we can.
 
-    >>> _fill(np.zeros((2,), dtype=np.float32), 6)
+    >>> import numpy as np
+    >>> _fill(np, np.zeros((2,), dtype=np.float32), 6)
     np.array([ 0.,  0.,  1.,  1., -1., -1.])
     """
     sz = x.shape[-1]
@@ -595,49 +492,23 @@ def _concat_error(main, error, length, np):
         return np.concatenate([e if e is not None else np.zeros_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length), dtype=np.float32)
     else:
         return None
-def _name_template(name, cell_shape, np):
-    """Converts a name into `(template, func_indices, part_sizes)`.
-
-    - `template`: a NumPy array of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
-    - `func_indices`: a list of `(index_to_write_at, func_to_write_the_result_of)`.
-    - `part_sizes`: a list of name-part sizes, always equal to `cell_shape[p]` unless the part has a func, for `_fill`ing."""
-    _shape_ok(cell_shape)
+def _name_template(np, str_to_floats, cell_shape, name):
+    assert isinstance(name, tuple)
     template = np.full((sum(cell_shape[:-1]),), np.nan, dtype=np.float32)
-    func_indices = []
-    part_sizes = list(cell_shape[:-1])
-    at, nums = 0, []
+    at = 0
     for i, sz in enumerate(cell_shape[:-1]):
         in_name = i < len(name)
         part = name[i] if in_name else None
         if isinstance(part, str):
-            template[at : at+sz] = _fill(_str_to_floats(part, np), sz, np=np)
+            template[at : at+sz] = _fill(np, str_to_floats(np, part), sz)
         elif isinstance(part, tuple):
-            for j, num in enumerate(part):
-                if callable(num):
-                    func_indices.append((at + j, num))
-                else:
-                    assert isinstance(num, float) or isinstance(num, int)
-            nums = [None if callable(num) else num for num in part]
-            template[at : at + sz] = _fill(np.array(nums, dtype=np.float32), sz, np=np)
-            if any(callable(num) for num in part):
-                part_sizes[i] = len(part)
-        elif callable(part):
-            raise TypeError("A part of the name is a func; wrap it in a tuple")
+            template[at : at + sz] = _fill(np, np.array(part, dtype=np.float32), sz)
         elif isinstance(part, float) or isinstance(part, int):
             raise TypeError("A part of the name is a number; wrap it in a tuple")
-        elif part is not None and part is not ...:
-            raise TypeError("Names must consist of strings, `None`/`...`, and tuples of either numbers or number-returning functions")
+        elif part is not None:
+            raise TypeError("Names must consist of strings, `None`, and tuples of either numbers or `None`s")
         at += sz
-    return template, func_indices, tuple(part_sizes)
-def _name_hash(name):
-    if callable(name): return id(name)
-    if not isinstance(name, tuple) and not isinstance(name, list): return name
-    result = name
-    for i in range(len(name)):
-        v1, v2 = name[i], _name_hash(name[i])
-        if result is name and v1 is not v2: result = list(name)
-        if v1 is not v2: result[i] = v2
-    return tuple(result)
+    return template
 
 
 
