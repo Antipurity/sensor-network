@@ -144,7 +144,7 @@ class Handler:
         # Also create the cached Python-name-to-NumPy-name method.
         self._name = functools.lru_cache(self.namer_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
         return self
-    def set(self, name=None, data=None, error=None):
+    def set(self, name=None, data=None, error=None): # TODO: Have the `type` arg at the end, maybe? (So, what, all users are forced to type out `type=` for every call ever? Wouldn't it be better to put it after `data` and before `error`, maybe even forcing `error` to be a keyword arg?)
         """
         `sn.set(name, data, error=None)`
 
@@ -162,7 +162,6 @@ class Handler:
         if isinstance(data, list): data = np.array(data, dtype=np.float32) # TODO: …The datatype should handle even this, right?
 
         # TODO: If `type` is not None, it must have the `'set'` attribute; defer `data` and `error` to that. (Datatypes could `sn.name(name)` to get data's templates, and 0-fill error's name.)
-        # TODO: …Maybe, emit a warning when `_name_template` encounters names that are too long for the cell-shape?
         assert name is None
 
         assert isinstance(data, np.ndarray)
@@ -494,6 +493,9 @@ def _concat_error(main, error, length, np):
         return None
 def _name_template(np, str_to_floats, cell_shape, name):
     assert isinstance(name, tuple)
+    if len(name) > len(cell_shape)-1:
+        import warnings
+        warnings.warn("The name is longer than the cell-shape allows for: " + str(name))
     template = np.full((sum(cell_shape[:-1]),), np.nan, dtype=np.float32)
     at = 0
     for i, sz in enumerate(cell_shape[:-1]):
