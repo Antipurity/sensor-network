@@ -71,7 +71,7 @@ class Handler:
     ```python
     Handler().shape(8,8,8, 64)
     Handler(8,8,8, 64)
-    Handler(*cell_shape, sensors=None, listeners=None, info=None, backend=numpy, namer_cache_size=1024, modify_name=None)
+    Handler(*cell_shape, sensors=None, listeners=None, info=None, modify_name=None, backend=numpy, name_cache_size=1024)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -85,11 +85,11 @@ class Handler:
     - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else.
     - `modify_name`: a list of funcs from name to name, with singular strings already wrapped in a one-item tuple.
     - `backend`: the NumPy object.
-    - `namer_cache_size`: info that is associated with names is cached for speed.
+    - `name_cache_size`: info that is associated with names is cached for speed.
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/`.append(fn)` `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, sensors=None, listeners=None, info=None, modify_name=None, backend=np, namer_cache_size=1024):
+    def __init__(self, *cell_shape, sensors=None, listeners=None, info=None, modify_name=None, backend=np, name_cache_size=1024):
         assert sensors is None or isinstance(sensors, list)
         assert listeners is None or isinstance(listeners, list)
         assert modify_name is None or isinstance(modify_name, list)
@@ -110,9 +110,9 @@ class Handler:
         self.cell_shape = ()
         self.cell_size = 0
         self.backend = backend
-        self.namer_cache_size = namer_cache_size
+        self.name_cache_size = name_cache_size
         self.modify_name = modify_name if modify_name is not None else []
-        self._str_to_floats = functools.lru_cache(namer_cache_size)(functools.partial(_str_to_floats, backend))
+        self._str_to_floats = functools.lru_cache(name_cache_size)(functools.partial(_str_to_floats, backend))
         self._name = None
         if len(cell_shape):
             self.shape(*cell_shape)
@@ -120,7 +120,7 @@ class Handler:
     def name(self, name):
         """`sn.name(name)`
 
-        Converts a Python name to a NumPy template, of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
+        Converts a Python name such as `('image', (.25, .5))` to a NumPy template, of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
 
         Names are tuples of either strings (which are MD5-hashed with the 16 bytes converted to -1…1 numbers), `None`s, and/or tuples of either numbers or `None`s."""
         if isinstance(name, str): name = (name,)
@@ -142,26 +142,30 @@ class Handler:
         self.cell_size = sum(cell_shape)
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
         # Also create the cached Python-name-to-NumPy-name method.
-        self._name = functools.lru_cache(self.namer_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
+        self._name = functools.lru_cache(self.name_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
         return self
-    def set(self, name=None, data=None, error=None): # TODO: Have the `type` arg at the end, maybe? (So, what, all users are forced to type out `type=` for every call ever? Wouldn't it be better to put it after `data` and before `error`, maybe even forcing `error` to be a keyword arg?)
+    def set(self, name=None, data=None, type=None, error=None):
         """
-        `sn.set(name, data, error=None)`
+        `sn.set(name, data, type=None, error=None)`
 
-        Sends named data to the handler. Receives nothing; see `.query`.
+        Sends named data to the handler. Receives no feedback; see `.query` for that.
 
         Args:
-        - `name`, such as `('image', .25, .5)`:
-            - If a string, or a tuple/list of strings or per-part tuples, then it's used to turn the 1D data array into a 2D array. See `.name`. TODO: …Won't be the case with datatypes, right?
-            - If `None`, `data` & `error` must already incorporate the name and be sized `cells×sum(cell_shape)`. Either don't modify them in-place afterwards, or do `sn.commit()` right after this.
-        - `data`: a list, or a NumPy 1D array of numbers, preferably -1…1.
-        - `error = None`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
+        - `name`: see `.name`.
+        - `data`: what to send.
+        - `type`: how the data is interpreted, such as `sn.Int(8)`. If name and type are `None`, `data` is raw: a `(cells, sum(cell_shape))`-shaped array; either don't modify it in-place after this call, or do `sn.commit()`.
+        - `error = None`: `data` transmission error: `None` or a `data`-sized float32 array of `max abs(true_data - data)`.
         """
         np = self.backend
         if isinstance(error, float): error = np.full_like(data, error)
-        if isinstance(data, list): data = np.array(data, dtype=np.float32) # TODO: …The datatype should handle even this, right?
 
-        # TODO: If `type` is not None, it must have the `'set'` attribute; defer `data` and `error` to that. (Datatypes could `sn.name(name)` to get data's templates, and 0-fill error's name.)
+        # TODO: Should do some default-typing, such as `8 → Int(8)` and `(2,3) → Int(2,3)`… Which?
+        #   (Probably have a separate func, called both here and on query/getting.)
+        #   TODO: Do we want to turn no-type number/list/NParray-data into `Float`s automatically?
+
+        if type is not None:
+            assert hasattr(type, 'set')
+            return type.set(self, name, data, error)
         assert name is None
 
         assert isinstance(data, np.ndarray)
@@ -175,47 +179,50 @@ class Handler:
         if self._wait_for_requests is not None:
             self._wait_for_requests.set_result(None)
             self._wait_for_requests = None
-    def query(self, name=None, query=None, error=None, callback=None):
+    def query(self, name=None, type=None, error=None, callback=None):
         """
         ```python
-        await sn.query(name, query: int|tuple)
-        sn.query(name, query: int|tuple, *, callback = lambda feedback: ...) TODO: Is there a more acceptable way to specify a func-type?
+        await sn.query(name, type)
+        sn.query(name, type, *, error=None, callback: lambda feedback: ...)
         ```
 
-        From the handler, asks for a NumPy array, or `None` (usually on transmission errors).
+        From the handler, asks for feedback, or `None` (on transmission errors). To guarantee feedback, use `.get`.
 
         Args:
         - `name`: see `.set`.
-        - `query`: the shape of the feedback that you want to receive.
+        - `type`: what to receive, such as `sn.Int(8)`.
+        - `error`: see `.set`.
         - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         """
         np = self.backend
-        if callback is None: callback = asyncio.Future()
+        assert callback is None or isinstance(callback, asyncio.Future) or callable(callback)
 
-        # TODO: If `type` is not `None`, assert that it has the `'query'` attribute, and defer to that.
+        if type is not None:
+            assert hasattr(type, 'query')
+            assert callback is None
+            return type.query(self, name, error)
+        query = type
         assert name is None
 
-        assert isinstance(query, np.ndarray) if name is None else (isinstance(query, int) or isinstance(query, tuple))
-        assert isinstance(callback, asyncio.Future) or callable(callback)
+        if callback is None: callback = asyncio.Future()
+
+        assert isinstance(query, np.ndarray)
+        assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
+        if isinstance(error, float): error = np.full_like(query, error)
+        assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
 
         if not self.cell_size:
             if callable(callback):
-                callback(None)
-                return
+                return callback(None)
             else:
-                f = asyncio.Future()
-                f.set_result(None)
-                return f
+                callback.set_result(None)
+                return callback
 
-        length = None
-        shape = query # TODO: …With datatypes, the datatype should be responsible for checking/ensuring shape…
-        assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
-        assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
         self._query.append(query)
         self._query_error.append(error)
         cells = query.shape[0]
-        self._next_fb.append((callback, shape, self._query_cell, self._query_cell + cells, name, length))
+        self._next_fb.append((callback, self._query_cell, self._query_cell + cells))
         self._query_cell += cells
         if self._wait_for_requests is not None:
             self._wait_for_requests.set_result(None)
@@ -226,23 +233,20 @@ class Handler:
         """
         `prev_feedback = await other_handler.pipe(*sn.handle(prev_feedback))`
 
-        Makes another handler handle this packet.
-
-        Useful if NumPy arrays have to be transferred manually, such as over the Internet.
+        Makes another handler handle this packet. Useful if NumPy arrays have to be transferred manually, such as over the Internet.
         """
-        self.set(None, data, data_error)
+        self.set(None, data, None, data_error)
         return self.query(None, query, query_error, callback)
-    async def get(self, name, query, error=None):
+    async def get(self, name, type, error=None):
         """
-        `await sn.get(name, query)`
+        `await sn.get(name, type, error=None)`
 
-        Gets feedback, guaranteed.
-
-        Never returns `None`, instead re-querying until a result is available.
+        Gets feedback, guaranteed. Never returns `None`, instead re-querying until a result is available.
         """
-        # TODO: If `type` has the `'get'` attribute, defer to that, else do what we're doing here.
+        if hasattr(type, 'get'):
+            return type.get(self, name, error)
         while True:
-            fb = await self.query(name, query, error)
+            fb = await self.query(name, type, error)
             if fb is not None: return fb
     def handle(self, prev_feedback=None, max_simultaneous_steps=16):
         """
@@ -472,13 +476,10 @@ def _feedback(callbacks, feedback, cell_shape):
     fb = None
     got_err = None
     assert feedback is None or feedback.shape[-1] == sum(cell_shape)
-    for callback, shape, start_cell, end_cell, namer, length in callbacks:
+    for callback, start_cell, end_cell in callbacks:
         if feedback is not None:
+            assert feedback.shape[0] >= end_cell
             fb = feedback[start_cell:end_cell, :]
-            assert fb.shape[0] == end_cell - start_cell
-            if namer is not None:
-                fb = namer.unname(fb, length, cell_shape)
-                fb = fb.reshape(shape)
         try:
             callback(fb) if callable(callback) else callback.set_result(fb) if not callback.cancelled() else None
         except KeyboardInterrupt as err:
