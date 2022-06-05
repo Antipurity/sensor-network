@@ -365,19 +365,41 @@ class Handler:
 
     class Int:
         """
+        ```py
+        Int(2,2, 8)
+        Int(*shape, options)
+        ```
+
         TODO:
         """
+        __slots__ = ('shape', 'opts')
         def __init__(self, *shape):
             s, o = shape[:-1], shape[-1]
             self.shape, self.opts = s, o
-            assert all(isinstance(n, int) for n in s)
-            assert isinstance(o, int) or isinstance(o, tuple) and all(isinstance(n, int) for n in o)
-            # TODO: Do we want to pre-create the class for bit-streaming, which we can defer to, already?
-        # TODO: The `Int(*shape, options)` type.
-        #   TODO: A method for setting.
-        #     …Autoregression via adding one global sensor for all the handler's future data, right?…
-        #   TODO: A method with a bool to switch between querying and getting.
-        #     (…For autoregressive querying, we want to add a listener, right?)
+            assert all(isinstance(n, int) and n>0 for n in s)
+            assert isinstance(o, int) and o>1, "Only makes sense to choose between 2 or more options"
+        def set(self, sn, name, data, error):
+            assert error is None
+            from math import frexp
+            from operator import mul
+            bpc = sn.info['bits_per_cell']
+            bpn = frexp(self.opts - 1)[1]
+            npc, cpn = -(-bpc // bpn), -(-bpn // bpc) # Combined numbers per cell, and sliced cells per number.
+            cells = -(-(functools.reduce(mul, self.shape, 1) * cpn) // npc)
+            # TODO: Name each and every cell. (At the first spot, expose a tuple of is-digital and is-goal and a progress-number per `self.shape` dimension. The rest are shared.)
+            # TODO: …How do we prepare the data for each cell?
+            #   TODO: …How to binary-encode the numbers in `data`?
+            # TODO: …How do we shuffle the cells?
+            # TODO: …Maybe we should first try this with a non-global sensor?
+            #   …If we had a global sensor, then couldn't we unite setting and getting into one `asyncio.Future`-feedback-optional queue?…
+            # TODO: A method for setting: `set(sn, name, data, error)`.
+            #   …Autoregression via adding one global sensor for all the handler's future data, right?
+            #     For that, we need an `Int`-global queue, or perhaps, a handler-specific queue, maybe even as an attribute on the handler…
+            #       TODO: How do we implement it?
+        # TODO: A method with a bool to switch between querying and getting, `_get(sn, name, error, query=False)`.
+        #   (…For autoregressive querying, we want to add a listener, right? In which we fulfill the Futures of feedback as it arrives, re-querying on `None` if needed? …No, wait: want a sensor, in which we `.query` every time…)
+        # TODO: query and get
+        # TODO: …Should we maybe have `.efficiency(sn)`, returning 0…1?
 
 
 
@@ -520,6 +542,9 @@ def _name_template(np, str_to_floats, cell_shape, name):
         if isinstance(part, str):
             template[at : at+sz] = _fill(np, str_to_floats(np, part), sz)
         elif isinstance(part, tuple):
+            if len(part) > sz:
+                import warnings
+                warnings.warn("A tuple is longer than fits in a name part: " + str(part))
             template[at : at + sz] = _fill(np, np.array(part, dtype=np.float32), sz)
         elif isinstance(part, float) or isinstance(part, int):
             raise TypeError("A part of the name is a number; wrap it in a tuple")
@@ -582,3 +607,4 @@ get = default.get
 handle = default.handle
 commit = default.commit
 discard = default.discard
+Int = Handler.Int

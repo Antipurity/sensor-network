@@ -167,11 +167,7 @@ steps_per_save = 1000
 
 sn.info = {
     'docs': """TODO:""",
-    'analog':{
-    },
-    'digital':{
-        'bits_per_cell': bits_per_chunk,
-    },
+    'bits_per_cell': bits_per_chunk,
 }
 
 
