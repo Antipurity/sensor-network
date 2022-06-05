@@ -101,9 +101,9 @@ class Handler:
         self._data_error = []
         self._query_error = []
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, cell_count, cell_size], …]
-        self._next_fb = [] # […, (on_feedback, shape, start_cell, end_cell, namer, length), …]
+        self._next_fb = [] # […, (on_feedback, start_cell, end_cell), …]
         self._wait_for_requests = None # asyncio.Future()
-        self._namers_cache = {}
+        self._pipe_queue = [] # […, […, ((data, query, data_error, query_error), Future), …], …]
         self.info = info
         self.sensors = sensors
         self.listeners = listeners
@@ -156,7 +156,7 @@ class Handler:
         - `error = None`: `data` transmission error: `None` or a `data`-sized float32 array of `max abs(true_data - data)`.
         """
         np = self.backend
-        if isinstance(error, float): error = np.full_like(data, error)
+        if isinstance(error, float): error = np.full_like(data, error) # TODO: Should instead concatenate 0-error-for-name and this. (Also, should be below, amid assertions.)
 
         # TODO: Should do some default-typing, such as `8 → Int(8)` and `(2,3) → Int(2,3)`… Which?
         #   (Probably have a separate func, called both here and on query/getting.)
@@ -228,14 +228,27 @@ class Handler:
             self._wait_for_requests = None
         if isinstance(callback, asyncio.Future):
             return callback
-    def pipe(self, data, query, data_error, query_error, callback=None):
+    def pipe(self, imm, *autoregressive, callback=None):
         """
-        `prev_feedback = await other_handler.pipe(*sn.handle(prev_feedback))`
+        `prev_feedback = await other_handler.pipe(sn.handle(prev_feedback))[0]`
 
         Makes another handler handle this packet. Useful if NumPy arrays have to be transferred manually, such as over the Internet.
         """
-        self.set(None, data, None, data_error)
-        return self.query(None, query, query_error, callback)
+        data, query, data_error, query_error = imm
+        result = []
+        if data is not None: self.set(None, data, None, data_error)
+        if query is not None: result.append(self.query(None, query, query_error, callback))
+        for i in range(len(autoregressive)):
+            # `autoregressive`, an undocumented feature: the ability to auto-schedule further pipings on further `.handle`ing, for when generation really needs to be sequential to be correct.
+            fut = asyncio.Future()
+            if i < len(self._pipe_queue):
+                to = self._pipe_queue[i]
+            else:
+                to = []
+                self._pipe_queue.append(to)
+            to.append((autoregressive[i], fut))
+            result.append(fut)
+        return result
     async def get(self, name, type, error=None):
         """
         `await sn.get(name, type, error=None)`
@@ -272,6 +285,9 @@ class Handler:
         assert max_simultaneous_steps is None or isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         # Collect sensor data.
         for s in self.sensors: s(self)
+        if len(self._pipe_queue):
+            for autoregressive, callback in self._pipe_queue.pop(0):
+                self.pipe(autoregressive, callback=callback)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             self._prev_fb[-1][0] = prev_feedback
@@ -370,7 +386,7 @@ class Handler:
         Int(*shape, options)
         ```
 
-        TODO:
+        Represents an autoregressively-sampled sequence of integers, each `0…options-1`. The bigger the `shape`, the longer it is to set/get.
         """
         __slots__ = ('shape', 'opts')
         def __init__(self, *shape):
@@ -387,18 +403,20 @@ class Handler:
             npc, cpn = -(-bpc // bpn), -(-bpn // bpc) # Combined numbers per cell, and sliced cells per number.
             cells = -(-(functools.reduce(mul, self.shape, 1) * cpn) // npc)
             # TODO: Name each and every cell. (At the first spot, expose a tuple of is-digital and is-goal and a progress-number per `self.shape` dimension. The rest are shared.)
+            #   (Since we sample autoregressively anyway, looping in Python is probably not a big deal.)
+            #   TODO: How do we do a dynamically-nested loop, though? (One flat loop, and explicit counting?)
             # TODO: …How do we prepare the data for each cell?
-            #   TODO: …How to binary-encode the numbers in `data`?
+            #   TODO: …How to binary-encode the numbers in `data` (which should be either an `int` or a tuple of those or a NumPy array of the appropriate `shape`)?
             # TODO: …How do we shuffle the cells?
-            # TODO: …Maybe we should first try this with a non-global sensor?
-            #   …If we had a global sensor, then couldn't we unite setting and getting into one `asyncio.Future`-feedback-optional queue?…
-            # TODO: A method for setting: `set(sn, name, data, error)`.
-            #   …Autoregression via adding one global sensor for all the handler's future data, right?
-            #     For that, we need an `Int`-global queue, or perhaps, a handler-specific queue, maybe even as an attribute on the handler…
-            #       TODO: How do we implement it?
+            #   …Cell-shuffling is an attempt to shore up the NN's inability to fully model packet-drops and subsequent-re-requesting (packets are guaranteed to arrive in-order, so cell-shuffling is no help for this); but if the NN doesn't actually see packet-drops in training, it will still not learn to repeat prev-action's things… Besides, this will blur the line between consecutive steps for the NN, which is very bad. So do we really want to do any cell-shuffling and any special `.get` treatment?
+            # TODO: …Also: do we *really* need to handle streams of ints specially in `Int`? Wouldn't just adding an option for "end-of-stream" and re-`get`ting until end of stream introduce no overhead? …Actually, it does: this requires a roundtrip, whereas native handling (with a `.pipe`ing queue) would help us preemptively generate more than we need and discard the rest.
+            #   …But how *much* more steps to schedule than we need? Shouldn't this be a hyperparam — and if we go this route, can't we make users decide to stream in partial queries or something?
         # TODO: A method with a bool to switch between querying and getting, `_get(sn, name, error, query=False)`.
         #   (…For autoregressive querying, we want to add a listener, right? In which we fulfill the Futures of feedback as it arrives, re-querying on `None` if needed? …No, wait: want a sensor, in which we `.query` every time…)
+        #   TODO: How to binary-decode the numbers in feedback?
+        #     …And should encoding/decoding be publicly-accessible methods, for `test.py`'s use (since we're thinking of converting those meager binary representations to random/arbitrary vectors, non-learnable for robustness and simplicity)?
         # TODO: query and get
+        #   TODO: …Actually, if we decide not to do cell-shuffling, then we shouldn't need `.get`, only querying…
         # TODO: …Should we maybe have `.efficiency(sn)`, returning 0…1?
 
 
