@@ -384,11 +384,11 @@ class Handler:
     class Int:
         """
         ```py
-        Int(2,2, 8)
-        Int(*[*shape, options], goal=False)
+        sn.Int(2,2, 8)
+        sn.Int(*[*shape, options], goal=False)
         ```
 
-        Represents an autoregressively-sampled sequence of integers, each `0…options-1`. The bigger the `shape`, the longer it is to set/get.
+        Datatype: an autoregressively-sampled sequence of integers, each `0…options-1`. So the bigger the `shape`, the longer it is to set/get.
         """
         __slots__ = ('sz', 'shape', 'opts', 'goal')
         def __init__(self, *shape, goal=False):
@@ -430,7 +430,8 @@ class Handler:
             start = -sn.cell_shape[-1]
             fb = np.concatenate(fb[:, start : start+bpc], 0)
             fb = sn.Int.decode_bits(sn, fb)
-            return sn.Int.repack(sn, fb, 2 ** bpc, self.opts) # TODO: If len(self.shape)==0, return a Python int, not a NumPy array.
+            R = sn.Int.repack(sn, fb, 2 ** bpc, self.opts)
+            return R if len(R.shape)>0 else R.item()
         @staticmethod
         def encode_ints(sn, ints, bitcount):
             """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
@@ -470,7 +471,13 @@ class Handler:
                 return ints
     class RawFloat:
         """
-        TODO:
+        `sn.RawFloat(*shape, goal=False)`
+
+        Datatype: a sequence of floating-point numbers.
+
+        Compared to `sn.Int`:
+        - This is sampled in parallel, which allows lower latency.
+        - This is analog, as opposed to `sn.Int`'s digital choices. Due to the size of the space of possibilities, explicit probabilities are not available, so generative models have to be used to learn diverse acting policies (i.e. GANs/DDPGs, VAEs, diffusion models).
         """
         __slots__ = ('sz', 'shape', 'goal')
         def __init__(self, *shape, goal=False):
@@ -487,13 +494,25 @@ class Handler:
             data = np.array(data, dtype=np.int32, copy=False)
             assert data.shape == self.shape
             data = data.reshape(self.sz)
+
             cells = -(-self.sz // sn.cell_shape[-1])
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
-            data = np.concatenate((data, np.zeros(self.sz - cells * sn.cell_shape[-1])))
+            data = np.concatenate((data, np.zeros(self.sz - cells * sn.cell_shape[-1], dtype=np.float32)))
             data = np.concatenate((names, data.reshape(cells, sn.cell_shape[-1])), -1)
             sn.set(None, data, None, error)
-            # TODO: Also, if len(self.shape)==0, return a Python float, not a NumPy array.
-        # TODO: Querying, which should be the same as setting but in reverse. Not hard to flatten the cell-feedbacks, right?
+        async def query(self, sn, name, error):
+            # Flatten feedback's cells and reshape it to our shape.
+            assert error is None # Not implemented for now.
+            assert sn.info['analog'] is True
+            np = sn.backend
+
+            cells = -(-self.sz // sn.cell_shape[-1])
+            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
+            fb = await sn.query(None, names, error)
+            if fb is None: return None
+            fb = fb[:, -sn.cell_shape[-1]:].flatten()
+            R = fb[:self.sz].reshape(self.shape)
+            return R if len(R.shape)>0 else R.item()
     # TODO: New tests.
 
 
@@ -673,3 +692,4 @@ handle = default.handle
 commit = default.commit
 discard = default.discard
 Int = Handler.Int
+RawFloat = Handler.RawFloat
