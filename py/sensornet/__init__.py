@@ -162,7 +162,7 @@ class Handler:
         if type is not None:
             assert hasattr(type, 'set')
             return type.set(self, name, data, error)
-        assert name is None
+        assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
 
         assert isinstance(data, np.ndarray)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
@@ -205,7 +205,7 @@ class Handler:
             assert callback is None
             return type.query(self, name, error)
         query = type
-        assert name is None
+        assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
 
         if callback is None: callback = asyncio.Future()
 

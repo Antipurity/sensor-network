@@ -89,7 +89,7 @@ def test4():
     h = sn.Handler(8,8,8,8, 64)
     d = np.array([1.])
     # TODO: …Go through all, and re-read, thinking of what we're missing…
-    h.set(name=((0,True,1),), data=d) # TODO: Datatype. (But also a better error-message than "assert name is None".)
+    h.set(name=((0,True,1),), data=d) # TODO: Datatype.
     try:
         h.set(name=(0,), data=d); assert False
     except TypeError:
