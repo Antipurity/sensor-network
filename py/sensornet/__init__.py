@@ -167,7 +167,7 @@ class Handler:
         assert isinstance(data, np.ndarray)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
         if isinstance(error, float):
-            ne = np.zeros(data.shape[0], data.shape[1] - self.cell_shape[-1], dtype=np.float32)
+            ne = np.zeros((data.shape[0], data.shape[1] - self.cell_shape[-1]), dtype=np.float32)
             ve = np.full_like(data.shape[0], self.cell_shape[-1], error, dtype=np.float32)
             error = np.concatenate((ne, ve), -1)
         assert error is None or isinstance(error, np.ndarray) and data.shape == error.shape
@@ -199,7 +199,7 @@ class Handler:
         assert callback is None or isinstance(callback, asyncio.Future) or callable(callback)
 
         type = _default_typing(type)
-        if type is not None:
+        if type is not None and not isinstance(type, np.ndarray):
             assert hasattr(type, 'query')
             assert callback is None
             return type.query(self, name, error)
@@ -294,6 +294,8 @@ class Handler:
                 self.pipe(autoregressive, callback=callback)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
+            if prev_feedback is not None:
+                assert prev_feedback.shape[0] == self._prev_fb[-1][3], "Cell-count is wrong"
             self._prev_fb[-1][0] = prev_feedback
         else:
             assert prev_feedback is None, 'The first step cannot give feedback to its previous step'
@@ -310,7 +312,6 @@ class Handler:
                     if feedback is False: break # Respond in-order, waiting if `False`.
                 assert feedback is None or isinstance(feedback, np.ndarray)
                 if feedback is not None:
-                    print(feedback.shape, cell_count, cell_size) # TODO: Why is cell_count 0?
                     assert len(feedback.shape) == 2 and feedback.shape[0] == cell_count and feedback.shape[1] == cell_size
                 self._prev_fb.pop(0)
                 _feedback(callbacks, feedback, cell_shape)
@@ -420,25 +421,27 @@ class Handler:
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
             data = sn.Int.repack(sn, data, self.opts, 2 ** bpc)
             data = sn.Int.encode_ints(sn, data, bpc)
-            zeros = np.zeros(cells, sn.cell_shape[-1] - bpc, dtype=np.float32)
+            zeros = np.zeros((cells, sn.cell_shape[-1] - bpc), dtype=np.float32)
             cells = np.split(np.concatenate((names, data, zeros), -1), cells, 0)
             sn.pipe(*[(c, None, None, None) for c in cells])
-        async def query(self, sn, name, error):
+        def query(self, sn, name, error):
             assert error is None
             np = sn.backend
             bpc = sn.info['bits_per_cell']
-            if len(sn.cell_shape)==0: return
-            assert sn.cell_shape[-1] >= bpc
-            cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc)
+            assert len(sn.cell_shape)==0 or sn.cell_shape[-1] >= bpc
+            cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc) if len(sn.cell_shape)>0 else 0
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
-            cells = np.split(names, names.shape[0], 0)
-            fb = await asyncio.gather(*sn.pipe(*[(None, c, None, None) for c in cells]))
-            if any(f is None for f in fb): return None
-            start = -sn.cell_shape[-1]
-            fb = np.concatenate(fb[:, start : start+bpc], 0)
-            fb = sn.Int.decode_bits(sn, fb)
-            R = sn.Int.repack(sn, fb, 2 ** bpc, self.opts)
-            return R if len(R.shape)>0 else R.item()
+            cells = np.split(names, names.shape[0], 0) if cells != 0 else ()
+            async def do_query(fb):
+                if len(sn.cell_shape)==0: return
+                fb = await fb
+                if any(f is None for f in fb): return None
+                start = -sn.cell_shape[-1]
+                fb = np.concatenate(fb[:, start : start+bpc], 0)
+                fb = sn.Int.decode_bits(sn, fb)
+                R = sn.Int.repack(sn, fb, 2 ** bpc, self.opts)
+                return R if len(R.shape)>0 else R.item()
+            return do_query(asyncio.gather(*sn.pipe(*[(None, c, None, None) for c in cells])) if len(cells)>0 else 7)
         @staticmethod
         def encode_ints(sn, ints, bitcount):
             """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
@@ -470,7 +473,7 @@ class Handler:
                 div = ceil(log2(to_opts) / log2(from_opts))
                 if isinstance(ints, int): return -(-ints // div)
                 sz = -(-ints.shape[0] // div) * div
-                ints = np.concatenate((ints, np.zeros(ints.shape[0] - sz, dtype=np.int32)))
+                ints = np.concatenate((ints, np.zeros((ints.shape[0] - sz,), dtype=np.int32)))
                 ints = ints.reshape(ints.shape[0] // div, div)
                 powers = from_opts ** np.arange(div-1, -1, -1, dtype=np.int32)
                 return (ints * powers).sum(-1)
@@ -507,22 +510,24 @@ class Handler:
             if len(sn.cell_shape)==0: return
             cells = -(-self.sz // sn.cell_shape[-1])
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
-            data = np.concatenate((data, np.zeros(cells * sn.cell_shape[-1] - self.sz, dtype=np.float32)))
+            data = np.concatenate((data, np.zeros((cells * sn.cell_shape[-1] - self.sz,), dtype=np.float32)))
             data = np.concatenate((names, data.reshape(cells, sn.cell_shape[-1])), -1)
             sn.set(None, data, None, error)
-        async def query(self, sn, name, error):
+        def query(self, sn, name, error):
             # Flatten feedback's cells and reshape it to our shape.
             assert error is None # Not implemented for now.
             assert sn.info is None or sn.info['analog'] is True
 
-            if len(sn.cell_shape)==0: return
-            cells = -(-self.sz // sn.cell_shape[-1])
+            cells = -(-self.sz // sn.cell_shape[-1]) if len(sn.cell_shape)>0 else 0
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
-            fb = await sn.query(None, names, error)
-            if fb is None: return None
-            fb = fb[:, -sn.cell_shape[-1]:].flatten()
-            R = fb[:self.sz].reshape(self.shape)
-            return R if len(R.shape)>0 else R.item()
+            async def do_query(fb):
+                if len(sn.cell_shape)==0: return
+                fb = await fb
+                if fb is None: return None
+                fb = fb[:, -sn.cell_shape[-1]:].flatten()
+                R = fb[:self.sz].reshape(self.shape)
+                return R if len(R.shape)>0 else R.item()
+            return do_query(sn.query(None, names, error)) # TODO: …Wait, `names` is apparently a type… TODO: …WAIT: `query` doesn't distinguish between non-None and 2D NumPy arrays…
     # TODO: New tests.
 
 
@@ -634,6 +639,9 @@ def _name_template(np, str_to_floats, cell_shape, name):
         at += sz
     return template
 def _shaped_names(sn, sz, cells, shape, goal, analog, name):
+    np = sn.backend
+    if cells == 0:
+        return np.zeros((0, sn.cell_size), dtype=np.float32)
     names, mult = [], -(-cells // sz)
     for c in range(cells):
         # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.

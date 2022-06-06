@@ -48,7 +48,7 @@ import time
 @sn.run
 def test0():
     """No shape, so no handling."""
-    h = sn.Handler()
+    h = sn.Handler(info={'analog':True, 'bits_per_cell':8})
     assert h.handle(None, None)[0].shape == (0,0)
     h.set('a', data=[1.], type=sn.RawFloat(1))
     h.query('b', type=2).close()
@@ -78,10 +78,11 @@ async def test3():
     """Named error."""
     h = sn.Handler(8,8,8,8, 64)
     # TODO: …Go through all, and re-read, thinking of what we're missing…
-    test = h.query(name='test', type=sn.RawFloat(16))
-    h.handle(None, None)
-    h.handle(np.zeros((1, 96)), None) # TODO: Why is this an error?
-    assert (await test) is not None
+    test = h.query(name='test', type=sn.RawFloat(16)) # TODO: Why is this attempting to create a `((-1.0, 1.0, -1.0), 't', 'e', 's', 't')` name?
+    h.handle(None, None) # TODO: Why does making this one async cause a deadlock or smth?
+    await h.handle(np.zeros((1, 96))) # TODO: Why is this an error? Where is the query?
+    print('zzz') # TODO: Why are we deadlocking now?
+    assert (await test) is not None # TODO:
 @sn.run
 def test4():
     """Name's errors."""
