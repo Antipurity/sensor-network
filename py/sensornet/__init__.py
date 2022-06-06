@@ -153,13 +153,12 @@ class Handler:
         - `name`: see `.name`.
         - `data`: what to send.
         - `type`: how the data is interpreted, such as `sn.Int(8)`. If name and type are `None`, `data` is raw: a `(cells, sum(cell_shape))`-shaped array; either don't modify it in-place after this call, or do `sn.commit()`.
+            - Implicit types: `8 → sn.Int(8)`; `(2,3) → sn.Int(2,3)`.
         - `error = None`: `data` transmission error: `None` or a `data`-sized float32 array of `max abs(true_data - data)`.
         """
         np = self.backend
 
-        # TODO: Should do some default-typing, such as `8 → Int(8)` and `(2,3) → Int(2,3)`… Which?
-        #   (Probably have a separate func, called both here and on query/getting.)
-
+        type = _default_typing(type)
         if type is not None:
             assert hasattr(type, 'set')
             return type.set(self, name, data, error)
@@ -199,6 +198,7 @@ class Handler:
         np = self.backend
         assert callback is None or isinstance(callback, asyncio.Future) or callable(callback)
 
+        type = _default_typing(type)
         if type is not None:
             assert hasattr(type, 'query')
             assert callback is None
@@ -388,7 +388,7 @@ class Handler:
         sn.Int(*[*shape, options], goal=False)
         ```
 
-        Datatype: an autoregressively-sampled sequence of integers, each `0…options-1`. So the bigger the `shape`, the longer it is to set/get.
+        Datatype: an autoregressively-sampled sequence of integers, each `0…options-1`. So the bigger the `shape`, the longer it is to set/get; this is so that the AI model can generate probabilities, sample from them, and still compose bit-streams without aliasing.
         """
         __slots__ = ('sz', 'shape', 'opts', 'goal')
         def __init__(self, *shape, goal=False):
@@ -504,7 +504,6 @@ class Handler:
             # Flatten feedback's cells and reshape it to our shape.
             assert error is None # Not implemented for now.
             assert sn.info['analog'] is True
-            np = sn.backend
 
             cells = -(-self.sz // sn.cell_shape[-1])
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
@@ -636,6 +635,10 @@ def _shaped_names(sn, sz, cells, shape, goal, analog, name):
         n_name = tuple([progress, *name])
         names.append(sn.name(n_name))
     return np.stack(names, 0)
+def _default_typing(type):
+    if isinstance(type, int): return Handler.Int(type)
+    if isinstance(type, tuple): return Handler.Int(*type)
+    return type
 
 
 
