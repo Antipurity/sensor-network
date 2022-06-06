@@ -122,7 +122,6 @@ class Handler:
         Converts a Python name such as `('image', (.25, .5))` to a NumPy template, of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
 
         Names are tuples of either strings (which are MD5-hashed with the 16 bytes converted to -1…1 numbers), `None`s, and/or tuples of either numbers or `None`s."""
-        if isinstance(name, str): name = (name,)
         for fn in self.modify_name:
             name = fn(name)
         assert isinstance(name, tuple)
@@ -157,6 +156,7 @@ class Handler:
         - `error = None`: `data` transmission error: `None` or a `data`-sized float32 array of `max abs(true_data - data)`.
         """
         np = self.backend
+        if isinstance(name, str): name = (name,)
 
         type = _default_typing(type)
         if type is not None:
@@ -197,6 +197,7 @@ class Handler:
         """
         np = self.backend
         assert callback is None or isinstance(callback, asyncio.Future) or callable(callback)
+        if isinstance(name, str): name = (name,)
 
         type = _default_typing(type)
         if type is not None and not isinstance(type, np.ndarray):
@@ -257,6 +258,7 @@ class Handler:
 
         Gets feedback, guaranteed. Never returns `None`, instead re-querying until a result is available.
         """
+        if isinstance(name, str): name = (name,)
         if hasattr(type, 'get'):
             return type.get(self, name, error)
         while True:
