@@ -48,25 +48,16 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Always only have 1 step of sampling; zero-pad the rest.
 
-# TODO: Have `Int(*shape, int_or_int_tuple)`: set autoregressively and in a random order, queried autoregressively (by installing our own into `sn.sensors`) and in a random order (failing on the first concrete `None` result), with getting-mode which immediately re-queries `None`s.
-#   TODO: Handle `(2,2,2,…,2)`-at-the-end specially, by simply putting the bits into cells as they come, aware of `sn.info['bits_per_cell']` (which must exist and be at least 1).
-#     TODO: Defer all other end-sizes to this, by putting each number's bit-pattern separately.
-#   TODO: Each cell's name should have a unique number, signifying the progress within the pattern.
-#   TODO: How to support `...`s/funcs at shapes' beginnings (dynamically-sized sequences) (`.query` fails for those, since end-of-stream is not guaranteed to arrive)?…
-# TODO: …Same for floats, except unlike ints, floats only have `shape`, and if dynamically-sized, have to expose binary actions for end/continue — AND, they are queried in parallel…
-#   (Floats should throw if info says that the env doesn't support analog getting/setting…)
-# TODO: What datatypes do we want? Particularly, the basic datatypes? Need at least the digital "sequence of ints" (queried autoregressively) (if shape is `...` or a function, should only support `.get` and add 1 action for "end-of-stream" and only stop when end-of-stream) and the analog "sequence of floats" (queried in parallel) (if shape has `...` or a function at the beginning, only support `.get` and add a digital "end of stream" action for each step), right?
-#   TODO: The `Goal(datatype)` datatype, which appends `'goal'` to the name and defers to the datatype.
-#     TODO: Make `Goal` set a global bool variable like a context manager. `Int` and `Float` should check that variable.
-#     TODO: Instead of taking up different name-parts for digital/analog/goal/progress, we should merge that with the "progress inside the set/query/get method" number: much more efficient. Prepend a tuple of 3 numbers in `Int`/`Float`. (And, we will no longer need to use `sn.Filter` to filter out the goal-cells, we can just do a much more direct equality-check. …We'd only need the filter for potential debugging of sensors then, right…)
-#   TODO: Also support strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.) …And possibly string/byte streams.
-#   TODO: Also support mu-encoded floats-in-ints.
-#   TODO: So what's the exact interface for datatype methods? Exactly the same as the main methods, but with `sn` at the front (so that datatypes can defer to 2D-impl of their base methods), with the assumption that names will be taken care of?
-#   TODO: Also remove all support for namers, right?… Does this include filters?… …Does this include funcs-in-names, since datatypes can just prepare name-parts directly with numbers (…string-hashing should probably have an LRU cache)?…
+# TODO: Do we want `.set` and `.query` and `.get` to have something like "a callback for when this is done submitting", so that streaming without stalling is at least possible to implement without low-level `.pipe`ing?
+# TODO: `RawFloat(*shape)`.
+# TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.) …And possibly infinite string/byte streams.
+# TODO: Also support mu-encoded (and/or linearly-encoded) floats-in-ints.
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 
 
 
+# TODO: Here, don't have a `Filter` for goals, but instead filter goals by `frame[:, 0]>0`.
+# TODO: In `copy.py`, use `Int`s and `goal=True`.
 # TODO: Also, here, in `modify_name`, should not just *set* the group-ID but *add* to it (and return result mod -1…1), so that envs can actually specify sub-envs.
 
 
@@ -74,7 +65,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
 #   TODO: …Try not L2 prediction but a GAN, with the 'discriminator' being the distance network (in other words, only do self-imitation for digital cells, and do DDPG for analog cells instead — after giving random noise as an extra input)?
 #     TODO: …Or is it sufficient to expose a ghost digital query, which will get reinforced when on correct paths for enhanced L2 prediction of the correct path?… (This *might* even be usable as 'full-RNN-state' goals, with zero effort on our side…) (A bit like humans using language/thoughts to augment their learning.)
-#     (Possibly a VAE, with each cell having a few extra numbers on input and output, past's prediction being conditioned on future's output. Of course, filtered by improved-distance. The only problem is that the first generation of the past doesn't know the future's output.)
+#     (Possibly a VAE, with each cell having a few extra numbers on input and output, past's prediction being conditioned on future's output. Of course, filtered by improved-distance. The only problem is that the first generation of the past doesn't know the future's output — in addition to the latent space not being fully covered, causing blurriness, which we'd need random-sampling and DDPG/GAN to fix.)
 # TODO: …Is it possible to have an analog-reward-goal which isn't ever actually encountered, but is set to 1 so that the model always maximizes reward? What would we need for this? The unroll-time measured-distance-to-analog-goal, which is 0…1 and is only there for higher precision?… …But how would we detect if cells are same-named, and what would we do if we don't actually have a same-name observation cell…
 
 
@@ -160,6 +151,7 @@ steps_per_save = 1000
 
 sn.info = {
     'docs': """TODO:""",
+    'analog': True,
     'bits_per_cell': bits_per_chunk,
 }
 

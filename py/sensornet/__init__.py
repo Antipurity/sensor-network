@@ -156,11 +156,9 @@ class Handler:
         - `error = None`: `data` transmission error: `None` or a `data`-sized float32 array of `max abs(true_data - data)`.
         """
         np = self.backend
-        if isinstance(error, float): error = np.full_like(data, error) # TODO: Should instead concatenate 0-error-for-name and this. (Also, should be below, amid assertions.)
 
         # TODO: Should do some default-typing, such as `8 → Int(8)` and `(2,3) → Int(2,3)`… Which?
         #   (Probably have a separate func, called both here and on query/getting.)
-        #   TODO: Do we want to turn no-type number/list/NParray-data into `Float`s automatically?
 
         if type is not None:
             assert hasattr(type, 'set')
@@ -169,6 +167,10 @@ class Handler:
 
         assert isinstance(data, np.ndarray)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
+        if isinstance(error, float):
+            ne = np.zeros(data.shape[0], data.shape[1] - self.cell_shape[-1], dtype=np.float32)
+            ve = np.full_like(data.shape[0], self.cell_shape[-1], error, dtype=np.float32)
+            error = np.concatenate((ne, ve), -1)
         assert error is None or isinstance(error, np.ndarray) and data.shape == error.shape
 
         if not self.cell_size: return
@@ -388,45 +390,46 @@ class Handler:
 
         Represents an autoregressively-sampled sequence of integers, each `0…options-1`. The bigger the `shape`, the longer it is to set/get.
         """
-        __slots__ = ('shape', 'opts', 'goal')
+        __slots__ = ('sz', 'shape', 'opts', 'goal')
         def __init__(self, *shape, goal=False):
             s, o = shape[:-1], shape[-1]
-            self.shape, self.opts, self.goal = s, o, goal
             assert isinstance(goal, bool)
-            assert all(isinstance(n, int) and n>0 for n in s)
+            assert isinstance(s, tuple) and all(isinstance(n, int) and n>0 for n in s)
             assert isinstance(o, int) and o>1, "Only makes sense to choose between 2 or more options"
+            from operator import mul
+            sz = functools.reduce(mul, self.shape, 1)
+            self.sz, self.shape, self.opts, self.goal = sz, s, o, goal
         def set(self, sn, name, data, error):
             assert error is None
             np = sn.backend
             data = np.array(data, dtype=np.int32, copy=False)
             assert len(data.shape) == 1 and data.shape == self.shape
-            from operator import mul
-            sz = functools.reduce(mul, self.shape, 1)
-            data = data.reshape(sz)
+            data = data.reshape(self.sz)
             assert ((data >= 0) & (data < self.opts)).all(), "Out-of-range ints"
 
+            # Assemble & pipe cells autoregressively.
             bpc = sn.info['bits_per_cell']
             assert sn.cell_shape[-1] >= bpc
+            names = sn.Int._names(sn, self.sz, self.opts, self.shape, self.goal, name, bpc)
+            cells = names.shape[0]
             data = sn.Int.repack(sn, data, self.opts, 2 ** bpc)
-            cells, names, mult = data.shape[0], [], -(-data.shape[0] // sz)
-            for c in range(cells):
-                # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
-                #   (We *could* also compute all names in one NumPy array for efficiency.)
-                n, progress = c * mult, []
-                for max in reversed(self.shape):
-                    progress.append((n % max) / max * 2 - 1)
-                    n = n // max
-                progress = tuple([1. if self.goal else -1., -1., *reversed(progress)])
-                n_name = tuple([progress, *name])
-                names.append(sn.name(n_name))
-            names = np.stack(names, 0)
             data = sn.Int.encode_ints(sn, data, bpc)
             zeros = np.zeros(cells, sn.cell_shape[-1] - bpc, dtype=np.float32)
-            sn.set(data = np.concatenate((names, data, zeros), -1))
-        # TODO: `async def query(sn, name, error)`. Using the same autoregressive-`pipe` method, but `await`ing the returned Futures, and on `None`, cancel the rest and return None; if no None, decode all ints and return the NumPy int array (or an int if len(self.shape)==0). Use `sn.Int.decode_ints(sn, bits)`.
-        #   …How do we implement this, exactly?
-        #     Do we first need to compute names-of-cells, exactly as `.set` did?…
-        # TODO: …Should we maybe have `.efficiency(sn)`, returning 0…1?
+            cells = np.split(np.concatenate((names, data, zeros), -1), cells, 0)
+            sn.pipe(*[(c, None, None, None) for c in cells])
+        async def query(self, sn, name, error):
+            assert error is None
+            np = sn.backend
+            bpc = sn.info['bits_per_cell']
+            assert sn.cell_shape[-1] >= bpc
+            names = sn.Int._names(sn, self.sz, self.opts, self.shape, self.goal, name, bpc)
+            cells = np.split(names, names.shape[0], 0)
+            fb = await asyncio.gather(*sn.pipe(*[(None, c, None, None) for c in cells]))
+            if any(f is None for f in fb): return None
+            start = -sn.cell_shape[-1]
+            fb = np.concatenate(fb[:, start : start+bpc], 0)
+            fb = sn.Int.decode_bits(sn, fb)
+            return sn.Int.repack(sn, fb, 2 ** bpc, self.opts)
         @staticmethod
         def encode_ints(sn, ints, bitcount):
             """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
@@ -436,8 +439,8 @@ class Handler:
             bits = np.expand_dims(ints, 1) & powers2
             return np.where(bits > 0, np.array(1., dtype=np.float32), np.array(-1., dtype=np.float32))
         @staticmethod
-        def decode_ints(sn, bits):
-            """`sn.Int.decode_ints(sn, bits)→ints`: from `(N, bitcount)`-shape float32 to `(N,)`-shape int32."""
+        def decode_bits(sn, bits):
+            """`sn.Int.decode_bits(sn, bits)→ints`: from `(N, bitcount)`-shape float32 to `(N,)`-shape int32."""
             assert len(bits.shape) == 2
             np = sn.backend
             powers2 = 2 ** np.arange(bits.shape[1]-1, -1, -1, dtype=np.int32)
@@ -445,16 +448,18 @@ class Handler:
         @staticmethod
         def repack(sn, ints, from_opts, to_opts):
             """`repack(sn, ints, from_opts, to_opts)→ints`: changes the base of `ints` digits, and thus its size. Importantly, `repack(sn, repack(sn, X, A, B), B, A) = X`."""
-            assert len(ints.shape) == 1
+            assert isinstance(ints, int) or len(ints.shape) == 1
             np = sn.backend
             from math import log2, ceil
             if from_opts > to_opts: # More `ints`: unpack.
                 mul = ceil(log2(from_opts) / log2(to_opts))
+                if isinstance(ints, int): return ints * mul
                 powers = to_opts ** np.arange(mul-1, -1, -1, dtype=np.int32)
                 ints = np.expand_dims(ints, 1)
                 return (np.floor_divide(ints, powers) % to_opts).reshape(ints.shape[0] * mul)
             elif from_opts < to_opts: # Less `ints`: pack.
                 div = ceil(log2(to_opts) / log2(from_opts))
+                if isinstance(ints, int): return -(-ints // div)
                 sz = -(-ints.shape[0] // div) * div
                 ints = np.concatenate((ints, np.zeros(ints.shape[0] - sz, dtype=np.int32)))
                 ints = ints.reshape(ints.shape[0] // div, div)
@@ -462,11 +467,27 @@ class Handler:
                 return (ints * powers).sum(-1)
             else:
                 return ints
-        # TODO: …Also: do we *really* need to handle streams of ints specially in `Int`? Wouldn't just adding an option for "end-of-stream" and re-`get`ting until end of stream introduce no overhead? …Actually, it does: this requires a roundtrip, whereas native handling (with a `.pipe`ing queue) would help us preemptively generate more than we need and discard the rest.
-        #   (…It would allow variable-sized strings though… So much more convenient than fixed-size strings… And even allow direct socket IO, like "mind-uploading" a server by first listening to its IO then taking over it…)
-        #   …But how *much* more steps to schedule than we need? Shouldn't this be a hyperparam — and if we go this route, can't we make users decide to stream in partial queries or something? …Or dependent on the handler's latency-in-steps.
-        #   …Also, for big transfers, isn't it better to use Python [streams](https://docs.python.org/3/library/asyncio-stream.html) than to force waiting for all data to be available? Meaning that we *might* want another type for unbounded int/byte/bit streams…
-    # TODO: `Float(*shape)`
+        @staticmethod
+        def _names(sn, sz, opts, shape, goal, name, bpc): # TODO: …Wait, can we reuse this for `Float`, just with an extra bool for digital/analog? …Do we need to pass in `cells`, not compute them here, since those are int-specific?…
+            cells = sn.Int.repack(sn, sz, opts, 2 ** bpc)
+            names, mult = [], -(-cells // sz)
+            for c in range(cells):
+                # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
+                #   (We *could* also compute all names in one NumPy array for efficiency.)
+                n, progress = c * mult, []
+                for max in reversed(shape):
+                    progress.append((n % max) / max * 2 - 1)
+                    n = n // max
+                progress = tuple([1. if goal else -1., -1., *reversed(progress)])
+                n_name = tuple([progress, *name])
+                names.append(sn.name(n_name))
+            return np.stack(names, 0)
+    # TODO: `RawFloat(*shape)`
+    #   TODO: …Zero-pad the data to be divisible by cell-value-size, and compute all the cell-names, then reshape to 2D and concat and set all at once?
+    #     TODO: …Or should we align floats to cells, packing as much as the end of `shape` allows into one cell but no more, for better learning? …Or should we just not care?
+    #   TODO: Querying, which should be the same as setting but in reverse.
+    #   TODO: (They should also check `sn.info['analog'] is True`.)
+    # TODO: New tests.
 
 
 
@@ -504,50 +525,6 @@ class Filter:
         # Call.
         if data.size > 0:
             return self.func(data, error, cell_shape)
-
-
-
-class Torch: # pragma: no cover # TODO: …Should we maybe remove this entirely, if it's unused?
-    """A [PyTorch](https://pytorch.org/) backend. Often [slower](https://github.com/pytorch/pytorch/issues/9873) than NumPy, even on GPU, so, not recommended."""
-    __slots__ = ('torch', 'nan', 'uint8', 'ndarray', 'float32')
-    # TODO: Re-inspect which methods we're still using.
-    def __init__(self, autogpu=False):
-        import torch
-        if autogpu and torch.cuda.is_available():
-            # (This is much easier than specifying `device=…`-but-only-if-not-NumPy.)
-            torch.set_default_tensor_type('torch.cuda.FloatTensor')
-        self.torch = torch
-        self.nan = float('nan')
-        self.uint8 = torch.uint8
-        self.int32 = torch.int32
-        self.ndarray = torch.Tensor
-        self.float32 = torch.float32
-    def repeat(self, x, repeats, axis):
-        # Even though `torch.repeat_interleave`'s interface exactly matches, this is more efficient.
-        assert axis == 0
-        return x.expand(repeats, *x.shape[1:])
-    def array(self, x, dtype):
-        return self.torch.tensor(x, dtype=dtype) if not isinstance(x, self.torch.Tensor) else x.to(dtype)
-    def expand_dims(self, x, axis):
-        return self.torch.unsqueeze(x, axis)
-    def concatenate(self, tensors, axis):
-        return self.torch.cat(tensors, axis)
-    def frombuffer(self, x, dtype):
-        if hasattr(self.torch, 'frombuffer'): return self.torch.frombuffer(x, dtype)
-        assert dtype is self.torch.uint8
-        return self.torch.tensor(np.frombuffer(x, np.uint8), dtype=dtype)
-    def lexsort(self, x):
-        # https://discuss.pytorch.org/t/numpy-lexsort-equivalent-in-pytorch/47850/3
-        assert len(x.shape) == 2
-        inv = self.torch.unique(x.flip(0), dim=-1, sorted=True, return_inverse=True)[1]
-        return self.torch.argsort(inv)
-    def minimum(self, x1, x2):
-        # `x2` is always a number here, and `torch.minimum` doesn't support that.
-        return self.torch.clamp(x1, x2)
-    def nan_to_num(self, x):
-        return self.torch.where(self.torch.isnan(x), self.torch.zeros_like(x), x)
-    def __getattr__(self, name):
-        return object.__getattribute__(self.torch, name)
 
 
 
