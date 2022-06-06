@@ -50,15 +50,15 @@ def test0():
     """No shape, so no handling."""
     h = sn.Handler()
     assert h.handle(None, None)[0].shape == (0,0)
-    h.data('a', data=[1.])
-    h.query('b', query=1, callback=lambda fb: ...)
-    h.query('c', query=1)
+    h.set('a', data=[1.], type=sn.RawFloat(1))
+    h.query('b', type=2).close()
+    h.query('c', type=2).close()
     assert h.handle(None, None)[0].shape == (0,0)
 @sn.run
 def test1():
     """Already-named data, and transmission error."""
     h = sn.Handler(8,8,8,8, 64)
-    h.data(data = np.zeros((3, 96)), error = np.full((3, 96), -.7))
+    h.set(data = np.zeros((3, 96)), error = np.full((3, 96), -.7))
     data, query, data_error, query_error = h.handle(None, None)
     assert (data == np.zeros((3, 96))).all()
     assert (query == np.zeros((0, 32))).all()
@@ -68,12 +68,13 @@ def test1():
 def test2():
     """Different kinds of names."""
     h = sn.Handler(8,8,8,8, 64)
-    h.data(name=('test',), data=np.array([-.4, -.2, .2, .4]))
-    h.data(
+    # TODO: …Go through all, and re-read, thinking of what we're missing…
+    h.set(name=('test',), data=np.array([-.4, -.2, .2, .4]))
+    h.set(
         name=('test', (-.2, .2, lambda start,end,total: start/total*2-1)),
         data=np.array([-.4, -.2, .2, .4]),
     )
-    h.data(name=((1,1,1,1,1,1,1,1),(1,1,1,1,1,1,1,1),(1,1,1,1)), data=np.array([-.4, -.2, .2, .4]))
+    h.set(name=((1,1,1,1,1,1,1,1),(1,1,1,1,1,1,1,1),(1,1,1,1)), data=np.array([-.4, -.2, .2, .4]))
     h.commit()
     data, query, *_ = h.handle(None, None)
     assert data.shape == (3, 96)
@@ -90,18 +91,13 @@ def test4():
     """Name's errors."""
     h = sn.Handler(8,8,8,8, 64)
     d = np.array([1.])
-    h.data(name=((0,True,1),), data=d)
+    h.set(name=((0,True,1),), data=d)
     try:
-        def bad(*_): assert False # pragma: no cover
-        h.data(name=(bad,), data=d); assert False
-    except TypeError:
-        pass # Unwrapped function.
-    try:
-        h.data(name=(0,), data=d); assert False
+        h.set(name=(0,), data=d); assert False
     except TypeError:
         pass # Unwrapped number.
     try:
-        h.data(name=(['obedience'],), data=d); assert False
+        h.set(name=(['obedience'],), data=d); assert False
     except TypeError:
         pass # Unknown type.
 @sn.run
@@ -133,7 +129,7 @@ def test7():
     h = sn.Handler(8,8,8,8, 64)
     got = False
     def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
-    h.data(name=('test',), data=np.zeros((2,3,4)), error=np.full((2,3,4), -.4))
+    h.set(name=('test',), data=np.zeros((2,3,4)), error=np.full((2,3,4), -.4))
     h.query(name=('test',), query=(2,3,4), callback=yes_feedback)
     data, query, *_ = h.handle(None, None)
     assert data.shape == (1,96) and query.shape == (1,32)
@@ -165,7 +161,7 @@ def test8():
         asyncio.ensure_future(request_data(sn, True))
         fb = None
         while finished < 6:
-            sn.data(name='bees', data=np.zeros((16,)))
+            sn.set(name='bees', data=np.zeros((16,)))
             fb = give_feedback_later(*(await sn.handle(fb)))
         await asyncio.sleep(.1)
         await fb # To silence a warning.
@@ -176,7 +172,7 @@ async def test9():
     """Pass-through of (synthetic) handler data to another one."""
     sn.shape(8,8,8,8, 64)
     shape1, shape2 = (13,96), (13,32)
-    fut = sn.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2))
+    fut = sn.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2)) # TODO: A tuple.
     data, query, *_ = sn.handle(None, None)
     assert data.shape == shape1 and query.shape == shape2
     sn.commit()
@@ -206,7 +202,7 @@ def test11():
         nonlocal n, got;  n += 1
         if n == 4: got = True
         return got and np.zeros((0, 96))
-    h.data(None, np.zeros((2, 96)))
+    h.set(None, np.zeros((2, 96)))
     h.handle(feedback, None)
     h.handle(None, None)
     h.handle(None, None)
@@ -219,7 +215,7 @@ async def test12():
     h = sn.Handler(8,8,8,8, 64)
     async def data_later():
         await asyncio.sleep(.2)
-        h.data('hey listen', np.zeros((128,)))
+        h.set('hey listen', np.zeros(128), sn.RawFloat(128))
     async def query_later():
         await asyncio.sleep(.2)
         h.query('forces of evil gather', 16)
@@ -236,9 +232,9 @@ async def test13():
     def bad(data, *_): # pragma: no cover
         assert False
     h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, 'this one'), good), sn.Filter(('no'), bad)])
-    h.data(name=('mm not this one',), data=np.array([1., 2., 3.]))
-    h.data(name=('yes', 'this one'), data=np.array([.1, .2, .3]))
-    h.data(name=('this one', 'does not match'), data=np.array([.1, .2, .5]))
+    h.set(name=('mm not this one',), data=np.array([1., 2., 3.]), type=sn.RawFloat(3))
+    h.set(name=('yes', 'this one'), data=np.array([.1, .2, .3]), type=sn.RawFloat(3))
+    h.set(name=('this one', 'does not match'), data=np.array([.1, .2, .5]), type=sn.RawFloat(3))
     data, query, data_error, query_error = await h.handle()
     assert good.b
     assert sn.Filter((None, 'this one'))(data, cell_shape=h.cell_shape).sum() == 1
@@ -247,7 +243,7 @@ async def test13():
 async def test14():
     """Modifying names."""
     h = sn.Handler(8,8,8,8, 64, modify_name = [lambda name: ('z',)])
-    h.data(name='btgrnonets', data=[1., 2.])
+    h.set(name='btgrnonets', data=[1., 2.], type=sn.RawFloat(2))
     data, query, data_error, query_error = await h.handle()
     assert sn.Filter(('z',))(data, cell_shape=h.cell_shape).sum() == 1
 print('Tests OK')
@@ -256,20 +252,20 @@ print('Tests OK')
 
 async def benchmark(N=64*10):
     """Raw number-shuffling performance."""
-    h = sn.Handler(8,8,8,8, 64) # `backend=sn.Torch()` seems slower.
+    h = sn.Handler(8,8,8,8, 64)
     iterations, feedback = 0, None
     def check_feedback(fb, *_):
         assert fb is not None and fb.shape == (64,) and fb[0] == .2
     async def await_feedback(fut): # pragma: no cover
         check_feedback(await fut)
     randn_src = h.backend.random if not hasattr(h.backend, 'randn') else h.backend
-    send_data = randn_src.randn(N)
+    send_data, send_type = randn_src.randn(N), sn.RawFloat(N)
     start, duration = time.monotonic(), 10.
     name = ('benchmark',)
     while time.monotonic() - start < duration:
-        h.data(name, data=send_data)
+        h.set(name, data=send_data, type=send_type)
         # asyncio.ensure_future(await_feedback(h.query(name, 64))) # 15% slowdown.
-        h.query(name, 64, callback=check_feedback)
+        h.query(name, 64, callback=check_feedback) # TODO: The type…
         data, query, data_error, query_error = await h.handle(feedback)
         feedback = h.backend.full((query.shape[0], data.shape[1]), .2) if data is not None else None
         iterations += 1

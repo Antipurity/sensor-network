@@ -274,6 +274,8 @@ class Handler:
 
         Pass it the previous handling's feedback: as a NumPy array sized `M×cell_size` or `None` or an `await`able future of that, or a low-level function (takes nothing, returns `False` to wait, `None` to drop, an array to respond).
 
+        If `max_simultaneous_steps` is `None`, there is no waiting, only immediate data/query, possibly empty.
+
         This returns `(data, query, data_error, query_error)`, or an `await`able promise of that.
         - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
         - `query`: same, but sized `M×name_size` (only the name).
@@ -389,6 +391,8 @@ class Handler:
         ```
 
         Datatype: an autoregressively-sampled sequence of integers, each `0…options-1`. So the bigger the `shape`, the longer it is to set/get; this is so that the AI model can generate probabilities, sample from them, and still compose bit-streams without aliasing.
+
+        To use this, `Handler`s need `info={'bits_per_cell': N}`.
         """
         __slots__ = ('sz', 'shape', 'opts', 'goal')
         def __init__(self, *shape, goal=False):
@@ -397,7 +401,7 @@ class Handler:
             assert isinstance(s, tuple) and all(isinstance(n, int) and n>0 for n in s)
             assert isinstance(o, int) and o>1, "Only makes sense to choose between 2 or more options"
             from operator import mul
-            sz = functools.reduce(mul, self.shape, 1)
+            sz = functools.reduce(mul, s, 1)
             self.sz, self.shape, self.opts, self.goal = sz, s, o, goal
         def set(self, sn, name, data, error):
             assert error is None
@@ -409,6 +413,7 @@ class Handler:
 
             # Assemble & pipe cells autoregressively.
             bpc = sn.info['bits_per_cell']
+            if len(sn.cell_shape)==0: return
             assert sn.cell_shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc)
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
@@ -421,6 +426,7 @@ class Handler:
             assert error is None
             np = sn.backend
             bpc = sn.info['bits_per_cell']
+            if len(sn.cell_shape)==0: return
             assert sn.cell_shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc)
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
@@ -478,23 +484,26 @@ class Handler:
         Compared to `sn.Int`:
         - This is sampled in parallel, which allows lower latency.
         - This is analog, as opposed to `sn.Int`'s digital choices. Due to the size of the space of possibilities, explicit probabilities are not available, so generative models have to be used to learn diverse acting policies (i.e. GANs/DDPGs, VAEs, diffusion models).
+
+        To use this, `Handler`s need `info={'analog':True}`.
         """
         __slots__ = ('sz', 'shape', 'goal')
         def __init__(self, *shape, goal=False):
             assert isinstance(goal, bool)
             assert isinstance(shape, tuple) and all(isinstance(n, int) and n>0 for n in shape)
             from operator import mul
-            sz = functools.reduce(mul, self.shape, 1)
+            sz = functools.reduce(mul, shape, 1)
             self.sz, self.shape, self.goal = sz, shape, goal
         def set(self, sn, name, data, error):
             # Zero-pad `data` and split it into cells, then pass it on.
             assert error is None # Not implemented for now.
-            assert sn.info['analog'] is True
+            assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
             data = np.array(data, dtype=np.int32, copy=False)
             assert data.shape == self.shape
             data = data.reshape(self.sz)
 
+            if len(sn.cell_shape)==0: return
             cells = -(-self.sz // sn.cell_shape[-1])
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
             data = np.concatenate((data, np.zeros(self.sz - cells * sn.cell_shape[-1], dtype=np.float32)))
@@ -503,8 +512,9 @@ class Handler:
         async def query(self, sn, name, error):
             # Flatten feedback's cells and reshape it to our shape.
             assert error is None # Not implemented for now.
-            assert sn.info['analog'] is True
+            assert sn.info is None or sn.info['analog'] is True
 
+            if len(sn.cell_shape)==0: return
             cells = -(-self.sz // sn.cell_shape[-1])
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
             fb = await sn.query(None, names, error)
@@ -521,7 +531,7 @@ class Filter:
 
     Wraps a `func(sn, data, error=None)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
 
-    Example uses: getting a global reward from the env; getting [CLIP](https://cliport.github.io/)-embedding goals from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
+    Example uses: getting a global reward from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
 
     `func`:
     - `None`: a call will simply return a per-cell bit-mask of whether the name fits.

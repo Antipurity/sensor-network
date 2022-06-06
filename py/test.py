@@ -149,6 +149,7 @@ steps_per_save = 1000
 
 sn.info = {
     'docs': """TODO:""",
+    # TODO: Also mention that we clip all inputs/outputs to -1…1.
     'analog': True,
     'bits_per_cell': bits_per_chunk,
 }
