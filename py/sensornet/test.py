@@ -77,7 +77,7 @@ def test2():
 async def test3():
     """Named error."""
     h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':16})
-    test = h.query(name='test', type=sn.RawFloat(16))
+    test = h.query(name='test', type=sn.RawFloat(17))
     await h.handle(None)
     h.set('burn', 9, 10)
     data, query, *_ = await h.handle(np.zeros((1, 96)))
@@ -88,36 +88,42 @@ def test4():
     """Name's errors."""
     h = sn.Handler(8,8,8,8, 64)
     d = np.array([1.])
-    # TODO: …Go through all, and re-read, thinking of what we're missing…
-    h.set(name=((0,True,1),), data=d) # TODO: Datatype.
+    h.set(name=((0,True,1),), data=d, type=sn.RawFloat(1))
     try:
-        h.set(name=(0,), data=d); assert False
+        h.set(name=(0,), data=d, type=sn.RawFloat(1)); assert False
     except TypeError:
         pass # Unwrapped number.
     try:
-        h.set(name=(['obedience'],), data=d); assert False
+        h.set(name=(['obedience'],), data=d, type=sn.RawFloat(1)); assert False
     except TypeError:
         pass # Unknown type.
 @sn.run
-def test5():
+async def test5():
     """Sensors are auto-called at each step."""
     h = sn.Handler(8,8,8,8, 64)
-    def eh_feedback(fb, *_): assert fb is not None
-    h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
-    h.sensors.append(lambda h: h.query(name=('test',), query=3, callback=eh_feedback))
+    fbs = []
+    def sensor(h):
+        async def asensor(fb):
+            fb = await fb
+            assert fb is not None
+        fbs.append(asyncio.ensure_future(asensor(h.query(name='insolence', type=sn.RawFloat(3)))))
+    h.sensors.add(lambda h: sensor(h))
+    h.sensors.add(lambda h: sensor(h))
     assert h.handle(None, None)[1].shape == (2, 32)
     h.handle(np.zeros((2, 96)), None)
+    assert len(fbs) == 4
 @sn.run
 def test6():
     """Errors thrown by `callback` are re-thrown."""
     h = sn.Handler(8,8,8,8, 64)
     def err1(*_): raise KeyboardInterrupt()
     def err2(*_): raise TypeError('damn')
-    h.query(name='death', query=1, callback=err1)
+    # TODO: …Go through all, and re-read, thinking of what we're missing…
+    h.query(name='death', type=sn.RawFloat(1), callback=err1) # TODO: No `callback`. …Wait, but then, does this whole test make any sense?
     assert h.handle(None, None)[1].shape == (1, 32)
     try: h.handle(None, None); assert False
     except KeyboardInterrupt: pass
-    h.query(query=np.zeros((5, 32)), error=np.full((5, 32), -.5), callback=err2)
+    h.query(type=np.zeros((5, 32)), error=np.full((5, 32), -.5), callback=err2)
     assert h.handle(None, None)[1].shape == (5, 32)
     try: h.handle(None, None); assert False
     except TypeError: pass
@@ -128,7 +134,7 @@ def test7():
     got = False
     def yes_feedback(fb, *_): nonlocal got;  assert fb.shape == (2,3,4);  got = True
     h.set(name=('test',), data=np.zeros((2,3,4)), error=np.full((2,3,4), -.4))
-    h.query(name=('test',), query=(2,3,4), callback=yes_feedback)
+    h.query(name=('test',), type=sn.RawFloat(2,3,4), callback=yes_feedback)
     data, query, *_ = h.handle(None, None)
     assert data.shape == (1,96) and query.shape == (1,32)
     h.handle(np.zeros((1,96)), None)

@@ -488,7 +488,7 @@ class Handler:
         Datatype: a sequence of floating-point numbers.
 
         Compared to `sn.Int`:
-        - This is sampled in parallel, which allows lower latency.
+        - This is sampled in parallel, which allows for lower latency.
         - This is analog, as opposed to `sn.Int`'s digital choices. Due to the size of the space of possibilities, explicit probabilities are not available, so generative models have to be used to learn diverse acting policies (i.e. GANs/DDPGs, VAEs, diffusion models).
 
         To use this, `Handler`s need `info={'analog':True}`.
