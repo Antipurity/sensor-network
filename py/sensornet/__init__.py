@@ -464,15 +464,15 @@ class Handler:
             """`repack(sn, ints, from_opts, to_opts)→ints`: changes the base of `ints` digits, and thus its size. Importantly, `repack(sn, repack(sn, X, A, B), B, A) = X`."""
             assert isinstance(ints, int) or len(ints.shape) == 1
             np = sn.backend
-            from math import log2, ceil
+            from math import log, floor, ceil
             if from_opts > to_opts: # More `ints`: unpack.
-                mul = ceil(log2(from_opts) / log2(to_opts))
+                mul = ceil(log(from_opts, to_opts)) # Prefer overallocating.
                 if isinstance(ints, int): return ints * mul
                 powers = to_opts ** np.arange(mul-1, -1, -1, dtype=np.int32)
                 ints = np.expand_dims(ints, 1)
                 return (np.floor_divide(ints, powers) % to_opts).reshape(ints.shape[0] * mul)
             elif from_opts < to_opts: # Less `ints`: pack.
-                div = ceil(log2(to_opts) / log2(from_opts))
+                div = floor(log(to_opts, from_opts)) # Prefer wasting capacity to not having enough.
                 if isinstance(ints, int): return -(-ints // div)
                 sz = -(-ints.shape[0] // div) * div
                 ints = np.concatenate((ints, np.zeros((sz - ints.shape[0],), dtype=np.int32)))
