@@ -51,7 +51,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Do we want `.set` and `.query` and `.get` to have something like "a callback for when this is done submitting", so that streaming without stalling is at least possible to implement without low-level `.pipe`ing?
 # TODO: `RawFloat(*shape)`.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.) …And possibly infinite string/byte streams.
-# TODO: Also support mu-encoded (and/or linearly-encoded) floats-in-ints.
+# TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`?
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 
 

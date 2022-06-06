@@ -403,15 +403,15 @@ class Handler:
             assert error is None
             np = sn.backend
             data = np.array(data, dtype=np.int32, copy=False)
-            assert len(data.shape) == 1 and data.shape == self.shape
+            assert data.shape == self.shape
             data = data.reshape(self.sz)
             assert ((data >= 0) & (data < self.opts)).all(), "Out-of-range ints"
 
             # Assemble & pipe cells autoregressively.
             bpc = sn.info['bits_per_cell']
             assert sn.cell_shape[-1] >= bpc
-            names = sn.Int._names(sn, self.sz, self.opts, self.shape, self.goal, name, bpc)
-            cells = names.shape[0]
+            cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc)
+            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
             data = sn.Int.repack(sn, data, self.opts, 2 ** bpc)
             data = sn.Int.encode_ints(sn, data, bpc)
             zeros = np.zeros(cells, sn.cell_shape[-1] - bpc, dtype=np.float32)
@@ -422,14 +422,15 @@ class Handler:
             np = sn.backend
             bpc = sn.info['bits_per_cell']
             assert sn.cell_shape[-1] >= bpc
-            names = sn.Int._names(sn, self.sz, self.opts, self.shape, self.goal, name, bpc)
+            cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc)
+            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
             cells = np.split(names, names.shape[0], 0)
             fb = await asyncio.gather(*sn.pipe(*[(None, c, None, None) for c in cells]))
             if any(f is None for f in fb): return None
             start = -sn.cell_shape[-1]
             fb = np.concatenate(fb[:, start : start+bpc], 0)
             fb = sn.Int.decode_bits(sn, fb)
-            return sn.Int.repack(sn, fb, 2 ** bpc, self.opts)
+            return sn.Int.repack(sn, fb, 2 ** bpc, self.opts) # TODO: If len(self.shape)==0, return a Python int, not a NumPy array.
         @staticmethod
         def encode_ints(sn, ints, bitcount):
             """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
@@ -467,26 +468,32 @@ class Handler:
                 return (ints * powers).sum(-1)
             else:
                 return ints
-        @staticmethod
-        def _names(sn, sz, opts, shape, goal, name, bpc): # TODO: …Wait, can we reuse this for `Float`, just with an extra bool for digital/analog? …Do we need to pass in `cells`, not compute them here, since those are int-specific?…
-            cells = sn.Int.repack(sn, sz, opts, 2 ** bpc)
-            names, mult = [], -(-cells // sz)
-            for c in range(cells):
-                # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
-                #   (We *could* also compute all names in one NumPy array for efficiency.)
-                n, progress = c * mult, []
-                for max in reversed(shape):
-                    progress.append((n % max) / max * 2 - 1)
-                    n = n // max
-                progress = tuple([1. if goal else -1., -1., *reversed(progress)])
-                n_name = tuple([progress, *name])
-                names.append(sn.name(n_name))
-            return np.stack(names, 0)
-    # TODO: `RawFloat(*shape)`
-    #   TODO: …Zero-pad the data to be divisible by cell-value-size, and compute all the cell-names, then reshape to 2D and concat and set all at once?
-    #     TODO: …Or should we align floats to cells, packing as much as the end of `shape` allows into one cell but no more, for better learning? …Or should we just not care?
-    #   TODO: Querying, which should be the same as setting but in reverse.
-    #   TODO: (They should also check `sn.info['analog'] is True`.)
+    class RawFloat:
+        """
+        TODO:
+        """
+        __slots__ = ('sz', 'shape', 'goal')
+        def __init__(self, *shape, goal=False):
+            assert isinstance(goal, bool)
+            assert isinstance(shape, tuple) and all(isinstance(n, int) and n>0 for n in shape)
+            from operator import mul
+            sz = functools.reduce(mul, self.shape, 1)
+            self.sz, self.shape, self.goal = sz, shape, goal
+        def set(self, sn, name, data, error):
+            # Zero-pad `data` and split it into cells, then pass it on.
+            assert error is None # Not implemented for now.
+            assert sn.info['analog'] is True
+            np = sn.backend
+            data = np.array(data, dtype=np.int32, copy=False)
+            assert data.shape == self.shape
+            data = data.reshape(self.sz)
+            cells = -(-self.sz // sn.cell_shape[-1])
+            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
+            data = np.concatenate((data, np.zeros(self.sz - cells * sn.cell_shape[-1])))
+            data = np.concatenate((names, data.reshape(cells, sn.cell_shape[-1])), -1)
+            sn.set(None, data, None, error)
+            # TODO: Also, if len(self.shape)==0, return a Python float, not a NumPy array.
+        # TODO: Querying, which should be the same as setting but in reverse. Not hard to flatten the cell-feedbacks, right?
     # TODO: New tests.
 
 
@@ -597,6 +604,19 @@ def _name_template(np, str_to_floats, cell_shape, name):
             raise TypeError("Names must consist of strings, `None`, and tuples of either numbers or `None`s")
         at += sz
     return template
+def _shaped_names(sn, sz, cells, shape, goal, analog, name):
+    names, mult = [], -(-cells // sz)
+    for c in range(cells):
+        # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
+        #   (We *could* also compute all names in one NumPy array for efficiency.)
+        n, progress = c * mult, []
+        for max in reversed(shape):
+            progress.append((n % max) / max * 2 - 1)
+            n = n // max
+        progress = tuple([1. if goal else -1., 1. if analog else -1., *reversed(progress)])
+        n_name = tuple([progress, *name])
+        names.append(sn.name(n_name))
+    return np.stack(names, 0)
 
 
 
