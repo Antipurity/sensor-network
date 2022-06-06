@@ -276,7 +276,7 @@ class Handler:
 
         Pass it the previous handling's feedback: as a NumPy array sized `M×cell_size` or `None` or an `await`able future of that, or a low-level function (takes nothing, returns `False` to wait, `None` to drop, an array to respond).
 
-        If `max_simultaneous_steps` is `None`, there is no waiting, only immediate data/query, possibly empty.
+        If `max_simultaneous_steps` is `None`, there is no waiting, only immediate data/query, possibly empty. Otherwise, this waits until there is some data/query, and until we aren't handle too many steps at once.
 
         This returns `(data, query, data_error, query_error)`, or an `await`able promise of that.
         - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
@@ -475,7 +475,7 @@ class Handler:
                 div = ceil(log2(to_opts) / log2(from_opts))
                 if isinstance(ints, int): return -(-ints // div)
                 sz = -(-ints.shape[0] // div) * div
-                ints = np.concatenate((ints, np.zeros((ints.shape[0] - sz,), dtype=np.int32)))
+                ints = np.concatenate((ints, np.zeros((sz - ints.shape[0],), dtype=np.int32)))
                 ints = ints.reshape(ints.shape[0] // div, div)
                 powers = from_opts ** np.arange(div-1, -1, -1, dtype=np.int32)
                 return (ints * powers).sum(-1)
@@ -654,7 +654,7 @@ def _shaped_names(sn, sz, cells, shape, goal, analog, name):
             n = n // max
         progress = tuple([1. if goal else -1., 1. if analog else -1., *reversed(progress)])
         n_name = tuple([progress, *name])
-        names.append(sn.name(n_name))
+        names.append(np.nan_to_num(sn.name(n_name)))
     return np.stack(names, 0)
 def _default_typing(type):
     if isinstance(type, int): return Handler.Int(type)

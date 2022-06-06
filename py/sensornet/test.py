@@ -76,19 +76,25 @@ def test2():
 @sn.run
 async def test3():
     """Named error."""
-    h = sn.Handler(8,8,8,8, 64)
-    # TODO: …Go through all, and re-read, thinking of what we're missing…
+    h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':16})
     test = h.query(name='test', type=sn.RawFloat(16))
-    h.handle(None, None) # TODO: Why does making this one async cause a deadlock or smth?
-    h.handle(np.zeros((1, 96)), None) # TODO:
-    print('zzz') # TODO: Why are we deadlocking now? Why is awaiting here evil? …Is it because `handle` waits for `test` to be fulfilled, for some reason?…
+    await h.handle(None)
+    h.set('burn', 7, 10)
+    # TODO: …Go through all, and re-read, thinking of what we're missing…
+    print(await h.handle(np.zeros((1, 96)))) # TODO: It it possible to inspect the data that we get?
+    #   110 00011 01010 000 — 50000.
+    #     …But 2**16 is 65536, so would bigger numbers overflow?…
+    #       111 01010 01100 000 — 60000.
+    #       000 10001 01110 000 — 4464 — 70000-65536. OVERFLOW.
+    #       TODO: …How do we *not* overflow?…
+    #     TODO: Make an assertion for this not overflowing.
     assert (await test) is not None
 @sn.run
 def test4():
     """Name's errors."""
     h = sn.Handler(8,8,8,8, 64)
     d = np.array([1.])
-    h.set(name=((0,True,1),), data=d)
+    h.set(name=((0,True,1),), data=d) # TODO: Datatype. (But also a better error-message than "assert name is None".)
     try:
         h.set(name=(0,), data=d); assert False
     except TypeError:
