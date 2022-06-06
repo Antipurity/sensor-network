@@ -310,6 +310,7 @@ class Handler:
                     if feedback is False: break # Respond in-order, waiting if `False`.
                 assert feedback is None or isinstance(feedback, np.ndarray)
                 if feedback is not None:
+                    print(feedback.shape, cell_count, cell_size) # TODO: Why is cell_count 0?
                     assert len(feedback.shape) == 2 and feedback.shape[0] == cell_count and feedback.shape[1] == cell_size
                 self._prev_fb.pop(0)
                 _feedback(callbacks, feedback, cell_shape)
@@ -506,7 +507,7 @@ class Handler:
             if len(sn.cell_shape)==0: return
             cells = -(-self.sz // sn.cell_shape[-1])
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
-            data = np.concatenate((data, np.zeros(self.sz - cells * sn.cell_shape[-1], dtype=np.float32)))
+            data = np.concatenate((data, np.zeros(cells * sn.cell_shape[-1] - self.sz, dtype=np.float32)))
             data = np.concatenate((names, data.reshape(cells, sn.cell_shape[-1])), -1)
             sn.set(None, data, None, error)
         async def query(self, sn, name, error):
@@ -620,7 +621,7 @@ def _name_template(np, str_to_floats, cell_shape, name):
         in_name = i < len(name)
         part = name[i] if in_name else None
         if isinstance(part, str):
-            template[at : at+sz] = _fill(np, str_to_floats(np, part), sz)
+            template[at : at+sz] = _fill(np, str_to_floats(part), sz)
         elif isinstance(part, tuple):
             if len(part) > sz:
                 import warnings

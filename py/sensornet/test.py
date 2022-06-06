@@ -68,24 +68,20 @@ def test1():
 def test2():
     """Different kinds of names."""
     h = sn.Handler(8,8,8,8, 64)
-    # TODO: …Go through all, and re-read, thinking of what we're missing…
-    h.set(name=('test',), data=np.array([-.4, -.2, .2, .4]))
-    h.set(
-        name=('test', (-.2, .2, lambda start,end,total: start/total*2-1)),
-        data=np.array([-.4, -.2, .2, .4]),
-    )
-    h.set(name=((1,1,1,1,1,1,1,1),(1,1,1,1,1,1,1,1),(1,1,1,1)), data=np.array([-.4, -.2, .2, .4]))
+    h.set(name=('test',), data=np.array([-.4, -.2, .2, .4]), type=sn.RawFloat(4))
+    h.set(name=((1,1,1,1,1,1,1,1),(1,1,1,1,1,1,1,1),(1,1,1,1)), data=np.array([-.4, -.2, .2, .4]), type=sn.RawFloat(4))
     h.commit()
     data, query, *_ = h.handle(None, None)
-    assert data.shape == (3, 96)
+    assert data.shape == (2, 96)
 @sn.run
-def test3():
+async def test3():
     """Named error."""
     h = sn.Handler(8,8,8,8, 64)
-    def yes_feedback(fb, *_): assert fb is not None
-    h.query(name=('test',), query=16, callback=yes_feedback)
+    # TODO: …Go through all, and re-read, thinking of what we're missing…
+    test = h.query(name='test', type=sn.RawFloat(16))
     h.handle(None, None)
-    h.handle(np.zeros((1, 96)), None)
+    h.handle(np.zeros((1, 96)), None) # TODO: Why is this an error?
+    assert (await test) is not None
 @sn.run
 def test4():
     """Name's errors."""
