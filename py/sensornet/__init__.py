@@ -396,28 +396,40 @@ class Handler:
             assert isinstance(o, int) and o>1, "Only makes sense to choose between 2 or more options"
         def set(self, sn, name, data, error):
             assert error is None
+            np = sn.backend
+            data = np.array(data, dtype=np.int32, copy=False, ndmin=1)
+            assert len(data.shape) == 1
+            assert ((data >= 0) & (data < self.opts)).all()
             from math import frexp
             from operator import mul
             bpc = sn.info['bits_per_cell']
             bpn = frexp(self.opts - 1)[1]
             npc, cpn = -(-bpc // bpn), -(-bpn // bpc) # Combined numbers per cell, and sliced cells per number.
-            cells = -(-(functools.reduce(mul, self.shape, 1) * cpn) // npc)
-            # TODO: Name each and every cell. (At the first spot, expose a tuple of is-digital and is-goal and a progress-number per `self.shape` dimension. The rest are shared.)
-            #   (Since we sample autoregressively anyway, looping in Python is probably not a big deal.)
-            #   TODO: How do we do a dynamically-nested loop, though? (One flat loop, and explicit counting?)
-            # TODO: …How do we prepare the data for each cell?
+            cells, names = -(-(functools.reduce(mul, self.shape, 1) * cpn) // npc), []
+            for c in range(cells):
+                # Prepend `(is_analog, is_goal, *shape_progress)` numbers to `name`s.
+                n, progress = c * npc, []
+                for max in reversed(self.shape):
+                    progress.append((n % max) / max * 2 - 1)
+                    n = n // max
+                progress = tuple([-1., -1., *reversed(progress)]) # TODO: How to get the "are we in Goal" bool? (…Especially for `async` queries…)
+                n_name = tuple([progress, *name])
+                names.append(sn.name(n_name))
+            # TODO: (…Should we maybe name as we go along, not all at once, to spread out the cost?…)
+            #   …Then again, `data` will be prepared all at once, so maybe we shouldn't care.
+            # TODO: …How do we prepare the data for each cell? …Is converting the `data` 1D array to a 2D array of bits all we need? …Yeah: that, and concatenation with names and zeros.
             #   TODO: …How to binary-encode the numbers in `data` (which should be either an `int` or a tuple of those or a NumPy array of the appropriate `shape`)?
-            # TODO: …How do we shuffle the cells?
-            #   …Cell-shuffling is an attempt to shore up the NN's inability to fully model packet-drops and subsequent-re-requesting (packets are guaranteed to arrive in-order, so cell-shuffling is no help for this); but if the NN doesn't actually see packet-drops in training, it will still not learn to repeat prev-action's things… Besides, this will blur the line between consecutive steps for the NN, which is very bad. So do we really want to do any cell-shuffling and any special `.get` treatment?
-            # TODO: …Also: do we *really* need to handle streams of ints specially in `Int`? Wouldn't just adding an option for "end-of-stream" and re-`get`ting until end of stream introduce no overhead? …Actually, it does: this requires a roundtrip, whereas native handling (with a `.pipe`ing queue) would help us preemptively generate more than we need and discard the rest.
-            #   …But how *much* more steps to schedule than we need? Shouldn't this be a hyperparam — and if we go this route, can't we make users decide to stream in partial queries or something?
-        # TODO: A method with a bool to switch between querying and getting, `_get(sn, name, error, query=False)`.
-        #   (…For autoregressive querying, we want to add a listener, right? In which we fulfill the Futures of feedback as it arrives, re-querying on `None` if needed? …No, wait: want a sensor, in which we `.query` every time…)
+            #     (…If we had a method for this, then we could have just prepared a per-cell NumPy array of `data` and converted and concatenated with name and zero-padding…)
+        # TODO: `async def query(sn, name, error)`. Using the same autoregressive-`pipe` method, but `await`ing the returned Futures, and on `None`, cancel the rest and return None; if no None, decode all ints and return the NumPy int array (or an int if len(self.shape)==0).
         #   TODO: How to binary-decode the numbers in feedback?
         #     …And should encoding/decoding be publicly-accessible methods, for `test.py`'s use (since we're thinking of converting those meager binary representations to random/arbitrary vectors, non-learnable for robustness and simplicity)?
-        # TODO: query and get
-        #   TODO: …Actually, if we decide not to do cell-shuffling, then we shouldn't need `.get`, only querying…
         # TODO: …Should we maybe have `.efficiency(sn)`, returning 0…1?
+        # TODO: …Also: do we *really* need to handle streams of ints specially in `Int`? Wouldn't just adding an option for "end-of-stream" and re-`get`ting until end of stream introduce no overhead? …Actually, it does: this requires a roundtrip, whereas native handling (with a `.pipe`ing queue) would help us preemptively generate more than we need and discard the rest.
+        #   (…It would allow variable-sized strings though… So much more convenient than fixed-size strings… And even allow direct socket IO, like "mind-uploading" a server by first listening to its IO then taking over it…)
+        #   …But how *much* more steps to schedule than we need? Shouldn't this be a hyperparam — and if we go this route, can't we make users decide to stream in partial queries or something? …Or dependent on the handler's latency-in-steps.
+        #   …Also, for big transfers, isn't it better to use Python [streams](https://docs.python.org/3/library/asyncio-stream.html) than to force waiting for all data to be available? Meaning that we *might* want another type for unbounded int/byte/bit streams…
+    # TODO: `Float(*shape)`
+    # TODO: `Goal(type)`
 
 
 

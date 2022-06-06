@@ -37,9 +37,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # (BMIs with even futuristic levels of tech can't do anything like downloading knowledge into your brain or capturing and controlling bodily functions for a full-dive into virtual worlds. Even write-access (computer-to-brain) is very hard to make out, and may in fact need years of training. But read-access (brain-to-computer) can explore a human's internal reactions, so that the human can revisit those reactions at will without having to expend effort; in addition, predicting neural-input could be useful for learning good represetations. And maybe you'd need RTX 6090 to run the AI part in real-time, since it may be Gato-sized.)
-#   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.)
+#   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.) TODO: …Also, "mind uploading" is the same as "replacing all computer communication with AI-generated goal-directable byte streams" but for humans, with all the same caveats such as "need way way too much compute to encode everything exactly, and it is likely better to integrate the protocol with the AI tighter", right? "AI is goal-directed generative models of actions/observations" is starting to make sense now…
 #     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war and murder become routine and one global superpower emerges since the only price of destruction is now some resources; creating new ideas rather than spreading existing ones becomes nearly impossible.)
-#   (…Didn't we write this down already?…)
 
 
 
@@ -60,11 +59,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: The `Goal(datatype)` datatype, which appends `'goal'` to the name and defers to the datatype.
 #     TODO: Make `Goal` set a global bool variable like a context manager. `Int` and `Float` should check that variable.
 #     TODO: Instead of taking up different name-parts for digital/analog/goal/progress, we should merge that with the "progress inside the set/query/get method" number: much more efficient. Prepend a tuple of 3 numbers in `Int`/`Float`. (And, we will no longer need to use `sn.Filter` to filter out the goal-cells, we can just do a much more direct equality-check. …We'd only need the filter for potential debugging of sensors then, right…)
-#   TODO: Also support strings and image-patches. (The most important 'convenience' datatypes.)
+#   TODO: Also support strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.) …And possibly string/byte streams.
 #   TODO: Also support mu-encoded floats-in-ints.
 #   TODO: So what's the exact interface for datatype methods? Exactly the same as the main methods, but with `sn` at the front (so that datatypes can defer to 2D-impl of their base methods), with the assumption that names will be taken care of?
 #   TODO: Also remove all support for namers, right?… Does this include filters?… …Does this include funcs-in-names, since datatypes can just prepare name-parts directly with numbers (…string-hashing should probably have an LRU cache)?…
-# TODO: Maybe, have `.metrics()` on handlers, and have one metric: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data).
+# TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 
 
 
@@ -75,6 +74,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
 #   TODO: …Try not L2 prediction but a GAN, with the 'discriminator' being the distance network (in other words, only do self-imitation for digital cells, and do DDPG for analog cells instead — after giving random noise as an extra input)?
 #     TODO: …Or is it sufficient to expose a ghost digital query, which will get reinforced when on correct paths for enhanced L2 prediction of the correct path?… (This *might* even be usable as 'full-RNN-state' goals, with zero effort on our side…) (A bit like humans using language/thoughts to augment their learning.)
+#     (Possibly a VAE, with each cell having a few extra numbers on input and output, past's prediction being conditioned on future's output. Of course, filtered by improved-distance. The only problem is that the first generation of the past doesn't know the future's output.)
 # TODO: …Is it possible to have an analog-reward-goal which isn't ever actually encountered, but is set to 1 so that the model always maximizes reward? What would we need for this? The unroll-time measured-distance-to-analog-goal, which is 0…1 and is only there for higher precision?… …But how would we detect if cells are same-named, and what would we do if we don't actually have a same-name observation cell…
 
 
@@ -95,13 +95,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
 
 # TODO: Make `graphenv` work not globally but in a class.
-
-# TODO: Should `sn.handle` also accept the feedback-error, which we can set to `1` to communicate bit-feedback?
-#   TODO: …For computational efficiency, maybe make `sn` accept the optional feedback-size in addition to cell-shape, so that here we can generate like 8 or 16 bits per cell instead of doing 8 NN calls per step…
-#     …If we embrace the digital nature of the output (and no longer have 8 calls per step, instead zero-padding the bit patterns, so everything is 8× faster), then we could write reliable allocators, as classes to be used with `sn.data` and `sn.query` (bidirectional for consistency, maybe via `.data(sn)` and `await .query(sn)` and `await .get(sn)`) (to preserve autoregressive correctness guarantees, if one cell isn't enough, then don't use many parallel-cells but use many sequential-steps): ints (obviously), floats (probably mu-encoded), strings (with a tokenizer) (both fixed-size and dynamic-size), even raw byte sequences and whatever we can imagine (N-d arrays of allocators?) — all without even a single bit wasted unless we want to…
-#       (POSSIBLY: querying should shuffle its (*uniquely-named*) cell-requests and do them in-order, with `.get` re-doing `None`-result cell-requests until settled — shuffled so that NNs can handle dropped packets without recomputing whole sequences, and have an easier time tracking the boundaries of requests.)
-#       Isn't this so much better than analog?
-#         (We can even remove our crummy number-sequence allocator, which is autoregressively incorrect since it allocates all cells in parallel.)
 
 
 
