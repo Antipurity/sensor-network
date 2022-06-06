@@ -403,9 +403,12 @@ class Handler:
             from math import frexp
             from operator import mul
             bpc = sn.info['bits_per_cell']
+            assert sn.cell_shape[-1] >= bpc
             bpn = frexp(self.opts - 1)[1]
             npc, cpn = -(-bpc // bpn), -(-bpn // bpc) # Combined numbers per cell, and sliced cells per number.
+            assert npc == 1 # TODO: Relax this…
             cells, names = -(-(functools.reduce(mul, self.shape, 1) * cpn) // npc), []
+            assert data.shape[0] == cells # TODO: Assert data.shape[0] == cells, right?… …But how would the users know?… …And, what about zero-padding?…
             for c in range(cells):
                 # Prepend `(is_analog, is_goal, *shape_progress)` numbers to `name`s.
                 n, progress = c * npc, []
@@ -415,15 +418,28 @@ class Handler:
                 progress = tuple([-1., -1., *reversed(progress)]) # TODO: How to get the "are we in Goal" bool? (…Especially for `async` queries…)
                 n_name = tuple([progress, *name])
                 names.append(sn.name(n_name))
-            # TODO: (…Should we maybe name as we go along, not all at once, to spread out the cost?…)
-            #   …Then again, `data` will be prepared all at once, so maybe we shouldn't care.
-            # TODO: …How do we prepare the data for each cell? …Is converting the `data` 1D array to a 2D array of bits all we need? …Yeah: that, and concatenation with names and zeros.
-            #   TODO: …How to binary-encode the numbers in `data` (which should be either an `int` or a tuple of those or a NumPy array of the appropriate `shape`)?
-            #     (…If we had a method for this, then we could have just prepared a per-cell NumPy array of `data` and converted and concatenated with name and zero-padding…)
-        # TODO: `async def query(sn, name, error)`. Using the same autoregressive-`pipe` method, but `await`ing the returned Futures, and on `None`, cancel the rest and return None; if no None, decode all ints and return the NumPy int array (or an int if len(self.shape)==0).
-        #   TODO: How to binary-decode the numbers in feedback?
-        #     …And should encoding/decoding be publicly-accessible methods, for `test.py`'s use (since we're thinking of converting those meager binary representations to random/arbitrary vectors, non-learnable for robustness and simplicity)?
+            # TODO: …How to pack `npc` numbers into each cell here?
+            names = np.stack(names, 0)
+            data = sn.Int.encode_ints(sn, data, bpc)
+            zeros = np.zeros(cells, sn.cell_shape[-1] - bpc, dtype=np.float32)
+            return np.concatenate((names, data, zeros), -1)
+        # TODO: `async def query(sn, name, error)`. Using the same autoregressive-`pipe` method, but `await`ing the returned Futures, and on `None`, cancel the rest and return None; if no None, decode all ints and return the NumPy int array (or an int if len(self.shape)==0). Use `sn.Int.decode_ints(sn, bits)`.
         # TODO: …Should we maybe have `.efficiency(sn)`, returning 0…1?
+        @staticmethod
+        def encode_ints(sn, ints, bitcount):
+            """`sn.Int.encode_ints(sn, ints, bitcount)`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
+            assert len(ints.shape) == 1
+            np = sn.backend
+            powers2 = 2 ** np.arange(bitcount-1, -1, -1, dtype=np.int32)
+            bits = np.expand_dims(ints, 1) & powers2
+            return np.where(bits > 0, np.array(1., dtype=np.float32), np.array(-1., dtype=np.float32))
+        @staticmethod
+        def decode_ints(sn, bits):
+            """TODO:"""
+            assert len(bits.shape) == 2
+            np = sn.backend
+            powers2 = 2 ** np.arange(bits.shape[1]-1, -1, -1, dtype=np.int32)
+            return np.where(bits > 0, powers2, 0).sum(-1)
         # TODO: …Also: do we *really* need to handle streams of ints specially in `Int`? Wouldn't just adding an option for "end-of-stream" and re-`get`ting until end of stream introduce no overhead? …Actually, it does: this requires a roundtrip, whereas native handling (with a `.pipe`ing queue) would help us preemptively generate more than we need and discard the rest.
         #   (…It would allow variable-sized strings though… So much more convenient than fixed-size strings… And even allow direct socket IO, like "mind-uploading" a server by first listening to its IO then taking over it…)
         #   …But how *much* more steps to schedule than we need? Shouldn't this be a hyperparam — and if we go this route, can't we make users decide to stream in partial queries or something? …Or dependent on the handler's latency-in-steps.
