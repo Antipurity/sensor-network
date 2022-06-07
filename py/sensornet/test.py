@@ -1,7 +1,7 @@
 """
 Tests and benchmarks for this Python implementation of a sensor network.
 
-Not counting other bottlenecks, expect around 10000 steps/second or less, which should be enough for most AI models.
+Not counting other bottlenecks, expect several thousand steps/second, which should be enough for a lot of AI models (especially real-time-interactive ones).
 
 ```bash
 python3 sensor-network/py/sensornet/test.py
@@ -11,16 +11,16 @@ Sample run:
 
 ```
 Tests OK
-With 4800 values, throughput: 293637120.0 bytes/sec (280.03 MiB/s) (15293.6 it/s)
-With 9600 values, throughput: 555648000.0 bytes/sec (529.91 MiB/s) (14470.0 it/s)
-With 14400 values, throughput: 779875200.0 bytes/sec (743.75 MiB/s) (13539.5 it/s)
-With 19200 values, throughput: 1009182720.0 bytes/sec (962.43 MiB/s) (13140.4 it/s)
-With 24000 values, throughput: 1214438400.0 bytes/sec (1158.18 MiB/s) (12650.4 it/s)
-With 28800 values, throughput: 1376202240.0 bytes/sec (1312.45 MiB/s) (11946.2 it/s)
-With 33600 values, throughput: 1541366400.0 bytes/sec (1469.96 MiB/s) (11468.5 it/s)
-With 38400 values, throughput: 1674055680.0 bytes/sec (1596.5 MiB/s) (10898.8 it/s)
-With 43200 values, throughput: 1824076800.0 bytes/sec (1739.58 MiB/s) (10556.0 it/s)
-With 48000 values, throughput: 1990272000.0 bytes/sec (1898.07 MiB/s) (10366.0 it/s)
+With 4800 values, throughput: 459838080.0 bytes/sec (438.54 MiB/s) (23949.9 it/s)
+With 9600 values, throughput: 819609600.0 bytes/sec (781.64 MiB/s) (21344.0 it/s)
+With 14400 values, throughput: 1146096000.0 bytes/sec (1093.0 MiB/s) (19897.5 it/s)
+With 19200 values, throughput: 1409041920.0 bytes/sec (1343.77 MiB/s) (18346.9 it/s)
+With 24000 values, throughput: 1638028800.0 bytes/sec (1562.15 MiB/s) (17062.8 it/s)
+With 28800 values, throughput: 1810068480.0 bytes/sec (1726.22 MiB/s) (15712.4 it/s)
+With 33600 values, throughput: 1971325440.0 bytes/sec (1880.0 MiB/s) (14667.6 it/s)
+With 38400 values, throughput: 2131368960.0 bytes/sec (2032.63 MiB/s) (13876.1 it/s)
+With 43200 values, throughput: 2306534400.0 bytes/sec (2199.68 MiB/s) (13348.0 it/s)
+With 48000 values, throughput: 2431584000.0 bytes/sec (2318.94 MiB/s) (12664.5 it/s)
 ```
 
 To measure [test coverage](http://www.kaner.com/pdfs/pnsqc00.pdf), use [Coverage](https://coverage.readthedocs.io/en/6.3.1/) or an equivalent. Should be 100% or there's a problem.
@@ -294,31 +294,19 @@ print('Tests OK')
 
 
 async def benchmark(N=64*10):
-    """Raw number-shuffling performance."""
+    """`RawFloat` number-shuffling performance."""
     h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':8})
     iterations, feedback = 0, None
-    async def await_feedback(fut): # pragma: no cover
-        fb = await fut
-        assert fb is not None and fb.shape == (64,) and fb[0] == .2
     randn_src = h.backend.random if not hasattr(h.backend, 'randn') else h.backend
-    send_data, send_type = randn_src.randn(N), sn.RawFloat(N)
+    send_data = randn_src.randn(N)
     start, duration = time.monotonic(), 10.
     name = ('benchmark',)
     f32 = h.backend.float32
     while time.monotonic() - start < duration:
-        h.set(name, data=send_data, type=send_type)
-        # asyncio.ensure_future(await_feedback(h.query(name, 256))) # 15% slowdown. # TODO:
-        h.query(name, 256).close()
+        h.set(name, data=send_data, type=sn.RawFloat(N))
+        h.query(name, sn.RawFloat(256)).close()
         data, query, error = await h.handle(feedback)
         feedback = h.backend.full((query.shape[0], data.shape[1]), .2, dtype=f32) if data is not None else None
-        #   TODO: …Maybe we should make `feedback` nameless too, just like `error`?… (For efficiency — and to better reflect the "feedback doesn't change names" constraint…)
-        #   TODO: How do we profile performance, again?
-        #     python -m cProfile -s tottime sensor-network/py/sensornet/test.py
-        #     nan_to_num
-        #     _shaped_names:648
-        #     <lots of numpy funcs> (most seem to be in `_shaped_names`)
-        #     name:118
-        #   TODO: Do we need to make Int & Float override __new__ to merge their instances, for performance?
         iterations += 1
     h.discard()
     thr = N*4 * (96/64) * iterations / duration
