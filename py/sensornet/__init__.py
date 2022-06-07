@@ -99,7 +99,7 @@ class Handler:
         self._data = []
         self._query = []
         self._error = []
-        self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, cell_count, cell_size], …]
+        self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, start_cell, end_cell), …]
         self._wait_for_requests = None # asyncio.Future()
         self._pipe_queue = [] # […, […, ((data, query, data_error), Future), …], …]
@@ -292,15 +292,15 @@ class Handler:
                 self.pipe(autoregressive, callback=callback)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
-            if prev_feedback is not None:
-                assert prev_feedback.shape[0] == self._prev_fb[-1][3], "Cell-count is wrong"
+            if isinstance(prev_feedback, np.ndarray):
+                assert prev_feedback.shape[0] == self._prev_fb[-1][2], "Cell-count is wrong"
             self._prev_fb[-1][0] = prev_feedback
         else:
             assert prev_feedback is None, 'The first step cannot give feedback to its previous step'
         # Respond to what we can.
         try:
             while len(self._prev_fb):
-                feedback, callbacks, cell_shape, cell_count, cell_size = self._prev_fb[0]
+                feedback, callbacks, cell_count, cell_size = self._prev_fb[0]
                 if isinstance(feedback, asyncio.Future):
                     if not feedback.done(): break
                     feedback = feedback.result()
@@ -310,9 +310,11 @@ class Handler:
                     if feedback is False: break # Respond in-order, waiting if `False`.
                 assert feedback is None or isinstance(feedback, np.ndarray)
                 if feedback is not None:
-                    assert len(feedback.shape) == 2 and feedback.shape[0] == cell_count and feedback.shape[1] == cell_size
+                    assert len(feedback.shape) == 2, "Feedback shape is wrong"
+                    assert feedback.shape[0] == cell_count, "Cell-count is wrong"
+                    assert feedback.shape[1] == cell_size, "Cell-size is wrong"
                 self._prev_fb.pop(0)
-                _feedback(callbacks, feedback, cell_shape)
+                _feedback(callbacks, feedback)
         except:
             self.discard()
             raise
@@ -335,7 +337,7 @@ class Handler:
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
-            _feedback(self._next_fb, None, self.cell_shape)
+            _feedback(self._next_fb, None)
         finally:
             self._query_cell = 0
             self._data.clear()
@@ -348,7 +350,7 @@ class Handler:
         data = self._data[0];  self._data.clear()
         query = self._query[0];  self._query.clear()
         error = self._error[0];  self._error.clear()
-        self._prev_fb.append([False, self._next_fb, self.cell_shape, query.shape[0], self.cell_size])
+        self._prev_fb.append([False, self._next_fb, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
         for l in self.listeners: l(self, data, error)
@@ -593,10 +595,9 @@ def _fill(np, x, size): # → y
     x = np.concatenate(folds, -1)
     if x.shape[-1] == size: return x
     return x[..., :size]
-def _feedback(callbacks, feedback, cell_shape):
+def _feedback(callbacks, feedback):
     fb = None
     got_err = None
-    assert feedback is None or feedback.shape[-1] == sum(cell_shape)
     for callback, start_cell, end_cell in callbacks:
         if feedback is not None:
             assert feedback.shape[0] >= end_cell

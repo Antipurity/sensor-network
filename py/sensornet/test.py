@@ -130,10 +130,9 @@ def test7():
     name = ('test',)
     n = 0
     finished = 0
-    # TODO: …Go through all, and re-read, thinking of what we're missing…
     async def request_data(h, maybe=False):
         nonlocal finished
-        fb = await (h.query(name, (3,5)) if maybe else h.get(name, (3,5))) # TODO: Why does this error? …Oh yeah: no datatype…
+        fb = await (h.query(name, sn.RawFloat(3,5)) if maybe else h.get(name, sn.RawFloat(3,5)))
         finished += 1
         if not maybe: assert fb.shape == (3,5)
     async def give_feedback_later(data, query, error):
@@ -141,23 +140,24 @@ def test7():
         await asyncio.sleep(.1)
         n += 1
         return np.zeros((query.shape[0], data.shape[1])) if n==30 or n>60 else None
+    @sn.run
     async def main():
         for _ in range(5):
             asyncio.ensure_future(request_data(sn))
         asyncio.ensure_future(request_data(sn, True))
         fb = None
         while finished < 6:
-            sn.set(name='bees', data=np.zeros((16,)))
+            sn.set(name='bees', data=np.zeros((16,)), type=sn.RawFloat(16))
             fb = give_feedback_later(*(await sn.handle(fb)))
         await asyncio.sleep(.1)
         await fb # To silence a warning.
         sn.discard()
-    asyncio.run(main())
 @sn.run
 async def test8():
     """Pass-through of (synthetic) handler data to another one."""
     sn.shape(8,8,8,8, 64)
     shape1, shape2 = (13,96), (13,32)
+    # TODO: …Go through all, and re-read, thinking of what we're missing…
     fut = sn.pipe((np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2)))[0]
     data, query, error = sn.handle(None, None)
     assert data.shape == shape1 and query.shape == shape2
