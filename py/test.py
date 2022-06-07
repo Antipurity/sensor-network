@@ -441,7 +441,7 @@ async def main():
                         if slow_mode > 0:
                             await asyncio.sleep(slow_mode)
 
-                        obs, query, data_error, query_error = await sn.handle(sn.torch(torch, action))
+                        obs, query, error = await sn.handle(sn.torch(torch, action))
                         obs   = np.nan_to_num(  obs.clip(-1., 1.), copy=False)
                         query = np.nan_to_num(query.clip(-1., 1.), copy=False)
                         #   (If getting out-of-memory, might want to chunk data/query processing.)

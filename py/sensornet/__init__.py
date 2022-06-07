@@ -31,7 +31,7 @@ def set():
     h.set('name', np.random.rand(32)*2-1)
 
 async def get():
-    nums = await h.get('name', 32)
+    nums = await h.get('name', 32) # TODO: Need the datatype. Do we show h.Int, or h.RawFloat?
     assert nums.shape == (32,)
 ```
 
@@ -42,7 +42,7 @@ And handle it:
 async def main():
     fb = None
     while True:
-        data, query, data_error, query_error = await h.handle(fb)
+        data, query, data_error, query_error = await h.handle(fb) # TODO: …Will our error be updated?… …Yes: data-only, no-name, error now, one variable.
         fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
@@ -98,12 +98,11 @@ class Handler:
         self._query_cell = 0
         self._data = []
         self._query = []
-        self._data_error = []
-        self._query_error = []
+        self._error = []
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_shape, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, start_cell, end_cell), …]
         self._wait_for_requests = None # asyncio.Future()
-        self._pipe_queue = [] # […, […, ((data, query, data_error, query_error), Future), …], …]
+        self._pipe_queue = [] # […, […, ((data, query, data_error), Future), …], …]
         self.info = info
         self.sensors = sensors
         self.listeners = listeners
@@ -153,7 +152,7 @@ class Handler:
         - `data`: what to send.
         - `type`: how the data is interpreted, such as `sn.Int(8)`. If name and type are `None`, `data` is raw: a `(cells, sum(cell_shape))`-shaped array; either don't modify it in-place after this call, or do `sn.commit()`.
             - Implicit types: `8 → sn.Int(8)`; `(2,3) → sn.Int(2,3)`.
-        - `error = None`: `data` transmission error: `None` or a `data`-sized float32 array of `max abs(true_data - data)`.
+        - `error = None`: `data` transmission error: `None` or a `(cells, cell_shape[-1])`-shaped float32 array of `max abs(true_data - data)`.
         """
         np = self.backend
         if isinstance(name, str): name = (name,)
@@ -167,23 +166,22 @@ class Handler:
         assert isinstance(data, np.ndarray)
         assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
         if isinstance(error, float):
-            ne = np.zeros((data.shape[0], data.shape[1] - self.cell_shape[-1]), dtype=np.float32)
-            ve = np.full_like(data.shape[0], self.cell_shape[-1], error, dtype=np.float32)
-            error = np.concatenate((ne, ve), -1)
-        assert error is None or isinstance(error, np.ndarray) and data.shape == error.shape
+            error = np.full((data.shape[0], self.cell_shape[-1]), error, dtype=np.float32)
+        assert error is None or isinstance(error, np.ndarray) and data.shape[0] == error.shape[0]
 
         if not self.cell_size: return
+        assert error is None or error.shape[1] == self.cell_shape[-1]
 
         self._data.append(data)
-        self._data_error.append(error)
+        self._error.append(error)
         if self._wait_for_requests is not None:
             self._wait_for_requests.set_result(None)
             self._wait_for_requests = None
-    def query(self, name=None, type=None, error=None, callback=None):
+    def query(self, name=None, type=None, callback=None):
         """
         ```python
         await sn.query(name, type)
-        sn.query(name, type, *, error=None, callback: lambda feedback: ...)
+        sn.query(name, type, *, callback: lambda feedback: ...)
         ```
 
         From the handler, asks for feedback, or `None` (on transmission errors). To guarantee feedback, use `.get`.
@@ -191,7 +189,6 @@ class Handler:
         Args:
         - `name`: see `.set`.
         - `type`: what to receive, such as `sn.Int(8)`.
-        - `error`: see `.set`.
         - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         """
@@ -203,7 +200,7 @@ class Handler:
         if type is not None and not isinstance(type, np.ndarray):
             assert hasattr(type, 'query')
             assert callback is None
-            return type.query(self, name, error)
+            return type.query(self, name)
         query = type
         assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
 
@@ -211,8 +208,6 @@ class Handler:
 
         assert isinstance(query, np.ndarray)
         assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
-        if isinstance(error, float): error = np.full_like(query, error)
-        assert error is None or isinstance(error, np.ndarray) and query.shape == error.shape
 
         if not self.cell_size:
             if callable(callback):
@@ -222,7 +217,6 @@ class Handler:
                 return callback
 
         self._query.append(query)
-        self._query_error.append(error)
         cells = query.shape[0]
         self._next_fb.append((callback, self._query_cell, self._query_cell + cells))
         self._query_cell += cells
@@ -237,12 +231,13 @@ class Handler:
 
         Makes another handler handle this packet. Useful if NumPy arrays have to be transferred manually, such as over the Internet.
         """
-        data, query, data_error, query_error = imm
+        data, query, error = imm
         result = []
-        if data is not None: self.set(None, data, None, data_error)
-        if query is not None: result.append(self.query(None, query, query_error, callback))
+        if data is not None: self.set(None, data, None, error)
+        if query is not None: result.append(self.query(None, query, callback))
         for i in range(len(autoregressive)):
             # `autoregressive`, an undocumented feature: the ability to auto-schedule further pipings on further `.handle`ing, for when generation really needs to be sequential to be correct.
+            assert len(autoregressive[i]) == 3
             fut = asyncio.Future()
             if i < len(self._pipe_queue):
                 to = self._pipe_queue[i]
@@ -252,17 +247,17 @@ class Handler:
             to.append((autoregressive[i], fut))
             result.append(fut)
         return result
-    async def get(self, name, type, error=None):
+    async def get(self, name, type):
         """
-        `await sn.get(name, type, error=None)`
+        `await sn.get(name, type)`
 
         Gets feedback, guaranteed. Never returns `None`, instead re-querying until a result is available.
         """
         if isinstance(name, str): name = (name,)
         if hasattr(type, 'get'):
-            return type.get(self, name, error)
+            return type.get(self, name)
         while True:
-            fb = await self.query(name, type, error)
+            fb = await self.query(name, type)
             if fb is not None: return fb
     def handle(self, prev_feedback=None, max_simultaneous_steps=16):
         """
@@ -278,11 +273,12 @@ class Handler:
 
         If `max_simultaneous_steps` is `None`, there is no waiting, only immediate data/query, possibly empty. Otherwise, this waits until there is some data/query, and until we aren't handle too many steps at once.
 
-        This returns `(data, query, data_error, query_error)`, or an `await`able promise of that.
+        This returns `(data, query, error)`, or an `await`able promise of that.
         - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
+            - A usage example: `data = numpy.clip(numpy.nan_to_num(data), -1., 1.)`.
         - `query`: same, but sized `M×name_size` (only the name).
-        - `data_error`, `query_error`: data transmission error: `None` or a `data`-sized float32 array of `abs(true_data - data)`.
-            - A usage example: `if data_error is not None: data = numpy.clip(data + data_error * (numpy.random.rand(*data.shape)*2-1), -1, 1)`.
+        - `error`: data transmission error: `None` or a `(cells, cell_shape[-1])`-sized float32 array of `abs(true_data - data)`.
+            - A usage example: `if error is not None: data[:, -sn.cell_shape[-1]:] += error * (numpy.random.rand(*error.shape)*2-1)`
         """
         np = self.backend
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
@@ -328,15 +324,14 @@ class Handler:
         """`sn.commit()`: actually copies the provided data/queries, allowing their NumPy arrays to be written-to elsewhere."""
         np = self.backend
         if len(self._data) == 1 and len(self._query) == 1: return
-        L1, L2 = self.cell_size, self.cell_size - (self.cell_shape[-1] if len(self.cell_shape) else 0)
+        values = self.cell_shape[-1] if len(self.cell_shape) else 0
+        L1, L2 = self.cell_size, self.cell_size - values
         data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, L1), dtype=np.float32)
         query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, L2), dtype=np.float32)
-        data_error = _concat_error(self._data, self._data_error, L1, np)
-        query_error = _concat_error(self._query, self._query_error, L2, np)
+        error = _concat_error(self._data, self._error, values, np)
         self._data.clear();  self._data.append(data)
         self._query.clear();  self._query.append(query)
-        self._data_error.clear();  self._data_error.append(data_error)
-        self._query_error.clear();  self._query_error.append(query_error)
+        self._error.clear();  self._error.append(error)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
         try:
@@ -345,21 +340,19 @@ class Handler:
             self._query_cell = 0
             self._data.clear()
             self._query.clear()
-            self._data_error.clear()
-            self._query_error.clear()
+            self._error.clear()
             self._next_fb.clear()
     def _take_data(self):
         """Gather data, queries, and their errors, and return them."""
         self.commit()
         data = self._data[0];  self._data.clear()
         query = self._query[0];  self._query.clear()
-        data_error = self._data_error[0];  self._data_error.clear()
-        query_error = self._query_error[0];  self._query_error.clear()
+        error = self._error[0];  self._error.clear()
         self._prev_fb.append([False, self._next_fb, self.cell_shape, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
-        for l in self.listeners: l(self, data, data_error)
-        return data, query, data_error, query_error
+        for l in self.listeners: l(self, data, error)
+        return data, query, error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
         """
         Limits how many steps can be done at once, yielding if necessary (if no data and no queries, or if it's been too long since the last yield).
@@ -408,7 +401,7 @@ class Handler:
             sz = functools.reduce(mul, s, 1)
             self.sz, self.shape, self.opts, self.goal = sz, s, o, goal
         def set(self, sn, name, data, error):
-            assert error is None
+            assert error is None, "Integers are precise"
             np = sn.backend
             data = np.array(data, dtype=np.int32, copy=False)
             assert data.shape == self.shape
@@ -425,9 +418,8 @@ class Handler:
             data = sn.Int.encode_ints(sn, data, bpc)
             zeros = np.zeros((cells, sn.cell_shape[-1] - bpc), dtype=np.float32)
             cells = np.split(np.concatenate((names, data, zeros), -1), cells, 0)
-            sn.pipe(*[(c, None, None, None) for c in cells])
-        def query(self, sn, name, error):
-            assert error is None
+            sn.pipe(*[(c, None, None) for c in cells])
+        def query(self, sn, name):
             np = sn.backend
             bpc = sn.info['bits_per_cell']
             assert len(sn.cell_shape)==0 or sn.cell_shape[-1] >= bpc
@@ -443,7 +435,7 @@ class Handler:
                 fb = sn.Int.decode_bits(sn, fb)
                 R = sn.Int.repack(sn, fb, 2 ** bpc, self.opts)
                 return R if len(R.shape)>0 else R.item()
-            return do_query(asyncio.gather(*sn.pipe(*[(None, c, None, None) for c in cells])) if len(cells)>0 else 7)
+            return do_query(asyncio.gather(*sn.pipe(*[(None, c, None) for c in cells])) if len(cells)>0 else 7)
         @staticmethod
         def encode_ints(sn, ints, bitcount):
             """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
@@ -502,22 +494,26 @@ class Handler:
             self.sz, self.shape, self.goal = sz, shape, goal
         def set(self, sn, name, data, error):
             # Zero-pad `data` and split it into cells, then pass it on.
-            assert error is None # Not implemented for now.
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
             data = np.array(data, dtype=np.int32, copy=False)
+            if isinstance(error, float):
+                error = np.full(data.shape, error, dtype=np.float32)
             assert data.shape == self.shape
+            assert error is None or isinstance(error, np.ndarray) and error.shape == self.shape
             data = data.reshape(self.sz)
+            error = error.reshape(self.sz) if error is not None else None
 
             if len(sn.cell_shape)==0: return
             cells = -(-self.sz // sn.cell_shape[-1])
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
-            data = np.concatenate((data, np.zeros((cells * sn.cell_shape[-1] - self.sz,), dtype=np.float32)))
+            z = np.zeros((cells * sn.cell_shape[-1] - self.sz,), dtype=np.float32)
+            data = np.concatenate((data, z))
+            error = np.concatenate((error, z)).reshape(cells, sn.cell_shape[-1]) if error is not None else None
             data = np.concatenate((names, data.reshape(cells, sn.cell_shape[-1])), -1)
             sn.set(None, data, None, error)
-        def query(self, sn, name, error):
+        def query(self, sn, name):
             # Flatten feedback's cells and reshape it to our shape.
-            assert error is None # Not implemented for now.
             assert sn.info is None or sn.info['analog'] is True
 
             cells = -(-self.sz // sn.cell_shape[-1]) if len(sn.cell_shape)>0 else 0
@@ -529,7 +525,7 @@ class Handler:
                 fb = fb[:, -sn.cell_shape[-1]:].flatten()
                 R = fb[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
-            return do_query(sn.query(None, names, error)) # TODO: …Wait, `names` is apparently a type… TODO: …WAIT: `query` doesn't distinguish between non-None and 2D NumPy arrays…
+            return do_query(sn.query(None, names))
     # TODO: New tests.
 
 
@@ -614,7 +610,8 @@ def _feedback(callbacks, feedback, cell_shape):
     if got_err is not None: raise got_err
 def _concat_error(main, error, length, np):
     if any(e is not None for e in error):
-        return np.concatenate([e if e is not None else np.zeros_like(d) for d,e in zip(main, error)], 0) if len(main) else np.zeros((0, length), dtype=np.float32)
+        assert len(main)
+        return np.concatenate([e if e is not None else np.zeros((d.shape[0], length), dtype=np.float32) for d,e in zip(main, error)], 0)
     else:
         return None
 def _name_template(np, str_to_floats, cell_shape, name):
