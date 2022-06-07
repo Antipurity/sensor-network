@@ -46,17 +46,20 @@ import time
 
 
 @sn.run
-def test0():
-    """No shape, so no handling."""
+async def test0():
+    """No shape, so no handling. (Mostly for test-coverage.)"""
     h = sn.Handler(info={'analog':True, 'bits_per_cell':8})
     assert h.handle(None, None)[0].shape == (0,0)
     h.set('a', data=[1.], type=sn.RawFloat(1))
     h.query('b', type=2).close()
-    h.query('c', type=2).close()
+    h.query('c', type=(2,)).close()
+    h.set('d', 3, 8)
+    e = h.query('e', type=sn.RawFloat(1))
     h.set(data=np.zeros((2, 0)))
     h.query(type=np.zeros((3, 0))).cancel()
     h.query(type=np.zeros((3, 0)), callback=lambda fb: ...)
     assert h.handle(None, None)[0].shape == (0,0)
+    await e
 @sn.run
 def test1():
     """Already-named data, and transmission error."""
@@ -236,6 +239,11 @@ async def test13():
     data, query, error = await h.handle()
     assert sn.Filter((None, 'z'))(h, data).sum() == 1
 print('Tests OK')
+# TODO: Need a test that `.set`s an `Int` of 65536 possibilities in an env with 4 bits-per-cell.
+# TODO: Error in a 2D-query callback, re-thrown.
+# TODO: A test that trips both test-is-too-long warnings (suppressing them from console).
+# TODO: A test where a name part is bad.
+# TODO: …How do we get a test where a datatype defines `.get`?…
 
 
 
