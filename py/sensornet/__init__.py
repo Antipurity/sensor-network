@@ -498,7 +498,7 @@ class Handler:
             # Zero-pad `data` and split it into cells, then pass it on.
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
-            data = np.array(data, dtype=np.int32, copy=False)
+            data = np.array(data, dtype=np.float32, copy=False)
             if isinstance(error, float):
                 error = np.full(data.shape, error, dtype=np.float32)
             assert data.shape == self.shape
@@ -543,9 +543,13 @@ class Filter:
     - `None`: a call will simply return a per-cell bit-mask of whether the name fits.
     - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
+    Be aware that `sn.Int` and `sn.RawFloat` prepend a hidden name-part, so here, `name` should begin with `None`.
+
     If needed for manually naming cells, `fltr.template(cell_shape)` is a 1D NumPy array with `nan`s for `None`s and numbers for name-parts."""
     def __init__(self, name, func = None):
         assert func is None or callable(func)
+        if isinstance(name, str): name = (name,)
+        assert isinstance(name, tuple)
         self.name = name
         self.func = func
     def __call__(self, sn: Handler, data, error=None, invert=False):

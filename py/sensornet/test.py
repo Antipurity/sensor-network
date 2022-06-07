@@ -211,52 +211,50 @@ async def test11():
 @sn.run
 async def test12():
     """`Filter`ing data for specifically-named cells."""
-    # TODO: …Go through all, and re-read, thinking of what we're missing…
-    print('test12') # TODO:
     def good(data, *_):
-        print(data[:, -64:]) # TODO: …Oh yeah: where *are* those numbers? Good point…
         good.b = True
-        assert (data[:, -64:].flatten()[:3] == np.array([.1, .2, .3])).all()
+        assert (data[:, -64:].flatten()[:3] == np.array([.1, .2, .3], dtype=np.float32)).all()
     def bad(data, *_): # pragma: no cover
         assert False
-    h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, 'this one'), good), sn.Filter(('no'), bad)])
+    h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, None, 'this one'), good), sn.Filter('no', bad)])
     h.set(name=('mm not this one',), data=np.array([1., 2., 3.]), type=sn.RawFloat(3))
     h.set(name=('yes', 'this one'), data=np.array([.1, .2, .3]), type=sn.RawFloat(3))
     h.set(name=('this one', 'does not match'), data=np.array([.1, .2, .5]), type=sn.RawFloat(3))
     data, query, error = await h.handle()
     assert good.b
-    assert sn.Filter((None, 'this one'))(data, cell_shape=h.cell_shape).sum() == 1
-    h.listeners[0](h, data, error)
+    assert sn.Filter((None, 'this one'))(h, data).sum() == 1
+    h.listeners.copy().pop()(h, data, error)
 @sn.run
 async def test13():
     """Modifying names."""
-    print('test13') # TODO:
     h = sn.Handler(8,8,8,8, 64, modify_name = [lambda name: ('z',)])
     h.set(name='btgrnonets', data=[1., 2.], type=sn.RawFloat(2))
     data, query, error = await h.handle()
-    assert sn.Filter(('z',))(data, cell_shape=h.cell_shape).sum() == 1
+    assert sn.Filter((None, 'z'))(h, data).sum() == 1
 print('Tests OK')
 
 
 
+# TODO: …Go through all, and re-read, thinking of what we're missing…
 async def benchmark(N=64*10):
     """Raw number-shuffling performance."""
-    h = sn.Handler(8,8,8,8, 64)
+    h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':8})
     iterations, feedback = 0, None
-    def check_feedback(fb, *_):
-        assert fb is not None and fb.shape == (64,) and fb[0] == .2
     async def await_feedback(fut): # pragma: no cover
-        check_feedback(await fut)
+        fb = await fut
+        assert fb is not None and fb.shape == (64,) and fb[0] == .2
     randn_src = h.backend.random if not hasattr(h.backend, 'randn') else h.backend
     send_data, send_type = randn_src.randn(N), sn.RawFloat(N)
     start, duration = time.monotonic(), 10.
     name = ('benchmark',)
+    f32 = h.backend.float32
     while time.monotonic() - start < duration:
         h.set(name, data=send_data, type=send_type)
-        # asyncio.ensure_future(await_feedback(h.query(name, 64))) # 15% slowdown.
-        h.query(name, 64, callback=check_feedback) # TODO: The type…
+        # asyncio.ensure_future(await_feedback(h.query(name, 256))) # 15% slowdown. # TODO:
+        h.query(name, 256).close()
         data, query, error = await h.handle(feedback)
-        feedback = h.backend.full((query.shape[0], data.shape[1]), .2) if data is not None else None
+        feedback = h.backend.full((query.shape[0], data.shape[1]), .2, dtype=f32) if data is not None else None
+        #   TODO: …Maybe we should make `feedback` nameless too, just like `error`?… (For efficiency — and to better reflect the "feedback doesn't change names" constraint…)
         iterations += 1
     h.discard()
     thr = N*4 * (96/64) * iterations / duration
