@@ -53,6 +53,9 @@ def test0():
     h.set('a', data=[1.], type=sn.RawFloat(1))
     h.query('b', type=2).close()
     h.query('c', type=2).close()
+    h.set(data=np.zeros((2, 0)))
+    h.query(type=np.zeros((3, 0))).cancel()
+    h.query(type=np.zeros((3, 0)), callback=lambda fb: ...)
     assert h.handle(None, None)[0].shape == (0,0)
 @sn.run
 def test1():
@@ -77,9 +80,10 @@ async def test3():
     """Named error."""
     h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':16})
     test = h.query(name='test', type=sn.RawFloat(17))
+    h.query(type=np.zeros((1, 32)), callback=lambda fb: ...)
     await h.handle(None)
     h.set('burn', 9, 10)
-    data, query, error = await h.handle(np.zeros((1, 96)))
+    data, query, error = await h.handle(np.zeros((2, 96)))
     assert data.shape == (1,96) and h.Int.decode_bits(h, data[:, 32 : 32+16])[0] == 9000
     assert (await test) is not None
 @sn.run
@@ -187,7 +191,7 @@ def test10():
         nonlocal n, got;  n += 1
         if n == 4: got = True
         return got and np.zeros((0, 96))
-    h.set(data=np.zeros((2, 96)))
+    h.set(data=np.zeros((2, 96)), error=.05)
     h.handle(feedback, None)
     h.handle(None, None)
     h.handle(None, None)
@@ -211,10 +215,10 @@ async def test11():
 @sn.run
 async def test12():
     """`Filter`ing data for specifically-named cells."""
-    def good(data, *_):
+    def good(h, data):
         good.b = True
         assert (data[:, -64:].flatten()[:3] == np.array([.1, .2, .3], dtype=np.float32)).all()
-    def bad(data, *_): # pragma: no cover
+    def bad(h, data): # pragma: no cover
         assert False
     h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, None, 'this one'), good), sn.Filter('no', bad)])
     h.set(name=('mm not this one',), data=np.array([1., 2., 3.]), type=sn.RawFloat(3))
@@ -223,7 +227,7 @@ async def test12():
     data, query, error = await h.handle()
     assert good.b
     assert sn.Filter((None, 'this one'))(h, data).sum() == 1
-    h.listeners.copy().pop()(h, data, error)
+    h.listeners.copy().pop()(h, data)
 @sn.run
 async def test13():
     """Modifying names."""
@@ -255,6 +259,7 @@ async def benchmark(N=64*10):
         data, query, error = await h.handle(feedback)
         feedback = h.backend.full((query.shape[0], data.shape[1]), .2, dtype=f32) if data is not None else None
         #   TODO: …Maybe we should make `feedback` nameless too, just like `error`?… (For efficiency — and to better reflect the "feedback doesn't change names" constraint…)
+        #   TODO: …We absolutely need to do that "prepare names not cell-by-cell but all-at-once" idea…
         iterations += 1
     h.discard()
     thr = N*4 * (96/64) * iterations / duration

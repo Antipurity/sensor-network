@@ -206,8 +206,7 @@ class Handler:
 
         if callback is None: callback = asyncio.Future()
 
-        assert isinstance(query, np.ndarray)
-        assert len(query.shape) == 2 and query.shape[-1] == self.cell_size-self.cell_shape[-1]
+        assert isinstance(query, np.ndarray) and len(query.shape) == 2
 
         if not self.cell_size:
             if callable(callback):
@@ -215,6 +214,7 @@ class Handler:
             else:
                 callback.set_result(None)
                 return callback
+        assert query.shape[-1] == self.cell_size-self.cell_shape[-1]
 
         self._query.append(query)
         cells = query.shape[0]
@@ -353,7 +353,7 @@ class Handler:
         self._prev_fb.append([False, self._next_fb, query.shape[0], self.cell_size])
         self._next_fb = []
         self.discard()
-        for l in self.listeners: l(self, data, error)
+        for l in self.listeners: l(self, data)
         return data, query, error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
         """
@@ -535,41 +535,38 @@ class Handler:
 class Filter:
     """`Filter(name, func=None)`
 
-    Wraps a `func(sn, data, error=None)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
+    Wraps a `func(sn, data)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
 
     Example uses: getting a global reward from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
 
     `func`:
-    - `None`: a call will simply return a per-cell bit-mask of whether the name fits.
+    - `None`: a call will simply return a per-cell bit-mask of whether the name fits; can also pass `invert=True` to invert that mask.
     - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
-    Be aware that `sn.Int` and `sn.RawFloat` prepend a hidden name-part, so here, `name` should begin with `None`.
-
-    If needed for manually naming cells, `fltr.template(cell_shape)` is a 1D NumPy array with `nan`s for `None`s and numbers for name-parts."""
+    Be aware that `sn.Int` and `sn.RawFloat` (so, all datatypes) prepend a hidden name-part, so here, `name` should begin with `None`."""
     def __init__(self, name, func = None):
         assert func is None or callable(func)
         if isinstance(name, str): name = (name,)
         assert isinstance(name, tuple)
         self.name = name
         self.func = func
-    def __call__(self, sn: Handler, data, error=None, invert=False):
+    def __call__(self, sn: Handler, data, *, invert=False):
         cell_shape = sn.cell_shape
         assert len(cell_shape), 'Specify the cell-shape too'
         np = sn.backend
         # Match.
         template = sn.name(self.name)
         name_sz = sum(cell_shape) - cell_shape[-1]
-        matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= (error if error is not None else 0.) + 1e-5)
+        matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= 1e-5)
         matches = matches.all(-1) if not invert else ~(matches.all(-1))
         if self.func is None:
             return matches
         data = data[matches]
         inds = np.lexsort(data.T[::-1])
         data = data[inds]
-        if error is not None: error = error[matches][inds]
         # Call.
         if data.size > 0:
-            return self.func(data, error, cell_shape)
+            return self.func(sn, data)
 
 
 
