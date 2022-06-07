@@ -113,6 +113,7 @@ class Handler:
         self.modify_name = modify_name if modify_name is not None else []
         self._str_to_floats = functools.lru_cache(name_cache_size)(functools.partial(_str_to_floats, backend))
         self._name = None
+        self._shaped_names = None
         if len(cell_shape):
             self.shape(*cell_shape)
     def name(self, name):
@@ -138,6 +139,7 @@ class Handler:
         self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
         # Also create the cached Python-name-to-NumPy-name method.
         self._name = functools.lru_cache(self.name_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
+        self._shaped_names = functools.lru_cache(self.name_cache_size)(functools.partial(_shaped_names, self))
         return self
     def set(self, name=None, data=None, type=None, error=None):
         """
@@ -416,10 +418,10 @@ class Handler:
             # Assemble & pipe cells autoregressively.
             bpc = sn.info['bits_per_cell']
             shape = sn.cell_shape
-            if len(shape)==0: return
+            if not len(shape): return
             assert shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc)
-            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
+            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, False, name)
             data = sn.Int.repack(sn, data, self.opts, 2 ** bpc)
             data = sn.Int.encode_ints(sn, data, bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
@@ -431,8 +433,8 @@ class Handler:
             shape = sn.cell_shape
             assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc) if len(shape)>0 else 0
-            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
-            cells = np.split(names, names.shape[0], 0) if cells != 0 else ()
+            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, False, name) if cells else None
+            cells = np.split(names, names.shape[0], 0) if cells else ()
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
@@ -514,7 +516,7 @@ class Handler:
             shape = sn.cell_shape
             if not len(shape): return
             cells = -(-self.sz // shape[-1])
-            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
+            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, True, name)
             z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
             data = np.concatenate((data, z))
             error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
@@ -525,8 +527,8 @@ class Handler:
             assert sn.info is None or sn.info['analog'] is True
 
             shape = sn.cell_shape
-            cells = -(-self.sz // shape[-1]) if len(shape)>0 else 0
-            names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, True, name)
+            cells = -(-self.sz // shape[-1]) if len(shape) else 0
+            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, True, name) if cells else np.zeros((0,0))
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb

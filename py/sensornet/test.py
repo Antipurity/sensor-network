@@ -318,7 +318,6 @@ async def benchmark(N=64*10):
         #     _shaped_names:648
         #     <lots of numpy funcs> (most seem to be in `_shaped_names`)
         #     name:118
-        #   TODO: …Should we cache full-name NumPy arrays, by providing a hidden method in `Handler` to replace `_shaped_names` but with a proper properly-invalidated cache?…
         #   TODO: Do we need to make Int & Float override __new__ to merge their instances, for performance?
         iterations += 1
     h.discard()
