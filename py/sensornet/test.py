@@ -55,11 +55,13 @@ async def test0():
     h.query('c', type=(2,)).close()
     h.set('d', 3, 8)
     e = h.query('e', type=sn.RawFloat(1))
+    f = h.query('f', type=2)
     h.set(data=np.zeros((2, 0)))
     h.query(type=np.zeros((3, 0))).cancel()
     h.query(type=np.zeros((3, 0)), callback=lambda fb: ...)
     assert h.handle(None, None)[0].shape == (0,0)
     await e
+    await f
 @sn.run
 def test1():
     """Already-named data, and transmission error."""
@@ -261,15 +263,36 @@ async def test15():
         h = sn.Handler(8,8,8,8, 64, info={'bits_per_cell':2})
         h.set(('a', 'b', 'c', 'd'), 0, 3)
         h.set(('a', 'b', (0,1,2,3,4,5,6,7,8)), 1, 3)
-        try: h.set(('x', lambda: 'bad'), 2, 3); assert False
+        def fn(): ... # pragma: no cover
+        try: h.set(('x', fn), 2, 3); assert False
         except TypeError: pass
+@sn.run
+async def test16():
+    """Requesting big integers."""
+    h = sn.Handler(8,8,8,8, 64, info={'bits_per_cell':4})
+    async def do(expect):
+        i = h.query('assemble that 16-bit number please 1', 65536)
+        fb = None
+        for iter in range(6):
+            if iter == 2:
+                j = h.query('assemble that 16-bit number please 2', 65536)
+            data, query, error = await h.handle(fb)
+            qs = (1, 32) if iter<2 or iter>=4 else (2,32)
+            assert data.shape == (0, 96) and query.shape == qs and error is None
+            fb = np.ones((query.shape[0], 96)) if expect is not None else None
+        h.handle(fb, None) # (Doing an extra step of the loop above instead of this would have made `.handle` infinitely await extra data, which is fine if in a detached execution thread, but not here.)
+        assert (await i) == expect
+        assert (await j) == expect
+    await do(65535)
+    await do(None)
+    i = h.query('itty 2-bitty num', 4)
+    await h.handle(None)
+    h.handle(np.ones((1, 96)), None)
+    assert (await i) == 3
 print('Tests OK')
-# TODO: Need a test that `.set`s an `Int` of 65536 possibilities in an env with 4 bits-per-cell.
-# TODO: …How do we get a test where a datatype defines `.get`?…
 
 
 
-# TODO: …Go through all, and re-read, thinking of what we're missing…
 async def benchmark(N=64*10):
     """Raw number-shuffling performance."""
     h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':8})

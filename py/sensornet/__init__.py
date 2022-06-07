@@ -235,12 +235,15 @@ class Handler:
         result = []
         if data is not None: self.set(None, data, None, error)
         if query is not None: result.append(self.query(None, query, callback))
+        if self._wait_for_requests is not None: print('piping while waiting for requests') # TODO: …Why isn't *this* tripped…
         for i in range(len(autoregressive)):
             # `autoregressive`, an undocumented feature: the ability to auto-schedule further pipings on further `.handle`ing, for when generation really needs to be sequential to be correct.
             assert len(autoregressive[i]) == 3
             fut = asyncio.Future()
-            if i < len(self._pipe_queue):
-                to = self._pipe_queue[i]
+            if not len(self._pipe_queue):
+                self._pipe_queue.append([])
+            if i+1 < len(self._pipe_queue):
+                to = self._pipe_queue[i+1]
             else:
                 to = []
                 self._pipe_queue.append(to)
@@ -254,7 +257,7 @@ class Handler:
         Gets feedback, guaranteed. Never returns `None`, instead re-querying until a result is available.
         """
         if isinstance(name, str): name = (name,)
-        if hasattr(type, 'get'):
+        if hasattr(type, 'get'): # pragma: no cover
             return type.get(self, name)
         while True:
             fb = await self.query(name, type)
@@ -426,18 +429,18 @@ class Handler:
             np = sn.backend
             bpc = sn.info['bits_per_cell']
             shape = sn.cell_shape
-            assert len(shape)==0 or shape[-1] >= bpc
+            assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc) if len(shape)>0 else 0
             names = _shaped_names(sn, self.sz, cells, self.shape, self.goal, False, name)
             cells = np.split(names, names.shape[0], 0) if cells != 0 else ()
             async def do_query(fb):
-                if len(shape)==0: return
+                if not len(shape): return
                 fb = await fb
                 if any(f is None for f in fb): return None
                 start = -shape[-1]
-                fb = np.concatenate(fb[:, start : start+bpc], 0)
+                fb = np.concatenate([x[:, start : start+bpc] for x in fb], 0)
                 fb = sn.Int.decode_bits(sn, fb)
-                R = sn.Int.repack(sn, fb, 2 ** bpc, self.opts)
+                R = sn.Int.repack(sn, fb, 2 ** bpc, self.opts)[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
             return do_query(asyncio.gather(*sn.pipe(*[(None, c, None) for c in cells])) if len(cells)>0 else 7)
         @staticmethod
@@ -532,7 +535,6 @@ class Handler:
                 R = fb[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
             return do_query(sn.query(None, names))
-    # TODO: New tests.
 
 
 
