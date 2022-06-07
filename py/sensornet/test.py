@@ -238,11 +238,33 @@ async def test13():
     h.set(name='btgrnonets', data=[1., 2.], type=sn.RawFloat(2))
     data, query, error = await h.handle()
     assert sn.Filter((None, 'z'))(h, data).sum() == 1
+@sn.run
+def test14():
+    """Errors thrown by `callback` are re-thrown."""
+    h = sn.Handler(8,8,8,8, 64)
+    def err1(*_): raise KeyboardInterrupt()
+    def err2(*_): raise TypeError('damn')
+    h.query(type=np.zeros((1, 32)), callback=err1)
+    assert h.handle(None, None)[1].shape == (1, 32)
+    try: h.handle(None, None); assert False
+    except KeyboardInterrupt: pass
+    h.query(type=np.zeros((5, 32)), callback=err2)
+    assert h.handle(None, None)[1].shape == (5, 32)
+    try: h.handle(None, None); assert False
+    except TypeError: pass
+@sn.run
+async def test15():
+    """Bad names."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        h = sn.Handler(8,8,8,8, 64, info={'bits_per_cell':2})
+        h.set(('a', 'b', 'c', 'd'), 0, 3)
+        h.set(('a', 'b', (0,1,2,3,4,5,6,7,8)), 1, 3)
+        try: h.set(('x', lambda: 'bad'), 2, 3); assert False
+        except TypeError: pass
 print('Tests OK')
 # TODO: Need a test that `.set`s an `Int` of 65536 possibilities in an env with 4 bits-per-cell.
-# TODO: Error in a 2D-query callback, re-thrown.
-# TODO: A test that trips both test-is-too-long warnings (suppressing them from console).
-# TODO: A test where a name part is bad.
 # TODO: …How do we get a test where a datatype defines `.get`?…
 
 
