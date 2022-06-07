@@ -312,7 +312,14 @@ async def benchmark(N=64*10):
         data, query, error = await h.handle(feedback)
         feedback = h.backend.full((query.shape[0], data.shape[1]), .2, dtype=f32) if data is not None else None
         #   TODO: …Maybe we should make `feedback` nameless too, just like `error`?… (For efficiency — and to better reflect the "feedback doesn't change names" constraint…)
-        #   TODO: …We absolutely need to do that "prepare names not cell-by-cell but all-at-once" idea…
+        #   TODO: How do we profile performance, again?
+        #     python -m cProfile -s tottime sensor-network/py/sensornet/test.py
+        #     nan_to_num
+        #     _shaped_names:648
+        #     <lots of numpy funcs> (most seem to be in `_shaped_names`)
+        #     name:118
+        #   TODO: …Should we cache full-name NumPy arrays, by providing a hidden method in `Handler` to replace `_shaped_names` but with a proper properly-invalidated cache?…
+        #   TODO: Do we need to make Int & Float override __new__ to merge their instances, for performance?
         iterations += 1
     h.discard()
     thr = N*4 * (96/64) * iterations / duration

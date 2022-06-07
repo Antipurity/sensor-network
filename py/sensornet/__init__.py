@@ -121,8 +121,6 @@ class Handler:
         Converts a Python name such as `('image', (.25, .5))` to a NumPy template, of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
 
         Names are tuples of either strings (which are MD5-hashed with the 16 bytes converted to -1…1 numbers), `None`s, and/or tuples of either numbers or `None`s."""
-        for fn in self.modify_name:
-            name = fn(name)
         assert isinstance(name, tuple)
         return self._name(name)
     def shape(self, *cell_shape):
@@ -160,6 +158,7 @@ class Handler:
         type = _default_typing(type)
         if type is not None:
             assert hasattr(type, 'set')
+            for fn in self.modify_name: name = fn(name)
             return type.set(self, name, data, error)
         assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
 
@@ -200,6 +199,7 @@ class Handler:
         if type is not None and not isinstance(type, np.ndarray):
             assert hasattr(type, 'query')
             assert callback is None
+            for fn in self.modify_name: name = fn(name)
             return type.query(self, name)
         query = type
         assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
@@ -235,7 +235,6 @@ class Handler:
         result = []
         if data is not None: self.set(None, data, None, error)
         if query is not None: result.append(self.query(None, query, callback))
-        if self._wait_for_requests is not None: print('piping while waiting for requests') # TODO: …Why isn't *this* tripped…
         for i in range(len(autoregressive)):
             # `autoregressive`, an undocumented feature: the ability to auto-schedule further pipings on further `.handle`ing, for when generation really needs to be sequential to be correct.
             assert len(autoregressive[i]) == 3
@@ -258,6 +257,7 @@ class Handler:
         """
         if isinstance(name, str): name = (name,)
         if hasattr(type, 'get'): # pragma: no cover
+            for fn in self.modify_name: name = fn(name)
             return type.get(self, name)
         while True:
             fb = await self.query(name, type)
@@ -646,21 +646,22 @@ def _name_template(np, str_to_floats, cell_shape, name):
         at += sz
     return template
 def _shaped_names(sn, sz, cells, shape, goal, analog, name):
+    # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
     np = sn.backend
-    if cells == 0:
-        return np.zeros((0, sn.cell_size), dtype=np.float32)
-    names, mult = [], -(-cells // sz)
-    for c in range(cells):
-        # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
-        #   (We *could* also compute all names in one NumPy array for efficiency.)
-        n, progress = c * mult, []
-        for max in reversed(shape):
-            progress.append((n % max) / max * 2 - 1)
-            n = n // max
-        progress = tuple([1. if goal else -1., 1. if analog else -1., *reversed(progress)])
-        n_name = tuple([progress, *name])
-        names.append(np.nan_to_num(sn.name(n_name)))
-    return np.stack(names, 0)
+    name_sz = (sn.cell_size - sn.cell_shape[-1]) if len(sn.cell_shape) else 0
+    if cells == 0 or not sn.cell_size:
+        return np.zeros((cells, name_sz), dtype=np.float32)
+    full_name = np.resize(np.nan_to_num(sn.name(tuple([None, *name]))), (cells, name_sz))
+
+    n, progress = np.linspace(0, sz, cells, dtype=np.float32), []
+    for max in reversed(shape):
+        progress.append((n % max) / max * 2 - 1)
+        n = np.floor_divide(n, max)
+    goal = np.full((cells,), 1. if goal else -1., dtype=np.float32)
+    analog = np.full((cells,), 1. if analog else -1., dtype=np.float32)
+    progress = np.stack([goal, analog, *reversed(progress)], 1)
+    full_name[:, :sn.cell_shape[0]] = _fill(np, progress, sn.cell_shape[0])
+    return full_name
 def _default_typing(type):
     if isinstance(type, int): return Handler.Int(type)
     if isinstance(type, tuple): return Handler.Int(*type)
