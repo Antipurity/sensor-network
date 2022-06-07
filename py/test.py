@@ -39,6 +39,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # (BMIs with even futuristic levels of tech can't do anything like downloading knowledge into your brain or capturing and controlling bodily functions for a full-dive into virtual worlds. Even write-access (computer-to-brain) is very hard to make out, and may in fact need years of training. But read-access (brain-to-computer) can explore a human's internal reactions, so that the human can revisit those reactions at will without having to expend effort; in addition, predicting neural-input could be useful for learning good represetations. And maybe you'd need RTX 6090 to run the AI part in real-time, since it may be Gato-sized.)
 #   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.) TODO: …Also, "mind uploading" is the same as "replacing all computer communication with AI-generated goal-directable byte streams" but for humans, with all the same caveats such as "need way way too much compute to encode everything exactly, and it is likely better to integrate the protocol with the AI tighter", right? "AI is goal-directed generative models of actions/observations" is starting to make sense now…
 #     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war and murder become routine and one global superpower emerges since the only price of destruction is now some resources; creating new ideas rather than spreading existing ones becomes nearly impossible.)
+# (TODO: …What we're requiring now is a file explaining the differences between analog and digital sampling, possibly even with "AI = goal-directed generative model", which our read-me can link to.)
 
 
 
@@ -47,6 +48,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Always only have 1 step of sampling; zero-pad the rest.
+# TODO: Here, don't have a `Filter` for goals, but instead filter goals by `frame[:, 0]>0`.
+# TODO: Here, detect non-digital cells by `frame[:, 1]>0` rather than content-sniffing, and use `sn`-provided int-encoding/decoding facilities.
+# TODO: In `copy.py`, use `Int`s and `goal=True`.
+# TODO: Also, here, in `modify_name`, should not just *set* the group-ID but *add* to it (and return result mod -1…1), so that envs can actually specify sub-envs.
 
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`?
@@ -54,9 +59,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Here, don't have a `Filter` for goals, but instead filter goals by `frame[:, 0]>0`.
-# TODO: In `copy.py`, use `Int`s and `goal=True`.
-# TODO: Also, here, in `modify_name`, should not just *set* the group-ID but *add* to it (and return result mod -1…1), so that envs can actually specify sub-envs.
 
 
 

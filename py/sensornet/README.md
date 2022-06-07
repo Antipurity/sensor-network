@@ -9,10 +9,8 @@ Python 3.5 or newer (for `asyncio` with `await`).
 ## Installation
 
 ```bash
-pip install sensornet
+pip install sensornet (TODO: Publish to PyPi.)
 ```
-
-TODO: Publish to PyPi.
 
 Or, like, copy this directory.
 
@@ -36,13 +34,12 @@ h = sn.shape(8,8,8,8, 64)
 Then send/receive data:
 
 ```python
-def set():
-    h.data('name', np.random.rand(32)*2-1)
-
 async def get():
-    nums = await h.get('name', 32)
-    assert nums.shape == (32,)
+    h.set('sensor', 13, 32)
+    assert (await h.get('action', 32)) in range(32)
 ```
+
+(Simple integer sending/receiving is shown here, but floats are also available by replacing `32` with `h.RawFloat(*shape)`.)
 
 And handle it:
 
@@ -51,13 +48,13 @@ And handle it:
 async def main():
     fb = None
     while True:
-        data, query, data_error, query_error = await h.handle(fb)
+        data, query, error = await h.handle(fb)
         fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
-This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication or integration with ML-libraries.
+This module implements this basic discrete+analog protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication or integration with ML-libraries.
 
-(Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
+(Implementing a controllable programming language with forking and/or listenable-to data is left as an exercise to the reader.)
 
 ---
 

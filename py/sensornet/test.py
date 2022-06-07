@@ -268,7 +268,7 @@ async def test15():
         except TypeError: pass
 @sn.run
 async def test16():
-    """Requesting big integers."""
+    """Integer queries."""
     h = sn.Handler(8,8,8,8, 64, info={'bits_per_cell':4})
     async def do(expect):
         i = h.query('assemble that 16-bit number please 1', 65536)
@@ -289,6 +289,10 @@ async def test16():
     await h.handle(None)
     h.handle(np.ones((1, 96)), None)
     assert (await i) == 3
+    i = h.query('atty-quadratty num', 16)
+    await h.handle(None)
+    h.handle(np.ones((1, 96)), None)
+    assert (await i) == 15
 print('Tests OK')
 
 

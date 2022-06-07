@@ -24,16 +24,13 @@ h = sn.shape(8,8,8,8, 64)
 
 Then send/receive data:
 
-TODO: Update the mini-tutorial with datatypes. Once we have them.
-
 ```python
-def set():
-    h.set('name', np.random.rand(32)*2-1)
-
 async def get():
-    nums = await h.get('name', 32) # TODO: Need the datatype. Do we show h.Int, or h.RawFloat?
-    assert nums.shape == (32,)
+    h.set('sensor', 13, 32)
+    assert (await h.get('action', 32)) in range(32)
 ```
+
+(Simple integer sending/receiving is shown here, but floats are also available by replacing `32` with `h.RawFloat(*shape)`.)
 
 And handle it:
 
@@ -42,13 +39,13 @@ And handle it:
 async def main():
     fb = None
     while True:
-        data, query, data_error, query_error = await h.handle(fb) # TODO: …Will our error be updated?… …Yes: data-only, no-name, error now, one variable.
+        data, query, error = await h.handle(fb)
         fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
-This module implements this basic protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication or integration with ML-libraries.
+This module implements this basic discrete+analog protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication or integration with ML-libraries.
 
-(Implementing a controllable language with forking and/or listenable-to data, and training an AI model that does something useful there, is left as an exercise to the reader.)
+(Implementing a controllable programming language with forking and/or listenable-to data is left as an exercise to the reader.)
 
 ---
 
@@ -280,10 +277,15 @@ class Handler:
 
         This returns `(data, query, error)`, or an `await`able promise of that.
         - `data`: float32 arrays of already-named cells of data, sized `N×cell_size`.
-            - A usage example: `data = numpy.clip(numpy.nan_to_num(data), -1., 1.)`.
         - `query`: same, but sized `M×name_size` (only the name).
         - `error`: data transmission error: `None` or a `(cells, cell_shape[-1])`-sized float32 array of `abs(true_data - data)`.
-            - A usage example: `if error is not None: data[:, -sn.cell_shape[-1]:] += error * (numpy.random.rand(*error.shape)*2-1)`
+
+        What can be done with the result:
+        - Be ready for data from untrusted sources: `data = numpy.clip(numpy.nan_to_num(data), -1., 1.)`.
+        - Blur out the precision that was lost during transmission: `if error is not None: data[:, -sn.cell_shape[-1]:] += error * (numpy.random.rand(*error.shape)*2-1)`
+        - Extract goal-cells: `data[data[:, 0] > 0]`
+        - Extract analog (`sn.RawFloat`) cells: `data[data[:, 1] > 0]`
+        - Extract digital (`sn.Int`) cells: `data[data[:, 1] <= 0]`
         """
         np = self.backend
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
@@ -651,7 +653,7 @@ def _shaped_names(sn, sz, cells, shape, goal, analog, name):
     # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
     np = sn.backend
     name_sz = (sn.cell_size - sn.cell_shape[-1]) if len(sn.cell_shape) else 0
-    if cells == 0 or not sn.cell_size:
+    if cells == 0 or not sn.cell_size: # pragma: no cover
         return np.zeros((cells, name_sz), dtype=np.float32)
     full_name = np.resize(np.nan_to_num(sn.name(tuple([None, *name]))), (cells, name_sz))
 
