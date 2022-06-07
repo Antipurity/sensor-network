@@ -156,9 +156,8 @@ def test7():
 async def test8():
     """Pass-through of (synthetic) handler data to another one."""
     sn.shape(8,8,8,8, 64)
-    shape1, shape2 = (13,96), (13,32)
-    # TODO: …Go through all, and re-read, thinking of what we're missing…
-    fut = sn.pipe((np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape1), np.zeros(shape2)))[0]
+    shape1, shape2, shape3 = (13,96), (13,32), (13,64)
+    fut = sn.pipe((np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape3)))[0]
     data, query, error = sn.handle(None, None)
     assert data.shape == shape1 and query.shape == shape2
     sn.commit()
@@ -188,7 +187,7 @@ def test10():
         nonlocal n, got;  n += 1
         if n == 4: got = True
         return got and np.zeros((0, 96))
-    h.set(None, np.zeros((2, 96)))
+    h.set(data=np.zeros((2, 96)))
     h.handle(feedback, None)
     h.handle(None, None)
     h.handle(None, None)
@@ -204,7 +203,7 @@ async def test11():
         h.set('hey listen', np.zeros(128), sn.RawFloat(128))
     async def query_later():
         await asyncio.sleep(.2)
-        h.query('forces of evil gather', 16)
+        assert (await h.query('forces of evil gather', sn.RawFloat(16))) is None
     asyncio.ensure_future(data_later())
     assert (await h.handle())[0].shape == (2, 96)
     asyncio.ensure_future(query_later())
@@ -212,7 +211,10 @@ async def test11():
 @sn.run
 async def test12():
     """`Filter`ing data for specifically-named cells."""
+    # TODO: …Go through all, and re-read, thinking of what we're missing…
+    print('test12') # TODO:
     def good(data, *_):
+        print(data[:, -64:]) # TODO: …Oh yeah: where *are* those numbers? Good point…
         good.b = True
         assert (data[:, -64:].flatten()[:3] == np.array([.1, .2, .3])).all()
     def bad(data, *_): # pragma: no cover
@@ -228,6 +230,7 @@ async def test12():
 @sn.run
 async def test13():
     """Modifying names."""
+    print('test13') # TODO:
     h = sn.Handler(8,8,8,8, 64, modify_name = [lambda name: ('z',)])
     h.set(name='btgrnonets', data=[1., 2.], type=sn.RawFloat(2))
     data, query, error = await h.handle()
