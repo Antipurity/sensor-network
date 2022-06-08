@@ -27,7 +27,7 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks and `'goal'` at the end for constraint-specification and `.metric()` for logging a dict.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks and impossible-to-collide naming and `.metric()` for logging a dict.)
 
 
 
@@ -50,22 +50,34 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: …A `model/???.py` file for VAE's normalization, with a test that with it, a NN from a 0…1 dataset to a hopefully-normal distribution would indeed learn to have EVERY output have 0 mean and 1 variance across the whole dataset?… (With it, making VAEs should be easy.)
 #   (KL-divergence is a little bit like a GAN: minimize p*log(p), maximize p*log(q), to make p (any distribution) into q (normal distribution for VAEs). Though is p*log(p) representable?)
 #     (Also, wouldn't it be much easier to compute probabilities for uniform target-distribution than for normal targ-distr?)
+#     (GANs are kinda like a second-degree method for approximating this, where the probability is explicitly modeled with a NN…)
+#     TODO: How can we possibly know a number's probability without non-1 batch sizes?… (…Memory all gone…)
+#       (Because in an RNN, we'd really like uniform/samplable distributions *at a point* rather than over a lifetime, which would need at least dozens of samples per loss-computation if we need non-1 batch sizes…)
+#       …ELBO… Can't concentrate on anything right now though…
+#       From looking at code: for normal distributions, where we have mean & variance computed by NNs, the KL-loss to minimize is `.5 * (mean**2 + (var.exp() - var))`, which makes each number's mean into 0 and variance into 1… …Isn't this exactly what I was looking for?
+#         TODO: Write this down in a function (`loss_make_normal`).
+#         …If it's this simple, then do we even need a separate file to test it in… …I guess we'd still like to look at the behavior, to check that it works out to what we expect, right?… TODO: Test `loss_make_normal` in a separate file.
+# (…Kinda forgot that VAEs are supposed to not just output an internal vector, but how it's sampled, meaning that the loss is a lot easier to do…)
 
 
 
-# TODO: Always only have 1 step of sampling; zero-pad the rest.
-# TODO: Here, don't have a `Filter` for goals, but instead filter goals by `frame[:, 0]>0` AKA `sample.goal_mask(frame)`.
-# TODO: Here, detect non-digital cells by `frame[:, 1]>0` rather than content-sniffing, and use `sn`-provided int-encoding/decoding facilities.
-# TODO: Also, here, in `modify_name`, should not just *set* the group-ID but *add* to it (and return result mod -1…1), so that envs can actually specify sub-envs.
+# TODO: …Maybe, instead of `dist_levels`, gate the distance by itself again, but this time, `dist.log2() = min(dist.log2() + 1, target_dist.log2())` (or possibly in exponential-`dist` space): all targets have an effect, but lower targets have a bigger effect. (I don't think we've tried a non-zero loss multiplier even for very high targets.)
+
+
+
+# TODO: …Also, now that we admit that AI = goal-conditioned generative models, we have much less of an excuse to insist on goal-cells being sampled rather than generated — making it gen-models all the way down… Can we come up with a good scheme for generating goals?… …Maybe the `loss` can just input `dst`-shaped 0s and learn to output `dst` whenever its goal-of-goals (predicted in distance's spot) is improved?… This actually sounds extremely plausible…
+
+
 
 # TODO: Have `gated_generative_loss(dist_pred, pred, dist_target, target)`, which we can call both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
 
 # TODO: …Maybe, DODGE should only optimize a small subset of parameters, so that its random-direction-picking doesn't drown the net in variance?…
+#   …Which subset, though…
 
 
 
+# TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
-# TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`?
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 
 
@@ -149,10 +161,10 @@ sn.shape(*cell_shape)
 state_sz, goal_sz = 256, 256
 slow_mode = .05 # Artificial delay per step.
 
-dist_levels = 1 # TODO: At least 2.
+dist_levels = 1 # TODO: At least 2. …Or maybe remove…
 bits_per_chunk = 8 # How to `sample`.
 #   TODO: Should be `frexp(choices_per_cell-1)[1]`, none of that "chunk" business.
-#   TODO: Also, should be named `bits_per_cell`, right? …And maybe just have `choices_per_cell`.
+#   TODO: Also, should be named `bits_per_cell`, right? …And maybe just have `choices_per_cell` as the main hyperparam, in case we're feeling not-power-of-2.
 
 lr = 1e-3
 replays_per_step = 2
@@ -186,30 +198,18 @@ def prepare_env(path):
     sn.sensors.append(sensor_with_name)
     return mod
 def modify_name(name):
+    # Remove inter-env collisions by adding the group ID to the end of their names.
     assert modify_name.ctx is not None, "Sending data not in an env's sensor; don't send it in callbacks of queries, instead remember to send it on the next step"
     res = [name[i] if i < len(name) else None for i in range(len(cell_shape) - 1)]
-    res[-1] = modify_name.ctx
-    if name[-1] == 'goal':
-        res[len(name) - 1] = None
-        res[-2] = 'goal'
-    return res
+    assert not isinstance(res[-1], tuple), "The group-id shouldn't be a tuple (to make our lives easier)"
+    res[-1] = modify_name.ctx if res[-1] is None else (modify_name.ctx + '.' + res[-1])
+    return tuple(res)
 sn.modify_name.append(modify_name)
 envs = ['graphenv'] if len(sys.argv) < 2 else sys.argv[1:]
 envs = { e: prepare_env(e) for e in envs }
-
-
-
 replay_buffer = []
-
-
-
-# Our interface to multigroup partial goals (AND/OR goals): the last 2 name parts are ('goal', group_id).
-goal_filter = sn.Filter([*[None for _ in cell_shape[:-3]], 'goal', ...]) # TODO: Just check the goal-bit with the new system, via `sample.goal_mask`.
-goal_name = torch.tensor(goal_filter.template(cell_shape)) # TODO: No.
-goal_name = torch.cat((goal_name, torch.full((cell_shape[-1],), float('nan'))), -1) # TODO: No.
-
-
-
+# Our interface to multigroup partial goals (AND/OR goals): the last name part is `group_id`, AKA user ID.
+#   Via carefully engineering the loss, users can have entirely separate threads of experience that reach ALL the goals in their group (but the NN can of course learn to share data between its threads).
 def goal_group_ids(frame):
     """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
     return set(name.tobytes() for name in np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0))
@@ -265,10 +265,15 @@ class Sampler:
             indices = sn.Int.decode_bits(sn, act[:, i : i + self.bits_per_cell])
             digital = F.one_hot(indices, logits_sz).float()
             return is_ana * analog + (1-is_ana) * digital
-    def goal_mask(self, frame):
-        return frame[:, 0] > 0
-    def analog_mask(self, frame):
-        return frame[:, 1] > 0
+    @staticmethod
+    def goal_mask(frame):
+        return frame[:, 0:1] > 0
+    @staticmethod
+    def analog_mask(frame):
+        return frame[:, 1:2] > 0
+    @staticmethod
+    def as_goal(frame):
+        return torch.cat((torch.ones(frame.shape[0], 1), frame[:, 1:]), -1)
 sample = Sampler(lambda x: transition_(x)[0:1], bits_per_chunk, sum(cell_shape[:-1]), sum(cell_shape))
 
 
@@ -333,7 +338,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         dst = torch.cat((dst[:, :sum(cell_shape[:-2])], dst_group_id, dst[:, sum(cell_shape[:-1]):]), -1)
 
         # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
-        dst = torch.where(goal_name == goal_name, goal_name, dst)
+        dst = sample.as_goal(dst)
         frame = torch.cat((dst, frame), 0)
         is_learned = torch.cat((torch.full((dst.shape[0], 1), True), is_learned), 0).float()
 
@@ -436,7 +441,7 @@ async def main():
                         # (The replay buffer won't want to know any user-specified goals.)
                         #   (And fetch goal-group IDs to add constraints for exploration, even if the env has set some goals.)
                         frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
-                        not_goal_cells = goal_filter(frame_names, cell_shape=cell_shape, invert=True)
+                        not_goal_cells = ~sample.goal_mask(frame_names)[:, 0]
                         prev_q = query
                         groups = goal_group_ids(frame_names)
 
@@ -455,7 +460,7 @@ async def main():
                                 if group not in goals:
                                     goal = random.choice(replay_buffer)[2]
                                     goal = goal[np.random.rand(goal.shape[0]) < (.05+.95*random.random())]
-                                    goal = torch.where(goal_name == goal_name, goal_name, goal)
+                                    goal = sample.as_goal(goal)
                                     expiration_cpu = torch.tensor(time+10000, device='cpu').int()
                                     expiration_gpu = torch.tensor(time+10000).int()
                                     goals[group] = (goal, expiration_cpu, expiration_gpu)
