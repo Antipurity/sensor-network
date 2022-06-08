@@ -113,7 +113,7 @@ async def test5():
     def sensor(h):
         async def asensor(fb):
             assert (await fb) is not None
-        fbs.append(asyncio.ensure_future(asensor(h.query(name='insolence', type=sn.RawFloat(3)))))
+        fbs.append(sn.run(asensor, h.query(name='insolence', type=sn.RawFloat(3))))
     h.sensors.add(lambda h: sensor(h))
     h.sensors.add(lambda h: sensor(h))
     assert h.handle(None, None)[1].shape == (2, 32)
@@ -152,8 +152,8 @@ def test7():
     @sn.run
     async def main():
         for _ in range(5):
-            asyncio.ensure_future(request_data(sn))
-        asyncio.ensure_future(request_data(sn, True))
+            sn.run(request_data, sn)
+        sn.run(request_data, sn, True)
         fb = None
         while finished < 6:
             sn.set(name='bees', data=np.zeros((16,)), type=sn.RawFloat(16))
@@ -213,9 +213,9 @@ async def test11():
     async def query_later():
         await asyncio.sleep(.2)
         assert (await h.query('forces of evil gather', sn.RawFloat(16))) is None
-    asyncio.ensure_future(data_later())
+    sn.run(data_later)
     assert (await h.handle())[0].shape == (2, 96)
-    asyncio.ensure_future(query_later())
+    sn.run(query_later)
     assert (await h.handle())[1].shape == (1, 32)
 @sn.run
 async def test12():

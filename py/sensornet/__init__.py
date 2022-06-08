@@ -56,7 +56,7 @@ This module implements this basic discrete+analog protocol, and does not include
 
 
 
-import numpy as np
+import numpy
 import hashlib
 import asyncio
 import functools
@@ -86,7 +86,7 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=np, name_cache_size=1024):
+    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024):
         from builtins import set
         assert modify_name is None or isinstance(modify_name, list)
         import json;  json.dumps(info) # Just for error-checking.
@@ -289,7 +289,7 @@ class Handler:
         """
         np = self.backend
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
-            prev_feedback = asyncio.ensure_future(prev_feedback)
+            prev_feedback = asyncio.create_task(prev_feedback) if hasattr(asyncio, 'create_task') else asyncio.ensure_future(prev_feedback)
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
         assert max_simultaneous_steps is None or isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         # Collect sensor data.
@@ -531,6 +531,7 @@ class Handler:
         def query(self, sn, name):
             # Flatten feedback's cells and reshape it to our shape.
             assert sn.info is None or sn.info['analog'] is True
+            np = sn.backend
 
             shape = sn.cell_shape
             cells = -(-self.sz // shape[-1]) if len(shape) else 0
@@ -546,41 +547,88 @@ class Handler:
 
 
 
-class Filter:
-    """`Filter(name, func=None)`
+    @staticmethod
+    def run(fn, *args, **kwargs):
+        """A convenient potentially-async function decorator, simply doing a call.
+        
+        If not async, simply calls the function, else lets sync code seamlessly call async code: either creates & runs an `asyncio` loop or schedules a new task in an existing one.
 
-    Wraps a `func(sn, data)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
+        Note: `Handler` queries, while returning `await`able objects, do not follow Python's convention of "wait before running any `async`-function code", and register the queries immediately. To follow this convention in your code, when calling `async`-functions from sync code (such as `.sensors` callbacks), pass `sn.query(…)` as an arg to `sn.run(…)` and `await` it inside, rather than doing `await sn.query(…)` inside."""
+        R = fn(*args, **kwargs) if callable(fn) else fn
+        if not asyncio.iscoroutinefunction(fn): return R
+        if hasattr(asyncio, 'get_running_loop'): # pragma: no cover
+            try: asyncio.get_running_loop();  return asyncio.create_task(R)
+            except: return asyncio.run(R)
+        else: # pragma: no cover
+            try: b = asyncio.get_event_loop().is_running()
+            except RuntimeError: b = False # Throws *after* the first global `sn.run`.
+            return asyncio.ensure_future(R) if b else asyncio.run(R)
 
-    Example uses: getting a global reward from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
 
-    `func`:
-    - `None`: a call will simply return a per-cell bit-mask of whether the name fits; can also pass `invert=True` to invert that mask.
-    - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
-    Be aware that `sn.Int` and `sn.RawFloat` (so, all datatypes) prepend a hidden name-part, so here, `name` should begin with `None`."""
-    def __init__(self, name, func = None):
-        assert func is None or callable(func)
-        if isinstance(name, str): name = (name,)
-        assert isinstance(name, tuple)
-        self.name = name
-        self.func = func
-    def __call__(self, sn: Handler, data, *, invert=False):
-        cell_shape = sn.cell_shape
-        assert len(cell_shape), 'Specify the cell-shape too'
-        np = sn.backend
-        # Match.
-        template = sn.name(self.name)
-        name_sz = sum(cell_shape) - cell_shape[-1]
-        matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= 1e-5)
-        matches = matches.all(-1) if not invert else ~(matches.all(-1))
-        if self.func is None:
-            return matches
-        data = data[matches]
-        inds = np.lexsort(data.T[::-1])
-        data = data[inds]
-        # Call.
-        if data.size > 0:
-            return self.func(sn, data)
+    @staticmethod
+    def torch(torch, tensor, awaitable=False): # pragma: no cover
+        """PyTorch integration, providing GPU→CPU async transfer, usable as `await sn.torch(torch, x, True)` or `sn.handle(sn.torch(torch, x))`. (Since PyTorch doesn't make this easy.)"""
+        if not isinstance(tensor, torch.Tensor) or not tensor.is_cuda:
+            tensor = tensor.detach().numpy() if isinstance(tensor, torch.Tensor) else tensor
+            if not awaitable:
+                return tensor
+            else:
+                f = asyncio.Future()
+                f.set_result(tensor)
+                return f
+        with torch.no_grad():
+            # https://discuss.pytorch.org/t/non-blocking-device-to-host-transfer/42353/2
+            result = torch.zeros_like(tensor, dtype=torch.float32, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
+            result.copy_(tensor, non_blocking=True)
+            event = torch.cuda.Event()
+            event.record()
+            if not awaitable:
+                return lambda: event.query() and result.numpy()
+            else:
+                async def busyquery():
+                    while True:
+                        if event.query(): return result.numpy()
+                        await asyncio.sleep(.003)
+                return busyquery()
+
+
+
+    class Filter:
+        """`Filter(name, func=None)`
+
+        Wraps a `func(sn, data)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
+
+        Example uses: getting a global reward from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
+
+        `func`:
+        - `None`: a call will simply return a per-cell bit-mask of whether the name fits; can also pass `invert=True` to invert that mask.
+        - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
+
+        Be aware that `sn.Int` and `sn.RawFloat` (so, all datatypes) prepend a hidden name-part, so here, `name` should begin with `None`."""
+        def __init__(self, name, func = None):
+            assert func is None or callable(func)
+            if isinstance(name, str): name = (name,)
+            assert isinstance(name, tuple)
+            self.name = name
+            self.func = func
+        def __call__(self, sn, data, *, invert=False):
+            cell_shape = sn.cell_shape
+            assert len(cell_shape), 'Specify the cell-shape too'
+            np = sn.backend
+            # Match.
+            template = sn.name(self.name)
+            name_sz = sum(cell_shape) - cell_shape[-1]
+            matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= 1e-5)
+            matches = matches.all(-1) if not invert else ~(matches.all(-1))
+            if self.func is None:
+                return matches
+            data = data[matches]
+            inds = np.lexsort(data.T[::-1])
+            data = data[inds]
+            # Call.
+            if data.size > 0:
+                return self.func(sn, data)
 
 
 
@@ -677,39 +725,8 @@ def _default_typing(type):
 
 
 
-def torch(torch, tensor, awaitable=False): # pragma: no cover
-    """PyTorch integration, providing GPU→CPU async transfer, usable as `await sn.torch(torch, x, True)` or `sn.handle(sn.torch(torch, x))`. (Since PyTorch doesn't make this easy.)"""
-    if not isinstance(tensor, torch.Tensor) or not tensor.is_cuda:
-        tensor = tensor.detach().numpy() if isinstance(tensor, torch.Tensor) else tensor
-        if not awaitable:
-            return tensor
-        else:
-            f = asyncio.Future()
-            f.set_result(tensor)
-            return f
-    with torch.no_grad():
-        # https://discuss.pytorch.org/t/non-blocking-device-to-host-transfer/42353/2
-        result = torch.zeros_like(tensor, dtype=torch.float32, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
-        result.copy_(tensor, non_blocking=True)
-        event = torch.cuda.Event()
-        event.record()
-        if not awaitable:
-            return lambda: event.query() and result.numpy()
-        else:
-            async def busyquery():
-                while True:
-                    if event.query(): return result.numpy()
-                    await asyncio.sleep(.003)
-            return busyquery()
-
-
-
-def run(fn, *args, **kwargs):
-    """A convenience async-function decorator: equivalent to `import asyncio;  asyncio.run(fn())`."""
-    return asyncio.run(fn(*args, **kwargs)) if asyncio.iscoroutinefunction(fn) else fn(*args, **kwargs)
-
-
-
+# Make the module itself act exactly like an instance of `Handler`, and the other way around.
+Handler.Handler = Handler
 default = Handler()
 sensors = default.sensors
 listeners = default.listeners
@@ -731,3 +748,6 @@ commit = default.commit
 discard = default.discard
 Int = Handler.Int
 RawFloat = Handler.RawFloat
+run = Handler.run
+torch = Handler.torch
+Filter = Handler.Filter

@@ -4,7 +4,7 @@ import random
 
 class Env:
     """
-    The simplest copy-task: most bit-inputs have to be ignored, some bits have to be remembered and recalled when requested, which results in -1|1 reward.
+    The simplest copy-task: most bit-inputs have to be ignored, but some bits have to be remembered and recalled when requested, which results in -1|1 reward.
     """
     bit = 0
     reward = 0
@@ -14,20 +14,20 @@ class Env:
 
         # Give reward & strive for it.
         if self.reward != 0:
-            sn.data('reward', [self.reward])
+            sn.set('reward', self.reward, 2)
             self.reward = 0
-        sn.data(('reward', 'goal'), [1])
+        sn.set('reward', 1, sn.Int(2, goal=True))
 
         if p < .9: # Observe rubbish.
-            sn.data('rubbish', [random.randint(0,1)])
+            sn.set('rubbish', random.randint(0,1), 2)
         elif p < .97: # Observe an important bit.
             self.bit = random.randint(0,1)
-            sn.data('remember', [self.bit])
+            sn.set('remember', self.bit, 2)
         else: # Recall the previous important bit.
-            bit = bool(self.bit)
-            def callback(fb):
-                self.reward = 1 if (fb[0] > 0) == bit else -1
+            bit = self.bit
+            async def callback(fb):
+                self.reward = int((await fb) == bit)
                 self.reward_metric = self.reward_metric * .99 + .01 * self.reward
-            sn.query('recall', 1, callback=callback)
+            sn.run(callback, sn.query('recall', 2))
     def metric(self):
         return {'reward': self.reward_metric}
