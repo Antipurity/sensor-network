@@ -48,7 +48,7 @@ import time
 @sn.run
 async def test0():
     """No shape, so no handling. (Mostly for test-coverage.)"""
-    h = sn.Handler(info={'analog':True, 'bits_per_cell':8})
+    h = sn.Handler(info={'analog':True, 'choices_per_cell':2**8})
     assert h.handle(None, None)[0].shape == (0,0)
     h.set('a', data=[1.], type=sn.RawFloat(1))
     h.query('b', type=2).close()
@@ -83,7 +83,7 @@ def test2():
 @sn.run
 async def test3():
     """Named error."""
-    h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':16})
+    h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'choices_per_cell':2**16})
     test = h.query(name='test', type=sn.RawFloat(17))
     h.query(type=np.zeros((1, 32)), callback=lambda fb: ...)
     await h.handle(None)
@@ -260,7 +260,7 @@ async def test15():
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        h = sn.Handler(8,8,8,8, 64, info={'bits_per_cell':2})
+        h = sn.Handler(8,8,8,8, 64, info={'choices_per_cell':2**2})
         h.set(('a', 'b', 'c', 'd'), 0, 3)
         h.set(('a', 'b', (0,1,2,3,4,5,6,7,8)), 1, 3)
         def fn(): ... # pragma: no cover
@@ -269,7 +269,7 @@ async def test15():
 @sn.run
 async def test16():
     """Integer queries."""
-    h = sn.Handler(8,8,8,8, 64, info={'bits_per_cell':4})
+    h = sn.Handler(8,8,8,8, 64, info={'choices_per_cell':2**4})
     async def do(expect):
         i = h.query('assemble that 16-bit number please 1', 65536)
         fb = None
@@ -299,7 +299,7 @@ print('Tests OK')
 
 async def benchmark(N=64*10):
     """`RawFloat` number-shuffling performance."""
-    h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'bits_per_cell':8})
+    h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'choices_per_cell':2**8})
     iterations, feedback = 0, None
     randn_src = h.backend.random if not hasattr(h.backend, 'randn') else h.backend
     send_data = randn_src.randn(N)

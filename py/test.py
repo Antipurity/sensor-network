@@ -140,7 +140,7 @@ slow_mode = .05 # Artificial delay per step.
 
 dist_levels = 1 # TODO: At least 2.
 bits_per_chunk = 8 # How to `sample`.
-#   TODO: Should be `bits_per_cell`, none of that "chunk" business.
+#   TODO: Should be `frexp(choices_per_cell-1)[1]`, none of that "chunk" business.
 
 lr = 1e-3
 replays_per_step = 2
@@ -153,7 +153,7 @@ sn.info = {
     'docs': """TODO:""",
     # TODO: Also mention that we clip all inputs/outputs to -1…1.
     'analog': True,
-    'bits_per_cell': bits_per_chunk,
+    'choices_per_cell': 2 ** bits_per_chunk,
 }
 
 

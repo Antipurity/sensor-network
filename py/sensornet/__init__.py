@@ -398,7 +398,9 @@ class Handler:
 
         Datatype: an autoregressively-sampled sequence of integers, each `0…options-1`. So the bigger the `shape`, the longer it is to set/get; this is so that the AI model can generate probabilities, sample from them, and still compose bit-streams without aliasing.
 
-        To use this, `Handler`s need `info={'bits_per_cell': N}`.
+        For efficiency, if possible, request many `Int`s via `shape`, rather than requesting many one-by-one.
+
+        To use this, `Handler`s need `info={'choices_per_cell': opts}`. This datatype will take care of conversions.
         """
         __slots__ = ('sz', 'shape', 'opts', 'goal')
         def __init__(self, *shape, goal=False):
@@ -418,23 +420,25 @@ class Handler:
             assert ((data >= 0) & (data < self.opts)).all(), "Out-of-range ints"
 
             # Assemble & pipe cells autoregressively.
-            bpc = sn.info['bits_per_cell']
+            cpc = sn.info['choices_per_cell']
+            from math import frexp;  bpc = frexp(cpc - 1)[1]
             shape = sn.cell_shape
             if not len(shape): return
             assert shape[-1] >= bpc
-            cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc)
+            cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
             names = sn._shaped_names(self.sz, cells, self.shape, self.goal, False, name)
-            data = sn.Int.repack(sn, data, self.opts, 2 ** bpc)
+            data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(sn, data, bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
             cells = np.split(np.concatenate((names, data, zeros), -1), cells, 0)
             sn.pipe(*[(c, None, None) for c in cells])
         def query(self, sn, name):
             np = sn.backend
-            bpc = sn.info['bits_per_cell']
+            cpc = sn.info['choices_per_cell']
+            from math import frexp;  bpc = frexp(cpc - 1)[1]
             shape = sn.cell_shape
             assert not len(shape) or shape[-1] >= bpc
-            cells = sn.Int.repack(sn, self.sz, self.opts, 2 ** bpc) if len(shape)>0 else 0
+            cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape)>0 else 0
             names = sn._shaped_names(self.sz, cells, self.shape, self.goal, False, name) if cells else None
             cells = np.split(names, names.shape[0], 0) if cells else ()
             async def do_query(fb):
@@ -444,7 +448,7 @@ class Handler:
                 start = -shape[-1]
                 fb = np.concatenate([x[:, start : start+bpc] for x in fb], 0)
                 fb = sn.Int.decode_bits(sn, fb)
-                R = sn.Int.repack(sn, fb, 2 ** bpc, self.opts)[:self.sz].reshape(self.shape)
+                R = sn.Int.repack(sn, fb, cpc, self.opts)[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
             return do_query(asyncio.gather(*sn.pipe(*[(None, c, None) for c in cells])) if len(cells)>0 else 7)
         @staticmethod
