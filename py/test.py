@@ -47,10 +47,15 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# TODO: …A `model/???.py` file for VAE's normalization, with a test that with it, a NN from a 0…1 dataset to a hopefully-normal distribution would indeed learn to have EVERY output have 0 mean and 1 variance across the whole dataset?… (With it, making VAEs should be easy.)
+#   (KL-divergence is a little bit like a GAN: minimize p*log(p), maximize p*log(q), to make p (any distribution) into q (normal distribution for VAEs). Though is p*log(p) representable?)
+#     (Also, wouldn't it be much easier to compute probabilities for uniform target-distribution than for normal targ-distr?)
+
+
+
 # TODO: Always only have 1 step of sampling; zero-pad the rest.
 # TODO: Here, don't have a `Filter` for goals, but instead filter goals by `frame[:, 0]>0` AKA `sample.goal_mask(frame)`.
 # TODO: Here, detect non-digital cells by `frame[:, 1]>0` rather than content-sniffing, and use `sn`-provided int-encoding/decoding facilities.
-# TODO: In `copy.py`, use `Int`s and `goal=True`.
 # TODO: Also, here, in `modify_name`, should not just *set* the group-ID but *add* to it (and return result mod -1…1), so that envs can actually specify sub-envs.
 
 # TODO: Have `gated_generative_loss(dist_pred, pred, dist_target, target)`, which we can call both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
@@ -211,7 +216,7 @@ def goal_group_ids(frame):
 
 
 
-class Sampler: # TODO: So do we just kill this? How to replace this with its one-step-sampling version?
+class Sampler:
     """
     GANs, VAEs, contrastive learning, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions    
     Autoregressive discrete sampling: AWAKEN
@@ -224,61 +229,47 @@ class Sampler: # TODO: So do we just kill this? How to replace this with its one
 
     (This adds autoregressive in-cell sampling. Cells are still processed in parallel, because envs should make cells independent of each other by design. And cell-groups are already autoregressively processed by RNNs.)
     """
-    def __init__(self, fn, bits_per_cell, start, end):
+    def __init__(self, fn, bits_per_cell, start, end): # TODO: Should we support non-power-of-2 sampling? (And compute `bits_per_cell` as `frexp(opts-1)[1]`.)
         self.bits_per_cell = bits_per_cell
         self.fn, self.start, self.end = fn, start, end
         self.softmax = Softmax(-1)
     def __call__(self, query):
-        """Given a `query` that's zero-padded to be action-sized, samples a binary action. # TODO: …Doesn't it make more sense to zero-pad it *here* (probably taking `cell_shape[-1]`)? To eliminate the chance of callers making a mistake?
+        """Given a name-only `query`, samples a binary action.
 
-        Non-differentiable; to make an action more likely to be sampled, use `.loss`.
+        The result is `(action, repr)`. Use `action` to act; use L2 loss on `repr` and `.target(action)` to predict the action.
 
-        This should advance RNN `State`, so do `State.Episode` shenanigans if unwanted.
-
-        (No non-action-cell sampling AKA L2-prediction here, since we won't use that. Though in theory, could use the outcome-averaged approximation, and complicate the interface by having a per-cell bitmask of whether it's an action.)"""
-        with torch.no_grad(): # TODO: …Or *should* it be differentiable, with digital gradient being pass-through to probabilities — so that GANs could be computed a bit faster (non-analog cells should still be non-differentiable)?…
-            # TODO: …Wait, we now have an explicit `self.analog_mask(query)` for the query, so it's not all digital… How do we sample both?…
-            query = detach(query).clone() # (No forward-derivative, and prepare to overwrite it in-place.)
-            #   TODO: (Won't be a need to clone the `query`.)
-
-            i = self.start
-            indices = self.softmax(detach(self.fn(query))).multinomial(1)[..., 0]
-            query[:, i : i + self.bits_per_cell] = sn.Int.encode_ints(sn, indices, self.bits_per_cell)
-            #   TODO: Instead of overwriting in-place, concat (no-name) `query` and `bits` and zeros.
-            return query
-    def loss(self, act):
-        """
-        Returns a loss that, when minimized, perfectly copies the probability of sampling seen `act`ions.
-
-        The result is `(cells, 1)`-shaped; `.sum()` it before `.backward()`.
-
-        Non-action observations are also supported (detected & predicted) via L2 loss, though they cannot be sampled, and are outcome-averaged.
-
-        (Does the same RNN calls with the same RNN inputs as sampling `act` would, so computation graphs match exactly.)
-        """
-        i = self.start
-        assert act.shape[1] == self.end
-        query = torch.cat((act[:, :i].detach(), torch.zeros(act.shape[0], self.end - i)), -1)
-        is_act = self.analog_mask(detach(act)).float()
-        #   TODO: The variable should be called `is_ana`.
-        loss = 0.
-        logits = self.fn(query)
-        obs_target = act[:, self.start : self.start+logits.shape[-1]] # TODO: Is this the analog L2-prediction target? How would we implement a GAN/VAE instead of L2 prediction?… (Or *possibly* in addition to, for a good prior for the GAN to refine, mostly bypassing the "if not initially in-distribution, then we can't learn it" problem…)
-        #   TODO: Should be named `ana_target`.
-        if obs_target.shape[-1] < logits.shape[-1]:
-            obs_target = torch.cat((obs_target, torch.zeros(logits.shape[0], logits.shape[-1] - obs_target.shape[-1])), -1)
-        # Digital. (L2 loss on `probs` with a one-hot index does end up copying the probabilities.)
-        probs = self.softmax(logits)
-        bits = act[:, i : i + self.bits_per_cell] # TODO: …Is there a need to slice now?… There's no min… But `act` is indeed too big, so yes, we need to slice.
-        indices = sn.Int.decode_bits(sn, bits)
-        act_target = F.one_hot(indices, probs.shape[-1]).float() # TODO: Should be named `dig_target`.
-        loss = ((1 - is_act) * (probs - act_target) + is_act * (logits - obs_target)).square().sum(-1, keepdim=True)
-        return loss
+        This will advance RNN `State`, so do `State.Episode` shenanigans if that is unwanted."""
+        is_ana = self.analog_mask(detach(query)).float()
+        i, j, cells = self.start, self.end, query.shape[0]
+        input = torch.cat((query, torch.zeros(cells, j - i)), -1)
+        name, logits = self.fn(input)
+        assert logits.shape[-1] == 2 ** self.bits_per_cell
+        analog = torch.cat((name, logits[..., :j-i]), -1)
+        with torch.no_grad():
+            digprob = self.softmax(detach(logits))
+            indices = digprob.multinomial(1)[..., 0]
+            bits = sn.Int.encode_ints(sn, indices, self.bits_per_cell)
+            digital = torch.cat((query, bits, torch.zeros(cells, j - self.bits_per_cell - i)), -1)
+        action = is_ana * analog + (1-is_ana) * digital
+        repr = torch.cat((is_ana * logits + (1-is_ana) * digprob), -1)
+        return action, repr
+    def target(self, act):
+        """Converts a presumably-sampled `action` to its `repr`, which can be used to compute L2 loss."""
+        # The representation: for analog, just the zero-padded prediction as-is; for digital, the post-softmax probability distribution.
+        i, j, cells = self.start, self.end, act.shape[0]
+        logits_sz = 2 ** self.bits_per_cell
+        act = detach(act)
+        with torch.no_grad():
+            is_ana = self.analog_mask(act).float()
+            analog = torch.cat((act, torch.zeros(cells, logits_sz - j)), -1)
+            indices = sn.Int.decode_bits(sn, act[:, i : i + self.bits_per_cell])
+            digital = F.one_hot(indices, logits_sz).float()
+            return is_ana * analog + (1-is_ana) * digital
     def goal_mask(self, frame):
         return frame[:, 0] > 0
     def analog_mask(self, frame):
         return frame[:, 1] > 0
-sample = Sampler(lambda x: transition_(x)[0], bits_per_chunk, sum(cell_shape[:-1]), sum(cell_shape))
+sample = Sampler(lambda x: transition_(x)[0:1], bits_per_chunk, sum(cell_shape[:-1]), sum(cell_shape))
 
 
 
@@ -292,8 +283,8 @@ class SkipConnection(nn.Module):
 def h(ins = state_sz, outs = ...): # A cross-cell transform.
     if outs is ...: outs = ins
     return SkipConnection(
-        ReLU(), LayerNorm(ins), SRWM(ins, ins, heads=2, Softmax=Softmax),
-        ReLU(), LayerNorm(ins), nn.Linear(ins, outs),
+        LayerNorm(ins), ReLU(), SRWM(ins, ins, heads=2, Softmax=Softmax),
+        LayerNorm(ins), ReLU(), nn.Linear(ins, outs),
     )
 
 
@@ -303,19 +294,19 @@ try:
     transition = torch.load(save_load)
 except FileNotFoundError:
     transition = nn.Sequential(
-        # Input prev-actions and next-observations, output info that `sample` can use and distances.
-        #   We predict the next input, thus serving as both an RL agent and a self-supervised learner.
-        #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions).
-        # TODO: …Since `h` does a ReLU first, which can cut off observations, should we do an nn.Linear first?
-        #   TODO: Or just put LayerNorm first, so that it can *maybe* learn to pass-through observations?
+        # Input prev-actions and next-observations,
+        #   output name and `sample`-logits and distances and regret.
+        #   We predict the next input, thus serving as both an RL agent and a goal-directed generative model.
+        #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions). TODO: …We'll be doing proper autoregressive modeling now, so no need for this remark.
         h(sum(cell_shape), state_sz),
         h(state_sz, state_sz),
-        h(state_sz, 2 ** bits_per_chunk + dist_levels + 1),
+        h(state_sz, sum(cell_shape[:-1]) + 2 ** bits_per_chunk + dist_levels + 1),
     )
 def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
     y = transition(x)
-    return y[..., :-(dist_levels+1)], 2 ** y[..., -(dist_levels+1):-1], 2 ** y[..., -1:]
+    name, d = sn.cell_size - cell_shape[-1], dist_levels+1
+    return y[..., :name], y[..., name:-d], 2 ** y[..., -d:-1], 2 ** y[..., -1:]
 dodge = DODGE(transition)
 optim = torch.optim.Adam(transition.parameters(), lr=lr)
 
@@ -348,20 +339,18 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # What to contrast `frame` with.
         with State.Episode(start_from_initial=False):
-            vals = cell_shape[-1]
-            frame_query = torch.cat((frame[:, :-vals], torch.zeros(frame.shape[0], vals)), -1)
-            frame_pred = sample(frame_query)
+            frame_pred, frame_pred_repr = sample(frame[:, :-cell_shape[-1]])
 
         # Distances of `frame` and `frame_pred` to contrast.
         with State.Episode(start_from_initial=False):
-            _, frame_dist, _ = transition_(frame)
+            _, _, frame_dist, _ = transition_(frame)
         with State.Episode(start_from_initial=False):
-            _, frame_pred_dist, frame_pred_regret = transition_(frame_pred)
+            _, _, frame_pred_dist, frame_pred_regret = transition_(frame_pred)
 
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
         dist_is_better = detach(frame_dist)[:, -1:] < detach(frame_pred_dist)[:, -1:]
         mask = (dist_is_better | ~sample.analog_mask(frame)).float()
-        predict_loss = (is_learned * sample.loss(frame) * mask).sum()
+        predict_loss = (is_learned * (frame_pred_repr - sample.target(frame)).square() * mask).sum()
 
         # Remember our regret of not being the `frame`. *Only* remember what we regret.
         regret = (is_learned * (frame_pred_dist[:, -1:] - frame_dist[:, -1:])).sum() / (is_learned.sum() + 1e-2)
@@ -453,7 +442,6 @@ async def main():
 
                         # Zero-pad `query` to be action-sized.
                         obs, query = torch.tensor(obs), torch.tensor(query)
-                        query = torch.cat((query, torch.zeros(query.shape[0], obs.shape[1] - query.shape[1])), -1)
                         frame = torch.cat((action, obs), 0) if action is not None else obs
                         frame_to_save = frame[not_goal_cells]
                         life_to_save = life.clone(remember_on_exit=False)
@@ -485,7 +473,7 @@ async def main():
                         if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
 
                         # Give prev-action & next-observation, remember distance estimates, and sample next action.
-                        _, dist, regret = transition_(frame)
+                        _, _, dist, regret = transition_(frame)
                         n = 0
                         for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
                             # (If we do better than expected, we leave early.)
@@ -497,7 +485,7 @@ async def main():
                                 expiration_cpu.fill_(0)
                             n += cells.shape[0]
                         with State.Episode(start_from_initial=False):
-                            action = sample(query)
+                            action = sample(query)[0]
                             #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
                             #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
 
