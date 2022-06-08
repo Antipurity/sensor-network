@@ -61,11 +61,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Maybe, instead of `dist_levels`, gate the distance by itself again, but this time, `dist.log2() = min(dist.log2() + 1, target_dist.log2())` (or possibly in exponential-`dist` space): all targets have an effect, but lower targets have a bigger effect. (I don't think we've tried a non-zero loss multiplier even for very high targets.)
-
-
-
-# TODO: …Also, now that we admit that AI = goal-conditioned generative models, we have much less of an excuse to insist on goal-cells being sampled rather than generated — making it gen-models all the way down… Can we come up with a good scheme for generating goals?… …Maybe the `loss` can just input `dst`-shaped 0s and learn to output `dst` whenever its goal-of-goals (predicted in distance's spot) is improved?… This actually sounds extremely plausible…
+# TODO: …Also, now that we admit that AI = goal-conditioned generative models, we have much less of an excuse to insist on goal-cells being sampled rather than generated — making it gen-models all the way down… Can we come up with a good scheme for generating goals?… …Maybe the `loss` can just input `dst`-shaped 0s and learn to output `dst` whenever its goal-of-goals (predicted in distance's spot) is improved — possibly even in the same GPU-call, since its `frame`-target includes `dst`?… This actually sounds extremely plausible…
+#   (TODO: …Would we then be able to have explicit queries for possible goals, both analog and digital?… Such… power… Truly, *everything* can be queried.)
 
 
 
@@ -73,6 +70,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: …Maybe, DODGE should only optimize a small subset of parameters, so that its random-direction-picking doesn't drown the net in variance?…
 #   …Which subset, though…
+
+# TODO: …We can actually incorporate VAEs into the loss without extra sampling: first put the real frame into the RNN (which would give us its dists & VAE-variables), *then* sample a fictitious frame to contrast with.
 
 
 
@@ -161,7 +160,6 @@ sn.shape(*cell_shape)
 state_sz, goal_sz = 256, 256
 slow_mode = .05 # Artificial delay per step.
 
-dist_levels = 1 # TODO: At least 2. …Or maybe remove…
 bits_per_chunk = 8 # How to `sample`.
 #   TODO: Should be `frexp(choices_per_cell-1)[1]`, none of that "chunk" business.
 #   TODO: Also, should be named `bits_per_cell`, right? …And maybe just have `choices_per_cell` as the main hyperparam, in case we're feeling not-power-of-2.
@@ -257,13 +255,13 @@ class Sampler:
         """Converts a presumably-sampled `action` to its `repr`, which can be used to compute L2 loss."""
         # The representation: for analog, just the zero-padded prediction as-is; for digital, the post-softmax probability distribution.
         i, j, cells = self.start, self.end, act.shape[0]
-        logits_sz = 2 ** self.bits_per_cell
+        options = 2 ** self.bits_per_cell
         act = detach(act)
         with torch.no_grad():
             is_ana = self.analog_mask(act).float()
-            analog = torch.cat((act, torch.zeros(cells, logits_sz - j)), -1)
-            indices = sn.Int.decode_bits(sn, act[:, i : i + self.bits_per_cell])
-            digital = F.one_hot(indices, logits_sz).float()
+            analog = torch.cat((act, torch.zeros(cells, options - j)), -1)
+            indices = sn.Int.decode_bits(sn, act[:, i : i + self.bits_per_cell]) % options
+            digital = F.one_hot(indices, options).float()
             return is_ana * analog + (1-is_ana) * digital
     @staticmethod
     def goal_mask(frame):
@@ -299,19 +297,18 @@ try:
     transition = torch.load(save_load)
 except FileNotFoundError:
     transition = nn.Sequential(
-        # Input prev-actions and next-observations,
-        #   output name and `sample`-logits and distances and regret.
+        # Input prev-actions and next-observations, output name and `sample`-logits and distance and regret.
         #   We predict the next input, thus serving as both an RL agent and a goal-directed generative model.
         #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions). TODO: …We'll be doing proper autoregressive modeling now, so no need for this remark.
         h(sum(cell_shape), state_sz),
         h(state_sz, state_sz),
-        h(state_sz, sum(cell_shape[:-1]) + 2 ** bits_per_chunk + dist_levels + 1),
+        h(state_sz, sum(cell_shape[:-1]) + 2 ** bits_per_chunk + 1 + 1),
     )
 def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
     y = transition(x)
-    name, d = sn.cell_size - cell_shape[-1], dist_levels+1
-    return y[..., :name], y[..., name:-d], 2 ** y[..., -d:-1], 2 ** y[..., -1:]
+    name = sn.cell_size - cell_shape[-1]
+    return y[..., :name], y[..., name:-2], 2 ** y[..., -2:-1], 2 ** y[..., -1:]
 dodge = DODGE(transition)
 optim = torch.optim.Adam(transition.parameters(), lr=lr)
 
@@ -364,10 +361,9 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         # Learn the regret, since estimating prediction-error by training several copies of the model is too expensive.
         regret_loss = 0 # (is_learned * (frame_pred_regret.log2() - detach(regret).clamp(1e-5).log2()).square()).sum() # TODO:
 
-        # Critic regression: `dist = sg timediff`
-        #   We try to learn *min* dist, not just mean dist, by making each next dist-level predict `min(timediff, prev_level)`.
-        #     (Worst-case, can also try tilted L1 loss.)
-        dist_limit = torch.cat((timediff, detach(frame_dist)[:, :-1]), -1)
+        # Critic regression: `dist = sg timediff`, but *optimistic*, meaning, min dist and not mean dist.
+        #   (Worst-case, can also try tilted L1 loss AKA distributional RL.)
+        dist_limit = frame_dist + .5 # Always be able to increase, but not by too much.
         dist_loss = (is_learned * (frame_dist.log2() - detach(timediff.min(dist_limit)).log2()).square()).sum()
 
         # GAN-like penalization of ungrounded plans.
