@@ -27,7 +27,7 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with callbacks and impossible-to-collide naming and `.metric()` for logging a dict.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with everything scheduled synchronously and impossible-to-collide naming and `.metric()` for logging a dict.)
 
 
 
@@ -40,32 +40,24 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   ("Downloading knowledge" can only be done onto a computer, since a human brain really wasn't designed for this. Having a personal AI agent is the best way of downloading skills.) TODO: …Also, "mind uploading" is the same as "replacing all computer communication with AI-generated goal-directable byte streams" but for humans, with all the same caveats such as "need way way too much compute to encode everything exactly, and it is likely better to integrate the protocol with the AI tighter", right? "AI is goal-directed generative models of actions/observations" is starting to make sense now…
 #     (And really, no one actually wants "downloading knowledge" to be an actual capability of brain-machine interfaces, without an indirection like that. Human culture isn't ready to treat humans like programs, with infinite copying and zero intrinsic value. For instance: markets get overtaken by the few that have all the knowledge and the bodies to put it into for profit; democracy loses connection to populations and becomes a tool of control by the most powerful ideas; war and murder become routine and one global superpower emerges since the only price of destruction is now some resources; creating new ideas rather than spreading existing ones becomes nearly impossible.)
 # (TODO: …What we're requiring now is a file explaining the differences between analog and digital sampling, possibly even with "AI = goal-directed generative model", which our read-me can link to.)
+#   (…A tutorial, maybe?)
 
 
 
 
 
 
-
-# TODO: …A `model/???.py` file for VAE's normalization, with a test that with it, a NN from a 0…1 dataset to a hopefully-normal distribution would indeed learn to have EVERY output have 0 mean and 1 variance across the whole dataset?… (With it, making VAEs should be easy.)
-#   From looking at code: for normal distributions, where we have mean & variance computed by NNs, the KL-loss to minimize is `mean**2 + var.exp()-var`, which makes each number's mean into 0 and variance into 1… …Isn't this exactly what I was looking for?
-#     TODO: Write this down in a function (`loss_make_normal`).
-#     TODO: Test `loss_make_normal` in a separate file, `model/vae.py`.
-#       …Doesn't it make more sense to minimize `mean**2 + (var-1).exp()-var`, because this actually has a minimum at var=1? Need to test I guess…
+# TODO: Here, calc & print `transition`'s param count (like `96.7K params`).
 
 
 
-# TODO: …Do we want a class for sampling given mean & variance (or given nothing for free-standing generation), with the KL-divergence-from-randn `.loss(mean, var)`?… Or is it too trivial, since the call is literally just `mean + var*torch.randn_like(var)`…
+# TODO: Have `dodge_optimizes_params=1000`, and have `dodge_params(sz)` which returns randn with probability `dodge_optimizes_params / sz`, and 0s elsewhere. (Even if random-direction DODGE is nice for memory, it performs worse the more parameters it has to optimize.)
 
 
 
-# TODO: Have `gated_generative_loss(dist_pred, pred, dist_target, target)`, which we can call both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
-#   …Would this learn goals, to maximize predicted-regret?
-
-# TODO: …Maybe, DODGE should only optimize a small subset of parameters, so that its random-direction-picking doesn't drown the net in variance?…
-#   …Which subset, though…
-#     Maybe, when generating the direction, generate not the full randn vector but only make like 100 numbers optimized, the rest have 0 in the direction?
-#       TODO: What hyperparams do we need?
+# TODO: Have `gated_generative_loss(dist_pred, pred, dist_target, target)`, with both dist-min obs/act and dist-max goals learned. Can call this both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
+#   TODO: …What does this need for VAE integration?… Because, if we don't pass in `target`, we'd have to get its latent-embedding *somehow*… …Wouldn't we want a separate call for the `target` anyway, for *both* the latent-emb and distance (don't care about logits)…
+#     TODO: …Wait, but even if `target` is used to compute latent-embs, wouldn't we need to have `pred` be generated *by* those latent-embs?… …Is our only remaining arg the `target`…? …Wait, but to get `pred`'s distance, we'd need to double-RNN it, to match `target`'s computation structure… SEEMS SUSPICIOUS, NO 100%-COHERENT PICTURE
 
 # TODO: …We can actually incorporate VAEs into the loss without extra sampling: first put the real frame into the RNN (which would give us its dists & VAE-variables), *then* sample a fictitious frame to contrast with.
 #   TODO: …Write down what we need our RNN (and `Sampler`) to do to incorporate VAEs…
@@ -81,6 +73,24 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+
+
+
+# TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
+
+# TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
+# TODO: Is it possible to learn an analog-reward-goal which isn't ever actually encountered, but is set to 1 by the env so that the model always maximizes reward?
+#   1st way: detect when a `encountered_dst`-cell has the same name as a `requested_dst`-cell (if it exists) and measure distortion to increase dist by. Needs cell-names to coincide though, which is quadratically-unlikely in general.
+#   2nd way: pre-decide distortion in `loss` (50% of cases, 0…1 distortion), distort `dst`, and increase dist by it (in log-space, for severe penalties). Probably a good idea; certainly better than waiting for someone to request impossible destinations and SLOWLY learning that they are impossible AFTERWARDS…
+
+# TODO: Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
+
+# TODO: Make `graphenv` work not globally but in a class.
+
+
+
+
+
 # TODO: Maybe, allow `sn.Int`s to have only `1` option, so that it's easy for users to dispatch "events" which can be set as goals. Maybe also turn no-data no-type `.set` calls into such events.
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… (If ints are not explicitly supported, provide at least some inefficient support of them.) (And, `sn.info['analog']` checks would probably be unnecessary with this.)
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
@@ -91,44 +101,20 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-
-# TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
-#   TODO: …Try not L2 prediction but a GAN, with the 'discriminator' being the distance network (in other words, only do self-imitation for digital cells, and do DDPG for analog cells instead — after giving random noise as an extra input)?
-#     TODO: …Or is it sufficient to expose a ghost digital query, which will get reinforced when on correct paths for enhanced L2 prediction of the correct path?… (This *might* even be usable as 'full-RNN-state' goals, with zero effort on our side…) (A bit like humans using language/thoughts to augment their learning.)
-#     (Possibly a VAE, with each cell having a few extra numbers on input and output, past's prediction being conditioned on future's output. Of course, filtered by improved-distance. The only problem is that the first generation of the past doesn't know the future's output — in addition to the latent space not being fully covered, causing blurriness, which we'd need random-sampling and DDPG/GAN to fix.)
-# TODO: …Is it possible to have an analog-reward-goal which isn't ever actually encountered, but is set to 1 so that the model always maximizes reward? What would we need for this? The unroll-time measured-distance-to-analog-goal, which is 0…1 and is only there for higher precision?… …But how would we detect if cells are same-named, and what would we do if we don't actually have a same-name observation cell…
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
-
-# TODO: …Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
-
-# TODO: Make `graphenv` work not globally but in a class.
-
-
-
+# TODO: …Re-read the things below, with the new "Generative Models Are All You Need" understanding…
 # TODO: Make goals the full-RNN-states (latents), not the inputs, like in http://proceedings.mlr.press/v100/nair20a/nair20a.pdf but with discrete-sampling instead of CC-VAEs:
 #   TODO: Alloc SRC `'-goal-src-state-'` and DST `'-goal-dst-state-'` for personal use. (Maybe make `modify_name` assert that these are unused.) (The current `'goal'` could probably act as SRC.)
 #   TODO: On unroll, in a throwaway episode, rename the frame to DST and sample and put the result into the replay buffer.
 #   TODO: On unroll, to pick a goal, fetch some random subset of cells from the replay buffer, rename to SRC and 0-fill their values, and in a throwaway episode, sample (possibly for all goal-groups at once) and set as the goal.
+#     …But now, we can sample cell-names too, so we don't need fetch some goals, we can just 0-fill and mark it as different from `dst` somehow…
+#     …Wait, this item is about unroll-time goal-sampling, so we don't even need to have it. (As long as we learn to sample full-latents too.)
 #   TODO: On replay, select random subsets (to support partial goals) of faraway latents as destinations, not of inputs.
 #     TODO: Have a 50/50 chance to select either faraway-latents or inputs as dst, so that we don't lose the ability for envs to specify goals.
 #       (With this, the interface will unify not only obs-and-act and obs-and-goal, but also allow training to reach other agents' full-RNN-state goals, by simply exposing their inner states as observations. "The individual is obsolete", mm.)
 #   TODO: On replay, in a throwaway episode, self-imitate (if regret is positive, max the sample-probability of) faraway-dst's SRC-cells given DST-renamed and 0-filled versions of them.
 #     TODO: Also, there, self-imitate random subsets of SRC-renamed frames given their cell-name-only versions.
 #   …Hold on: if we allow *actions* to be parts of goals, and allow (maybe enforce) a few untethered actions per step, then does this automatically do full-RNN-state goals (with both goal-striving-by-src and goal-self-imitation-by-dst)?…
+#     (I imagine that the problem with actions-as-goals is that the network could quickly discover that it can just instantly output that goal as an action, since the NN knows its goals.)
 
 
 
@@ -154,6 +140,8 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available(
 
 from model.recurrency import State, SRWM
 from model.dodge import DODGE, LayerNorm, Softmax, ReLU, detach
+from model.vae import make_normal, normal
+#   TODO: Use `make_normal` in VAE's loss; use `normal` when sampling VAE's latent variables.
 
 import sensornet as sn
 

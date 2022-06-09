@@ -86,6 +86,7 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
+    __slots__ = ('_query_cell', '_data', '_query', '_error', '_prev_fb', '_next_fb', '_wait_for_requests', '_pipe_queue', 'info', 'sensors', 'listeners', 'cell_shape', 'cell_size', 'n', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_name', '_shaped_names')
     def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024):
         from builtins import set
         assert modify_name is None or isinstance(modify_name, list)
@@ -93,9 +94,7 @@ class Handler:
         sensors = set(sensors) if sensors is not None else set()
         listeners = set(listeners) if listeners is not None else set()
         self._query_cell = 0
-        self._data = []
-        self._query = []
-        self._error = []
+        self._data, self._query, self._error = [], [], []
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, start_cell, end_cell), …]
         self._wait_for_requests = None # asyncio.Future()
@@ -103,8 +102,7 @@ class Handler:
         self.info = info
         self.sensors = sensors
         self.listeners = listeners
-        self.cell_shape = ()
-        self.cell_size = 0
+        self.cell_shape, self.cell_size, self.n = (), 0, 0
         self.backend = backend
         self.name_cache_size = name_cache_size
         self.modify_name = modify_name if modify_name is not None else []
@@ -606,6 +604,7 @@ class Handler:
         - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
         Be aware that `sn.Int` and `sn.RawFloat` (so, all datatypes) prepend a hidden name-part, so here, `name` should begin with `None`."""
+        __slots__ = ('name', 'func')
         def __init__(self, name, func = None):
             assert func is None or callable(func)
             if isinstance(name, str): name = (name,)
