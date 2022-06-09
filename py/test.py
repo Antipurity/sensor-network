@@ -47,7 +47,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Here, calc & print `transition`'s param count (like `96.7K params`).
 
 
 
@@ -301,8 +300,6 @@ try:
 except FileNotFoundError:
     transition = nn.Sequential(
         # Input prev-actions and next-observations, output name and `sample`-logits and distance and regret.
-        #   We predict the next input, thus serving as both an RL agent and a goal-directed generative model.
-        #   We overcome L2-prediction outcome-averaging via autoregressive `sample`ing, though it's only fully 'solved' for binary outputs (AKA actions). TODO: …We'll be doing proper autoregressive modeling now, so no need for this remark.
         h(sum(cell_shape), state_sz),
         h(state_sz, state_sz),
         h(state_sz, sum(cell_shape[:-1]) + 2 ** bits_per_chunk + 1 + 1),
@@ -314,6 +311,9 @@ def transition_(x):
     return y[..., :name], y[..., name:-2], 2 ** y[..., -2:-1], 2 ** y[..., -1:]
 dodge = DODGE(transition)
 optim = torch.optim.Adam(transition.parameters(), lr=lr)
+# For debugging, print the param-count.
+pc = sum(x.numel() for x in transition.parameters())
+print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else pc/1000+'K' if pc>1000 else pc, 'params')
 
 
 
