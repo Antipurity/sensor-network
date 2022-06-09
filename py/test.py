@@ -48,34 +48,42 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: …A `model/???.py` file for VAE's normalization, with a test that with it, a NN from a 0…1 dataset to a hopefully-normal distribution would indeed learn to have EVERY output have 0 mean and 1 variance across the whole dataset?… (With it, making VAEs should be easy.)
-#   (KL-divergence is a little bit like a GAN: minimize p*log(p), maximize p*log(q), to make p (any distribution) into q (normal distribution for VAEs). Though is p*log(p) representable?)
-#     (Also, wouldn't it be much easier to compute probabilities for uniform target-distribution than for normal targ-distr?)
-#     (GANs are kinda like a second-degree method for approximating this, where the probability is explicitly modeled with a NN…)
-#     TODO: How can we possibly know a number's probability without non-1 batch sizes?… (…Memory all gone…)
-#       (Because in an RNN, we'd really like uniform/samplable distributions *at a point* rather than over a lifetime, which would need at least dozens of samples per loss-computation if we need non-1 batch sizes…)
-#       …ELBO… Can't concentrate on anything right now though…
-#       From looking at code: for normal distributions, where we have mean & variance computed by NNs, the KL-loss to minimize is `.5 * (mean**2 + (var.exp() - var))`, which makes each number's mean into 0 and variance into 1… …Isn't this exactly what I was looking for?
-#         TODO: Write this down in a function (`loss_make_normal`).
-#         …If it's this simple, then do we even need a separate file to test it in… …I guess we'd still like to look at the behavior, to check that it works out to what we expect, right?… TODO: Test `loss_make_normal` in a separate file.
-# (…Kinda forgot that VAEs are supposed to not just output an internal vector, but how it's sampled, meaning that the loss is a lot easier to do…)
+#   From looking at code: for normal distributions, where we have mean & variance computed by NNs, the KL-loss to minimize is `mean**2 + var.exp()-var`, which makes each number's mean into 0 and variance into 1… …Isn't this exactly what I was looking for?
+#     TODO: Write this down in a function (`loss_make_normal`).
+#     TODO: Test `loss_make_normal` in a separate file, `model/vae.py`.
+#       …Doesn't it make more sense to minimize `mean**2 + (var-1).exp()-var`, because this actually has a minimum at var=1? Need to test I guess…
 
 
 
-# TODO: …Also, now that we admit that AI = goal-conditioned generative models, we have much less of an excuse to insist on goal-cells being sampled rather than generated — making it gen-models all the way down… Can we come up with a good scheme for generating goals?… …Maybe the `loss` can just input `dst`-shaped 0s and learn to output `dst` whenever its goal-of-goals (predicted in distance's spot) is improved — possibly even in the same GPU-call, since its `frame`-target includes `dst`?… This actually sounds extremely plausible…
-#   (TODO: …Would we then be able to have explicit queries for possible goals, both analog and digital?… Such… power… Truly, *everything* can be queried.)
+# TODO: …Do we want a class for sampling given mean & variance (or given nothing for free-standing generation), with the KL-divergence-from-randn `.loss(mean, var)`?… Or is it too trivial, since the call is literally just `mean + var*torch.randn_like(var)`…
 
 
 
 # TODO: Have `gated_generative_loss(dist_pred, pred, dist_target, target)`, which we can call both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
+#   …Would this learn goals, to maximize predicted-regret?
 
 # TODO: …Maybe, DODGE should only optimize a small subset of parameters, so that its random-direction-picking doesn't drown the net in variance?…
 #   …Which subset, though…
+#     Maybe, when generating the direction, generate not the full randn vector but only make like 100 numbers optimized, the rest have 0 in the direction?
+#       TODO: What hyperparams do we need?
 
 # TODO: …We can actually incorporate VAEs into the loss without extra sampling: first put the real frame into the RNN (which would give us its dists & VAE-variables), *then* sample a fictitious frame to contrast with.
+#   TODO: …Write down what we need our RNN (and `Sampler`) to do to incorporate VAEs…
+#     Do we want to make `transition_` return 2 extra items (mean & variance), and maybe accept one extra sampled-`latent` arg, and return a `namedtuple` because the output-complexity is getting ridiculous?
 
 
 
-# TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`.
+# TODO: Stop sampling goals from the replay buffer, and start *generating* goals:
+#   TODO: In `loss`, get latents of `dst` first, then use those latents to turn 0-filled `dst`-sized cells into `dst` (in the same GPU-call as the rest of the `frame`) if good.
+#     TODO: For goals, "good" means "sample-dist is higher" (whereas for actions, "good" means "sample-dist is lower"). (Goals are then neither too hard (AKA when never occuring as real targets) nor too easy (AKA when real-dist is lower than expected).)
+#       (This is [AMIGo](https://arxiv.org/pdf/2006.12122.pdf)-inspired. Alternatively, could make goals learn regret rather than dists and maximize regret rather than dists; or even be [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf)-like and have an ensemble of RNNs, and maximize dist-error.)
+#   TODO: At unroll-time & goal-selection-time, rather than choosing anything from the replay buffer, simply choose a random number of goal-cells to generate (and a `torch.randn` latent) then generate them.
+
+
+
+# TODO: Maybe, allow `sn.Int`s to have only `1` option, so that it's easy for users to dispatch "events" which can be set as goals. Maybe also turn no-data no-type `.set` calls into such events.
+# TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… (If ints are not explicitly supported, provide at least some inefficient support of them.) (And, `sn.info['analog']` checks would probably be unnecessary with this.)
+# TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 
@@ -164,6 +172,8 @@ bits_per_chunk = 8 # How to `sample`.
 #   TODO: Should be `frexp(choices_per_cell-1)[1]`, none of that "chunk" business.
 #   TODO: Also, should be named `bits_per_cell`, right? …And maybe just have `choices_per_cell` as the main hyperparam, in case we're feeling not-power-of-2.
 
+# TODO: …Do we maybe also want a hyperparam for "how many actions to pick between at unroll-time"?… (…Which we can *technically* allow the model to modify, for better or worse — same as learning-rate and replays-per-step and max-replay-buffer-len… Though maybe it's better to just learn an "expected improvement with this action-count" NN/table.)
+
 lr = 1e-3
 replays_per_step = 2
 max_replay_buffer_len = 1024
@@ -197,8 +207,9 @@ def prepare_env(path):
     return mod
 def modify_name(name):
     # Remove inter-env collisions by adding the group ID to the end of their names.
+    #   (`sn.RawFloat` and `sn.Int` prepend a name-part, so `res` contains one less.)
     assert modify_name.ctx is not None, "Sending data not in an env's sensor; don't send it in callbacks of queries, instead remember to send it on the next step"
-    res = [name[i] if i < len(name) else None for i in range(len(cell_shape) - 1)]
+    res = [name[i] if i < len(name) else None for i in range(len(cell_shape) - 2)]
     assert not isinstance(res[-1], tuple), "The group-id shouldn't be a tuple (to make our lives easier)"
     res[-1] = modify_name.ctx if res[-1] is None else (modify_name.ctx + '.' + res[-1])
     return tuple(res)
