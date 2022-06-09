@@ -55,20 +55,32 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Have `gated_generative_loss(dist_pred, pred, dist_target, target)`, with both dist-min obs/act and dist-max goals learned. Can call this both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
-#   TODO: …What does this need for VAE integration?… Because, if we don't pass in `target`, we'd have to get its latent-embedding *somehow*… …Wouldn't we want a separate call for the `target` anyway, for *both* the latent-emb and distance (don't care about logits)…
-#     TODO: …Wait, but even if `target` is used to compute latent-embs, wouldn't we need to have `pred` be generated *by* those latent-embs?… …Is our only remaining arg the `target`…? …Wait, but to get `pred`'s distance, we'd need to double-RNN it, to match `target`'s computation structure… SEEMS SUSPICIOUS, NO 100%-COHERENT PICTURE
+# TODO: Have `latent_sz=16`.
+#   TODO: Make `transition`'s input bigger by that, and output bigger by twice-that.
+#   TODO: Make `transition_` accept the extra `latent` (if `None`, auto-generate it) and output, using the extra `latent_mean`/`latent_var_log`, the extra `latent = normal(mean, var_log)`.
+# TODO: VAE integration, `fill_in(target)`:
+#   TODO: Put `target` through `transition_`; get `target_dist` and `latent_target`.
+#   TODO: Generate `pred` given name-only 0s-in-values `target` and `latent_target`.
+#   TODO: Put `pred` through `transition_`; get `dist_pred`.
+#   TODO: Compute `target_logits` as `sample.target(target)`.
+#   TODO: Return `((pred_dist, pred_frame, pred_logits), (target_dist, target_frame, target_logits))`.
+# TODO: Possibly, to make the `loss` match unroll's "sample name-only queries to get actions" better, leave out random cells from predictions.
 
-# TODO: …We can actually incorporate VAEs into the loss without extra sampling: first put the real frame into the RNN (which would give us its dists & VAE-variables), *then* sample a fictitious frame to contrast with.
-#   TODO: …Write down what we need our RNN (and `Sampler`) to do to incorporate VAEs…
-#     Do we want to make `transition_` return 2 extra items (mean & variance), and maybe accept one extra sampled-`latent` arg, and return a `namedtuple` because the output-complexity is getting ridiculous?
+# TODO: Have `gated_generative_loss(pred_dist, pred, target_dist, target)`, with both dist-min obs/act and dist-max goals learned. Can call this both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
+#   TODO: …Doesn't it need to accept logits for good integration with the analog/digital system?
+#   TODO: …It only implements distance-gated prediction of logits, doesn't it… So it doesn't need the actual frames, right?
+
+# TODO: …Write down what we need `transition_` and `Sampler` to do to incorporate VAEs…
+#   TODO: Do we want to make `transition_` return 2 extra items (mean & variance), and maybe accept one extra sampled-`latent` arg, and return a `namedtuple` because the output-complexity is getting ridiculous?
+#   TODO: …`Sampler` modifications?…
 
 
 
-# TODO: Stop sampling goals from the replay buffer, and start *generating* goals:
-#   TODO: In `loss`, get latents of `dst` first, then use those latents to turn 0-filled `dst`-sized cells into `dst` (in the same GPU-call as the rest of the `frame`) if good.
+# TODO: Stop sampling goals from the replay buffer, and start *generating* goals (much like in http://proceedings.mlr.press/v100/nair20a/nair20a.pdf):
+#   TODO: In `loss`, get latents of `dst` first, then sample & use those latents to turn 0-filled `dst`-sized cells into `dst` (in the same GPU-call as the rest of the `frame`) if good.
 #     TODO: For goals, "good" means "sample-dist is higher" (whereas for actions, "good" means "sample-dist is lower"). (Goals are then neither too hard (AKA when never occuring as real targets) nor too easy (AKA when real-dist is lower than expected).)
 #       (This is [AMIGo](https://arxiv.org/pdf/2006.12122.pdf)-inspired. Alternatively, could make goals learn regret rather than dists and maximize regret rather than dists; or even be [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf)-like and have an ensemble of RNNs, and maximize dist-error.)
+#       TODO: Possibly, for goals, "good" should mean "sample-dist is not as expected". (So that faster-than-expected paths still have opportunity to be retreated and learned-from more.)
 #   TODO: At unroll-time & goal-selection-time, rather than choosing anything from the replay buffer, simply choose a random number of goal-cells to generate (and a `torch.randn` latent) then generate them.
 
 
@@ -101,20 +113,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Re-read the things below, with the new "Generative Models Are All You Need" understanding…
-# TODO: Make goals the full-RNN-states (latents), not the inputs, like in http://proceedings.mlr.press/v100/nair20a/nair20a.pdf but with discrete-sampling instead of CC-VAEs:
-#   TODO: Alloc SRC `'-goal-src-state-'` and DST `'-goal-dst-state-'` for personal use. (Maybe make `modify_name` assert that these are unused.) (The current `'goal'` could probably act as SRC.)
-#   TODO: On unroll, in a throwaway episode, rename the frame to DST and sample and put the result into the replay buffer.
-#   TODO: On unroll, to pick a goal, fetch some random subset of cells from the replay buffer, rename to SRC and 0-fill their values, and in a throwaway episode, sample (possibly for all goal-groups at once) and set as the goal.
-#     …But now, we can sample cell-names too, so we don't need fetch some goals, we can just 0-fill and mark it as different from `dst` somehow…
-#     …Wait, this item is about unroll-time goal-sampling, so we don't even need to have it. (As long as we learn to sample full-latents too.)
-#   TODO: On replay, select random subsets (to support partial goals) of faraway latents as destinations, not of inputs.
-#     TODO: Have a 50/50 chance to select either faraway-latents or inputs as dst, so that we don't lose the ability for envs to specify goals.
-#       (With this, the interface will unify not only obs-and-act and obs-and-goal, but also allow training to reach other agents' full-RNN-state goals, by simply exposing their inner states as observations. "The individual is obsolete", mm.)
-#   TODO: On replay, in a throwaway episode, self-imitate (if regret is positive, max the sample-probability of) faraway-dst's SRC-cells given DST-renamed and 0-filled versions of them.
-#     TODO: Also, there, self-imitate random subsets of SRC-renamed frames given their cell-name-only versions.
-#   …Hold on: if we allow *actions* to be parts of goals, and allow (maybe enforce) a few untethered actions per step, then does this automatically do full-RNN-state goals (with both goal-striving-by-src and goal-self-imitation-by-dst)?…
-#     (I imagine that the problem with actions-as-goals is that the network could quickly discover that it can just instantly output that goal as an action, since the NN knows its goals.)
+# TODO: …To allow `dst`s to be not only inputs but also RNN states, should allow `src`-cells that get put into `dst`s and get self-reinforced when there exists a past where dist became larger. (Same as `dst`-reinforcement, but generated not for-the-future but for-the-past.) (Can't just use regular actions as goals, because our loss would learn to simply always generate them in one step.)
+#   TODO: The problem with this naïve formulation is that it seems like it'd need 2 runs of `loss`, doubling the compute cost. Can we get a better understanding and do it all in 1?
 
 
 
