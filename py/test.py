@@ -58,21 +58,20 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Have `latent_sz=16`.
 #   TODO: Make `transition`'s input bigger by that, and output bigger by twice-that.
 #   TODO: Make `transition_` accept the extra `latent` (if `None`, auto-generate it) and output, using the extra `latent_mean`/`latent_var_log`, the extra `latent = normal(mean, var_log)`.
+#     TODO: Make it also register the `make_normal(mean, var_log)` loss via `State.loss` (if the new bool-arg `regularize` is True).
 # TODO: VAE integration, `fill_in(target)`:
-#   TODO: Put `target` through `transition_`; get `target_dist` and `latent_target`.
+#   TODO: Put `target` through `transition_`; get `target_dist` and `latent_target`. (`regularize=True`)
 #   TODO: Generate `pred` given name-only 0s-in-values `target` and `latent_target`.
 #   TODO: Put `pred` through `transition_`; get `dist_pred`.
 #   TODO: Compute `target_logits` as `sample.target(target)`.
 #   TODO: Return `((pred_dist, pred_frame, pred_logits), (target_dist, target_frame, target_logits))`.
+# TODO: Make `Sampler(…)(…)` accept `latent=None`, and pass that in to `self.fn` as an extra arg. (Output latents are computed in a separate RNN call, along with distances, in `fill_in`.)
 # TODO: Possibly, to make the `loss` match unroll's "sample name-only queries to get actions" better, leave out random cells from predictions.
 
-# TODO: Have `gated_generative_loss(pred_dist, pred, target_dist, target)`, with both dist-min obs/act and dist-max goals learned. Can call this both during the main loop (with DODGE, no backprop) and during replay (backprop-only, no DODGE).
-#   TODO: …Doesn't it need to accept logits for good integration with the analog/digital system?
-#   TODO: …It only implements distance-gated prediction of logits, doesn't it… So it doesn't need the actual frames, right?
-
-# TODO: …Write down what we need `transition_` and `Sampler` to do to incorporate VAEs…
-#   TODO: Do we want to make `transition_` return 2 extra items (mean & variance), and maybe accept one extra sampled-`latent` arg, and return a `namedtuple` because the output-complexity is getting ridiculous?
-#   TODO: …`Sampler` modifications?…
+# TODO: Have `gated_generative_loss(pred_dist, pred_logits, target_dist, target_logits)`, with both dist-min obs/act and dist-max goals learned.
+# TODO: Make `loss` use `gated_generative_loss` now, in addition to learning distances and modifying `dst` and all that.
+# TODO: Make unrolls disable DODGE before `replay` (which is inside a new `State.Episode` which first updates all state to be detach(state); OR, just don't care about forward-grad) then re-enable it with the old direction after it.
+# TODO: Make unrolls, when we save full frames to the replay buffer, use `fill_in(frame)` to get `L = gated_generative_loss(…)` inputs and `dodge.minimize(L)`.
 
 
 
@@ -82,6 +81,18 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #       (This is [AMIGo](https://arxiv.org/pdf/2006.12122.pdf)-inspired. Alternatively, could make goals learn regret rather than dists and maximize regret rather than dists; or even be [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf)-like and have an ensemble of RNNs, and maximize dist-error.)
 #       TODO: Possibly, for goals, "good" should mean "sample-dist is not as expected". (So that faster-than-expected paths still have opportunity to be retreated and learned-from more.)
 #   TODO: At unroll-time & goal-selection-time, rather than choosing anything from the replay buffer, simply choose a random number of goal-cells to generate (and a `torch.randn` latent) then generate them.
+
+
+
+
+
+# TODO: Allow `dst` to be not only inputs but also whole RNN states, for full generality (by having not only sampled goals-in-the-future but also sampled goals-for-the-past, and reinforcing them when good):
+#   TODO: Make `replay` generate a few extra `src`-cells for `dst`, with random latents and a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), in a disposable `State.Episode` inside destination's RNN context. Pass those latents to `gated_generative_loss`, after artificially setting their goal-bit to 1.
+#   TODO: Make `gated_generative_loss` compute & use latents for the whole frame, including `dst` now.
+#   TODO: Make `gated_generative_loss` not use `detach` on prediction targets, so that `src`-cells can get gradient too. (Now, it should automatically reinforce `src`-cells to be the hardest-to-reach `dst`s, and the other way around.)
+#   (For stability, might need momentum-slowing for targets if possible.) (…In fact, momentum-slowing might even be required for dists.)
+#   TODO: NEED a hyperparam that makes `gated_generative_loss` never predict non-`src` `dst`, so that unrolls only go toward internal-state goals, but envs can still specify extra input-space goals.
+#     TODO: NEED an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
 
 
 
@@ -108,13 +119,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
-
-
-
-
-
-# TODO: …To allow `dst`s to be not only inputs but also RNN states, should allow `src`-cells that get put into `dst`s and get self-reinforced when there exists a past where dist became larger. (Same as `dst`-reinforcement, but generated not for-the-future but for-the-past.) (Can't just use regular actions as goals, because our loss would learn to simply always generate them in one step.)
-#   TODO: The problem with this naïve formulation is that it seems like it'd need 2 runs of `loss`, doubling the compute cost. Can we get a better understanding and do it all in 1?
 
 
 
