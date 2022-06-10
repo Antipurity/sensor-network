@@ -50,7 +50,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Have `dodge_optimizes_params=1000`, and have `dodge_params(sz)` which returns randn with probability `dodge_optimizes_params / sz`, and 0s elsewhere. (Even if random-direction DODGE is nice for memory, it performs worse the more parameters it has to optimize.)
 
 
 
@@ -166,6 +165,7 @@ bits_per_chunk = 8 # How to `sample`.
 # TODO: …Do we maybe also want a hyperparam for "how many actions to pick between at unroll-time"?… (…Which we can *technically* allow the model to modify, for better or worse — same as learning-rate and replays-per-step and max-replay-buffer-len… Though maybe it's better to just learn an "expected improvement with this action-count" NN/table.)
 
 lr = 1e-3
+dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
 replays_per_step = 2
 max_replay_buffer_len = 1024
 
@@ -420,9 +420,14 @@ def replay(optim, current_frame, current_time):
 
 @sn.run
 async def main():
+    direction = None
+    def update_direction():
+        nonlocal direction
+        direction = torch.where(torch.rand(dodge.sz) < dodge_optimizes_params / dodge.sz, torch.randn(dodge.sz), torch.zeros(dodge.sz))
+        dodge.restart(direction)
     with fw.dual_level():
         with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
-            dodge.restart()
+            update_direction()
             with State.Episode() as life:
                 with torch.no_grad(): # TODO: This should only apply to the parts where we aren't learning from the replay buffer.
                     prev_q, action, frame = None, None, None
@@ -465,10 +470,11 @@ async def main():
                                     goals[group] = (goal, expiration_cpu, expiration_gpu)
                                     # And change DODGE direction when changing the goal.
                                     if random.randint(1, len(goals)) == 1:
-                                        dodge.restart()
+                                        update_direction()
 
                         # TODO: Here is the perfect place to predict `frame`'s data from its zeroed-out-data version, if we DODGE-predict online. (Though, might want to remove the goal-cells.) (Replays can still do prediction, just, one-step.)
                         #   (Gating the prediction by improvement is easy here, because we'll have 2 distances: of prediction and of `frame` a bit below. And even of the `action` from the previous step…)
+                        #   `gated_generative_loss`
 
                         # Give goals to the RNN.
                         extra_cells = []
