@@ -60,12 +60,14 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: Compute `target_logits` as `sample.target(target)`.
 #   TODO: Compute `regularization_loss` via `make_normal`.
 #   TODO: Return `((pred_dist, pred_frame, pred_logits), (target_dist, target_frame, target_logits), regularization_loss)`.
-# TODO: Make `Sampler(…)(…)` accept `latent=None`, and pass that in to `self.fn` as an extra arg. (Output latents are computed in a separate RNN call, along with distances, in `fill_in`.)
+#   TODO: Make `loss` use `fill_in` rather than doing all this by itself.
 # TODO: Possibly, to make the `loss` match unroll's "sample name-only queries to get actions" better, leave out random cells from predictions.
 #   TODO: Rename `loss` to `full_loss`.
 #     TODO: (…Is it possible to learn distances locally, like Bellman's equation does — or rather, is it viable enough?… Because, if we only learn distances during replay with no global-via-DODGE gradient-communication, then distances can't use non-local information — not even the prev step's distance…)
-#       TODO: (…It wouldn't be *too* terrible if we preserved all of a DODGE rollout's distances (per-goal-group) and used the final/goal-reached distance plus steps as the target for all other distances, right?… …We *can* work out the "is the goal reached" thing precisely, now that we have precisely-checkable digital actions and have had the "analog-actions should minimize final-distance-to-`dst`, not only reach it precisely" idea, *right*…)
-#         TODO: …Try and work out how we'd measure & use "is the goal reached"…
+#       TODO: (…It wouldn't be *too* terrible if we preserved all of a DODGE rollout's distances (per-goal-group) and used the final/goal-reached distance plus steps as the target for all other distances, right?… …We *can* work out the "is the goal reached" thing precisely, now that we have precisely-checkable digital actions (though their names can be not-so-precisely checkable) and have had the "analog-actions should minimize final-distance-to-`dst`, not only reach it precisely" idea, *right*…)
+#         (I think with cumulative-minimums and either inter-cell max or sum, we *can* work out a measure of "instantaneous distance", which we'd then minimize and possibly learn…)
+#         …Maybe we should even swear off replays entirely, only doing DODGE and possibly BPTT if dists are small enough?… We'd lose *all* goal-relabeling capabilities (so `dst` can only be generated, possibly with L2 loss on consequences of its latents — maybe the most-matching cells that we base our "0 dist" decisions on?), but *maybe* we can pull through?…
+#         TODO: …Try and work out how we'd measure & use "is the goal reached", exactly…
 
 # TODO: Have `gated_generative_loss(pred_dist, pred_logits, target_dist, target_logits)`, with both dist-min obs/act and dist-max goals learned.
 # TODO: Make `loss` use `gated_generative_loss` now, in addition to learning distances and modifying `dst` and all that.
@@ -229,17 +231,18 @@ class Sampler:
 
     Digital sampling explicitly models all probabilities of each choice. It is the idea that powers autoregressive language models and many agents, including [GPT-3](https://arxiv.org/abs/2005.14165) and [Gato](https://arxiv.org/abs/2205.06175). Unlike analog sampling (i.e. a GAN), cells have to be processed not in parallel but in sequence, which is already handled by the `sn.Int` datatype.
     """
+    __slots__ = ('cpc', 'bpc', 'fn', 'start', 'end', 'softmax')
     def __init__(self, fn, choices_per_cell, start, end):
         from math import frexp
-        bpc = frexp(choices_per_cell - 1)[1]
-        assert bpc <= end-start, "Not enough space to encode digital actions (RNN input is ridiculously small)"
+        bits_per_cell = frexp(choices_per_cell - 1)[1]
+        assert bits_per_cell <= end-start, "Not enough space to encode digital actions (RNN input is ridiculously small)"
         assert end-start <= choices_per_cell, "For simplicity, there should be more choices than values"
-        self.choices_per_cell = choices_per_cell
-        self.bits_per_cell = bpc
+        self.cpc = choices_per_cell
+        self.bpc = bits_per_cell
         self.fn, self.start, self.end = fn, start, end
         self.softmax = Softmax(-1)
-    def __call__(self, query):
-        """Given a name-only `query`, samples a binary action.
+    def __call__(self, query, latent=...):
+        """Given a name-only `query` (and possibly `latent`), samples a binary action.
 
         The result is `(action, logits)`. Use `action` to act; use L2 loss on `logits` and `.target(action)` to predict the action.
 
@@ -247,15 +250,15 @@ class Sampler:
         is_ana = self.analog_mask(detach(query)).float()
         i, j, cells = self.start, self.end, query.shape[0]
         input = torch.cat((query, torch.zeros(cells, j - i)), -1)
-        name_and_logits = self.fn(input)[0]
-        assert len(name_and_logits.shape) == 2 and name_and_logits.shape[1] == i + self.choices_per_cell
+        name_and_logits = self.fn(input, latent)[0]
+        assert len(name_and_logits.shape) == 2 and name_and_logits.shape[1] == i + self.cpc
         name = name_and_logits[:, :i] # (Even for digital cells, names are VAE-generated.)
         analog = name_and_logits[:, :j]
         with torch.no_grad():
-            digprob = self.softmax(detach(name_and_logits[:, i : i + self.choices_per_cell]))
+            digprob = self.softmax(detach(name_and_logits[:, i : i + self.cpc]))
             indices = digprob.multinomial(1)[..., 0]
-            bits = sn.Int.encode_ints(sn, indices, self.bits_per_cell)
-            digital = torch.cat((name, bits, torch.zeros(cells, j - self.bits_per_cell - i)), -1)
+            bits = sn.Int.encode_ints(sn, indices, self.bpc)
+            digital = torch.cat((name, bits, torch.zeros(cells, j - self.bpc - i)), -1)
         action = is_ana * analog + (1-is_ana) * digital
         logits = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
         return action, logits
@@ -265,13 +268,12 @@ class Sampler:
         #   (L2 loss on probabilities ends up copying the probabilities.)
         i, j, cells = self.start, self.end, act.shape[0]
         assert len(act.shape) == 2 and act.shape[1] == j
-        options = self.choices_per_cell
         act = detach(act)
         with torch.no_grad():
             is_ana = self.analog_mask(act).float()
-            analog = torch.cat((act, torch.zeros(cells, options - j)), -1)
-            indices = sn.Int.decode_bits(sn, act[:, i : i + self.bits_per_cell]) % options
-            digital = F.one_hot(indices, options).float()
+            analog = torch.cat((act, torch.zeros(cells, self.cpc - j)), -1)
+            indices = sn.Int.decode_bits(sn, act[:, i : i + self.bpc]) % self.cpc
+            digital = F.one_hot(indices, self.cpc).float()
             return is_ana * analog + (1-is_ana) * digital
     @staticmethod
     def goal_mask(frame):
