@@ -53,18 +53,19 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Have `latent_sz=16`.
-#   TODO: Make `transition`'s input bigger by that, and output bigger by twice-that.
-#   TODO: Make `transition_` accept the extra `latent` (if `None`, auto-generate it) and output, using the extra `latent_mean`/`latent_var_log`, the extra `latent = normal(mean, var_log)`.
-#     TODO: Make it also register the `make_normal(mean, var_log)` loss via `State.loss` (if the new bool-arg `regularize` is True).
 # TODO: VAE integration, `fill_in(target)`:
 #   TODO: Put `target` through `transition_`; get `target_dist` and `latent_target`. (`regularize=True`)
 #   TODO: Generate `pred` given name-only 0s-in-values `target` and `latent_target`.
 #   TODO: Put `pred` through `transition_`; get `dist_pred`.
 #   TODO: Compute `target_logits` as `sample.target(target)`.
-#   TODO: Return `((pred_dist, pred_frame, pred_logits), (target_dist, target_frame, target_logits))`.
+#   TODO: Compute `regularization_loss` via `make_normal`.
+#   TODO: Return `((pred_dist, pred_frame, pred_logits), (target_dist, target_frame, target_logits), regularization_loss)`.
 # TODO: Make `Sampler(…)(…)` accept `latent=None`, and pass that in to `self.fn` as an extra arg. (Output latents are computed in a separate RNN call, along with distances, in `fill_in`.)
 # TODO: Possibly, to make the `loss` match unroll's "sample name-only queries to get actions" better, leave out random cells from predictions.
+#   TODO: Rename `loss` to `full_loss`.
+#     TODO: (…Is it possible to learn distances locally, like Bellman's equation does — or rather, is it viable enough?… Because, if we only learn distances during replay with no global-via-DODGE gradient-communication, then distances can't use non-local information — not even the prev step's distance…)
+#       TODO: (…It wouldn't be *too* terrible if we preserved all of a DODGE rollout's distances (per-goal-group) and used the final/goal-reached distance plus steps as the target for all other distances, right?… …We *can* work out the "is the goal reached" thing precisely, now that we have precisely-checkable digital actions and have had the "analog-actions should minimize final-distance-to-`dst`, not only reach it precisely" idea, *right*…)
+#         TODO: …Try and work out how we'd measure & use "is the goal reached"…
 
 # TODO: Have `gated_generative_loss(pred_dist, pred_logits, target_dist, target_logits)`, with both dist-min obs/act and dist-max goals learned.
 # TODO: Make `loss` use `gated_generative_loss` now, in addition to learning distances and modifying `dst` and all that.
@@ -159,7 +160,8 @@ from model.log import log, clear
 cell_shape = (8,8,8,8, 64)
 sn.shape(*cell_shape)
 
-state_sz, goal_sz = 256, 256
+state_sz = 256
+latent_sz = 16 # For VAE generation.
 slow_mode = .05 # Artificial delay per step.
 
 choices_per_cell = 256
@@ -221,7 +223,7 @@ class Sampler:
     """
     Handles analog+digital sampling from the `transition` RNN model.
 
-    AI is goal-directed generative models, so sampling is enough for both (optimistic) prediction of observations and generation of good actions.
+    RL is goal-directed generative models, so sampling is enough for both (optimistic) prediction of observations and generation of good actions.
 
     Uses a `cells × action_size → cells × choices_per_cell` RNN (with hidden `State`) to sample from bit sequences, without averaging in-action correlations away, as compute-efficiently as possible (vary `choices_per_cell` depending on RNN's size to maximize information throughput).
 
@@ -230,7 +232,8 @@ class Sampler:
     def __init__(self, fn, choices_per_cell, start, end):
         from math import frexp
         bpc = frexp(choices_per_cell - 1)[1]
-        assert bpc <= end-start, "Not enough space to encode digital actions"
+        assert bpc <= end-start, "Not enough space to encode digital actions (RNN input is ridiculously small)"
+        assert end-start <= choices_per_cell, "For simplicity, there should be more choices than values"
         self.choices_per_cell = choices_per_cell
         self.bits_per_cell = bpc
         self.fn, self.start, self.end = fn, start, end
@@ -238,27 +241,30 @@ class Sampler:
     def __call__(self, query):
         """Given a name-only `query`, samples a binary action.
 
-        The result is `(action, repr)`. Use `action` to act; use L2 loss on `repr` and `.target(action)` to predict the action.
+        The result is `(action, logits)`. Use `action` to act; use L2 loss on `logits` and `.target(action)` to predict the action.
 
         This will advance RNN `State`, so do `State.Episode` shenanigans if that is unwanted."""
         is_ana = self.analog_mask(detach(query)).float()
         i, j, cells = self.start, self.end, query.shape[0]
         input = torch.cat((query, torch.zeros(cells, j - i)), -1)
-        name, logits = self.fn(input)
-        assert logits.shape[-1] == self.choices_per_cell
-        analog = torch.cat((name, logits[..., :j-i]), -1)
+        name_and_logits = self.fn(input)[0]
+        assert len(name_and_logits.shape) == 2 and name_and_logits.shape[1] == i + self.choices_per_cell
+        name = name_and_logits[:, :i] # (Even for digital cells, names are VAE-generated.)
+        analog = name_and_logits[:, :j]
         with torch.no_grad():
-            digprob = self.softmax(detach(logits))
+            digprob = self.softmax(detach(name_and_logits[:, i : i + self.choices_per_cell]))
             indices = digprob.multinomial(1)[..., 0]
             bits = sn.Int.encode_ints(sn, indices, self.bits_per_cell)
-            digital = torch.cat((query, bits, torch.zeros(cells, j - self.bits_per_cell - i)), -1)
+            digital = torch.cat((name, bits, torch.zeros(cells, j - self.bits_per_cell - i)), -1)
         action = is_ana * analog + (1-is_ana) * digital
-        repr = torch.cat((is_ana * logits + (1-is_ana) * digprob), -1)
-        return action, repr
+        logits = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
+        return action, logits
     def target(self, act):
-        """Converts a presumably-sampled `action` to its `repr`, which can be used to compute L2 loss."""
-        # The representation: for analog, just the zero-padded prediction as-is; for digital, the post-softmax probability distribution.
+        """Converts a presumably-sampled `action` to its `logits`, which can be used to compute L2 loss."""
+        # The representation: for analog, just the prediction as-is; for digital, name & the post-softmax probability distribution.
+        #   (L2 loss on probabilities ends up copying the probabilities.)
         i, j, cells = self.start, self.end, act.shape[0]
+        assert len(act.shape) == 2 and act.shape[1] == j
         options = self.choices_per_cell
         act = detach(act)
         with torch.no_grad():
@@ -276,7 +282,6 @@ class Sampler:
     @staticmethod
     def as_goal(frame):
         return torch.cat((torch.ones(frame.shape[0], 1), frame[:, 1:]), -1)
-sample = Sampler(lambda x: transition_(x)[0:1], choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
 
 
 
@@ -290,8 +295,8 @@ class SkipConnection(nn.Module):
 def h(ins = state_sz, outs = ...): # A cross-cell transform.
     if outs is ...: outs = ins
     return SkipConnection(
-        LayerNorm(ins), ReLU(), SRWM(ins, ins, heads=2, Softmax=Softmax),
-        LayerNorm(ins), ReLU(), nn.Linear(ins, outs),
+        ReLU(), LayerNorm(ins), SRWM(ins, ins, heads=2, Softmax=Softmax),
+        ReLU(), LayerNorm(ins), nn.Linear(ins, outs),
     )
 
 
@@ -301,18 +306,25 @@ try:
     transition = torch.load(save_load)
 except FileNotFoundError:
     transition = nn.Sequential(
-        # Input prev-actions and next-observations, output name and `sample`-logits and distance and regret.
-        h(sum(cell_shape), state_sz),
+        # `(frame, latent) → (name_and_logits_or_values, latent_mean, latent_var_log, dist)`
+        #   `frame` is goals and prev-actions and next-observations.
+        #   `latent` is for VAEs: sampled from a normal distribution with learned mean & variance-logarithm.
+        nn.Linear(sum(cell_shape) + latent_sz, state_sz),
         h(state_sz, state_sz),
-        h(state_sz, sum(cell_shape[:-1]) + choices_per_cell + 1 + 1),
+        h(state_sz, state_sz),
+        h(state_sz, sum(cell_shape[:-1])+choices_per_cell + 2*latent_sz + 1),
     )
-def transition_(x):
-    """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
-    y = transition(x)
-    name = sn.cell_size - cell_shape[-1]
-    return y[..., :name], y[..., name:-2], 2 ** y[..., -2:-1], 2 ** y[..., -1:]
-dodge = DODGE(transition)
+def transition_(x, latent=...):
+    """Wraps `transition` to return a tuple of `(name_and_logits, latent_info, distance)`. `name_and_logits` is for `Sampler`, `latent_info` is for `normal` and `make_normal`."""
+    if latent is ...:
+        latent = torch.randn(x.shape[0], latent_sz)
+    assert len(x.shape) == 2 and len(latent.shape) == 2 and x.shape[0] == latent.shape[0] and latent.shape[1] == latent_sz
+    y = transition(torch.cat((x, latent), -1))
+    lt = 2*latent_sz
+    return y[:, :-(lt+1)], y[:, -(lt+1) : -1], 2 ** y[:, -1:]
+dodge = DODGE(transition) # For forward-gradient-feedback potentially-very-long-unrolls RNN training.
 optim = torch.optim.Adam(transition.parameters(), lr=lr)
+sample = Sampler(transition_, choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
 # For debugging, print the param-count.
 pc = sum(x.numel() for x in transition.parameters())
 print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else pc/1000+'K' if pc>1000 else pc, 'params')
@@ -350,9 +362,9 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # Distances of `frame` and `frame_pred` to contrast.
         with State.Episode(start_from_initial=False):
-            _, _, frame_dist, _ = transition_(frame)
+            _, _, frame_dist = transition_(frame)
         with State.Episode(start_from_initial=False):
-            _, _, frame_pred_dist, frame_pred_regret = transition_(frame_pred)
+            _, _, frame_pred_dist = transition_(frame_pred)
 
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
         dist_is_better = detach(frame_dist)[:, -1:] < detach(frame_pred_dist)[:, -1:]
@@ -362,9 +374,6 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         # Remember our regret of not being the `frame`. *Only* remember what we regret.
         regret = (is_learned * (frame_pred_dist[:, -1:] - frame_dist[:, -1:])).sum() / (is_learned.sum() + 1e-2)
         regret_cpu.copy_(detach(regret), non_blocking=True)
-
-        # Learn the regret, since estimating prediction-error by training several copies of the model is too expensive.
-        regret_loss = 0 # (is_learned * (frame_pred_regret.log2() - detach(regret).clamp(1e-5).log2()).square()).sum() # TODO:
 
         # Critic regression: `dist = sg timediff`, but *optimistic*, meaning, min dist and not mean dist.
         #   (Worst-case, can also try tilted L1 loss AKA distributional RL.)
@@ -378,7 +387,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         log(0, False, torch, improvement = mask.mean() - (~sample.analog_mask(frame)).float().mean())
         #   TODO: Why is improvement always 0, even though `predict_loss` is not? …Wait, is it `nan` sometimes, from looking at the plots?…
         #     (From looking at the plot, it's `nan` sometimes in the beginning, but not in the end.)
-        log(1, False, torch, predict_loss=predict_loss, regret_loss=regret_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss)
+        log(1, False, torch, predict_loss=predict_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss)
         n = 2
         for name, env in envs.items():
             if hasattr(env, 'metric'):
@@ -386,7 +395,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
                 n += 1
         # TODO: …How can we possibly fix the loss not decreasing?…
 
-        loss = predict_loss + regret_loss + dist_loss + ungrounded_dist_loss
+        loss = predict_loss + dist_loss + ungrounded_dist_loss
         return loss
 
 def replay(optim, current_frame, current_time):
@@ -398,10 +407,7 @@ def replay(optim, current_frame, current_time):
 
         time, ep, frame, regret_cpu = random.choice(replay_buffer)
 
-        # Learn partial ("OR") goals, by omitting some cells.
-        #   (Note: it's possible to sample several goals and pick a 'best' one, [like AdaGoal does](https://arxiv.org/abs/2111.12045). But that works best with a measure of 'error' to maximize, and our replay-buffer already kinda maximizes regret.)
-        #     (Could be done with either the `regret` output of `transition_`, or by keeping several `transition`s to measure ensemble disagreement. Could also [train some generative model](http://proceedings.mlr.press/v100/nair20a/nair20a.pdf), but those are hard to train, hence the sampling.)
-        #       (All of which is too expensive.)
+        # Learn partial ("OR") goals, by omitting some cells randomly.
         dst_is_picked = np.random.rand(current_frame.shape[0]) < (.05+.95*random.random())
         dst = current_frame[dst_is_picked]
 
@@ -485,7 +491,7 @@ async def main():
                         if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
 
                         # Give prev-action & next-observation, remember distance estimates, and sample next action.
-                        _, _, dist, regret = transition_(frame)
+                        _, _, dist = transition_(frame)
                         n = 0
                         for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
                             # (If we do better than expected, we leave early.)
