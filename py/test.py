@@ -121,6 +121,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# TODO: …Do we maybe also want a hyperparam for "how many actions to pick between at unroll-time"?… (…Which we can *technically* allow the model to modify, for better or worse — same as learning-rate and replays-per-step and max-replay-buffer-len… Though maybe it's better to just learn an "expected improvement with this action-count" NN/table.)
+
+
+
 
 
 
@@ -158,11 +162,7 @@ sn.shape(*cell_shape)
 state_sz, goal_sz = 256, 256
 slow_mode = .05 # Artificial delay per step.
 
-bits_per_chunk = 8 # How to `sample`.
-#   TODO: Should be `frexp(choices_per_cell-1)[1]`, none of that "chunk" business.
-#   TODO: Also, should be named `bits_per_cell`, right? …And maybe just have `choices_per_cell` as the main hyperparam, in case we're feeling not-power-of-2.
-
-# TODO: …Do we maybe also want a hyperparam for "how many actions to pick between at unroll-time"?… (…Which we can *technically* allow the model to modify, for better or worse — same as learning-rate and replays-per-step and max-replay-buffer-len… Though maybe it's better to just learn an "expected improvement with this action-count" NN/table.)
+choices_per_cell = 256
 
 lr = 1e-3
 dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
@@ -173,10 +173,11 @@ save_load = '' # A filename, if saving/loading occurs.
 steps_per_save = 1000
 
 sn.info = {
-    'docs': """TODO:""",
-    # TODO: Also mention that we clip all inputs/outputs to -1…1.
+    'docs': """TODO:
+
+    We clip all inputs/outputs to -1…1.""",
     'analog': True,
-    'choices_per_cell': 2 ** bits_per_chunk,
+    'choices_per_cell': choices_per_cell,
 }
 
 
@@ -218,19 +219,20 @@ def goal_group_ids(frame):
 
 class Sampler:
     """
-    GANs, VAEs, contrastive learning, BYOL: direct prediction of inputs averages them, so we need tricks to learn actual input distributions    
-    Autoregressive discrete sampling: AWAKEN
+    Handles analog+digital sampling from the `transition` RNN model.
 
-    (TODO: …Regrettably, the meme above holds no water anymore with the "AI = goal-conditioned generative models" viewpoint; GANs/VAEs are just analog-space generative models… So, need better exposition.)
+    AI is goal-directed generative models, so sampling is enough for both (optimistic) prediction of observations and generation of good actions.
 
-    Uses a `cells × action_size → cells × 2**bits_per_chunk` RNN (with hidden `State`) to sample from bit sequences, without averaging in-action correlations away, as compute-efficiently as possible (vary `bits_per_chunk` depending on RNN's size).
+    Uses a `cells × action_size → cells × choices_per_cell` RNN (with hidden `State`) to sample from bit sequences, without averaging in-action correlations away, as compute-efficiently as possible (vary `choices_per_cell` depending on RNN's size to maximize information throughput).
 
-    Same idea as in language modeling, and [Gato](https://arxiv.org/abs/2205.06175), though per-cell and with explicit bits.
-
-    (This adds autoregressive in-cell sampling. Cells are still processed in parallel, because envs should make cells independent of each other by design. And cell-groups are already autoregressively processed by RNNs.)
+    Digital sampling explicitly models all probabilities of each choice. It is the idea that powers autoregressive language models and many agents, including [GPT-3](https://arxiv.org/abs/2005.14165) and [Gato](https://arxiv.org/abs/2205.06175). Unlike analog sampling (i.e. a GAN), cells have to be processed not in parallel but in sequence, which is already handled by the `sn.Int` datatype.
     """
-    def __init__(self, fn, bits_per_cell, start, end): # TODO: Should we support non-power-of-2 sampling? (And compute `bits_per_cell` as `frexp(opts-1)[1]`.)
-        self.bits_per_cell = bits_per_cell
+    def __init__(self, fn, choices_per_cell, start, end):
+        from math import frexp
+        bpc = frexp(choices_per_cell - 1)[1]
+        assert bpc <= end-start, "Not enough space to encode digital actions"
+        self.choices_per_cell = choices_per_cell
+        self.bits_per_cell = bpc
         self.fn, self.start, self.end = fn, start, end
         self.softmax = Softmax(-1)
     def __call__(self, query):
@@ -243,7 +245,7 @@ class Sampler:
         i, j, cells = self.start, self.end, query.shape[0]
         input = torch.cat((query, torch.zeros(cells, j - i)), -1)
         name, logits = self.fn(input)
-        assert logits.shape[-1] == 2 ** self.bits_per_cell
+        assert logits.shape[-1] == self.choices_per_cell
         analog = torch.cat((name, logits[..., :j-i]), -1)
         with torch.no_grad():
             digprob = self.softmax(detach(logits))
@@ -257,7 +259,7 @@ class Sampler:
         """Converts a presumably-sampled `action` to its `repr`, which can be used to compute L2 loss."""
         # The representation: for analog, just the zero-padded prediction as-is; for digital, the post-softmax probability distribution.
         i, j, cells = self.start, self.end, act.shape[0]
-        options = 2 ** self.bits_per_cell
+        options = self.choices_per_cell
         act = detach(act)
         with torch.no_grad():
             is_ana = self.analog_mask(act).float()
@@ -274,7 +276,7 @@ class Sampler:
     @staticmethod
     def as_goal(frame):
         return torch.cat((torch.ones(frame.shape[0], 1), frame[:, 1:]), -1)
-sample = Sampler(lambda x: transition_(x)[0:1], bits_per_chunk, sum(cell_shape[:-1]), sum(cell_shape))
+sample = Sampler(lambda x: transition_(x)[0:1], choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
 
 
 
@@ -302,7 +304,7 @@ except FileNotFoundError:
         # Input prev-actions and next-observations, output name and `sample`-logits and distance and regret.
         h(sum(cell_shape), state_sz),
         h(state_sz, state_sz),
-        h(state_sz, sum(cell_shape[:-1]) + 2 ** bits_per_chunk + 1 + 1),
+        h(state_sz, sum(cell_shape[:-1]) + choices_per_cell + 1 + 1),
     )
 def transition_(x):
     """Wraps `transition` to return a tuple of `(sample_info, distance, distance_regret)`."""
