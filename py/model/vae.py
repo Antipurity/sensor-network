@@ -15,7 +15,7 @@ def make_normal(x: torch.Tensor):
     mean, var_log = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]
     return mean.square() + var_log.exp() - var_log
 def normal(x: torch.Tensor):
-    """Simply samples from a normal distribution with a given mean and log-of-variance (one output of a NN).
+    """Simply samples from a normal distribution with a given mean and log-of-variance (one output of a NN). Output is half the input's size.
 
     VAE's sampling."""
     mean, var_log = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]

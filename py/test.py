@@ -1,7 +1,9 @@
 """
 # The model that we implement in this file
 
-Let's assume a discrete model of the world: `universe: state → state`. This describes one boring line/circle through time.
+Goal-directed generative model of the world.
+
+Let's write down the most generic discrete-time model of the world: `universe: state → state`. This describes one boring line/circle through time.
 
 Now, let's consider an agent with bidirectional communication with its world, receiving `obs`ervations and returning `act`ions: `universe: (state, act) → (state, obs)`. Now we have a whole infinite graph of possibilities, with the path selected by `act`ions.
 
@@ -9,11 +11,14 @@ Where that agent ultimately goes can be named its goal. In the sequence of the a
 
 To reach goals most efficiently, the agent should build a map of that graph of possibilities, to run shortest-path queries on. Why *not* use something like a [Transformer](https://arxiv.org/abs/1706.03762) with [RNN-state](https://arxiv.org/abs/2202.05780), and do next-`obs` prediction? Without an ideological agenda, there's no reason to claim that Deep Learning can't succeed at general intelligence, being the most data-driven and successful approach that we have.
 
-`act`ing can actually be exactly the same as next-frame prediction, if actions are included in next-frame observations; then it's easy for human and AI actions to be treated exactly the same. But we do want shortest/best paths and not just any paths, so that prediction has to be [critic-](https://arxiv.org/abs/2006.15134)[regularized](https://arxiv.org/abs/1806.05635); if `obs` are stochastic, the model may become overly optimistic instead of averaging/smudging the predictions.
+`act`ing can actually be exactly the same as next-frame prediction, if actions are included in next-frame observations; then it's easy for human and AI actions to be treated exactly the same. But we do want shortest/best paths and not just any paths, so our prediction has to be [critic-](https://arxiv.org/abs/2006.15134)[regularized](https://arxiv.org/abs/1806.05635); if `obs` are stochastic, the model may become overly optimistic instead of averaging/smudging the predictions.
+
+# (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with everything scheduled synchronously and impossible-to-collide naming and `.metric()` for logging a dict.)
 
 # Relation to self-supervised learning
 
-In recent years, deep learning has seen the rise of methods for self-supervised learning. Among them, a particular kind of non-contrastive methods for extracting useful representations from images bear strong resemblance to URL.
+In recent years, deep learning has seen the rise of methods for self-supervised learning. Among them, a particular kind of non-contrastive methods for extracting useful representations from images bear strong resemblance to URL. TODO: We're now neither URL nor BYOL-related. We're now simply doing generative modeling. Image augs are good to note, but other things are not.
 
 - [Barlow twins](https://arxiv.org/abs/2103.03230): `repr(state1) = repr(state2)` using a cross-correlation loss for soft-whitening.
 
@@ -26,8 +31,6 @@ This is similar to just predicting the next input in RNNs, possibly min-distance
 
 Further, the ability to reproduce [the human ability to learn useful representations from interacting with the world](https://xcorr.net/2021/12/31/2021-in-review-unsupervised-brain-models/) can be said to be the main goal of self-supervised learning in computer vision. The structure of the body/environment is usable as data augmentations: for images, we have eyes, which can crop (movement & eyelids), make it grayscale [(eye ](http://hyperphysics.phy-astr.gsu.edu/hbase/vision/rodcone.html)[ro](https://en.wikipedia.org/wiki/Rod_cell)[ds)](https://en.wikipedia.org/wiki/File:Distribution_of_Cones_and_Rods_on_Human_Retina.png), scale and flip and rotate (body movement in 3D), blur (un/focus), adjust brightness (eyelashes), and do many indescribable things, such as "next word" or "next sound sample after this movement".
 """
-# (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with everything scheduled synchronously and impossible-to-collide naming and `.metric()` for logging a dict.)
 
 
 
@@ -53,31 +56,29 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: VAE integration, `fill_in(target)`:
-#   TODO: Put `target` through `transition_`; get `target_dist` and `latent_target`. (`regularize=True`)
-#   TODO: Generate `pred` given name-only 0s-in-values `target` and `latent_target`.
-#   TODO: Put `pred` through `transition_`; get `dist_pred`.
-#   TODO: Compute `target_logits` as `sample.target(target)`.
-#   TODO: Compute `regularization_loss` via `make_normal`.
-#   TODO: Return `((pred_dist, pred_frame, pred_logits), (target_dist, target_frame, target_logits), regularization_loss)`.
-#   TODO: Make `loss` use `fill_in` rather than doing all this by itself.
-# TODO: Possibly, to make the `loss` match unroll's "sample name-only queries to get actions" better, leave out random cells from predictions.
-#   TODO: Rename `loss` to `full_loss`.
-#     TODO: (…Is it possible to learn distances locally, like Bellman's equation does — or rather, is it viable enough?… Because, if we only learn distances during replay with no global-via-DODGE gradient-communication, then distances can't use non-local information — not even the prev step's distance…)
-#       TODO: (…It wouldn't be *too* terrible if we preserved all of a DODGE rollout's distances (per-goal-group) and used the final/goal-reached distance plus steps as the target for all other distances, right?… …We *can* work out the "is the goal reached" thing precisely, now that we have precisely-checkable digital actions (though their names can be not-so-precisely checkable) and have had the "analog-actions should minimize final-distance-to-`dst`, not only reach it precisely" idea, *right*…)
-#         (I think with cumulative-minimums and either inter-cell max or sum, we *can* work out a measure of "instantaneous distance", which we'd then minimize and possibly learn…)
-#         …Maybe we should even swear off replays entirely, only doing DODGE and possibly BPTT if dists are small enough?… We'd lose *all* goal-relabeling capabilities (so `dst` can only be generated, possibly with L2 loss on consequences of its latents — maybe the most-matching cells that we base our "0 dist" decisions on?), but *maybe* we can pull through?…
-#         TODO: …Try and work out how we'd measure & use "is the goal reached", exactly…
+# TODO: (…Is it possible to learn distances locally (not only-in-replay which can't use long-horizon DODGE), like Bellman's equation does — or rather, is it viable enough?… Because, if we only learn distances during replay with no global-via-DODGE gradient-communication, then distances can't use non-local information — not even the prev step's distance…)
+#   TODO: (…It wouldn't be *too* terrible if we preserved all of a DODGE rollout's distances (per-goal-group) and used the final/goal-reached distance plus steps as the target for all other distances, right?… …We *can* work out the "is the goal reached" thing precisely, now that we have precisely-checkable digital actions (though their names can be not-so-precisely checkable) and have had the "analog-actions should minimize final-distance-to-`dst`, not only reach it precisely" idea, *right*…)
+#     (I think with cumulative-minimums and either inter-cell max or sum, we *can* work out a measure of "instantaneous distance", which we'd then minimize and possibly learn…)
+#     …Maybe we should even swear off replays entirely, only doing DODGE and possibly BPTT if dists are small enough?… We'd lose *all* goal-relabeling capabilities (so `dst` can only be generated, possibly with L2 loss on consequences of its latents — maybe the most-matching cells that we base our "0 dist" decisions on?), but *maybe* we can pull through?…
+#     TODO: …Try and work out how we'd measure & use "is the goal reached", exactly… Would we need quadratic every-goal-cell-to-every-frame-cell matching?…
+
+# TODO: …Wait: `sn.Int(…, goal=True)` would be autoregressive, wouldn't it?… How would we fix this…
+#   …And, our goal-specification tactic is a bit terrible for non-`.sensors` envs because we can hardly re-send goals on every timestep like it's nothing…
+# TODO: Have a hyperparam for how many cells to allow before splitting into several RNN calls; and split accordingly. (This could be the key to proper-goal-Ints: if we can set it to 1 without a drop in performance (either speed or loss), then we could forget about autoregressivity in `sn` and just give literally everything immediately, allowing well-founded goal specification.)
+
+# TODO: Possibly, to make the `full_loss` match unroll's "sample name-only queries to get actions" better, leave out random cells from predictions. Even from inputs. (Currently, we're only "leaving them out" by assigning random group IDs to what we don't want, but maybe we should also just delete some cells.)
+#   And will this be future-proof? Will we still want to do this once we're learning online and all… …What could make this irrelevant is order-dependent autoregressivity.
 
 # TODO: Have `gated_generative_loss(pred_dist, pred_logits, target_dist, target_logits)`, with both dist-min obs/act and dist-max goals learned.
-# TODO: Make `loss` use `gated_generative_loss` now, in addition to learning distances and modifying `dst` and all that.
+# TODO: Make `full_loss` use `gated_generative_loss` now, in addition to learning distances and modifying `dst` and all that.
 # TODO: Make unrolls disable DODGE before `replay` (which is inside a new `State.Episode` which first updates all state to be detach(state); OR, just don't care about forward-grad) then re-enable it with the old direction after it.
 # TODO: Make unrolls, when we save full frames to the replay buffer, use `fill_in(frame)` to get `L = gated_generative_loss(…)` inputs and `dodge.minimize(L)`.
+# …Could online-dist-learning make this generative-loss-only func irrelevant?…
 
 
 
 # TODO: Stop sampling goals from the replay buffer, and start *generating* goals (much like in http://proceedings.mlr.press/v100/nair20a/nair20a.pdf):
-#   TODO: In `loss`, get latents of `dst` first, then sample & use those latents to turn 0-filled `dst`-sized cells into `dst` (in the same GPU-call as the rest of the `frame`) if good.
+#   TODO: In `full_loss`, get latents of `dst` first, then sample & use those latents to turn 0-filled `dst`-sized cells into `dst` (in the same GPU-call as the rest of the `frame`) if good.
 #     TODO: For goals, "good" means "sample-dist is higher" (whereas for actions, "good" means "sample-dist is lower"). (Goals are then neither too hard (AKA when never occuring as real targets) nor too easy (AKA when real-dist is lower than expected).)
 #       (This is [AMIGo](https://arxiv.org/pdf/2006.12122.pdf)-inspired. Alternatively, could make goals learn regret rather than dists and maximize regret rather than dists; or even be [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf)-like and have an ensemble of RNNs, and maximize dist-error.)
 #       TODO: Possibly, for goals, "good" should mean "sample-dist is not as expected". (So that faster-than-expected paths still have opportunity to be retreated and learned-from more.)
@@ -105,7 +106,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
 # TODO: Is it possible to learn an analog-reward-goal which isn't ever actually encountered, but is set to 1 by the env so that the model always maximizes reward?
 #   1st way: detect when a `encountered_dst`-cell has the same name as a `requested_dst`-cell (if it exists) and measure distortion to increase dist by. Needs cell-names to coincide though, which is quadratically-unlikely in general.
-#   2nd way: pre-decide distortion in `loss` (50% of cases, 0…1 distortion), distort `dst`, and increase dist by it (in log-space, for severe penalties). Probably a good idea; certainly better than waiting for someone to request impossible destinations and SLOWLY learning that they are impossible AFTERWARDS…
+#   2nd way: pre-decide distortion in `full_loss` (50% of cases, 0…1 distortion), distort `dst`, and increase dist by it (in log-space, for severe penalties). Probably a good idea; certainly better than waiting for someone to request impossible destinations and SLOWLY learning that they are impossible AFTERWARDS…
 
 # TODO: Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
 
@@ -159,7 +160,7 @@ from model.log import log, clear
 
 
 # Hyperparameters.
-cell_shape = (8,8,8,8, 64)
+cell_shape = (8,8,8,8, 256)
 sn.shape(*cell_shape)
 
 state_sz = 256
@@ -213,7 +214,7 @@ sn.modify_name.append(modify_name)
 envs = ['graphenv'] if len(sys.argv) < 2 else sys.argv[1:]
 envs = { e: prepare_env(e) for e in envs }
 replay_buffer = []
-# Our interface to multigroup partial goals (AND/OR goals): the last name part is `group_id`, AKA user ID.
+# Our interface to multigroup combined-cells goals (OR/AND goals): the last name part is `group_id`, AKA user ID.
 #   Via carefully engineering the loss, users can have entirely separate threads of experience that reach ALL the goals in their group (but the NN can of course learn to share data between its threads).
 def goal_group_ids(frame):
     """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
@@ -333,8 +334,26 @@ print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else 
 
 
 
-def loss(prev_ep, frame, dst, timediff, regret_cpu):
-    """`loss(prev_ep, frame, dst, timediff)`
+
+
+def fill_in(target):
+    """VAE integration: encode `target` and decode an alternative to it. If called in pre-`target` RNN state, produces target's info and alternative-target's info.
+
+    Result: `((target_dist, target, target_logits), (pred_dist, pred, pred_logits), regularization_loss)`"""
+    assert len(target.shape) == 2
+    with State.Episode(start_from_initial=False): # Decoder & distance.
+        _, target_latent_info, target_dist = transition_(target)
+        target_logits = sample.target(target)
+        target_latent = normal(target_latent_info)
+        regularization_loss = make_normal(target_latent_info).sum(-1, keepdim=True)
+    name_sz = sn.cell_size - cell_shape[-1]
+    pred, pred_logits = sample(target[:, : name_sz], target_latent) # Encoder.
+    with State.Episode(start_from_initial=False): # Distance.
+        _, _, pred_dist = transition_(pred)
+    return ((target_dist, target, target_logits), (pred_dist, pred, pred_logits), regularization_loss)
+
+def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
+    """`full_loss(prev_ep, frame, dst, timediff, regret_cpu)`
 
     Predicts the `prev_frame`→`frame` transition IF it's closer to the goal than what we can sample.
 
@@ -344,7 +363,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
     - `timediff` is the distance to that goal, as a `(frame_cells + dst_cells, 1)`-shaped int32 tensor. Must always be *more* than 0."""
 
     with prev_ep:
-        # Multigroup ("AND") goals, where many threads of experience (with their group IDs) can pursue separate goals.
+        # Multigroup ("OR") goals, where many threads of experience (with their group IDs) can pursue separate goals.
         #   (The group ID replaces the last name-part.)
         is_learned = torch.rand(frame.shape[0], 1) < (.1+.9*random.random())
         dst_group_id = torch.rand(1, cell_shape[-2])*2-1
@@ -358,23 +377,16 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
         frame = torch.cat((dst, frame), 0)
         is_learned = torch.cat((torch.full((dst.shape[0], 1), True), is_learned), 0).float()
 
-        # What to contrast `frame` with.
-        with State.Episode(start_from_initial=False):
-            frame_pred, frame_pred_repr = sample(frame[:, :-cell_shape[-1]])
-
-        # Distances of `frame` and `frame_pred` to contrast.
-        with State.Episode(start_from_initial=False):
-            _, _, frame_dist = transition_(frame)
-        with State.Episode(start_from_initial=False):
-            _, _, frame_pred_dist = transition_(frame_pred)
+        # Contrast `frame` with our own understanding of it.
+        (frame_dist, frame, frame_logits), (pred_dist, pred, pred_logits), reg_loss = fill_in(frame)
 
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
-        dist_is_better = detach(frame_dist)[:, -1:] < detach(frame_pred_dist)[:, -1:]
+        dist_is_better = detach(frame_dist)[:, -1:] < detach(pred_dist)[:, -1:]
         mask = (dist_is_better | ~sample.analog_mask(frame)).float()
-        predict_loss = (is_learned * (frame_pred_repr - sample.target(frame)).square() * mask).sum()
+        predict_loss = (is_learned * (pred_logits - frame_logits).square() * mask).sum()
 
         # Remember our regret of not being the `frame`. *Only* remember what we regret.
-        regret = (is_learned * (frame_pred_dist[:, -1:] - frame_dist[:, -1:])).sum() / (is_learned.sum() + 1e-2)
+        regret = (is_learned * (pred_dist[:, -1:] - frame_dist[:, -1:])).sum() / (is_learned.sum() + 1e-2)
         regret_cpu.copy_(detach(regret), non_blocking=True)
 
         # Critic regression: `dist = sg timediff`, but *optimistic*, meaning, min dist and not mean dist.
@@ -384,12 +396,13 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # GAN-like penalization of ungrounded plans.
         dist_penalty = 1.05
-        ungrounded_dist_loss = 0 # (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum() # TODO:
+        ungrounded_dist_loss = 0 # (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum() # TODO: (*Should* be superseded by our unformed "go to min-local-dist min-global-dist goal-cells" plans, right?…)
 
         log(0, False, torch, improvement = mask.mean() - (~sample.analog_mask(frame)).float().mean())
         #   TODO: Why is improvement always 0, even though `predict_loss` is not? …Wait, is it `nan` sometimes, from looking at the plots?…
         #     (From looking at the plot, it's `nan` sometimes in the beginning, but not in the end.)
-        log(1, False, torch, predict_loss=predict_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss)
+        #     TODO: …Why are we leaving out digital cells anyway? `env/copy.py` is a digital-only env anyway, so doesn't this not make any sense?
+        log(1, False, torch, predict_loss=predict_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss, reg_loss=reg_loss)
         n = 2
         for name, env in envs.items():
             if hasattr(env, 'metric'):
@@ -397,7 +410,7 @@ def loss(prev_ep, frame, dst, timediff, regret_cpu):
                 n += 1
         # TODO: …How can we possibly fix the loss not decreasing?…
 
-        loss = predict_loss + dist_loss + ungrounded_dist_loss
+        loss = predict_loss + dist_loss + ungrounded_dist_loss + reg_loss
         return loss
 
 def replay(optim, current_frame, current_time):
@@ -409,13 +422,13 @@ def replay(optim, current_frame, current_time):
 
         time, ep, frame, regret_cpu = random.choice(replay_buffer)
 
-        # Learn partial ("OR") goals, by omitting some cells randomly.
+        # Learn combined-cells ("AND") goals, by omitting some cells randomly.
         dst_is_picked = np.random.rand(current_frame.shape[0]) < (.05+.95*random.random())
         dst = current_frame[dst_is_picked]
 
         # Learn.
         timediff = torch.full((frame.shape[0] + dst.shape[0], 1), float(current_time - time))
-        L = L + loss(ep, frame, dst=dst, timediff=timediff, regret_cpu=regret_cpu)
+        L = L + full_loss(ep, frame, dst=dst, timediff=timediff, regret_cpu=regret_cpu)
 
         # If our replay buffer gets too big, leave only max-regret samples.
         if len(replay_buffer) > max_replay_buffer_len:
@@ -425,6 +438,8 @@ def replay(optim, current_frame, current_time):
     # Optimize NN params.
     dodge.minimize(L)
     optim.step();  optim.zero_grad(True)
+
+
 
 
 
@@ -505,9 +520,9 @@ async def main():
                                 expiration_cpu.fill_(0)
                             n += cells.shape[0]
                         with State.Episode(start_from_initial=False):
-                            action = sample(query)[0]
+                            action, _ = sample(query)
                             #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
-                            #     (Could even plot the regret of sampling-one vs sampling-many, and see if/when it's worth it.)
+                            #     (Could even plot the regret of sampling-one vs sampling-many, by generating N and having a regret-plot for each (should go to 0 with sufficiently-big N), and see if/when it's worth it.)
 
                         # Learn. (Distance is always non-0.)
                         replay(optim, frame, time)
