@@ -56,11 +56,21 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: (…Is it possible to learn distances locally (not only-in-replay which can't use long-horizon DODGE), like Bellman's equation does — or rather, is it viable enough?… Because, if we only learn distances during replay with no global-via-DODGE gradient-communication, then distances can't use non-local information — not even the prev step's distance…)
-#   TODO: (…It wouldn't be *too* terrible if we preserved all of a DODGE rollout's distances (per-goal-group) and used the final/goal-reached distance plus steps as the target for all other distances, right?… …We *can* work out the "is the goal reached" thing precisely, now that we have precisely-checkable digital actions (though their names can be not-so-precisely checkable) and have had the "analog-actions should minimize final-distance-to-`dst`, not only reach it precisely" idea, *right*…)
-#     (I think with cumulative-minimums and either inter-cell max or sum, we *can* work out a measure of "instantaneous distance", which we'd then minimize and possibly learn…)
-#     …Maybe we should even swear off replays entirely, only doing DODGE and possibly BPTT if dists are small enough?… We'd lose *all* goal-relabeling capabilities (so `dst` can only be generated, possibly with L2 loss on consequences of its latents — maybe the most-matching cells that we base our "0 dist" decisions on?), but *maybe* we can pull through?…
-#     TODO: …Try and work out how we'd measure & use "is the goal reached", exactly… Would we need quadratic every-goal-cell-to-every-frame-cell matching?…
+# TODO: Have the func `local_dist(base, goal) → (dist, smudge)`.
+#   TODO: Compute base & goal analog-masks.
+#   TODO: Compute cell-to-cell distances: sum of abs-diffs of names, plus: if both base & goal are digital, convert to a number and put MAXDIST if equal else 0, else sum of abs-diffs of names.
+#   TODO: Sum up all cross-cell distances into one number.
+# TODO: The func `global_dist(dist, smudge) → (dist, smudge)` to combine dists & smudgings across time-steps to compute prediction targets. The last ones are last-prediction-plus-1 (unless goal is reached, in which case, 0); smudgings become their cumulative-minima from themselves to the end; distances become 0 when local-smudgings are equal to global-smudgings, else next-dist-plus-1 (computed via "0 at targets, 1 elsewhere, then cumsum" followed by subtracting "that-cumsum at targets, 0 elsewhere, then cumsum").
+# TODO: During unroll, preserve all dist/smudge predictions and all (per-goal-group) local per-goal dist/smudge.
+#   TODO: Whenever we change a goal, compute all global dists and minimize prediction loss.
+# TODO: In `full_loss` or whenever, keep track of int32 per-cell indices of goal-groups, and use them to index `stack`ed global dists/smudgings.
+#   TODO: Make `transition_` also output smudging-prediction (2**out-1).
+#   TODO: Learn the min-smudging too, just like distances. (Should become 0 where reachable, and min-possible-distance where unreachable.)
+# TODO: Remove `replay_buffer` entirely; no goal-relabeling at all. Don't just learn distances from local information, but instead minimize losses during rollouts.
+
+# TODO: Should we generate `dst` cells every step with the same latents, and make them all predict the real/first `dst` whenever the condition fits (dist-error is higher and smudging is lower)? Good idea to make this temporally-coherent, right — since the whole path does have the same `dst` as a potential future?
+# TODO: Should we generate `dst`-sized `src` cells every step with the same latents as `dst`, and predict the original `dst` whenever we reach the goal (target-distance is 0)? Is the role of `src` to simply invert `dst`, and in doing so, potentially provide valid-but-imagined `dst`s? (…Actually sounds plausible…)
+#   TODO: …If we do this only at the goal, then we'd kinda be ensuring that everything *between* at-`dst` and at-`src` steps doesn't fit the criterion, right? Or would NN optimization tend toward that and thus naturally collapse all distances to 1, meaning that we need more mechanisms to ensure faraway distinctness? …I think in our formulation, `src` really would slowly collapse toward 1-dist, since it'd sometimes sample `dst` prematurely…
 
 # TODO: …Wait: `sn.Int(…, goal=True)` would be autoregressive, wouldn't it?… How would we fix this…
 #   …And, our goal-specification tactic is a bit terrible for non-`.sensors` envs because we can hardly re-send goals on every timestep like it's nothing…
@@ -520,7 +530,7 @@ async def main():
                                 expiration_cpu.fill_(0)
                             n += cells.shape[0]
                         with State.Episode(start_from_initial=False):
-                            action, _ = sample(query)
+                            action, _ = sample(torch.cat((query, obs[:, :query.shape[1]]), -1))
                             #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
                             #     (Could even plot the regret of sampling-one vs sampling-many, by generating N and having a regret-plot for each (should go to 0 with sufficiently-big N), and see if/when it's worth it.)
 
