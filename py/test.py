@@ -56,11 +56,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Have the func `local_dist(base, goal) → (dist, smudge)`.
-#   TODO: Compute base & goal analog-masks.
-#   TODO: Compute cell-to-cell distances: sum of abs-diffs of names, plus: if both base & goal are digital, convert to a number and put MAXDIST if equal else 0, else sum of abs-diffs of names.
-#   TODO: Sum up all cross-cell distances into one number.
-# TODO: The func `global_dist(dist, smudge) → (dist, smudge)` to combine dists & smudgings across time-steps to compute prediction targets. The last ones are last-prediction-plus-1 (unless goal is reached, in which case, 0); smudgings become their cumulative-minima from themselves to the end; distances become 0 when local-smudgings are equal to global-smudgings, else next-dist-plus-1 (computed via "0 at targets, 1 elsewhere, then cumsum" followed by subtracting "that-cumsum at targets, 0 elsewhere, then cumsum").
+# TODO: The func `global_dist(final_dist_pred, smudges) → (dists, smudges)` to combine dists & smudgings across time-steps to compute prediction targets. The last ones are last-prediction-plus-1 (unless goal is reached, in which case, 0); smudgings become their cumulative-minima from themselves to the end; distances become 0 when local-smudgings are equal to global-smudgings, else next-dist-plus-1 (computed via "0 at targets, 1 elsewhere, then cumsum" followed by subtracting "that-cumsum at targets, 0 elsewhere, then cumsum").
 # TODO: During unroll, preserve all dist/smudge predictions and all (per-goal-group) local per-goal dist/smudge.
 #   TODO: Whenever we change a goal, compute all global dists and minimize prediction loss.
 # TODO: In `full_loss` or whenever, keep track of int32 per-cell indices of goal-groups, and use them to index `stack`ed global dists/smudgings.
@@ -71,6 +67,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Should we generate `dst` cells every step with the same latents, and make them all predict the real/first `dst` whenever the condition fits (dist-error is higher and smudging is lower)? Good idea to make this temporally-coherent, right — since the whole path does have the same `dst` as a potential future?
 # TODO: Should we generate `dst`-sized `src` cells every step with the same latents as `dst`, and predict the original `dst` whenever we reach the goal (target-distance is 0)? Is the role of `src` to simply invert `dst`, and in doing so, potentially provide valid-but-imagined `dst`s? (…Actually sounds plausible…)
 #   TODO: …If we do this only at the goal, then we'd kinda be ensuring that everything *between* at-`dst` and at-`src` steps doesn't fit the criterion, right? Or would NN optimization tend toward that and thus naturally collapse all distances to 1, meaning that we need more mechanisms to ensure faraway distinctness? …I think in our formulation, `src` really would slowly collapse toward 1-dist, since it'd sometimes sample `dst` prematurely…
+
+# TODO: …Should we replace DODGE with proper BPTT when predicted-distance is short — or how to combine, maybe doing both at the exact same time but with different horizons?…
 
 # TODO: …Wait: `sn.Int(…, goal=True)` would be autoregressive, wouldn't it?… How would we fix this…
 #   …And, our goal-specification tactic is a bit terrible for non-`.sensors` envs because we can hardly re-send goals on every timestep like it's nothing…
@@ -105,6 +103,13 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   (For stability, might need momentum-slowing for targets if possible.) (…In fact, momentum-slowing might even be required for dists.)
 #   TODO: NEED a hyperparam that makes `gated_generative_loss` never predict non-`src` `dst`, so that unrolls only go toward internal-state goals, but envs can still specify extra input-space goals.
 #     TODO: NEED an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
+
+
+
+
+
+
+# TODO: …May want a hyperparam for what to do with digital inputs: leave as binary encodings, VS lookup in a learnable table, VS lookup in a fixed random table…
 
 
 
@@ -232,6 +237,7 @@ def goal_group_ids(frame):
 
 
 
+# Sampling actions.
 class Sampler:
     """
     Handles analog+digital sampling from the `transition` RNN model.
@@ -273,7 +279,7 @@ class Sampler:
         action = is_ana * analog + (1-is_ana) * digital
         logits = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
         return action, logits
-    def target(self, act):
+    def target(self, act, one_hot=1):
         """Converts a presumably-sampled `action` to its `logits`, which can be used to compute L2 loss."""
         # The representation: for analog, just the prediction as-is; for digital, name & the post-softmax probability distribution.
         #   (L2 loss on probabilities ends up copying the probabilities.)
@@ -284,7 +290,7 @@ class Sampler:
             is_ana = self.analog_mask(act).float()
             analog = torch.cat((act, torch.zeros(cells, self.cpc - j)), -1)
             indices = sn.Int.decode_bits(sn, act[:, i : i + self.bpc]) % self.cpc
-            digital = F.one_hot(indices, self.cpc).float()
+            digital = F.one_hot(indices, self.cpc).float() * one_hot
             return is_ana * analog + (1-is_ana) * digital
     @staticmethod
     def goal_mask(frame):
@@ -298,7 +304,7 @@ class Sampler:
 
 
 
-def cat(*a, dim=-1): return torch.cat(a, dim)
+# Model.
 class SkipConnection(nn.Module):
     """Linearize gradients, to make learning easier."""
     def __init__(self, *fn): super().__init__();  self.fn = nn.Sequential(*fn)
@@ -311,9 +317,6 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
         ReLU(), LayerNorm(ins), SRWM(ins, ins, heads=2, Softmax=Softmax),
         ReLU(), LayerNorm(ins), nn.Linear(ins, outs),
     )
-
-
-
 try:
     if not save_load: raise FileNotFoundError()
     transition = torch.load(save_load)
@@ -346,6 +349,27 @@ print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else 
 
 
 
+# Computable-on-unroll distances.
+def local_dist(base, goal):
+    """`local_dist(base, goal) → smudge`
+
+    Given sets of cells of observations & goals, computes local-dist (smudging) between them, which is 0 when the `goal` is 100% reached and more when not. (Learned pathfinding should select min-dist actions among min-smudging paths, so that even unreachable goals can have best-effort paths known instead of being out-of-distribution.)
+
+    For efficiency, `goal` may be several stacked goal-groups at once."""
+    assert len(base.shape) == 2 and len(goal.shape) >= 2 and base.shape[-1] == goal.shape[-1] == sn.cell_size
+    base, goal = detach(base), detach(goal)
+    max_smudge = sn.cell_size
+    with torch.no_grad():
+        base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge)
+        cross_smudges = (base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2)).abs().sum(-1)
+        return cross_smudges.min(-2)[0].mean(-1)
+# TODO: The func `global_dist(final_dist_pred, smudges) → (dists, smudges)` to combine dists & smudgings across time-steps to compute prediction targets. The last ones are last-prediction-plus-1 (unless goal is reached, in which case, 0); smudgings become their cumulative-minima from themselves to the end; distances become 0 when local-smudgings are equal to global-smudgings, else next-dist-plus-1 (computed via "0 at targets, 1 elsewhere, then cumsum" followed by subtracting "that-cumsum at targets, 0 elsewhere, then cumsum").
+
+
+
+
+
+# Loss.
 def fill_in(target):
     """VAE integration: encode `target` and decode an alternative to it. If called in pre-`target` RNN state, produces target's info and alternative-target's info.
 
@@ -423,7 +447,7 @@ def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
         loss = predict_loss + dist_loss + ungrounded_dist_loss + reg_loss
         return loss
 
-def replay(optim, current_frame, current_time):
+def replay(optim, current_frame, current_time): # TODO: …Don't replay, *maybe*?…
     """Remembers a frame from a distant past, so that the NN can reinforce actions and observations when it needs to go to the present."""
     if len(replay_buffer) < 8: return
 
@@ -453,6 +477,7 @@ def replay(optim, current_frame, current_time):
 
 
 
+# Unroll.
 @sn.run
 async def main():
     direction = None
