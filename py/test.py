@@ -56,7 +56,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: The func `global_dist(final_dist_pred, smudges) → (dists, smudges)` to combine dists & smudgings across time-steps to compute prediction targets. The last ones are last-prediction-plus-1 (unless goal is reached, in which case, 0); smudgings become their cumulative-minima from themselves to the end; distances become 0 when local-smudgings are equal to global-smudgings, else next-dist-plus-1 (computed via "0 at targets, 1 elsewhere, then cumsum" followed by subtracting "that-cumsum at targets, 0 elsewhere, then cumsum").
 # TODO: During unroll, preserve all dist/smudge predictions and all (per-goal-group) local per-goal dist/smudge.
 #   TODO: Whenever we change a goal, compute all global dists and minimize prediction loss.
 # TODO: In `full_loss` or whenever, keep track of int32 per-cell indices of goal-groups, and use them to index `stack`ed global dists/smudgings.
@@ -64,9 +63,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: Learn the min-smudging too, just like distances. (Should become 0 where reachable, and min-possible-distance where unreachable.)
 # TODO: Remove `replay_buffer` entirely; no goal-relabeling at all. Don't just learn distances from local information, but instead minimize losses during rollouts.
 
-# TODO: Should we generate `dst` cells every step with the same latents, and make them all predict the real/first `dst` whenever the condition fits (dist-error is higher and smudging is lower)? Good idea to make this temporally-coherent, right — since the whole path does have the same `dst` as a potential future?
+# TODO: Should we generate `dst` cells every step with the same latents, and make them all predict the real/first `dst` whenever the condition fits (dist-error is higher (either locally or anywhere-in-the-future) and smudging is lower)? Good idea to make this temporally-coherent, right — since the whole path does have the same `dst` as a potential future?
 # TODO: Should we generate `dst`-sized `src` cells every step with the same latents as `dst`, and predict the original `dst` whenever we reach the goal (target-distance is 0)? Is the role of `src` to simply invert `dst`, and in doing so, potentially provide valid-but-imagined `dst`s? (…Actually sounds plausible…)
 #   TODO: …If we do this only at the goal, then we'd kinda be ensuring that everything *between* at-`dst` and at-`src` steps doesn't fit the criterion, right? Or would NN optimization tend toward that and thus naturally collapse all distances to 1, meaning that we need more mechanisms to ensure faraway distinctness? …I think in our formulation, `src` really would slowly collapse toward 1-dist, since it'd sometimes sample `dst` prematurely…
+#   TODO: …Or maybe `src` should predict *itself* whenever there is anything high-dist-error in the past? This way, if distance has collapsed to 1, then at least `src` would stop being generated.
 
 # TODO: …Should we replace DODGE with proper BPTT when predicted-distance is short — or how to combine, maybe doing both at the exact same time but with different horizons?…
 
@@ -110,6 +110,20 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: …May want a hyperparam for what to do with digital inputs: leave as binary encodings, VS lookup in a learnable table, VS lookup in a fixed random table…
+
+
+
+
+
+
+# TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
+
+
+
+
+
+
+# TODO: …Maybe also add support for nucleus sampling, so that we don't very-rarely sample overly-low-probability discrete actions?…
 
 
 
@@ -350,7 +364,7 @@ print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else 
 
 
 # Computable-on-unroll distances.
-def local_dist(base, goal):
+def local_dist(base: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
     """`local_dist(base, goal) → smudge`
 
     Given sets of cells of observations & goals, computes local-dist (smudging) between them, which is 0 when the `goal` is 100% reached and more when not. (Learned pathfinding should select min-dist actions among min-smudging paths, so that even unreachable goals can have best-effort paths known instead of being out-of-distribution.)
@@ -363,7 +377,20 @@ def local_dist(base, goal):
         base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge)
         cross_smudges = (base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2)).abs().sum(-1)
         return cross_smudges.min(-2)[0].mean(-1)
-# TODO: The func `global_dist(final_dist_pred, smudges) → (dists, smudges)` to combine dists & smudgings across time-steps to compute prediction targets. The last ones are last-prediction-plus-1 (unless goal is reached, in which case, 0); smudgings become their cumulative-minima from themselves to the end; distances become 0 when local-smudgings are equal to global-smudgings, else next-dist-plus-1 (computed via "0 at targets, 1 elsewhere, then cumsum" followed by subtracting "that-cumsum at targets, 0 elsewhere, then cumsum").
+def global_dist(smudges: torch.Tensor, final_dist_pred: torch.Tensor, final_smudge_pred: torch.Tensor):
+    """`global_dist(smudges, final_dist_pred, final_smudge_pred) → (smudge, dists)`
+
+    On a path to a goal, the min local-dist (`smudge`) is considered the best that we can do to reach it. `dists` before it will count out the steps to reach it, to be used as prediction targets."""
+    assert final_dist_pred.shape[-1] == final_smudge_pred.shape[-1] == 1
+    smudges, final_dist_pred, final_smudge_pred = detach(smudges), detach(final_dist_pred), detach(final_smudge_pred)
+    with torch.no_grad():
+        smudge = smudges.min(-1, keepdim=True)[0].min(final_smudge_pred + 1)
+        reached = smudges <= smudge+1
+        next_of_reached = torch.cat((torch.zeros(*reached.shape[:-1], 1), reached[..., :-1].float()), -1)
+        dists = final_dist_pred + torch.arange(1, reached.shape[-1]+1) # Count-out.
+        left_scan = ((dists - 1) * next_of_reached).cummax(-1)[0]
+        dists = (dists - left_scan).flip(-1)
+        return (smudge, dists)
 
 
 
