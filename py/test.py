@@ -56,33 +56,22 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: During unroll, preserve all dist & smudge predictions (computed when we input prev-act and next-obs stuff into `transition_`) (ALL predictions along with goal-group-index for looking up targets, no averaging) and all per-goal-group smudges via `local_dists`.
-#   TODO: Whenever we change a goal, compute all `global_dists` and minimize prediction loss.
-#     TODO: …We should rewrite `full_loss` to no longer perform all those extra manipulations on `dst`, right?… TODO: Write down the changes.
-#       …Do "the changes" consist of removing `dst`-manipulation stuff (since `goal`s should be already prepended, right?) and changing gating of goal-cells to max-error (and changing all gating to also require smudging to be same-or-less)?
-#       …Since dist-targets are not known locally, `full_loss` *might* have to be split into `local_loss` (learning gated-by-dist/smudge-predictions of cell contents) and `global_loss` (learning dists/smudge; its args are probably *just* pred/target dist/smudge, and it should probably only learn losses)… TODO: Implementation details?
-# TODO: In `full_loss` or whenever, keep track of int32 per-cell indices of goal-groups, and use them to index `stack`ed global dists/smudgings.
-#   TODO: Learn the min-smudging too, just like distances. (The target is 1 number per goal-group for the entire trajectory.)
-#   TODO: Gate losses by decreasing-smudges.
-# TODO: Remove `replay_buffer` entirely; no goal-relabeling at all. Don't just learn distances from local information, but instead minimize losses during rollouts: when we save full frames to the replay buffer, get `L = full_loss(…)` inputs and `dodge.minimize(L)`.
+# TODO: Stop sampling goals from the replay buffer, and start *generating* goals:
+#   TODO: Make `unroll` `sample` the `goal`s (with a random cell-count, possibly 0…current_cells) instead of using `replay_buffer`, with RNN-input being all-0 but with the goal-group both at the input and overriden to be at the output.
+#   TODO: In `full_loss`:
+#     TODO: No longer do `dst` manipulations — and in fact, don't accept `dst` nor `timediff` at all (nor `regret_cpu`, nor `prev_ep`); goal-cells should already be inside `frame`.
+#     TODO: When sampling an autoencoding prediction, goal-cells should start from all-0 (goal-group-only), whereas others should start from name-only.
+#     TODO: More complex gating of autoencoding: for goal-cells, "OK" means "sample-dist is not as expected" (whereas for other cells, "OK" means "sample-dist is lower").
+#       ([Generated](http://proceedings.mlr.press/v100/nair20a/nair20a.pdf) goals are then neither too hard (AKA when never occuring as real targets) nor too easy (AKA when we know what we can do and then reliably do it, with no dist-error).) (Related to: [AMIGo](https://arxiv.org/pdf/2006.12122.pdf), [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf). Fits tighter than either.)
+#   TODO: Remove `replay_buffer` and `replay` entirely.
 
 
 
-# TODO: Stop sampling goals from the replay buffer, and start *generating* goals (much like in http://proceedings.mlr.press/v100/nair20a/nair20a.pdf):
-#   TODO: In `full_loss`, get latents of `dst` first, then sample & use those latents to turn 0-filled `dst`-sized cells into `dst` (in the same GPU-call as the rest of the `frame`) if good.
-#     TODO: For goals, "good" means "sample-dist is higher" (whereas for actions, "good" means "sample-dist is lower"). (Goals are then neither too hard (AKA when never occuring as real targets) nor too easy (AKA when real-dist is lower than expected).)
-#       (This is [AMIGo](https://arxiv.org/pdf/2006.12122.pdf)-inspired. Alternatively, could make goals learn regret rather than dists and maximize regret rather than dists; or even be [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf)-like and have an ensemble of RNNs, and maximize dist-error.)
-#       TODO: Possibly, for goals, "good" should mean "sample-dist is not as expected". (So that faster-than-expected paths still have opportunity to be retreated and learned-from more.)
-#   TODO: At unroll-time & goal-selection-time, rather than choosing anything from the replay buffer, simply choose a random number of goal-cells to generate (and a `torch.randn` latent) then generate them.
-
-
-
-# TODO: Should we generate `dst` cells every step with the same latents (stored per-goal-group) (RNN-input is all-0s but with goal-group-id), and make them all predict the real/first `dst` whenever the condition fits (dist-error is higher (either locally or anywhere-in-the-future) and smudging is lower)? Good idea to make this temporally-coherent, right — since the whole path does have the same `dst` as a potential future?
-#   Or maybe "with the same latents" should mean "autoencode the same `goal` that's appended to the frame each time", with no interference on latents?
-# TODO: Should we generate a few `dst`-latent (or random-latent?) `src` cells every step with a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), and predict/autoencode themselves whenever the path has contained any dist-prediction errors (so, same as `dst`'s gating, but for the past instead for the future)? So that `dst` can strive toward non-input unpredictable outcomes?
-#   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
-#   TODO: POSSIBLY WANT `dst`-generation to be conditioned on whether it can only use `src`-cells, and compute separate dists & smudges for `src`-only learning, and have a hyperparam that makes only `src` cells generatable (envs can still specify input-space goals).
-#     TODO: If so, WANT an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
+# TODO: Split `full_loss` into `local_loss` which does gated-autoencoding (only needs `frame` as input) (returns loss and dist-pred and smudge-pred) and `global_loss` which learns distances (only needs dist/smudge predictions and targets as inputs) (returns loss).
+# TODO: In `global_loss`, learn the min-smudging too, just like distances. (The target is 1 number per goal-group for the entire trajectory.)
+# TODO: In `local_loss`, gate autoencoding by decreasing-smudging.
+# TODO: During unroll, preserve all dist & smudge predictions (computed when we input prev-act and next-obs stuff into `transition_`) (ALL predictions along with goal-group-index for looking up targets, no averaging) and all per-goal-group smudges (computed via `local_dists`) in a list.
+#   TODO: Whenever we change a goal in `unroll`, empty that list: compute all `global_dists`, compute `L = global_loss(…)`, and `dodge.minimize(L)`.
 
 
 
@@ -93,6 +82,13 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #     TODO: Have a hyperparam that makes digital-generation detect distinct goal-groups and generate digital-cells in parallel for distinct groups. For speed.
 #   TODO: Make `sn.Int` put everything in at the same time, nothing autoregressive. (Big-int goals will then be possible.)
 #   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
+
+
+
+# TODO: Should we generate a few random-latent `src` cells every step with a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), and predict/autoencode themselves whenever the path has contained any dist-prediction errors (so, same as `dst`'s gating, but for the past instead for the future)? So that `dst` can strive toward non-input unreliably-reachable outcomes?
+#   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
+#   TODO: POSSIBLY WANT `dst`-generation to be conditioned on whether it can only use `src`-cells, and compute separate dists & smudges for `src`-only learning, and have a hyperparam that makes only `src` cells generatable (envs can still specify input-space goals).
+#     TODO: If so, WANT an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
 
 
 
@@ -507,9 +503,9 @@ def replay(optim, current_frame, current_time): # TODO: …Don't replay, *maybe*
 
 
 
-# Unroll.
+# The main loop.
 @sn.run
-async def main():
+async def unroll():
     direction = None
     def update_direction():
         nonlocal direction
