@@ -56,32 +56,15 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: During unroll, preserve all dist/smudge predictions and all (per-goal-group) local per-goal dist/smudge.
-#   TODO: Whenever we change a goal, compute all global dists and minimize prediction loss.
+# TODO: During unroll, preserve all dist/smudge predictions (computed when we input prev-act and next-obs stuff into `transition_`) and all (per-goal-group) local per-goal dist/smudge.
+#   TODO: Whenever we change a goal, compute all `global_dists` and minimize prediction loss.
+#     TODO: …We should rewrite `full_loss` to no longer perform all those extra manipulations on `dst`, right?… TODO: Write down the changes.
+#       …Since dist-targets are not known locally, `full_loss` *might* have to be split into `local_loss` (learning gated-by-dist/smudge-predictions of cell contents) and `global_loss` (learning dists/smudge)…
 # TODO: In `full_loss` or whenever, keep track of int32 per-cell indices of goal-groups, and use them to index `stack`ed global dists/smudgings.
-#   TODO: Make `transition_` also output smudging-prediction (2**out-1).
-#   TODO: Learn the min-smudging too, just like distances. (Should become 0 where reachable, and min-possible-distance where unreachable.)
-# TODO: Remove `replay_buffer` entirely; no goal-relabeling at all. Don't just learn distances from local information, but instead minimize losses during rollouts.
-
-# TODO: Should we generate `dst` cells every step with the same latents, and make them all predict the real/first `dst` whenever the condition fits (dist-error is higher (either locally or anywhere-in-the-future) and smudging is lower)? Good idea to make this temporally-coherent, right — since the whole path does have the same `dst` as a potential future?
-# TODO: Should we generate `dst`-sized `src` cells every step with the same latents as `dst`, and predict the original `dst` whenever we reach the goal (target-distance is 0)? Is the role of `src` to simply invert `dst`, and in doing so, potentially provide valid-but-imagined `dst`s? (…Actually sounds plausible…)
-#   TODO: …If we do this only at the goal, then we'd kinda be ensuring that everything *between* at-`dst` and at-`src` steps doesn't fit the criterion, right? Or would NN optimization tend toward that and thus naturally collapse all distances to 1, meaning that we need more mechanisms to ensure faraway distinctness? …I think in our formulation, `src` really would slowly collapse toward 1-dist, since it'd sometimes sample `dst` prematurely…
-#   TODO: …Or maybe `src` should predict *itself* whenever there is anything high-dist-error in the past? This way, if distance has collapsed to 1, then at least `src` would stop being generated.
-
-# TODO: …Should we replace DODGE with proper BPTT when predicted-distance is short — or how to combine, maybe doing both at the exact same time but with different horizons?…
-
-# TODO: …Wait: `sn.Int(…, goal=True)` would be autoregressive, wouldn't it?… How would we fix this…
-#   …And, our goal-specification tactic is a bit terrible for non-`.sensors` envs because we can hardly re-send goals on every timestep like it's nothing…
-# TODO: Have a hyperparam for how many cells to allow before splitting into several RNN calls; and split accordingly. (This could be the key to proper-goal-Ints: if we can set it to 1 without a drop in performance (either speed or loss), then we could forget about autoregressivity in `sn` and just give literally everything immediately, allowing well-founded goal specification.)
-
-# TODO: Possibly, to make the `full_loss` match unroll's "sample name-only queries to get actions" better, leave out random cells from predictions. Even from inputs. (Currently, we're only "leaving them out" by assigning random group IDs to what we don't want, but maybe we should also just delete some cells.)
-#   And will this be future-proof? Will we still want to do this once we're learning online and all… …What could make this irrelevant is order-dependent autoregressivity.
-
-# TODO: Have `gated_generative_loss(pred_dist, pred_logits, target_dist, target_logits)`, with both dist-min obs/act and dist-max goals learned.
-# TODO: Make `full_loss` use `gated_generative_loss` now, in addition to learning distances and modifying `dst` and all that.
-# TODO: Make unrolls disable DODGE before `replay` (which is inside a new `State.Episode` which first updates all state to be detach(state); OR, just don't care about forward-grad) then re-enable it with the old direction after it.
-# TODO: Make unrolls, when we save full frames to the replay buffer, use `fill_in(frame)` to get `L = gated_generative_loss(…)` inputs and `dodge.minimize(L)`.
-# …Could online-dist-learning make this generative-loss-only func irrelevant?…
+#   …Or we could use `goal_group_ids` and match goal groups in `frame`…
+#   TODO: Learn the min-smudging too, just like distances.
+#   TODO: Gate losses by decreasing-dists.
+# TODO: Remove `replay_buffer` entirely; no goal-relabeling at all. Don't just learn distances from local information, but instead minimize losses during rollouts: when we save full frames to the replay buffer, get `L = full_loss(…)` inputs and `dodge.minimize(L)`.
 
 
 
@@ -94,15 +77,30 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# TODO: Should we generate `dst` cells every step with the same latents (stored per-goal-group) (RNN-input is all-0s but with goal-group-id), and make them all predict the real/first `dst` whenever the condition fits (dist-error is higher (either locally or anywhere-in-the-future) and smudging is lower)? Good idea to make this temporally-coherent, right — since the whole path does have the same `dst` as a potential future?
+# TODO: Should we generate a few `dst`-latent (or random-latent?) `src` cells every step with a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), and predict/autoencode themselves whenever the path has contained any dist-prediction errors (so, same as `dst`'s gating, but for the past instead for the future)? So that `dst` can strive toward non-input unpredictable outcomes?
+#   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
+#   TODO: POSSIBLY WANT `dst`-generation to be conditioned on whether it can only use `src`-cells, and compute separate dists & smudges for `src`-only learning, and have a hyperparam that makes only `src` cells generatable (envs can still specify input-space goals).
+#     TODO: If so, WANT an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
 
 
-# TODO: Allow `dst` to be not only inputs but also whole RNN states, for full generality (by having not only sampled goals-in-the-future but also sampled goals-for-the-past, and reinforcing them when good):
-#   TODO: Make `replay` generate a few extra `src`-cells for `dst`, with random latents and a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), in a disposable `State.Episode` inside destination's RNN context. Pass those latents to `gated_generative_loss`, after artificially setting their goal-bit to 1.
-#   TODO: Make `gated_generative_loss` compute & use latents for the whole frame, including `dst` now.
-#   TODO: Make `gated_generative_loss` not use `detach` on prediction targets, so that `src`-cells can get gradient too. (Now, it should automatically reinforce `src`-cells to be the hardest-to-reach `dst`s, and the other way around.)
-#   (For stability, might need momentum-slowing for targets if possible.) (…In fact, momentum-slowing might even be required for dists.)
-#   TODO: NEED a hyperparam that makes `gated_generative_loss` never predict non-`src` `dst`, so that unrolls only go toward internal-state goals, but envs can still specify extra input-space goals.
-#     TODO: NEED an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
+
+# TODO: …Wait: `sn.Int(…, goal=True)` is autoregressive and thus can't be specified at every single timestep, because ints are not limited to single timesteps…
+#   …The problem is that we *can't* give up the speed advantage of putting many cells through the RNN in parallel, but at the same time, we also can't let `Int`s be spread across multiple timesteps because then big-`Int` goals are impossible…
+#     TODO: …Maybe `sn` should explicitly handle within-step dependencies, by making `handle` also return a list/tuple of per-stage end-of-stage (so `[cells]` if without dependencies, `[N, cells]` with 1, etc), and making `pipe` know & handle that, and POSSIBLY making `set`/`query`/`get` be able to accept tuples/lists of datatypes to be put in-sequence (implemented via temporary-internal-state: make each outer global call establish a context in which each inner global call appends to a new stage, which is good-enough because our async-semantics schedule data immediately)?… And possibly have the `sn.List` datatype, known in `_default_typing` (and, default-typable datatypes should mention their own alternative forms in docs)?…
+#       …Actually, maybe it's in fact better to generate *everything* that came from a single env autoregressively?… Or is it better to allow envs to decide, which would be easy if we have `sn.List`s… If we allow envs to decide, then we can have envs that compare both ways, in terms of both speed and loss…
+#       …And what if there are *inter*-env dependencies? Do we really want to spend this much time on limiting the model's capabilities?
+#         TODO: For generality, maybe we should make `sn` blissfully unaware of discrete-sampling difficulties, but only here, generate all analog cells in parallel first and then generate ALL discrete cells autoregressively (very slow but correct)? In the worst case, we can still regain a lot of performance by autodetecting goal-groups and autoregressively generating each group's ints in parallel.
+
+
+
+
+
+
+# TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
+#   …Maybe instead of BPTT with its periodic-stalling, we should do backprop-less DODGE online (even with `dodge_optimizes_params=1`, it should help quite a bit) with ≈1000-step-delayed one-step synth-grad learning following at a distance… Disabling DODGE before that and re-enabling it with the old direction afterward… Possibly even with Reptile or MAML…
+
+# TODO: Do dropout of frame-cells when doing synth-grad replays (forward-unroll with DODGE can see all). (This will make sampling actions-without-next-frame at unroll-time not out-of-distribution, *and* make the net try to minimize dependencies on inputs.)
 
 
 
@@ -116,14 +114,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
-
-
-
-
-
-
-# TODO: …Maybe also add support for nucleus sampling, so that we don't very-rarely sample overly-low-probability discrete actions?…
+# TODO: …Maybe also add support for nucleus sampling (like zeroing out all probabilities that are less than 1/40 and re-normalizing), so that we don't very-rarely sample overly-low-probability discrete actions?…
 
 
 
@@ -247,7 +238,7 @@ replay_buffer = []
 #   Via carefully engineering the loss, users can have entirely separate threads of experience that reach ALL the goals in their group (but the NN can of course learn to share data between its threads).
 def goal_group_ids(frame):
     """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
-    return set(name.tobytes() for name in np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0))
+    return np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)
 
 
 
@@ -336,22 +327,22 @@ try:
     transition = torch.load(save_load)
 except FileNotFoundError:
     transition = nn.Sequential(
-        # `(frame, latent) → (name_and_logits_or_values, latent_mean, latent_var_log, dist)`
+        # `(frame, latent) → (name_and_logits_or_values, latent_mean_and_var_log, dist, smudge)`
         #   `frame` is goals and prev-actions and next-observations.
         #   `latent` is for VAEs: sampled from a normal distribution with learned mean & variance-logarithm.
         nn.Linear(sum(cell_shape) + latent_sz, state_sz),
         h(state_sz, state_sz),
         h(state_sz, state_sz),
-        h(state_sz, sum(cell_shape[:-1])+choices_per_cell + 2*latent_sz + 1),
+        h(state_sz, sum(cell_shape[:-1])+choices_per_cell + 2*latent_sz + 1 + 1),
     )
 def transition_(x, latent=...):
-    """Wraps `transition` to return a tuple of `(name_and_logits, latent_info, distance)`. `name_and_logits` is for `Sampler`, `latent_info` is for `normal` and `make_normal`."""
+    """Wraps `transition` to return a tuple of `(name_and_logits, latent_info, distance, smudge)`. `name_and_logits` is for `Sampler`, `latent_info` is for `normal` and `make_normal`."""
     if latent is ...:
         latent = torch.randn(x.shape[0], latent_sz)
     assert len(x.shape) == 2 and len(latent.shape) == 2 and x.shape[0] == latent.shape[0] and latent.shape[1] == latent_sz
     y = transition(torch.cat((x, latent), -1))
     lt = 2*latent_sz
-    return y[:, :-(lt+1)], y[:, -(lt+1) : -1], 2 ** y[:, -1:]
+    return y[:, :-(lt+1)], y[:, -(lt+1) : -2], 2 ** y[:, -2:-1], 2 ** y[:, -1:] - 1
 dodge = DODGE(transition) # For forward-gradient-feedback potentially-very-long-unrolls RNN training.
 optim = torch.optim.Adam(transition.parameters(), lr=lr)
 sample = Sampler(transition_, choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
@@ -377,14 +368,16 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge)
         cross_smudges = (base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2)).abs().sum(-1)
         return cross_smudges.min(-2)[0].mean(-1)
-def global_dist(smudges: torch.Tensor, final_dist_pred: torch.Tensor, final_smudge_pred: torch.Tensor):
-    """`global_dist(smudges, final_dist_pred, final_smudge_pred) → (smudge, dists)`
+# TODO: …Wouldn't we also like to have `local_dists` which splits BOTH base & goal into matching goal-groups, then measures per-goal-group smudges? Would free us from having to do this in `full_loss`, right?
+#   …Wouldn't we want NumPy names for this?… …The goal-cells list is likely pre-prepared by the unroll, but `base` is not split into goal-groups and we need to do so via NumPy…
+def global_dists(smudges: torch.Tensor, final_dist_pred: torch.Tensor, final_smudge_pred: torch.Tensor):
+    """`global_dists(smudges, final_dist_pred, final_smudge_pred) → (smudge, dists)`
 
     On a path to a goal, the min local-dist (`smudge`) is considered the best that we can do to reach it. `dists` before it will count out the steps to reach it, to be used as prediction targets."""
     assert final_dist_pred.shape[-1] == final_smudge_pred.shape[-1] == 1
     smudges, final_dist_pred, final_smudge_pred = detach(smudges), detach(final_dist_pred), detach(final_smudge_pred)
     with torch.no_grad():
-        smudge = smudges.min(-1, keepdim=True)[0].min(final_smudge_pred + 1)
+        smudge = smudges.min(-1, keepdim=True)[0].min(final_smudge_pred + 1) # TODO: Maybe "smudging" should be copied if we neither reached the goal nor did we claim to, and copied+1 if we're claiming to be close? …But then, it's not enough to have just *final* dist preds, we need to have *all*…
         reached = smudges <= smudge+1
         next_of_reached = torch.cat((torch.zeros(*reached.shape[:-1], 1), reached[..., :-1].float()), -1)
         dists = final_dist_pred + torch.arange(1, reached.shape[-1]+1) # Count-out.
@@ -401,16 +394,17 @@ def fill_in(target):
     """VAE integration: encode `target` and decode an alternative to it. If called in pre-`target` RNN state, produces target's info and alternative-target's info.
 
     Result: `((target_dist, target, target_logits), (pred_dist, pred, pred_logits), regularization_loss)`"""
+    # TODO: Shouldn't this *also* output smudgings? So that we could predict them, and gate by them?
     assert len(target.shape) == 2
     with State.Episode(start_from_initial=False): # Decoder & distance.
-        _, target_latent_info, target_dist = transition_(target)
+        _, target_latent_info, target_dist, _ = transition_(target)
         target_logits = sample.target(target)
         target_latent = normal(target_latent_info)
         regularization_loss = make_normal(target_latent_info).sum(-1, keepdim=True)
     name_sz = sn.cell_size - cell_shape[-1]
     pred, pred_logits = sample(target[:, : name_sz], target_latent) # Encoder.
     with State.Episode(start_from_initial=False): # Distance.
-        _, _, pred_dist = transition_(pred)
+        _, _, pred_dist, _ = transition_(pred)
     return ((target_dist, target, target_logits), (pred_dist, pred, pred_logits), regularization_loss)
 
 def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
@@ -534,7 +528,7 @@ async def main():
                         frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
                         not_goal_cells = ~sample.goal_mask(frame_names)[:, 0]
                         prev_q = query
-                        groups = goal_group_ids(frame_names)
+                        groups = set(name.tobytes() for name in goal_group_ids(frame_names))
 
                         # Zero-pad `query` to be action-sized.
                         obs, query = torch.tensor(obs), torch.tensor(query)
@@ -543,6 +537,7 @@ async def main():
                         life_to_save = life.clone(remember_on_exit=False)
 
                         # Delete/update our `goals` when we think we reached them.
+                        #   TODO: Sample `dst` instead of this `replay_buffer` sampling. (Possibly generated along with the rest of the query at every step, with the same latents until the goal is changed.)
                         for group, (cells, expiration_cpu, expiration_gpu) in goals.copy().items():
                             if time > expiration_cpu:
                                 del goals[group]
@@ -570,7 +565,7 @@ async def main():
                         if len(extra_cells): frame = torch.cat([*extra_cells, frame], 0)
 
                         # Give prev-action & next-observation, remember distance estimates, and sample next action.
-                        _, _, dist = transition_(frame)
+                        _, _, dist, _ = transition_(frame)
                         n = 0
                         for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
                             # (If we do better than expected, we leave early.)

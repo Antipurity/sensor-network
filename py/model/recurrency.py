@@ -225,6 +225,7 @@ class DeltaNet(nn.Module):
     [DeltaNet](https://arxiv.org/abs/2102.11174): a linear-time RNN-like alternative to self-attention, with some meta-learning built-in.
     - `ins`, `outs`: sizes of input & output vectors.
     - `heads`: splits inputs into this many sub-tensors, operates on each independently, then reassembles.
+    - `device`: important to pass in; `model.to(device)` won't work due to `State`.
 
     Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.    
     (The sequence of input vectors has to be presented not in parallel, but one-by-one. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, update_count, ins)`; `update_count` can be used to perform many updates at once at the cost of correctness.)
@@ -246,6 +247,7 @@ class DeltaNet(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.softmax = Softmax(-1)
     def forward(self, x):
+        assert len(x.shape) >= 2
         h, si, sm = self.heads, self.sigmoid, self.softmax
 
         W = self.fast()
@@ -284,6 +286,7 @@ class SRWM(nn.Module):
     def __call__(self, x):
         # This is less efficient than https://github.com/IDSIA/modern-srwm/blob/main/reinforcement_learning/torchbeast/self_ref_v1/self_ref_v1.cu
         #   But are these 10 lines more comprehensible than those 1671?
+        assert len(x.shape) >= 2
         h, si, sm = self.heads, self.sigmoid, self.softmax
 
         W = self.W()
@@ -393,6 +396,32 @@ if __name__ == '__main__': # pragma: no cover
         assert (s() == torch.tensor([[6.]])).all()
     @run
     def test8():
+        """`SRWM` is literally 50 times faster with parallel queries. (At least partially because it's CPU-bound.)"""
+        dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+        def env(name, net, ins):
+            import time;  start = time.monotonic()
+            groups = 100
+            with torch.no_grad():
+                for _ in range(groups):
+                    with State.Episode():
+                        for x in ins:
+                            net(x)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize(dev)
+            end = time.monotonic()
+            print(name, (end - start) / groups, 'sec/call')
+        N = 256
+        net = nn.Sequential(
+            nn.Linear(N, N),
+            *[nn.Sequential(
+                SkipConnection(nn.ReLU(), nn.LayerNorm(N), SRWM(N, N, heads=2, device=dev)),
+                SkipConnection(nn.ReLU(), nn.LayerNorm(N), nn.Linear(N, N)),
+            ) for _ in range(20)],
+        ).to(dev)
+        env('64-in-one', net, [torch.randn(64, N, device=dev)])
+        env('One-after-another', net, [torch.randn(1, N, device=dev) for _ in range(64)])
+    @run
+    def test9():
         """`RNN`, `DeltaNet`, `SRWM` can all learn to remember state."""
         N, batch_sz = 32, 16
         def example():
