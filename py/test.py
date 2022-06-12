@@ -85,12 +85,13 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Wait: `sn.Int(…, goal=True)` is autoregressive and thus can't be specified at every single timestep, because ints are not limited to single timesteps…
-#   …The problem is that we *can't* give up the speed advantage of putting many cells through the RNN in parallel, but at the same time, we also can't let `Int`s be spread across multiple timesteps because then big-`Int` goals are impossible…
-#     TODO: …Maybe `sn` should explicitly handle within-step dependencies, by making `handle` also return a list/tuple of per-stage end-of-stage (so `[cells]` if without dependencies, `[N, cells]` with 1, etc), and making `pipe` know & handle that, and POSSIBLY making `set`/`query`/`get` be able to accept tuples/lists of datatypes to be put in-sequence (implemented via temporary-internal-state: make each outer global call establish a context in which each inner global call appends to a new stage, which is good-enough because our async-semantics schedule data immediately)?… And possibly have the `sn.List` datatype, known in `_default_typing` (and, default-typable datatypes should mention their own alternative forms in docs)?…
-#       …Actually, maybe it's in fact better to generate *everything* that came from a single env autoregressively?… Or is it better to allow envs to decide, which would be easy if we have `sn.List`s… If we allow envs to decide, then we can have envs that compare both ways, in terms of both speed and loss…
-#       …And what if there are *inter*-env dependencies? Do we really want to spend this much time on limiting the model's capabilities?
-#         TODO: For generality, maybe we should make `sn` blissfully unaware of discrete-sampling difficulties, but only here, generate all analog cells in parallel first and then generate ALL discrete cells autoregressively (very slow but correct)? In the worst case, we can still regain a lot of performance by autodetecting goal-groups and autoregressively generating each group's ints in parallel.
+# TODO: Make docs of `sn.Int` mention its alternative/`_default_typing` forms.
+# TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
+#   TODO: `Sampler`:
+#     TODO: NumPy-detect analog & digital cells. First generate all analog cells in parallel, then generate all digital cells autoregressively. (And make `__call__` able to be conditioned on a `target`, instead of on-policy outputs.) (And have `.loss(…)` that does target-conditioned generation and prediction of `.target(…)`.) (And make `full_loss` and `fill_in` make sampling target-aware.)
+#     TODO: Have a hyperparam that makes digital-generation detect distinct goal-groups and generate digital-cells in parallel for distinct groups. For speed.
+#   TODO: Make `sn.Int` put everything in at the same time, nothing autoregressive. (Big-int goals will then be possible.)
+#   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
 
 
 
