@@ -96,7 +96,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
-#   …Maybe instead of BPTT with its periodic-stalling, we should do backprop-less DODGE online (even with `dodge_optimizes_params=1`, it should help quite a bit) with ≈1000-step-delayed one-step synth-grad learning following at a distance… Disabling DODGE before that and re-enabling it with the old direction afterward… Possibly even with Reptile or MAML…
+#   …Maybe instead of BPTT with its periodic-stalling, we should do backprop-less DODGE online (even with `dodge_optimizes_params=1`, it should help quite a bit) with ≈1000-step-delayed one-step synth-grad learning following at a distance… Disabling DODGE before that and re-enabling it with the old direction afterward… Possibly even with Reptile or MAML, though [it may be superfluous with enough layers](https://arxiv.org/abs/2106.09017)…
 
 # TODO: Do dropout of frame-cells when doing synth-grad replays (forward-unroll with DODGE can see all). (This will make sampling actions-without-next-frame at unroll-time not out-of-distribution, *and* make the net try to minimize dependencies on inputs.)
 
@@ -347,7 +347,7 @@ print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else 
 
 
 # Our interface to multigroup combined-cells goals (OR/AND goals): the last name part is `group_id`, AKA user ID.
-#   Via us carefully engineering the loss, users can have entirely separate threads of experience that reach any goals in their group (but the NN can of course learn to share data between its threads).
+#   Via careful engineering here, users can have entirely separate threads of experience that reach any goals in their group (but the NN can of course learn to share data between its threads).
 def goal_groups(frame):
     """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
     return np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)
@@ -359,7 +359,7 @@ def local_dists(base: torch.Tensor, goals) -> torch.Tensor:
     smudges = [local_dist(base, goal, group) for (group, goal, _, _) in goals.values()]
     return torch.stack(smudges) if len(smudges) else torch.tensor([])
 def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
-    """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance.
+    """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
     Quadratic time complexity."""
     assert len(base.shape) == len(goal.shape) == 2 and base.shape[-1] == goal.shape[-1] == sn.cell_size
@@ -374,17 +374,19 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
         base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge)
         cross_smudges = (.5*(base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2))).clamp(0., 1.).abs().sum(-1)
         return torch.where(same_group, cross_smudges, max_smudge).min(-2)[0].mean(-1)
-def global_dists(smudges: torch.Tensor, final_dist_pred: torch.Tensor, final_smudge_pred: torch.Tensor):
-    """`global_dists(smudges, final_dist_pred, final_smudge_pred) → (smudge, dists)`
+def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: torch.Tensor):
+    """`global_dists(smudges, dists_pred, smudges_pred) → (smudge, dists)`
 
-    On a path to a goal, the min local-dist (`smudge`) is considered the best that we can do to reach it. `dists` before it will count out the steps to reach it, to be used as prediction targets."""
-    assert final_dist_pred.shape[-1] == final_smudge_pred.shape[-1] == 1
-    smudges, final_dist_pred, final_smudge_pred = detach(smudges), detach(final_dist_pred), detach(final_smudge_pred)
+    On a path to a goal, the min local-dist (`smudge`) measures how close we can come. `dists` will count out the steps to reach it, to be used as prediction targets."""
+    assert smudges.shape == dists_pred.shape == smudges_pred.shape
+    smudges, dists_pred, smudges_pred = detach(smudges), detach(dists_pred), detach(smudges_pred)
     with torch.no_grad():
-        smudge = smudges.min(-1, keepdim=True)[0].min(final_smudge_pred + 1) # TODO: Maybe "smudging" should be copied if we neither reached the goal nor did we claim to, and copied+1 if we're claiming to be close? …But then, it's not enough to have just *final* dist preds, we need to have *all*…
+        are_we_claiming_to_have_arrived = (dists_pred < smudges.shape[-1]).any(-1, keepdim=True)
+        smudge = smudges.min(-1, keepdim=True)[0]
+        smudge = smudge.min(smudges_pred[..., -1:] + (~are_we_claiming_to_have_arrived).float())
         reached = smudges <= smudge+1
         next_of_reached = torch.cat((torch.zeros(*reached.shape[:-1], 1), reached[..., :-1].float()), -1)
-        dists = final_dist_pred + torch.arange(1, reached.shape[-1]+1) # Count-out.
+        dists = dists_pred[..., -1:] + torch.arange(1, reached.shape[-1]+1) # Count-out.
         left_scan = ((dists - 1) * next_of_reached).cummax(-1)[0]
         dists = (dists - left_scan).flip(-1)
         return (smudge, dists)
@@ -465,7 +467,7 @@ def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
         log(1, False, torch, predict_loss=predict_loss, dist_loss=dist_loss, ungrounded_dist_loss=ungrounded_dist_loss, reg_loss=reg_loss)
         n = 2
         for name, env in envs.items():
-            if hasattr(env, 'metric'):
+            if hasattr(env, 'metric'): # The list of envs for which this is true shouldn't ever change.
                 log(n, False, torch, **{name+'.'+k: v for k,v in env.metric().items()})
                 n += 1
         # TODO: …How can we possibly fix the loss not decreasing?…
