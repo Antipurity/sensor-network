@@ -58,6 +58,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Stop sampling goals from the replay buffer, and start *generating* goals:
 #   TODO: In `full_loss`:
+#     (May want to split first, to change-a-copy instead of change-in-place.)
 #     TODO: No longer do `dst` manipulations — and in fact, don't accept `dst` nor `timediff` at all (nor `regret_cpu`, nor `prev_ep`); goal-cells should already be inside `frame`.
 #     TODO: When sampling an autoencoding prediction, goal-cells should start from all-0-plus-`goal_cells_override`, whereas others should start from name-only.
 #     TODO: More complex gating of autoencoding: for goal-cells, "OK" means "sample-dist is not as expected" (whereas for other cells, "OK" means "sample-dist is lower").
@@ -67,6 +68,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Split `full_loss` into `local_loss` which does gated-autoencoding (only needs `frame` as input) (returns loss and dist-pred and smudge-pred) and `global_loss` which learns distances (only needs dist/smudge predictions and targets as inputs) (returns loss).
+#   TODO: …Possibly: to make both able to log metrics easily, have a global dict of metrics, and have an in-unroll loop over metrics (global-dict then per-env) that logs them all?
+#     TODO: Have a hyperparam that can turn off logging, at least.
 # TODO: In `global_loss`, learn the min-smudging too, just like distances. (The target is 1 number per goal-group for the entire trajectory.)
 # TODO: In `local_loss`, gate autoencoding by decreasing-smudging.
 # TODO: During unroll, preserve all dist & smudge predictions (computed when we input prev-act and next-obs stuff into `transition_`) (ALL predictions along with goal-group-index for looking up targets, no averaging) and all per-goal-group smudges (computed via `local_dists`) in a list.
@@ -92,6 +95,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# TODO: …What about that random-cell-dropout that makes `action`-sampling in-distribution (I think we need it); and, should we maybe also make `local_loss` randomly decide to leave in full observations instead of zeroing them out, so that we can unite queries & observations & goals into one big request at unroll-time?…
+
+
+
+
 
 
 # TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
@@ -112,6 +120,12 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: …Maybe also add support for nucleus sampling (like zeroing out all probabilities that are less than 1/40 and re-normalizing), so that we don't very-rarely sample overly-low-probability discrete actions?…
+
+
+
+
+
+# TODO: Also a hyperparam for whether learned-distances are expected values (AKA averages or medians) or made-optimistic.
 
 
 
@@ -190,6 +204,7 @@ lr = 1e-3
 dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
 replays_per_step = 2
 max_replay_buffer_len = 1024
+optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targets are clamped to be at most pred-plus-`optimism`.
 
 save_load = '' # A filename, if saving/loading occurs.
 steps_per_save = 1000
@@ -296,7 +311,7 @@ class Sampler:
     def analog_mask(frame):
         return frame[:, 1:2] > 0
     @staticmethod
-    def as_goal(frame):
+    def as_goal(frame): # TODO: When `full_loss` goes, this should go too (will be unused then).
         return torch.cat((torch.ones(frame.shape[0], 1), frame[:, 1:]), -1)
 
 
@@ -430,7 +445,41 @@ def fill_in(target):
         _, _, pred_dist, pred_smudge = transition_(pred)
     return ((target_dist, target_smudge, target, target_logits), (pred_dist, pred_smudge, pred, pred_logits), regularization_loss)
 
-def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
+def local_loss(frame):
+    """Does gated autoencoding, always improving goal-direction actions and goal-suggestions. Advances RNN state; needs to be called in the RNN-context just before `frame`. Returns `(loss, dist_preds, smudge_preds)`; use `global_loss` later to learn the gating."""
+    # Contrast `frame` with our own understanding of it.
+    (frame_dist, frame_smudge, frame, frame_logits), (pred_dist, pred_smudge, pred, pred_logits), reg_loss = fill_in(frame)
+    # TODO: …Wait: where do we zero-fill the values of `frame`? `sample` in `fill_in`? Really? Is that really a good idea, considering that we need to make goal-cells start from overriden zeros?
+
+    # Compute what we learn to imitate, namely, reached-goal cells for which:
+    #   If non-goal cells: distance decreases.
+    #   If goal cells: distance misprediction increases.
+    min_dist_misprediction = 2
+    eventually_closer = frame_smudge <= pred_smudge+1
+    is_goal = Sampler.goal_mask(frame)
+    dist_is_better = torch.where(is_goal, frame_dist <= pred_dist, (frame_dist - pred_dist).abs() >= min_dist_misprediction)
+    imitate = (eventually_closer & dist_is_better).float()
+
+    # Self-imitation (critic-regularized regression) (gated autoencoding).
+    reg_loss = (imitate * reg_loss).sum()
+    predict_loss = (imitate * (frame_logits - pred_logits).square()).sum()
+
+    # TODO: Also `log_metrics`, all losses and `imitate.mean()`.
+
+    return (reg_loss + predict_loss, frame_dist, frame_smudge)
+
+def global_loss(pred_dist, pred_smudge, target_dist, target_smudge):
+    """Learns what to gate the autoencoding by. Returns the loss"""
+    target_dist = detach(target_dist.min(pred_dist + optimism) if optimism is not None else target_dist)
+    target_smudge = detach(target_smudge.min(pred_smudge + optimism) if optimism is not None else target_smudge)
+    dist_loss = (pred_dist.log2() - target_dist.log2()).square().sum()
+    smudge_loss = ((pred_smudge+1).log2() - (target_smudge+1).log2()).square().sum()
+    # TODO: Also `log_metrics`, both losses.
+    return dist_loss + smudge_loss
+
+# TODO: Maybe the func `log_metrics`? Maybe even, if called with args, adds global metrics, else logs all?
+
+def full_loss(prev_ep, frame, dst, timediff, regret_cpu): # TODO: Delete this… After we have `log_metrics`.
     """`full_loss(prev_ep, frame, dst, timediff, regret_cpu)`
 
     Predicts the `prev_frame`→`frame` transition IF it's closer to the goal than what we can sample.
@@ -578,7 +627,7 @@ async def unroll():
 
                         # TODO: Here is the perfect place to predict `frame`'s data from its zeroed-out-data version, if we DODGE-predict online. (Though, might want to remove the goal-cells.) (Replays can still do prediction, just, one-step.)
                         #   (Gating the prediction by improvement is easy here, because we'll have 2 distances: of prediction and of `frame` a bit below. And even of the `action` from the previous step…)
-                        #   `gated_generative_loss`
+                        #   `local_loss`, and once we have dist-targets, `global_loss`
 
                         # Give goals to the RNN.
                         extra_cells = []
@@ -588,7 +637,7 @@ async def unroll():
 
                         # Give prev-action & next-observation, remember distance estimates, and sample next action.
                         _, _, dist, _ = transition_(frame)
-                        #   TODO: Should preserve `dist`, along with smudges… But shouldn't they be preserved in per-goal lists?
+                        #   TODO: Should preserve `dist`, along with smudges… But shouldn't they be preserved in per-goal lists? With correspondences of which number is which goal? How to compute those correspondences?
                         n = 0
                         for group, (cells, expiration_cpu, expiration_gpu) in goals.items():
                             # (If we do better than expected, we leave early.)
@@ -605,7 +654,7 @@ async def unroll():
                             #     (Could even plot the regret of sampling-one vs sampling-many, by generating N and having a regret-plot for each (should go to 0 with sufficiently-big N), and see if/when it's worth it.)
 
                         # Learn. (Distance is always non-0.)
-                        replay(optim, frame, time)
+                        replay(optim, frame, time) # TODO: Remove this, right? And along with it, the `replay_buffer`…
 
                         # Save. (Both replay-buffer and disk.)
                         replay_buffer.append((
