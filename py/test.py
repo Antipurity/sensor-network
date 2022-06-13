@@ -59,9 +59,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: When sampling an autoencoding prediction (in `fill_in`), goal-cells should start from all-0-plus-`goal_cells_override`, whereas others should start from name-only. (Though sometimes, *might* want to start from full data?…)
-# TODO: During unroll, preserve all dist & smudge predictions (computed when we input prev-act and next-obs stuff into `transition_`) (ALL predictions along with goal-group-index for looking up targets, no averaging) and all per-goal-group smudges (computed via `local_dists`) in a list.
+# TODO: Make `unroll` use `loss, *metrics = per_goal_loss(…)` and `dodge.minimize(loss)` and put metrics into a list.
 #   TODO: Whenever we change a goal in `unroll`, empty that list: compute all `global_dists`, compute `L = global_loss(…)`, and `dodge.minimize(L)`.
+# TODO: When sampling an autoencoding prediction (in `fill_in`), goal-cells should start from all-0-plus-`goal_cells_override`, whereas others should start from name-only. (Though sometimes, *might* want to start from full data?… …And *maybe*, sometimes, might want to even zero out the names, in case we want to generate them too?…)
 
 
 
@@ -448,12 +448,37 @@ def local_loss(frame):
 
     # Log and return.
     log_metrics(imitated=imitate.mean(), reg_loss=reg_loss, predict_loss=predict_loss)
-    return (reg_loss + predict_loss, frame_dist, frame_smudge)
+    return reg_loss + predict_loss, frame_dist, frame_smudge
 
-def global_loss(pred_dist, pred_smudge, target_dist, target_smudge):
+def per_goal_loss(frame, goals):
+    """`per_goal_loss(frame, goals) → (loss, smudges, pred_dist, pred_smudge)`
+
+    Wraps `local_loss` to compute all *per-goal* local metrics, which can later be `torch.stack`ed and put into `global_dists` and then into `global_loss`."""
+    # Compute per-group means of predictions, then predict means and return means (which would be subject to `global_loss`).
+    #   Also compute `local_dist`s.
+    loss, dist_pred, smudge_pred = local_loss(frame)
+    smudges, dist_preds, smudge_preds,  = [], [], [], 
+    for group, goal, _, _ in goals:
+        same_group = (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdim=True).float()
+        cell_count = same_group.sum()
+        mean_dist_pred = (same_group * detach(dist_pred)).sum() / cell_count
+        mean_smudge_pred = (same_group * detach(smudge_pred)).sum() / cell_count
+        dist_preds.append(mean_dist_pred)
+        smudge_preds.append(mean_smudge_pred)
+        loss = loss + (same_group * (dist_pred - mean_dist_pred).square()).sum()
+        loss = loss + (same_group * (smudge_pred - mean_smudge_pred).square()).sum()
+        smudges.append(local_dist(frame, goal, group)) # (`same_group` is recomputed inside.)
+        # TODO: Remove `local_dists` since this is all that it does, and we're doing its job for it.
+    if goals:
+        return loss, torch.stack(smudges), torch.stack(dist_preds), torch.stack(smudge_preds)
+    else:
+        return loss, torch.tensor(()), torch.tensor(()), torch.tensor(())
+
+def global_loss(pred_dist, pred_smudge, target_dist, target_smudge): # TODO: Swap word-order to be consistent with `global_dists`.
     """Learns what to gate the autoencoding by. Returns the loss."""
     target_dist = detach(target_dist.min(pred_dist + optimism) if optimism is not None else target_dist)
     target_smudge = detach(target_smudge.min(pred_smudge + optimism) if optimism is not None else target_smudge)
+    #   TODO: Swap word-order to be consistent with `global_dists`.
     dist_loss = (pred_dist.log2() - target_dist.log2()).square().sum()
     smudge_loss = ((pred_smudge+1).log2() - (target_smudge+1).log2()).square().sum()
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
