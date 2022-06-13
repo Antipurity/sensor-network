@@ -57,10 +57,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Stop sampling goals from the replay buffer, and start *generating* goals:
-#   TODO: Make `unroll` `sample` the `goal`s (with a random cell-count, possibly 0…current_cells) instead of using `replay_buffer`, with RNN-input being all-0 but with the goal-group both at the input and overriden to be at the output.
 #   TODO: In `full_loss`:
 #     TODO: No longer do `dst` manipulations — and in fact, don't accept `dst` nor `timediff` at all (nor `regret_cpu`, nor `prev_ep`); goal-cells should already be inside `frame`.
-#     TODO: When sampling an autoencoding prediction, goal-cells should start from all-0 (goal-group-only), whereas others should start from name-only.
+#     TODO: When sampling an autoencoding prediction, goal-cells should start from all-0-plus-`goal_cells_override`, whereas others should start from name-only.
 #     TODO: More complex gating of autoencoding: for goal-cells, "OK" means "sample-dist is not as expected" (whereas for other cells, "OK" means "sample-dist is lower").
 #       ([Generated](http://proceedings.mlr.press/v100/nair20a/nair20a.pdf) goals are then neither too hard (AKA when never occuring as real targets) nor too easy (AKA when we know what we can do and then reliably do it, with no dist-error).) (Related to: [AMIGo](https://arxiv.org/pdf/2006.12122.pdf), [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf). Fits tighter than either.)
 #   TODO: Remove `replay_buffer` and `replay` entirely.
@@ -185,6 +184,7 @@ latent_sz = 16 # For VAE generation.
 slow_mode = .05 # Artificial delay per step.
 
 choices_per_cell = 256
+clamp = 1. # All inputs/outputs are clipped to `-clamp…clamp`.
 
 lr = 1e-3
 dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
@@ -390,6 +390,24 @@ def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: 
         left_scan = ((dists - 1) * next_of_reached).cummax(-1)[0]
         dists = (dists - left_scan).flip(-1)
         return (smudge, dists)
+def goal_cells_override(based_on: torch.Tensor, analog_mask: torch.Tensor, goal_group):
+    """`goal_cells_override(based_on, analog_mask, goal_group) → based_on_2`
+
+    Overrides the data needed by goal-cells, namely, goal/analog bits and the goal-group."""
+    assert len(based_on.shape) == len(analog_mask.shape) == 2 and analog_mask.shape[1] == 1
+    cells = analog_mask.shape[0]
+    start, end = sum(cell_shape[:-2]), sum(cell_shape[:-1])
+    goalness = torch.ones(cells, 1)
+    analogness = analog_mask.float()*2-1
+    goal_group = torch.as_tensor(goal_group).expand(cells, end-start)
+    return torch.cat((goalness, analogness, based_on[2:start], goal_group, based_on[end:]), -1)
+def sample_goal(cells, goal_group, analog_prob=.5):
+    """Samples a new goal. Advances RNN state."""
+    analog_mask = torch.rand(cells, 1) < analog_prob
+    z = torch.zeros(cells, sn.cell_size)
+    z = goal_cells_override(z, analog_mask, goal_group)
+    z = sample(z).clamp(-clamp, clamp)
+    return goal_cells_override(z, analog_mask, goal_group)
 
 
 
@@ -433,7 +451,7 @@ def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
         dst = torch.cat((dst[:, :sum(cell_shape[:-2])], dst_group_id, dst[:, sum(cell_shape[:-1]):]), -1)
 
         # Name `dst` with the fact that it's all goal-cells, and add it to the `frame`.
-        dst = sample.as_goal(dst)
+        dst = Sampler.as_goal(dst)
         frame = torch.cat((dst, frame), 0)
         is_learned = torch.cat((torch.full((dst.shape[0], 1), True), is_learned), 0).float()
 
@@ -443,7 +461,7 @@ def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
 
         # Critic-regularized regression: if `frame_pred` regrets not being `frame`, make it into `frame`.
         dist_is_better = detach(frame_dist)[:, -1:] < detach(pred_dist)[:, -1:]
-        mask = (dist_is_better | ~sample.analog_mask(frame)).float()
+        mask = (dist_is_better | ~Sampler.analog_mask(frame)).float()
         #   TODO: A different mask for goal-cells: not dist-is-better, but dist has high error (either lower or higher) AND smudging is same-or-lower.
         predict_loss = (is_learned * (pred_logits - frame_logits).square() * mask).sum()
 
@@ -460,7 +478,7 @@ def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
         dist_penalty = 1.05
         ungrounded_dist_loss = 0 # (is_learned * (frame_pred_dist - detach(frame_pred_dist) * dist_penalty).square()).sum() # TODO: (*Should* be superseded by our unformed "go to min-local-dist min-global-dist goal-cells" plans, right?…)
 
-        log(0, False, torch, improvement = mask.mean() - (~sample.analog_mask(frame)).float().mean())
+        log(0, False, torch, improvement = mask.mean() - (~Sampler.analog_mask(frame)).float().mean())
         #   TODO: Why is improvement always 0, even though `predict_loss` is not? …Wait, is it `nan` sometimes, from looking at the plots?…
         #     (From looking at the plot, it's `nan` sometimes in the beginning, but not in the end.)
         #     TODO: …Why are we leaving out digital cells anyway? `env/copy.py` is a digital-only env anyway, so doesn't this not make any sense?
@@ -475,7 +493,7 @@ def full_loss(prev_ep, frame, dst, timediff, regret_cpu):
         loss = predict_loss + dist_loss + ungrounded_dist_loss + reg_loss
         return loss
 
-def replay(optim, current_frame, current_time): # TODO: …Don't replay, *maybe*?…
+def replay(optim, current_frame, current_time): # TODO: …Don't replay…
     """Remembers a frame from a distant past, so that the NN can reinforce actions and observations when it needs to go to the present."""
     if len(replay_buffer) < 8: return
 
@@ -526,14 +544,14 @@ async def unroll():
                             await asyncio.sleep(slow_mode)
 
                         obs, query, error = await sn.handle(sn.torch(torch, action))
-                        obs   = np.nan_to_num(  obs.clip(-1., 1.), copy=False)
-                        query = np.nan_to_num(query.clip(-1., 1.), copy=False)
+                        obs   = np.nan_to_num(  obs.clip(-clamp, clamp), copy=False)
+                        query = np.nan_to_num(query.clip(-clamp, clamp), copy=False)
                         #   (If getting out-of-memory, might want to chunk data/query processing.)
 
                         # (The replay buffer won't want to know any user-specified goals.)
                         #   (And fetch goal-group IDs to add constraints for exploration, even if the env has set some goals.)
                         frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
-                        not_goal_cells = ~sample.goal_mask(frame_names)[:, 0]
+                        not_goal_cells = ~Sampler.goal_mask(frame_names)[:, 0]
                         prev_q = query
 
                         # Bookkeeping for later.
@@ -543,24 +561,20 @@ async def unroll():
                         life_to_save = life.clone(remember_on_exit=False)
 
                         # Delete/update our `goals` when we think we reached them.
-                        #   TODO: Sample `dst` instead of this `replay_buffer` sampling. (Possibly generated along with the rest of the query at every step, with the same latents until the goal is changed.)
                         for hash, (group, cells, expiration_cpu, expiration_gpu) in goals.copy().items():
                             if time > expiration_cpu:
                                 del goals[hash]
-                        if len(replay_buffer): # (…Won't be a need for this check once we generate-instead-of-pick `dst`…)
-                            for group in goal_groups(frame_names):
-                                hash = group.tobytes()
-                                if hash not in goals:
-                                    # TODO: Instead, pick a cell-count and generate `goal` via `sample`, ensuring that goal-`group` is preserved.
-                                    goal = random.choice(replay_buffer)[2]
-                                    goal = goal[np.random.rand(goal.shape[0]) < (.05+.95*random.random())]
-                                    goal = sample.as_goal(goal)
-                                    expiration_cpu = torch.tensor(time+10000, device='cpu').int()
-                                    expiration_gpu = torch.tensor(time+10000).int()
-                                    goals[hash] = (group, goal, expiration_cpu, expiration_gpu)
-                                    # And change DODGE direction when changing the goal.
-                                    if random.randint(1, len(goals)) == 1:
-                                        update_direction()
+                        for group in goal_groups(frame_names):
+                            hash = group.tobytes()
+                            if hash not in goals:
+                                with State.Episode(start_from_initial=False):
+                                    goal = sample_goal(random.randint(1, obs.shape[0] or 1), group)
+                                expiration_cpu = torch.tensor(time+10000, device='cpu').int()
+                                expiration_gpu = torch.tensor(time+10000).int()
+                                goals[hash] = (group, goal, expiration_cpu, expiration_gpu)
+                                # And change DODGE direction when changing the goal.
+                                if random.randint(1, len(goals)) == 1:
+                                    update_direction()
 
                         # TODO: Here is the perfect place to predict `frame`'s data from its zeroed-out-data version, if we DODGE-predict online. (Though, might want to remove the goal-cells.) (Replays can still do prediction, just, one-step.)
                         #   (Gating the prediction by improvement is easy here, because we'll have 2 distances: of prediction and of `frame` a bit below. And even of the `action` from the previous step…)
@@ -586,7 +600,7 @@ async def unroll():
                                 expiration_cpu.fill_(0)
                             n += cells.shape[0]
                         with State.Episode(start_from_initial=False):
-                            action, _ = sample(torch.cat((query, obs[:, :query.shape[1]]), -1))
+                            action, _ = sample(torch.cat((query, obs[:, :query.shape[1]]), -1)).clamp(-clamp, clamp)
                             #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
                             #     (Could even plot the regret of sampling-one vs sampling-many, by generating N and having a regret-plot for each (should go to 0 with sufficiently-big N), and see if/when it's worth it.)
 
