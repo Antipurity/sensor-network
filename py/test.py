@@ -59,7 +59,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Whenever we change a goal in `unroll`, empty the list of metrics: compute all `global_dists`, compute `L = global_loss(…)`, and `dodge.minimize(L)`.
 # TODO: When sampling an autoencoding prediction (in `fill_in`), goal-cells should start from all-0-plus-`goal_cells_override`, whereas others should start from name-only. (Though sometimes, *might* want to start from full data?… …And *maybe*, sometimes, might want to even zero out the names, in case we want to generate them too?…)
 #   TODO: Do we want the separate func `augment(frame)` (cell-dropout, then full OR name-only OR group-only)?
 
@@ -97,6 +96,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
 #   …Maybe instead of BPTT with its periodic-stalling, we should do backprop-less DODGE online (even with `dodge_optimizes_params=1`, it should help quite a bit) with ≈1000-step-delayed one-step synth-grad learning following at a distance… Disabling DODGE before that and re-enabling it with the old direction afterward… Possibly even with Reptile or MAML, though [it may be superfluous with enough layers](https://arxiv.org/abs/2106.09017)…
+#   …Or maybe, synth-grad should generate a query-vector then take a value-vector and return its gradient…
 
 # TODO: Do dropout of frame-cells when doing synth-grad replays (forward-unroll with DODGE can see all). (This will make sampling actions-without-next-frame at unroll-time not out-of-distribution, *and* make the net try to minimize dependencies on inputs.)
 
@@ -193,6 +193,7 @@ clamp = 1. # All inputs/outputs are clipped to `-clamp…clamp`.
 
 lr = 1e-3
 dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
+dodge_len = 1. # `DODGE` is BPTT-like, and each learning episode will run for `dodge_len` multiplied by the average steps-to-reach-goal.
 optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targets are clamped to be at most pred-plus-`optimism`.
 
 logging = True
@@ -458,7 +459,7 @@ def per_goal_loss(frame, goals):
     #   Also compute `local_dist`s.
     loss, dist_pred, smudge_pred = local_loss(frame)
     smudges, dist_preds, smudge_preds,  = [], [], [], 
-    for group, goal, _, _, _, _, _ in goals.values():
+    for group, goal, _, _, _, _, _, _ in goals.values():
         same_group = (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdim=True).float()
         cell_count = same_group.sum()
         mean_dist_pred = (same_group * detach(dist_pred)).sum() / cell_count
@@ -505,21 +506,32 @@ def log_metrics(**kw):
 async def unroll():
     direction = None
     loss_so_far = 0.
+    avg_time_to_goal, avg_time_to_goal_momentum = 0., .99
     def update_direction():
         nonlocal direction, loss_so_far
         p = dodge_optimizes_params / dodge.sz
         direction = torch.where(torch.rand(dodge.sz) < p, torch.randn(dodge.sz), torch.zeros(dodge.sz))
-        dodge.minimize(loss_so_far)
+        if loss_so_far != 0.: dodge.minimize(loss_so_far)
         dodge.restart(direction)
         loss_so_far = 0.
+    def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
+        if not len(smudge): return
+        smudges = torch.stack(smudge)
+        dist_preds = torch.stack(dist_pred)
+        smudge_preds = torch.stack(smudge_pred)
+        smudge.clear();  dist_pred.clear();  smudge_pred.clear()
+        smudge_target, dist_target = global_dists(smudges, dist_preds, smudge_preds)
+        loss_so_far = loss_so_far + global_loss(dist_pred, smudge_pred, dist_target, smudge_target)
+        if start_time is not None:
+            avg_time_to_goal = avg_time_to_goal_momentum*avg_time_to_goal + (1-avg_time_to_goal_momentum) * (time - start_time)
     with fw.dual_level():
         with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
             update_direction()
             with State.Episode() as life:
-                with torch.no_grad(): # TODO: This shouldn't apply to the delayed synth-grad-aware backprop-train.
+                with torch.no_grad(): # TODO: This shouldn't apply to the delayed synth-grad-aware backprop-train. (After we have that, I mean.)
                     prev_q, action, frame = None, None, None
-                    goals = {} # goal_group_id → (group, goal, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds)
-                    time = 0 # Hopefully this doesn't get above 2**31-1.
+                    goals = {} # goal_group_id → (group, goal, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds, start_time)
+                    time = 0 # Hopefully this doesn't get above 2**31-eps, or `expiration_time_cpu` will have big problems.
                     while True:
                         if slow_mode > 0:
                             await asyncio.sleep(slow_mode)
@@ -535,13 +547,11 @@ async def unroll():
                         frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
                         prev_q = query
 
-                        # TODO: `global_loss` should be updated here, and `dodge.minimize`d. (Or maybe, when any goal has changed?…)
-                        #   (…Or maybe, we shouldn't `torch.stack` but instead store smudges & dist_preds & smudge_preds in `goals`, finalized and `dodge.minimize`d when a goal is deleted OR when we change DODGE direction?…)
-                        #   TODO: Probably need a func that updates & clears a goal's losses/targets. MAYBE returning a bool, where if any have triggered, we `dodge.minimize` after the loop over `frame_names` goals. (TODO: Or should we just add to the loss, and only `dodge.minimize` when DODGE direction changes, probably only in `update_direction`?)
-
                         # Delete/update our `goals` when we think we've reached them.
-                        for hash, (_, _, expiration_cpu, _, _, _, _) in goals.copy().items():
+                        #   When deleting a goal, minimize its `global_loss`.
+                        for hash, (_, _, expiration_cpu, _, smudges, dist_preds, smudge_preds, start_time) in goals.copy().items():
                             if time > expiration_cpu:
+                                finish_computing_loss(smudges, dist_preds, smudge_preds, start_time)
                                 del goals[hash]
                         for group in goal_groups(frame_names):
                             hash = group.tobytes()
@@ -551,23 +561,23 @@ async def unroll():
                                 expiration_cpu = torch.tensor(time+10000, device='cpu').int()
                                 expiration_gpu = torch.tensor(time+10000).int()
                                 smudges, dist_preds, smudge_preds = [], [], []
-                                goals[hash] = (group, goal, expiration_cpu, expiration_gpu, smudges, dist_preds, smudge_preds)
-                                # And change DODGE direction when changing the goal.
-                                #   TODO: Once we store everything per-goal, we could completely decouple DODGE optimization and goal-generation, right?
-                                #     TODO: Want a hyperparam for the probability of resetting at each step, right? …Or do we want to keep track of real time-to-delete-goal, and make the probability 1/that?…
-                                if random.randint(1, len(goals)) == 1:
-                                    update_direction()
+                                goals[hash] = (group, goal, expiration_cpu, expiration_gpu, smudges, dist_preds, smudge_preds, time)
                         # Expose self-generated goals to the RNN.
                         if goals:
-                            extra_cells = [goal for (_, goal, _, _, _, _, _) in goals.values()]
+                            extra_cells = [goal for (_, goal, _, _, _, _, _, _) in goals.values()]
                             frame = torch.cat([*extra_cells, frame], 0)
+                        # Delimit DODGE-episode boundaries, changing its projection direction sometimes.
+                        if dodge_len * random.random() < 1 / (avg_time_to_goal+.5):
+                            for _, _, _, _, smudges, dist_preds, smudge_preds, start_time in goals.values():
+                                finish_computing_loss(smudges, dist_preds, smudge_preds)
+                            update_direction()
 
                         # Learn to predict better, via `per_goal_loss`.
                         #   TODO: …This can actually do normal backprop at the same time, right? Even synthetic gradients… Just do `loss.backward()` when all params are .requires_grad_(True) and will give correct gradient, and don't step the `optim` ourselves so that DODGE updates are still valid…
                         with State.Episode(start_from_initial=False):
                             loss, smudge, dist_pred, smudge_pred = per_goal_loss(frame, goals)
                             loss_so_far = loss_so_far + loss
-                            for _, _, _, _, smudges, dist_preds, smudge_preds in goals.values(): # For `global_loss`.
+                            for _, _, _, _, smudges, dist_preds, smudge_preds, _ in goals.values(): # For `global_loss`.
                                 smudges.append(smudge)
                                 dist_preds.append(dist_pred)
                                 smudge_preds.append(smudge_pred)
@@ -576,7 +586,7 @@ async def unroll():
                         # Give prev-action & next-observation, remember dist-to-goal estimates, and sample next action.
                         _, _, dist, _ = transition_(frame)
                         n = 0
-                        for group, (group, goal, expiration_cpu, expiration_gpu, _, _, _) in goals.items():
+                        for group, (group, goal, expiration_cpu, expiration_gpu, _, _, _, _) in goals.items():
                             # (If we do better than expected, we leave early.)
                             if goal.shape[0] > 0:
                                 group_dist = (time + dist.detach()[n : n+goal.shape[0], -1].mean() + 1).int().min(expiration_gpu)
