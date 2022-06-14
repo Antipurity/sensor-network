@@ -60,12 +60,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …We've removed second-order goal-chasing, because where we originally wanted to make gating of goal-cells let in everything if there was an error somewhere later, now we only do `local_loss`… Should we bring back go-to-error goal-chasing, by deferring the gating until `global_loss`?…
-#   …How would we do that… Is that too much effort, and does it remove too much clarity…
 
 
-
-# TODO: Make docs of `sn.Int` mention its alternative/`_default_typing` forms.
+# TODO: Also have `sn.List` for easily combining datatypes, without having to `import asyncio;  await asyncio.gather(…)`.
+#   TODO: Make `_default_typing` aware of it.
 # TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
 #   TODO: `Sampler`:
 #     TODO: NumPy-detect analog & digital cells. First generate all analog cells in parallel, then generate all digital cells autoregressively. (And make `__call__` able to be conditioned on a `target`, instead of on-policy outputs.) (And have `.loss(…)` that does target-conditioned generation and prediction of `.target(…)`.) (And make `local_loss` and `fill_in` make sampling target-aware.)
@@ -104,12 +102,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: …Maybe also add support for nucleus sampling (like zeroing out all probabilities that are less than 1/40 and re-normalizing), so that we don't very-rarely sample overly-low-probability discrete actions?…
-
-
-
-
-
-# TODO: Also a hyperparam for whether learned-distances are expected values (AKA averages or medians) or made-optimistic.
 
 
 

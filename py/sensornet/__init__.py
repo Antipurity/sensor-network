@@ -390,6 +390,8 @@ class Handler:
     class Int:
         """
         ```py
+        8
+        (2,2, 8)
         sn.Int(2,2, 8)
         sn.Int(*[*shape, options], goal=False)
         ```
