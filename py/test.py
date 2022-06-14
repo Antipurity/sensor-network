@@ -62,8 +62,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Also have `sn.List` for easily combining datatypes, without having to `import asyncio;  await asyncio.gather(…)`.
-#   TODO: Make `_default_typing` aware of it.
 # TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
 #   TODO: `Sampler`:
 #     TODO: NumPy-detect analog & digital cells. First generate all analog cells in parallel, then generate all digital cells autoregressively. (And make `__call__` able to be conditioned on a `target`, instead of on-policy outputs.) (And have `.loss(…)` that does target-conditioned generation and prediction of `.target(…)`.) (And make `local_loss` and `fill_in` make sampling target-aware.)
@@ -72,6 +70,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: …Do we need to turn that unroll-time `transition_(…)` into `sample(…)`?… Or is it fine to just `transition_` since we don't care about sampling and only want to give inputs?… (Not if we want to unify queries and observations into one call.)
 #   TODO: Make `sn.Int` put everything in at the same time, nothing autoregressive. (Big-int goals will then be possible.)
 #   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
+#   TODO: Have the `sn.Goal(type)` datatype, which sets-then-resets a global bit during set/query/get which `sn.Int` and `sn.RawFloat` heed. (Easier to think about, and to specify in complex type hierarchies.)
 
 
 

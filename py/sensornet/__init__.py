@@ -544,6 +544,31 @@ class Handler:
                 R = fb[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
             return do_query(sn.query(None, names))
+    class List: # pragma: no cover
+        """
+        ```py
+        [*types]
+        sn.List(*types)
+        ```
+
+        Datatype: a simple list of other datatypes. Name and data (and maybe error) must be per-type tuples/lists.
+        """
+        __slots__ = ('types',)
+        def __init__(self, *types):
+            self.types = types
+        def set(self, sn, name, data, error):
+            assert len(name) == len(data) == len(self.types)
+            assert error is None or len(data) == len(error)
+            for i in range(len(data)):
+                sn.set(name[i], data[i], self.types[i], None if error is None else error[i])
+        def query(self, sn, name):
+            assert len(name) == len(self.types)
+            result = [sn.query(name[i], self.types[i]) for i in range(len(name))]
+            return asyncio.gather(*result)
+        def get(self, sn, name):
+            assert len(name) == len(self.types)
+            result = [sn.get(name[i], self.types[i]) for i in range(len(name))]
+            return asyncio.gather(*result)
 
 
 
@@ -722,6 +747,7 @@ def _shaped_names(sn, sz, cells, shape, goal, analog, name):
 def _default_typing(type):
     if isinstance(type, int): return Handler.Int(type)
     if isinstance(type, tuple): return Handler.Int(*type)
+    if isinstance(type, list): return Handler.List(*type)
     return type
 
 
@@ -749,6 +775,7 @@ commit = default.commit
 discard = default.discard
 Int = Handler.Int
 RawFloat = Handler.RawFloat
+List = Handler.List
 run = Handler.run
 torch = Handler.torch
 Filter = Handler.Filter
