@@ -28,7 +28,7 @@ class DODGE:
 
     Methods:
     - `.restart(direction = ...)`: starts optimization, by setting forward-derivatives to slices of `direction` (a good & default candidate for which is `torch.randn(dodge.sz)`; see the linked papers for other alternatives). Please note that DODGE is not magic, and can't learn inter-restart dependencies, because directions are different.
-    - `.minimize(loss)`: updates `model`'s parameters.
+    - `.minimize(loss)`: updates `model`'s parameters, and steps `optim` if provided.
         - If RNN state is reset with `detach` after this, then having many calls to this without restarts is equivalent to just one call of this just before the restart, with the sum of losses — but updates params slightly faster.
     - `.stop()`: stops optimization, unless restarted again. No need to stop right before a restart.
     """
