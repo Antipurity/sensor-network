@@ -375,7 +375,7 @@ class Handler:
         8
         (2,2, 8)
         sn.Int(2,2, 8)
-        sn.Int(*[*shape, options], goal=False)
+        sn.Int(*[*shape, options])
         ```
 
         Datatype: a sequence of integers, each `0…options-1`.
@@ -386,15 +386,14 @@ class Handler:
 
         To use this, `Handler`s need to specify `info={'choices_per_cell': opts}`. This datatype will take care of conversions.
         """
-        __slots__ = ('sz', 'shape', 'opts', 'goal')
-        def __init__(self, *shape, goal=False):
+        __slots__ = ('sz', 'shape', 'opts')
+        def __init__(self, *shape):
             s, o = shape[:-1], shape[-1]
-            assert isinstance(goal, bool)
             assert isinstance(s, tuple) and all(isinstance(n, int) and n>0 for n in s)
             assert isinstance(o, int) and o>1, "Only makes sense to choose between 2 or more options"
             from operator import mul
             sz = functools.reduce(mul, s, 1)
-            self.sz, self.shape, self.opts, self.goal = sz, s, o, goal
+            self.sz, self.shape, self.opts = sz, s, o
         def set(self, sn, name, data, error):
             assert error is None, "Integers are precise"
             np = sn.backend
@@ -410,7 +409,7 @@ class Handler:
             if not len(shape): return
             assert shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
-            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, False, name)
+            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name)
             data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(sn, data, bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
@@ -422,7 +421,7 @@ class Handler:
             shape = sn.cell_shape
             assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape) else 0
-            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, False, name) if cells else None
+            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name) if cells else None
             async def do_query(fb):
                 if not cells: return
                 fb = await fb
@@ -472,7 +471,7 @@ class Handler:
                 return ints
     class RawFloat:
         """
-        `sn.RawFloat(*shape, goal=False)`
+        `sn.RawFloat(*shape)`
 
         Datatype: a sequence of floating-point numbers.
 
@@ -482,13 +481,12 @@ class Handler:
 
         To use this, `Handler`s need `info={'analog':True}`.
         """
-        __slots__ = ('sz', 'shape', 'goal')
-        def __init__(self, *shape, goal=False):
-            assert isinstance(goal, bool)
+        __slots__ = ('sz', 'shape')
+        def __init__(self, *shape):
             assert isinstance(shape, tuple) and all(isinstance(n, int) and n>0 for n in shape)
             from operator import mul
             sz = functools.reduce(mul, shape, 1)
-            self.sz, self.shape, self.goal = sz, shape, goal
+            self.sz, self.shape = sz, shape
         def set(self, sn, name, data, error):
             # Zero-pad `data` and split it into cells, then pass it on.
             assert sn.info is None or sn.info['analog'] is True
@@ -504,7 +502,7 @@ class Handler:
             shape = sn.cell_shape
             if not len(shape): return
             cells = -(-self.sz // shape[-1])
-            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, True, name)
+            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name)
             z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
             data = np.concatenate((data, z))
             error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
@@ -517,7 +515,7 @@ class Handler:
 
             shape = sn.cell_shape
             cells = -(-self.sz // shape[-1]) if len(shape) else 0
-            names = sn._shaped_names(self.sz, cells, self.shape, self.goal, True, name) if cells else np.zeros((0,0))
+            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name) if cells else np.zeros((0,0))
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
@@ -537,7 +535,7 @@ class Handler:
         """
         __slots__ = ('types',)
         def __init__(self, *types):
-            self.types = types
+            self.types = tuple(_default_typing(t) for t in types)
         def set(self, sn, name, data, error):
             assert len(name) == len(data) == len(self.types)
             assert error is None or len(data) == len(error)
@@ -549,6 +547,26 @@ class Handler:
         def get(self, sn, name):
             assert len(name) == len(self.types)
             return asyncio.gather(sn.get(name[i], self.types[i]) for i in range(len(name)))
+    class Goal:
+        """
+        `sn.Goal(type)`: datatype, where the wrapped `type` will mark all its cells as to-be-sought-out.
+        """
+        goal = False
+        __slots__ = ('type',)
+        def __init__(self, type):
+            self.type = _default_typing(type)
+        def set(self, sn, name, data, error):
+            prev, Handler.Goal.goal = Handler.Goal.goal, True
+            try: return sn.set(name, data, self.type, error)
+            finally: Handler.Goal.goal = prev
+        def query(self, sn, name):
+            prev, Handler.Goal.goal = Handler.Goal.goal, True
+            try: return sn.query(name, self.type)
+            finally: Handler.Goal.goal = prev
+        def get(self, sn, name):
+            prev, Handler.Goal.goal = Handler.Goal.goal, True
+            try: return sn.get(name, self.type)
+            finally: Handler.Goal.goal = prev
 
 
 
@@ -756,6 +774,7 @@ discard = default.discard
 Int = Handler.Int
 RawFloat = Handler.RawFloat
 List = Handler.List
+Goal = Handler.Goal
 run = Handler.run
 torch = Handler.torch
 Filter = Handler.Filter

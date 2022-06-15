@@ -16,7 +16,7 @@ class Env:
         if self.reward != 0:
             sn.set('reward', self.reward, 2)
             self.reward = 0
-        sn.set('reward', 1, sn.Int(2, goal=True))
+        sn.set('reward', 1, sn.Goal(sn.Int(2)))
 
         if p < .9: # Observe rubbish.
             sn.set('rubbish', random.randint(0,1), 2)

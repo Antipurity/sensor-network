@@ -63,7 +63,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
-#   TODO: Have the `sn.Goal(type)` datatype, which sets-then-resets a global bit during set/query/get which `sn.Int` and `sn.RawFloat` heed. (Easier to think about, and to specify in complex type hierarchies.)
 #   TODO: Make test coverage 100% again.
 
 
