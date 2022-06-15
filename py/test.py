@@ -248,26 +248,35 @@ class Sampler:
         self.bpc = bits_per_cell
         self.fn, self.start, self.end = fn, start, end
         self.softmax = Softmax(-1)
-    def __call__(self, query, latent=...): # TODO: Also want to know the NumPy version, so that we can iterate properly… Can all our users provide that?…
-        """Given a full-size `query` (zero-pad names if needed, or `augment` frames) (and possibly `latent`), samples a binary action.
+    def __call__(self, query: torch.Tensor, query_names: np.ndarray, latent=...):
+        """.
+        
+        Inputs: a full-size `query` (zero-pad names if needed, or `augment` frames), its name-only NumPy version (for `Sampler.sample_order`), and optionally `latent`.
 
-        The result is `(action, logits)`. Use `action` to act; use L2 loss on `logits` and `.target(action)` to predict the action.
+        The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to predict the action.
 
-        This will advance RNN `State`, so do `State.Episode` shenanigans if that is unwanted."""
-        is_ana = self.analog_mask(detach(query)).float()
+        This will advance RNN `State`, so reset via `State.Episode` if that is unwanted."""
+        assert len(query.shape) == len(query_names.shape) == 2 and query.shape[-1] == j
         i, j, cells = self.start, self.end, query.shape[0]
-        assert len(query.shape) == 2 and query.shape[-1] == j
-        name_and_logits = self.fn(query, latent)[0]
-        assert len(name_and_logits.shape) == 2 and name_and_logits.shape[1] == i + self.cpc
-        name = name_and_logits[:, :i] # (Even for digital cells, names are VAE-generated.)
-        analog = name_and_logits[:, :j]
-        with torch.no_grad():
-            digprob = self.softmax(detach(name_and_logits[:, i : i + self.cpc]))
-            indices = digprob.multinomial(1)[..., 0]
-            bits = sn.Int.encode_ints(sn, indices, self.bpc)
-            digital = torch.cat((name, bits, torch.zeros(cells, j - self.bpc - i)), -1)
-        action = (is_ana * analog + (1-is_ana) * digital).clamp(-clamp, clamp)
-        logits = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
+        action = torch.zeros(cells, j)
+        logits = torch.zeros(cells, i + self.cpc)
+        for inds in Sampler.sample_order(query_names):
+            query_part = query[inds]
+            is_ana = Sampler.analog_mask(detach(query_part)).float()
+            name_and_logits = self.fn(query_part, ... if latent is ... else latent[inds])[0]
+            assert len(name_and_logits.shape) == 2 and name_and_logits.shape[1] == i + self.cpc
+            name = name_and_logits[:, :i] # (Even for digital cells, names are VAE-generated.)
+            analog = name_and_logits[:, :j]
+            with torch.no_grad():
+                digprob = self.softmax(detach(name_and_logits[:, i : i + self.cpc]))
+                indices = digprob.multinomial(1)[..., 0]
+                bits = sn.Int.encode_ints(sn, indices, self.bpc)
+                digital = torch.cat((name, bits, torch.zeros(cells, j - self.bpc - i)), -1)
+            action_part = (is_ana * analog + (1-is_ana) * digital).clamp(-clamp, clamp)
+            logits_part = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
+            self.fn(action_part, ... if latent is ... else latent[inds]) # Input what we sampled.
+            action = action.index_put([inds], action_part)
+            logits = logits.index_put([inds], logits_part)
         return action, logits
     def target(self, act, one_hot=1):
         """Converts a presumably-sampled `action` to its `logits`, which can be used to compute L2 loss."""
@@ -277,7 +286,7 @@ class Sampler:
         assert len(act.shape) == 2 and act.shape[1] == j
         act = detach(act)
         with torch.no_grad():
-            is_ana = self.analog_mask(act).float()
+            is_ana = Sampler.analog_mask(act).float()
             analog = torch.cat((act, torch.zeros(cells, self.cpc - j)), -1)
             indices = sn.Int.decode_bits(sn, act[:, i : i + self.bpc]) % self.cpc
             digital = F.one_hot(indices, self.cpc).float() * one_hot
@@ -289,7 +298,7 @@ class Sampler:
     def analog_mask(frame):
         return frame[:, 1:2] > 0
     @staticmethod
-    def sample_order(frame_names: np.ndarray): # TODO: Use this during sampling, by first giving each yielded subtensor of `frame`, then giving post-digital-decoding input as input.
+    def sample_order(frame_names: np.ndarray):
         """Allows sampling `frame`s correctly, by iterating over these indices and sampling each index-group in sequence. In particular, analog cells are sampled all at once, then each goal group's digital cell is sampled autoregressively, because learning can't model joint probabilities otherwise, and because goal-groups are supposed to be independent and thus parallelizable."""
         analog_mask = Sampler.analog_mask(frame_names)
         yield analog_mask[:, 0]
@@ -405,7 +414,9 @@ def sample_goal(cells, goal_group, analog_prob=.5):
     goal_group = torch.as_tensor(goal_group).expand(cells, end-start)
     z = torch.zeros(cells, sn.cell_size)
     z = cells_override(z, goal_mask, analog_mask, goal_group)
-    z = sample(z).clamp(-clamp, clamp)
+    z = sample(z, ...).clamp(-clamp, clamp)
+    #   TODO: Should make `cells_override` be able to accept NumPy arrays (with only `torch.cat` having to be swapped).
+    #     TODO: But what about `goal_mask` and `analog_mask` and `goal_group` here? Do we need to generate them in NumPy and convert manually (at least `analog_mask`, to preserve analog-ness)… …Probably won't be a huge deal since this only happens when a goal changes…
     return cells_override(z, goal_mask, analog_mask, goal_group)
 
 
@@ -438,7 +449,12 @@ def fill_in(target):
         target_logits = sample.target(target)
         target_latent = normal(target_latent_info)
         regularization_loss = make_normal(target_latent_info).sum(-1, keepdim=True)
-    pred, pred_logits = sample(augment(target), target_latent) # Encoder.
+    pred, pred_logits = sample(augment(target), ..., target_latent) # Encoder.
+    #   TODO: We need to accept `target_names` to pass in to `sample`.
+    #     TODO: `local_loss` has to accept `frame_names` to pass to `fill_in`.
+    #       TODO: `per_goal_loss` has to accept `frame_names` to pass to `local_loss`.
+    #         TODO: `cell_dropout` has to accept & return `frame_names` to pass to `per_goal_loss`.
+    #         TODO: The caller of `cell_dropout` has to destructure its result.
     with State.Episode(start_from_initial=False): # Distance.
         _, _, pred_dist, pred_smudge = transition_(pred)
     return ((target_dist, target_smudge, target, target_logits), (pred_dist, pred_smudge, pred, pred_logits), regularization_loss)
@@ -552,13 +568,13 @@ async def unroll():
                         if slow_mode > 0:
                             await asyncio.sleep(slow_mode)
 
-                        obs, query, error = await sn.handle(sn.torch(torch, action))
-                        obs   = np.nan_to_num(  obs.clip(-clamp, clamp), copy=False)
-                        query = np.nan_to_num(query.clip(-clamp, clamp), copy=False)
+                        obs_np, query_np, error_np = await sn.handle(sn.torch(torch, action))
+                        obs_np   = np.nan_to_num(  obs.clip(-clamp, clamp), copy=False)
+                        query_np = np.nan_to_num(query.clip(-clamp, clamp), copy=False)
                         #   (If getting out-of-memory, might want to chunk data/query processing.)
 
                         # Bookkeeping for later.
-                        obs, query = torch.tensor(obs), torch.tensor(query)
+                        obs, query = torch.tensor(obs_np), torch.tensor(query_np)
                         frame = torch.cat((action, obs), 0) if action is not None else obs
                         frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs[:, :query.shape[1]]
                         prev_q = query
@@ -613,7 +629,7 @@ async def unroll():
                             n += goal.shape[0]
                         with State.Episode(start_from_initial=False):
                             zeros = torch.zeros(query.shape[0], cell_shape[-1])
-                            action, _ = sample(torch.cat((query, zeros), -1))
+                            action, _ = sample(torch.cat((query, zeros), -1), query_np)
                             #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
                             #     (Could even plot the regret of sampling-one vs sampling-many, by generating N and having a regret-plot for each (should go to 0 with sufficiently-big N), and see if/when it's worth it.)
 
