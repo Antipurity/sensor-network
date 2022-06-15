@@ -231,19 +231,26 @@ class Handler:
         """
         if data is not None: self.set(None, data, None, error)
         if query is not None: return self.query(None, query, callback)
-    async def get(self, name, type):
+    def get(self, name, type):
         """
         `await sn.get(name, type)`
 
         Gets feedback, guaranteed. Never returns `None`, instead re-querying until a result is available.
         """
         if isinstance(name, str): name = (name,)
-        if hasattr(type, 'get'): # pragma: no cover
+        type = _default_typing(type)
+        if hasattr(type, 'get'):
             for fn in self.modify_name: name = fn(name)
             return type.get(self, name)
-        while True:
-            fb = await self.query(name, type)
-            if fb is not None: return fb
+        goal = Handler.Goal.goal
+        async def query_loop(fb):
+            while True: # Minimize re-requests at the cost of latency.
+                fb = await fb
+                if fb is not None: return fb
+                prev, Handler.Goal.goal = Handler.Goal.goal, goal
+                try: fb = self.query(name, type)
+                finally: Handler.Goal.goal = prev
+        return query_loop(self.query(name, type))
     def handle(self, prev_feedback=None, max_simultaneous_steps=16):
         """
         ```python
@@ -394,6 +401,8 @@ class Handler:
             from operator import mul
             sz = functools.reduce(mul, s, 1)
             self.sz, self.shape, self.opts = sz, s, o
+        def __repr__(self):
+            return 'sn.Int(' + ','.join(repr(s) for s in [*self.shape, self.opts]) + ')'
         def set(self, sn, name, data, error):
             assert error is None, "Integers are precise"
             np = sn.backend
@@ -487,6 +496,8 @@ class Handler:
             from operator import mul
             sz = functools.reduce(mul, shape, 1)
             self.sz, self.shape = sz, shape
+        def __repr__(self):
+            return 'sn.RawFloat(' + ','.join(repr(s) for s in self.shape) + ')'
         def set(self, sn, name, data, error):
             # Zero-pad `data` and split it into cells, then pass it on.
             assert sn.info is None or sn.info['analog'] is True
@@ -536,6 +547,8 @@ class Handler:
         __slots__ = ('types',)
         def __init__(self, *types):
             self.types = tuple(_default_typing(t) for t in types)
+        def __repr__(self):
+            return 'sn.List(' + ','.join(repr(t) for t in self.types) + ')'
         def set(self, sn, name, data, error):
             assert len(name) == len(data) == len(self.types)
             assert error is None or len(data) == len(error)
@@ -543,10 +556,10 @@ class Handler:
                 sn.set(name[i], data[i], self.types[i], None if error is None else error[i])
         def query(self, sn, name):
             assert len(name) == len(self.types)
-            return asyncio.gather(sn.query(name[i], self.types[i]) for i in range(len(name)))
+            return asyncio.gather(*[sn.query(name[i], self.types[i]) for i in range(len(name))])
         def get(self, sn, name):
             assert len(name) == len(self.types)
-            return asyncio.gather(sn.get(name[i], self.types[i]) for i in range(len(name)))
+            return asyncio.gather(*[sn.get(name[i], self.types[i]) for i in range(len(name))])
     class Goal:
         """
         `sn.Goal(type)`: datatype, where the wrapped `type` will mark all its cells as to-be-sought-out.
@@ -555,6 +568,8 @@ class Handler:
         __slots__ = ('type',)
         def __init__(self, type):
             self.type = _default_typing(type)
+        def __repr__(self):
+            return 'sn.Goal(' + repr(self.type) + ')'
         def set(self, sn, name, data, error):
             prev, Handler.Goal.goal = Handler.Goal.goal, True
             try: return sn.set(name, data, self.type, error)

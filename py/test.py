@@ -62,11 +62,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
-#   TODO: Make test coverage 100% again.
-
-
-
 # TODO: Should we generate a few random-latent `src` cells every step with a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), and predict/autoencode themselves whenever the path has contained any dist-prediction errors (so, same as `dst`'s gating, but for the past instead for the future)? So that `dst` can strive toward non-input unreliably-reachable outcomes?
 #   …But I don't think that this is principled at all, AKA that this has any fixed-point (and I'm starting to feel like it should)…
 #   …Something more principled would be "Get an emb of where we are, locally-similar globally-distinct (possibly learnable with BYOL, AKA "predict the next frame's slow-changing emb by prev frame's emb, without gating"), and allow those embs to be used as goals"… Do we want this instead, maybe?…
@@ -121,6 +116,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
+# TODO: Maybe make `sn.modify_name` called not on top-level calls but in `sn.Int` & `sn.RawFloat`, so that `sn.List`s can have their own name structure.
+# TODO: Maybe, make `_default_typing` interpret `[8]*17` as `sn.Int(17,8)`, same with floats — and non-equal items become `sn.List`s — and treat lists & tuples the same?
 # TODO: …What if we did make `sn.query` return double-`await`ables, so first `await` (fulfilled in either `.discard` or `._take_data`) would wait for submission and second `await` would actually give the data? (Then efficient piping is as simple as single-`await`ing in an infinite loop, and not just here but also wherever we want anything like a stream of data, such as dynamically-sized strings… And, no need to make `.set` `await`able, since it can just await queries. Overall, a good idea: usability is key. …Then again, we *could* hide the complexity of `sn.listeners` queues in our own classes…)
 
 

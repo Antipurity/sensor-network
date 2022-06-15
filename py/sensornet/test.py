@@ -288,6 +288,22 @@ async def test16():
     await h.handle(None)
     h.handle(np.ones((1, 96)), None)
     assert (await i) == 15
+@sn.run
+async def test17():
+    """Lists and goals."""
+    h = sn.Handler(8,8,8,8, 64, info={'choices_per_cell':2**4})
+    h.set(('miew', 'fmemor'), [1, 6], [16, 16])
+    h.set(('miew', 'fmemor'), [1, 6], sn.Goal([16, 16]))
+    L1 = h.get(('hgtngege', 'nveerna'), [16, 16])
+    L2 = h.get(('hgtngegu', 'nveerny'), sn.Goal([16, 16]))
+    L3 = h.query(('hgtngegu', 'nveerny'), sn.Goal([16, 16]))
+    data, query, error = await h.handle(None)
+    assert data.shape == (4, 96) and query.shape == (6, 32) and error is None
+    h.handle(np.ones((6, 96)), None)
+    assert (await L1) == [15, 15]
+    assert (await L2) == [15, 15]
+    assert (await L3) == [15, 15]
+    assert repr(sn.Goal(sn.List(sn.Int(16), sn.RawFloat(15)))) == 'sn.Goal(sn.List(sn.Int(16),sn.RawFloat(15)))'
 print('Tests OK')
 
 
