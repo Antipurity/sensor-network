@@ -63,9 +63,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
-#   TODO: Make `sn.Int` put everything in at the same time, nothing autoregressive. (Big-int goals will then be possible.)
 #   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
+#     …Or *do* we want such a mechanism maybe, so that transport protocols can actually delimit boundaries easily? …Or should they just attach themselves to `sn.sensors` and drain from their own queues… Which would also make unpredictably-arriving packets not insert themselves at random points but actually get put at the end of the queue correctly.
+#     …Yeah, should remove.
 #   TODO: Have the `sn.Goal(type)` datatype, which sets-then-resets a global bit during set/query/get which `sn.Int` and `sn.RawFloat` heed. (Easier to think about, and to specify in complex type hierarchies.)
+#   TODO: Make test coverage 100% again.
 
 
 

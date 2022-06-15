@@ -396,11 +396,13 @@ class Handler:
         sn.Int(*[*shape, options], goal=False)
         ```
 
-        Datatype: an autoregressively-sampled sequence of integers, each `0…options-1`. So the bigger the `shape`, the longer it is to set/get; this is so that the AI model can generate probabilities, sample from them, and still compose bit-streams without aliasing.
+        Datatype: a sequence of integers, each `0…options-1`.
 
         For efficiency, if possible, request many `Int`s via `shape`, rather than requesting many one-by-one.
 
-        To use this, `Handler`s need `info={'choices_per_cell': opts}`. This datatype will take care of conversions.
+        `sn.Int` is typically much slower but much more precise, compared to `sn.RawFloat`. Modeling-wise: enumerating `options` allows handlers to model the probability of each and sample from prob distributions when queried, *however*, correctly sampling more than one choice requires autoregressivity, AKA sampling choices one-by-one and feeding back the choice each time. So, same trade-offs as digital vs analog.
+
+        To use this, `Handler`s need to specify `info={'choices_per_cell': opts}`. This datatype will take care of conversions.
         """
         __slots__ = ('sz', 'shape', 'opts', 'goal')
         def __init__(self, *shape, goal=False):
@@ -419,7 +421,7 @@ class Handler:
             data = data.reshape(self.sz)
             assert ((data >= 0) & (data < self.opts)).all(), "Out-of-range ints"
 
-            # Assemble & pipe cells autoregressively.
+            # Assemble & set cells.
             cpc = sn.info['choices_per_cell']
             from math import frexp;  bpc = frexp(cpc - 1)[1]
             shape = sn.cell_shape
@@ -430,27 +432,25 @@ class Handler:
             data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(sn, data, bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
-            cells = np.split(np.concatenate((names, data, zeros), -1), cells, 0)
-            sn.pipe(*[(c, None, None) for c in cells])
+            cells = np.concatenate((names, data, zeros), -1)
+            sn.set(None, cells)
         def query(self, sn, name):
-            np = sn.backend
             cpc = sn.info['choices_per_cell']
             from math import frexp;  bpc = frexp(cpc - 1)[1]
             shape = sn.cell_shape
             assert not len(shape) or shape[-1] >= bpc
-            cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape)>0 else 0
+            cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape) else 0
             names = sn._shaped_names(self.sz, cells, self.shape, self.goal, False, name) if cells else None
-            cells = np.split(names, names.shape[0], 0) if cells else ()
             async def do_query(fb):
-                if not len(shape): return
+                if not cells: return
                 fb = await fb
                 if any(f is None for f in fb): return None
                 start = -shape[-1]
-                fb = np.concatenate([x[:, start : start+bpc] for x in fb], 0)
+                fb = fb[:, start : start+bpc]
                 fb = sn.Int.decode_bits(sn, fb)
                 R = sn.Int.repack(sn, fb, cpc, self.opts)[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
-            return do_query(asyncio.gather(*sn.pipe(*[(None, c, None) for c in cells])) if len(cells)>0 else 7)
+            return do_query(sn.query(None, names) if cells else None)
         @staticmethod
         def encode_ints(sn, ints, bitcount):
             """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
@@ -495,7 +495,7 @@ class Handler:
         Datatype: a sequence of floating-point numbers.
 
         Compared to `sn.Int`:
-        - This is sampled in parallel, which allows for lower latency.
+        - This is much more likely to be sampled in parallel, which allows for lower latency.
         - This is analog, as opposed to `sn.Int`'s digital choices. Due to the size of the space of possibilities, explicit probabilities are not available, so generative models have to be used to learn diverse acting policies (i.e. GANs/DDPGs, VAEs, diffusion models).
 
         To use this, `Handler`s need `info={'analog':True}`.
@@ -544,7 +544,7 @@ class Handler:
                 R = fb[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
             return do_query(sn.query(None, names))
-    class List: # pragma: no cover
+    class List:
         """
         ```py
         [*types]
@@ -563,12 +563,10 @@ class Handler:
                 sn.set(name[i], data[i], self.types[i], None if error is None else error[i])
         def query(self, sn, name):
             assert len(name) == len(self.types)
-            result = [sn.query(name[i], self.types[i]) for i in range(len(name))]
-            return asyncio.gather(*result)
+            return asyncio.gather(sn.query(name[i], self.types[i]) for i in range(len(name)))
         def get(self, sn, name):
             assert len(name) == len(self.types)
-            result = [sn.get(name[i], self.types[i]) for i in range(len(name))]
-            return asyncio.gather(*result)
+            return asyncio.gather(sn.get(name[i], self.types[i]) for i in range(len(name)))
 
 
 
