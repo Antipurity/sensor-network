@@ -63,9 +63,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
-#   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
-#     …Or *do* we want such a mechanism maybe, so that transport protocols can actually delimit boundaries easily? …Or should they just attach themselves to `sn.sensors` and drain from their own queues… Which would also make unpredictably-arriving packets not insert themselves at random points but actually get put at the end of the queue correctly.
-#     …Yeah, should remove.
 #   TODO: Have the `sn.Goal(type)` datatype, which sets-then-resets a global bit during set/query/get which `sn.Int` and `sn.RawFloat` heed. (Easier to think about, and to specify in complex type hierarchies.)
 #   TODO: Make test coverage 100% again.
 
@@ -125,6 +122,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
+# TODO: …What if we did make `sn.query` return double-`await`ables, so first `await` (fulfilled in either `.discard` or `._take_data`) would wait for submission and second `await` would actually give the data? (Then efficient piping is as simple as single-`await`ing in an infinite loop, and not just here but also wherever we want anything like a stream of data, such as dynamically-sized strings… And, no need to make `.set` `await`able, since it can just await queries. Overall, a good idea: usability is key. …Then again, we *could* hide the complexity of `sn.listeners` queues in our own classes…)
 
 
 

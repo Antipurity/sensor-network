@@ -86,7 +86,7 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    __slots__ = ('_query_cell', '_data', '_query', '_error', '_prev_fb', '_next_fb', '_wait_for_requests', '_pipe_queue', 'info', 'sensors', 'listeners', 'cell_shape', 'cell_size', 'n', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_name', '_shaped_names')
+    __slots__ = ('_query_cell', '_data', '_query', '_error', '_prev_fb', '_next_fb', '_wait_for_requests', 'info', 'sensors', 'listeners', 'cell_shape', 'cell_size', 'n', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_name', '_shaped_names')
     def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024):
         from builtins import set
         assert modify_name is None or isinstance(modify_name, list)
@@ -98,7 +98,6 @@ class Handler:
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, start_cell, end_cell), …]
         self._wait_for_requests = None # asyncio.Future()
-        self._pipe_queue = [] # […, […, ((data, query, data_error), Future), …], …]
         self.info = info
         self.sensors = sensors
         self.listeners = listeners
@@ -222,30 +221,16 @@ class Handler:
             self._wait_for_requests = None
         if isinstance(callback, asyncio.Future):
             return callback
-    def pipe(self, imm, *autoregressive, callback=None):
+    def pipe(self, data, query, error, callback=None):
         """
-        `prev_feedback = await other_handler.pipe(sn.handle(prev_feedback))[0]`
+        `prev_feedback = await other_handler.pipe(*sn.handle(prev_feedback))`
 
         Makes another handler handle this packet. Useful if NumPy arrays have to be transferred manually, such as over the Internet.
+
+        (To both preserve packet boundaries and to not stall the pipeline, extra work has to be performed, namely, have a queue of `sn.handle(…)` results, and in `other_handler.sensors`, have a function that pops from that queue via `.pipe`, waiting for data when the queue is empty.)
         """
-        data, query, error = imm
-        result = []
         if data is not None: self.set(None, data, None, error)
-        if query is not None: result.append(self.query(None, query, callback))
-        for i in range(len(autoregressive)):
-            # `autoregressive`, an undocumented feature: the ability to auto-schedule further pipings on further `.handle`ing, for when generation really needs to be sequential to be correct.
-            assert len(autoregressive[i]) == 3
-            fut = asyncio.Future()
-            if not len(self._pipe_queue):
-                self._pipe_queue.append([])
-            if i+1 < len(self._pipe_queue):
-                to = self._pipe_queue[i+1]
-            else:
-                to = []
-                self._pipe_queue.append(to)
-            to.append((autoregressive[i], fut))
-            result.append(fut)
-        return result
+        if query is not None: return self.query(None, query, callback)
     async def get(self, name, type):
         """
         `await sn.get(name, type)`
@@ -292,9 +277,6 @@ class Handler:
         assert max_simultaneous_steps is None or isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         # Collect sensor data.
         for s in self.sensors: s(self)
-        if len(self._pipe_queue):
-            for autoregressive, callback in self._pipe_queue.pop(0):
-                self.pipe(autoregressive, callback=callback)
         # Remember to respond to the previous step with prev_feedback.
         if len(self._prev_fb):
             if isinstance(prev_feedback, np.ndarray):

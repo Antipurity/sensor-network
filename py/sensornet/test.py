@@ -166,7 +166,7 @@ async def test8():
     """Pass-through of (synthetic) handler data to another one."""
     sn.shape(8,8,8,8, 64)
     shape1, shape2, shape3 = (13,96), (13,32), (13,64)
-    fut = sn.pipe((np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape3)))[0]
+    fut = sn.pipe(np.random.rand(*shape1)*2-1, np.random.rand(*shape2)*2-1, np.zeros(shape3))
     data, query, error = sn.handle(None, None)
     assert data.shape == shape1 and query.shape == shape2
     sn.commit()
