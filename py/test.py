@@ -68,6 +68,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #       TODO: …Do we need to double every output as an input? Even analog cells… Guess so…
 #     TODO: For speed, make generation detect distinct goal-groups and generate digital-cells in parallel for distinct groups.
 #       TODO: …How exactly do we detect these?… …We're dealing with array-sizes that are inferred from data, so it has to at least be done in NumPy…
+#         Need some `Sampler.sample_order(frame, frame_names)` that returns an iterator, right…
+#         Do we, for each subgroup, construct bit-masks of "digital AND this subgroup", and use `.nonzero()` to get lists of per-goal-group digital cells, which we can then transpose?…
 #   TODO: …Do we need to turn that unroll-time `transition_(…)` into `sample(…)`?… Or is it fine to just `transition_` since we don't care about sampling and only want to give inputs?… (Not if we want to unify queries and observations into one call.)
 #   TODO: Make `sn.Int` put everything in at the same time, nothing autoregressive. (Big-int goals will then be possible.)
 #   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
@@ -78,6 +80,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Should we generate a few random-latent `src` cells every step with a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), and predict/autoencode themselves whenever the path has contained any dist-prediction errors (so, same as `dst`'s gating, but for the past instead for the future)? So that `dst` can strive toward non-input unreliably-reachable outcomes?
 #   …But I don't think that this is principled at all, AKA that this has any fixed-point (and I'm starting to feel like it should)…
 #   …Something more principled would be "Get an emb of where we are, locally-similar globally-distinct (possibly learnable with BYOL, AKA "predict the next frame's slow-changing emb by prev frame's emb, without gating"), and allow those embs to be used as goals"… Do we want this instead, maybe?…
+#     (At least BYOL-with-explicit-VAE-latents would not wash out randomness, but learn to generatively model it.)
 #   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
 #   TODO: POSSIBLY WANT `dst`-generation to be conditioned on whether it can only use `src`-cells, and compute separate dists & smudges for `src`-only learning, and have a hyperparam that makes only `src` cells generatable (envs can still specify input-space goals).
 #     TODO: If so, WANT an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
@@ -245,7 +248,7 @@ class Sampler:
         self.bpc = bits_per_cell
         self.fn, self.start, self.end = fn, start, end
         self.softmax = Softmax(-1)
-    def __call__(self, query, latent=...):
+    def __call__(self, query, latent=...): # TODO: Also want to know the NumPy version, so that we can iterate properly… Can all our users provide that?…
         """Given a full-size `query` (zero-pad names if needed, or `augment` frames) (and possibly `latent`), samples a binary action.
 
         The result is `(action, logits)`. Use `action` to act; use L2 loss on `logits` and `.target(action)` to predict the action.
@@ -285,6 +288,17 @@ class Sampler:
     @staticmethod
     def analog_mask(frame):
         return frame[:, 1:2] > 0
+    @staticmethod
+    def sample_order(frame_names: np.ndarray): # TODO: Use this during sampling, by first giving each yielded subtensor of `frame`, then giving post-digital-decoding input as input.
+        """Allows sampling `frame`s correctly, by iterating over these indices and sampling each index-group in sequence. In particular, analog cells are sampled all at once, then each goal group's digital cell is sampled autoregressively, because learning can't model joint probabilities otherwise, and because goal-groups are supposed to be independent and thus parallelizable."""
+        analog_mask = Sampler.analog_mask(frame_names)
+        yield analog_mask[:, 0]
+        frame_names = frame_names[~analog_mask, :]
+        groups = goal_groups(frame_names)
+        inds = [same_goal_group(frame_names, g)[:, 0].nonzero() for g in groups]
+        for i in range(max(x.shape[0] for x in inds)):
+            group_inds = np.stack([x[i] for x in inds if i < x.shape[0]])
+            yield group_inds
 
 
 
@@ -335,9 +349,12 @@ print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else 
 
 # Our interface to multigroup combined-cells goals (OR/AND goals): the last name part is `group_id`, AKA user ID.
 #   Via careful engineering here, users can have entirely separate threads of experience that reach any goals in their group (but the NN can of course learn to share data between its threads).
-def goal_groups(frame):
+def goal_groups(frame: np.ndarray) -> np.ndarray:
     """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
     return np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)
+def same_goal_group(frame: np.ndarray, group: np.ndarray) -> np.ndarray:
+    """Returns a bitmask shaped as `(cells, 1)`."""
+    return (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdim=True)
 def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
     """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
@@ -350,7 +367,7 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
     base, goal = detach(base), detach(goal)
     max_smudge = sn.cell_size
     with torch.no_grad():
-        same_group = (base[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdim=True)
+        same_group = same_goal_group(base, group)
         base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge)
         cross_smudges = (.5*(base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2))).clamp(0., 1.).abs().sum(-1)
         return torch.where(same_group, cross_smudges, max_smudge).min(-2)[0].mean(-1)
