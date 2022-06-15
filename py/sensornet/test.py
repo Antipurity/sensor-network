@@ -273,16 +273,11 @@ async def test16():
     async def do(expect):
         i = h.query('assemble that 16-bit number please 1', 65536)
         fb = None
-        for iter in range(6):
-            if iter == 2:
-                j = h.query('assemble that 16-bit number please 2', 65536)
-            data, query, error = await h.handle(fb)
-            qs = (1, 32) if iter<2 or iter>=4 else (2,32)
-            assert data.shape == (0, 96) and query.shape == qs and error is None
-            fb = np.ones((query.shape[0], 96)) if expect is not None else None
-        h.handle(fb, None) # (Doing an extra step of the loop above instead of this would have made `.handle` infinitely await extra data, which is fine if in a detached execution thread, but not here.)
+        data, query, error = await h.handle(fb)
+        assert data.shape == (0, 96) and query.shape == (4, 32) and error is None
+        fb = np.ones((query.shape[0], 96)) if expect is not None else None
+        h.handle(fb, None) # (`await h.handle(fb)` here infinitely awaits extra data, which is fine if in a detached execution thread, but not here.)
         assert (await i) == expect
-        assert (await j) == expect
     await do(65535)
     await do(None)
     i = h.query('itty 2-bitty num', 4)

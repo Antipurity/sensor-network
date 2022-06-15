@@ -425,7 +425,7 @@ class Handler:
             async def do_query(fb):
                 if not cells: return
                 fb = await fb
-                if any(f is None for f in fb): return None
+                if fb is None: return None
                 start = -shape[-1]
                 fb = fb[:, start : start+bpc]
                 fb = sn.Int.decode_bits(sn, fb)
