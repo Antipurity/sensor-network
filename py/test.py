@@ -63,14 +63,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Make `sn` unaware of discrete-sampling difficulties, because the models handle them instead.
-#   TODO: `Sampler`:
-#     TODO: NumPy-detect analog & digital cells. First generate all analog cells in parallel, then generate all digital cells autoregressively. (And make `__call__` able to be conditioned on a `target`, instead of on-policy outputs.) (And have `.loss(…)` that does target-conditioned generation and prediction of `.target(…)`.) (And make `local_loss` and `fill_in` make sampling target-aware.)
-#       TODO: …Do we need to double every output as an input? Even analog cells… Guess so…
-#     TODO: For speed, make generation detect distinct goal-groups and generate digital-cells in parallel for distinct groups.
-#       TODO: …How exactly do we detect these?… …We're dealing with array-sizes that are inferred from data, so it has to at least be done in NumPy…
-#         Need some `Sampler.sample_order(frame, frame_names)` that returns an iterator, right…
-#         Do we, for each subgroup, construct bit-masks of "digital AND this subgroup", and use `.nonzero()` to get lists of per-goal-group digital cells, which we can then transpose?…
-#   TODO: …Do we need to turn that unroll-time `transition_(…)` into `sample(…)`?… Or is it fine to just `transition_` since we don't care about sampling and only want to give inputs?… (Not if we want to unify queries and observations into one call.)
 #   TODO: Make `sn.Int` put everything in at the same time, nothing autoregressive. (Big-int goals will then be possible.)
 #   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
 #   TODO: Have the `sn.Goal(type)` datatype, which sets-then-resets a global bit during set/query/get which `sn.Int` and `sn.RawFloat` heed. (Easier to think about, and to specify in complex type hierarchies.)
@@ -396,7 +388,7 @@ def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: 
         left_scan = ((dists - 1) * next_of_reached).cummax(-1)[0]
         dists = (dists - left_scan).flip(-1)
         return (smudge, dists)
-def cells_override(based_on: torch.Tensor, goal_mask: torch.Tensor, analog_mask: torch.Tensor, goal_group: torch.Tensor):
+def cells_override(based_on, goal_mask, analog_mask, goal_group):
     """`cells_override(based_on, analog_mask, goal_group) → based_on_2`
 
     Overrides the data needed by goal-cells, namely, goal/analog bits and the goal-group. `based_on` is likely all-0s."""
@@ -405,29 +397,33 @@ def cells_override(based_on: torch.Tensor, goal_mask: torch.Tensor, analog_mask:
     start, end = sum(cell_shape[:-2]), sum(cell_shape[:-1])
     goalness = goal_mask.float()*2-1
     analogness = analog_mask.float()*2-1
-    return torch.cat((goalness, analogness, based_on[2:start], goal_group, based_on[end:]), -1)
+    tpl = (goalness, analogness, based_on[2:start], goal_group, based_on[end:])
+    return torch.cat(tpl, -1) if isinstance(based_on, torch.Tensor) else np.concatenate(tpl, -1)
 def sample_goal(cells, goal_group, analog_prob=.5):
     """Samples a new goal. Advances RNN state."""
-    goal_mask = torch.full((cells, 1), True)
-    analog_mask = torch.rand(cells, 1) < analog_prob
     start, end = sum(cell_shape[:-2]), sum(cell_shape[:-1])
+    goal_mask_np = np.full((cells, 1), True)
+    analog_mask_np = np.random.rand(cells, 1) < analog_prob
+    goal_group_np = np.resize(goal_group, (cells, end-start))
+    z_np = np.zeros((cells, sn.cell_size), dtype=np.float32)
+    z_np = cells_override(z_np, goal_mask_np, analog_mask_np, goal_group_np)
+    goal_mask = torch.full((cells, 1), True)
+    analog_mask = torch.as_tensor(analog_mask_np)
     goal_group = torch.as_tensor(goal_group).expand(cells, end-start)
     z = torch.zeros(cells, sn.cell_size)
     z = cells_override(z, goal_mask, analog_mask, goal_group)
-    z = sample(z, ...).clamp(-clamp, clamp)
-    #   TODO: Should make `cells_override` be able to accept NumPy arrays (with only `torch.cat` having to be swapped).
-    #     TODO: But what about `goal_mask` and `analog_mask` and `goal_group` here? Do we need to generate them in NumPy and convert manually (at least `analog_mask`, to preserve analog-ness)… …Probably won't be a huge deal since this only happens when a goal changes…
-    return cells_override(z, goal_mask, analog_mask, goal_group)
+    z = sample(z, z_np).clamp(-clamp, clamp)
+    return cells_override(z, goal_mask, analog_mask, goal_group), z_np
 
 
 
 
 
 # Loss.
-def cell_dropout(frame: torch.Tensor) -> torch.Tensor:
-    """Makes querying subsets of cells not out-of-distribution, by dropping & shuffling cells randomly at training-time. Call before `per_goal_loss`."""
-    inds = torch.multinomial(torch.arange(0, frame.shape[0], dtype=torch.float32), random.randint(1, frame.shape[0]), replacement=False)
-    return frame[inds]
+def cell_dropout(frame: torch.Tensor, frame_names: np.ndarray):
+    """Makes querying subsets of cells not out-of-distribution, by dropping & shuffling cells randomly at training-time. Call & destructure before `per_goal_loss`."""
+    inds = np.choice(np.arange(0, frame.shape[0]), random.randint(1, frame.shape[0]), replace=False)
+    return frame[inds], frame_names[inds]
 def augment(frame: torch.Tensor) -> torch.Tensor:
     """Augments a frame, so that VAEs can be trained to minimize both dependence on input and cross-input dependence, and so that we can sample even without knowing queries (for imagined trajectories).
 
@@ -439,7 +435,7 @@ def augment(frame: torch.Tensor) -> torch.Tensor:
     name_only = torch.cat((frame[:, -cell_shape[-1]:], torch.zeros(cells, cell_shape[-1])), -1)
     group_only = cells_override(torch.zeros_like(frame), Sampler.goal_mask(frame), Sampler.analog_mask(frame), frame[:, start:end])
     return torch.where(is_name, name_only, group_only)
-def fill_in(target):
+def fill_in(target, target_names):
     """VAE integration: encode `target` and decode an alternative to it. If called in pre-`target` RNN state, produces target's info and alternative-target's info.
 
     Result: `((target_dist, target_smudge, target, target_logits), (pred_dist, pred_smudge, pred, pred_logits), regularization_loss)`"""
@@ -449,22 +445,17 @@ def fill_in(target):
         target_logits = sample.target(target)
         target_latent = normal(target_latent_info)
         regularization_loss = make_normal(target_latent_info).sum(-1, keepdim=True)
-    pred, pred_logits = sample(augment(target), ..., target_latent) # Encoder.
-    #   TODO: We need to accept `target_names` to pass in to `sample`.
-    #     TODO: `local_loss` has to accept `frame_names` to pass to `fill_in`.
-    #       TODO: `per_goal_loss` has to accept `frame_names` to pass to `local_loss`.
-    #         TODO: `cell_dropout` has to accept & return `frame_names` to pass to `per_goal_loss`.
-    #         TODO: The caller of `cell_dropout` has to destructure its result.
+    pred, pred_logits = sample(augment(target), target_names, target_latent) # Encoder.
     with State.Episode(start_from_initial=False): # Distance.
         _, _, pred_dist, pred_smudge = transition_(pred)
     return ((target_dist, target_smudge, target, target_logits), (pred_dist, pred_smudge, pred, pred_logits), regularization_loss)
 
-def local_loss(frame):
+def local_loss(frame, frame_names):
     """Does gated autoencoding, always improving goal-direction actions and goal-suggestions. Advances RNN state; needs to be called in the RNN-context just before `frame`. Returns `(loss, dist_preds, smudge_preds)`; use `global_loss` later to learn the gating.
 
     (Due to our "non-goals have lower dist, goals have different dist" gating, [generated](http://proceedings.mlr.press/v100/nair20a/nair20a.pdf) goals are neither too hard (AKA when never occuring as real targets) nor too easy (AKA when we know what we can do and then reliably do it, with no dist-error).) (Related to: [AMIGo](https://arxiv.org/pdf/2006.12122.pdf), [AdaGoal](https://arxiv.org/pdf/2111.12045.pdf). Fits tighter than either.)"""
     # Contrast `frame` with our own understanding of it.
-    (frame_dist, frame_smudge, frame, frame_logits), (pred_dist, pred_smudge, pred, pred_logits), reg_loss = fill_in(frame)
+    (frame_dist, frame_smudge, frame, frame_logits), (pred_dist, pred_smudge, pred, pred_logits), reg_loss = fill_in(frame, frame_names)
 
     # Compute what we learn to imitate, namely, reached-goal cells for which:
     #   If non-goal cells: distance decreases.
@@ -483,15 +474,16 @@ def local_loss(frame):
     log_metrics(imitated=imitate.mean(), reg_loss=reg_loss, predict_loss=predict_loss)
     return reg_loss + predict_loss, frame_dist, frame_smudge
 
-def per_goal_loss(frame, goals):
-    """`per_goal_loss(frame, goals) → (loss, smudges, dist_preds, smudge_preds)`
+def per_goal_loss(frame, frame_names, goals):
+    """`per_goal_loss(frame, frame_names, goals) → (loss, smudges, dist_preds, smudge_preds)`
 
     Wraps `local_loss` to compute all *per-goal* local metrics, which can later be `torch.stack`ed and put into `global_dists` and then into `global_loss`."""
     # Compute per-group means of predictions, then predict means and return means (which would be subject to `global_loss`).
     #   Also compute `local_dist`s.
-    loss, dist_pred, smudge_pred = local_loss(frame)
+    loss, dist_pred, smudge_pred = local_loss(frame, frame_names)
     smudges, dist_preds, smudge_preds,  = [], [], [], 
-    for group, goal, _, _, _, _, _, _ in goals.values():
+    for V in goals.values():
+        group, goal = V[0], V[1]
         same_group = (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdim=True).float()
         cell_count = same_group.sum()
         mean_dist_pred = (same_group * detach(dist_pred)).sum() / cell_count
@@ -562,7 +554,7 @@ async def unroll():
             with State.Episode() as life:
                 with torch.no_grad(): # TODO: This shouldn't apply to the delayed synth-grad-aware backprop-train. (After we have that, I mean.)
                     prev_q, action, frame = None, None, None
-                    goals = {} # goal_group_id → (group, goal, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds, start_time)
+                    goals = {} # goal_group_id → (group, goal, goal_names, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds, start_time)
                     time = 0 # If this gets unreasonably high, goal-switching will have problems.
                     while True:
                         if slow_mode > 0:
@@ -581,7 +573,7 @@ async def unroll():
 
                         # Delete/update our `goals` when we think we've reached them.
                         #   When deleting a goal, minimize its `global_loss`.
-                        for hash, (_, _, expiration_cpu, _, smudges, dist_preds, smudge_preds, start_time) in goals.copy().items():
+                        for hash, (_, _, _, expiration_cpu, _, smudges, dist_preds, smudge_preds, start_time) in goals.copy().items():
                             if time > expiration_cpu:
                                 finish_computing_loss(smudges, dist_preds, smudge_preds, start_time)
                                 del goals[hash]
@@ -589,27 +581,29 @@ async def unroll():
                             hash = group.tobytes()
                             if hash not in goals:
                                 with State.Episode(start_from_initial=False):
-                                    goal = sample_goal(random.randint(1, obs.shape[0] or 1), group)
+                                    goal, goal_names = sample_goal(random.randint(1, obs.shape[0] or 1), group)
                                 expiration_cpu = torch.tensor(time+10000, device='cpu', dtype=torch.int64)
                                 expiration_gpu = torch.tensor(time+10000, dtype=torch.int64)
                                 smudges, dist_preds, smudge_preds = [], [], []
-                                goals[hash] = (group, goal, expiration_cpu, expiration_gpu, smudges, dist_preds, smudge_preds, time)
+                                goals[hash] = (group, goal, goal_names, expiration_cpu, expiration_gpu, smudges, dist_preds, smudge_preds, time)
                         # Expose self-generated goals to the RNN.
                         if goals:
-                            extra_cells = [goal for (_, goal, _, _, _, _, _, _) in goals.values()]
+                            extra_cells = [goal for (_, goal, _, _, _, _, _, _, _) in goals.values()]
+                            extra_names = [goal_names for (_, _, goal_names, _, _, _, _, _, _) in goals.values()]
                             frame = torch.cat([*extra_cells, frame], 0)
+                            frame_names = np.concatenate([*extra_names, frame_names], 0)
                         # Delimit DODGE-episode boundaries, changing its projection direction sometimes.
                         if dodge_len * random.random() < 1 / (avg_time_to_goal+.5): # (Close enough to what `dodge_len` says.)
-                            for _, _, _, _, smudges, dist_preds, smudge_preds, start_time in goals.values():
+                            for _, _, _, _, _, smudges, dist_preds, smudge_preds, start_time in goals.values():
                                 finish_computing_loss(smudges, dist_preds, smudge_preds)
                             update_direction()
 
                         # Learn to predict better, via `per_goal_loss`.
                         #   TODO: …This can actually do normal backprop at the same time, right? Even synthetic gradients… Just do `loss.backward()` when all params are .requires_grad_(True) and will give correct gradient, and don't step the `optim` ourselves so that DODGE updates are still valid…
                         with State.Episode(start_from_initial=False):
-                            loss, smudge, dist_pred, smudge_pred = per_goal_loss(cell_dropout(frame), goals)
+                            loss, smudge, dist_pred, smudge_pred = per_goal_loss(*cell_dropout(frame, frame_names), goals)
                             loss_so_far = loss_so_far + loss
-                            for _, _, _, _, smudges, dist_preds, smudge_preds, _ in goals.values(): # For `global_loss`.
+                            for _, _, _, _, _, smudges, dist_preds, smudge_preds, _ in goals.values(): # For `global_loss`.
                                 smudges.append(smudge)
                                 dist_preds.append(dist_pred)
                                 smudge_preds.append(smudge_pred)
@@ -618,7 +612,7 @@ async def unroll():
                         # Give prev-action & next-observation, remember dist-to-goal estimates, and sample next action.
                         _, _, dist, _ = transition_(frame)
                         n = 0
-                        for group, (group, goal, expiration_cpu, expiration_gpu, _, _, _, _) in goals.items():
+                        for group, (group, goal, _, expiration_cpu, expiration_gpu, _, _, _, _) in goals.items():
                             # (If we do better than expected, we leave early.)
                             if goal.shape[0] > 0:
                                 group_dist = (time + dist.detach()[n : n+goal.shape[0], -1].mean() + 1).int().min(expiration_gpu)
