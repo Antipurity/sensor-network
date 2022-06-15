@@ -67,6 +67,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #     TODO: NumPy-detect analog & digital cells. First generate all analog cells in parallel, then generate all digital cells autoregressively. (And make `__call__` able to be conditioned on a `target`, instead of on-policy outputs.) (And have `.loss(…)` that does target-conditioned generation and prediction of `.target(…)`.) (And make `local_loss` and `fill_in` make sampling target-aware.)
 #       TODO: …Do we need to double every output as an input? Even analog cells… Guess so…
 #     TODO: For speed, make generation detect distinct goal-groups and generate digital-cells in parallel for distinct groups.
+#       TODO: …How exactly do we detect these?… …We're dealing with array-sizes that are inferred from data, so it has to at least be done in NumPy…
 #   TODO: …Do we need to turn that unroll-time `transition_(…)` into `sample(…)`?… Or is it fine to just `transition_` since we don't care about sampling and only want to give inputs?… (Not if we want to unify queries and observations into one call.)
 #   TODO: Make `sn.Int` put everything in at the same time, nothing autoregressive. (Big-int goals will then be possible.)
 #   TODO: Make `sn.Handler.pipe` not have any mechanism for spreading out requests along multiple timesteps.
@@ -75,6 +76,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Should we generate a few random-latent `src` cells every step with a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), and predict/autoencode themselves whenever the path has contained any dist-prediction errors (so, same as `dst`'s gating, but for the past instead for the future)? So that `dst` can strive toward non-input unreliably-reachable outcomes?
+#   …But I don't think that this is principled at all, AKA that this has any fixed-point (and I'm starting to feel like it should)…
+#   …Something more principled would be "Get an emb of where we are, locally-similar globally-distinct (possibly learnable with BYOL, AKA "predict the next frame's slow-changing emb by prev frame's emb, without gating"), and allow those embs to be used as goals"… Do we want this instead, maybe?…
 #   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
 #   TODO: POSSIBLY WANT `dst`-generation to be conditioned on whether it can only use `src`-cells, and compute separate dists & smudges for `src`-only learning, and have a hyperparam that makes only `src` cells generatable (envs can still specify input-space goals).
 #     TODO: If so, WANT an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
@@ -167,7 +170,7 @@ cell_shape = (8,8,8,8, 256)
 sn.shape(*cell_shape)
 
 state_sz = 256
-latent_sz = 16 # For VAE generation.
+latent_sz = 32 # For VAE generation.
 slow_mode = .05 # Artificial delay per step.
 
 choices_per_cell = 256
@@ -393,19 +396,21 @@ def sample_goal(cells, goal_group, analog_prob=.5):
 
 
 # Loss.
+def cell_dropout(frame: torch.Tensor) -> torch.Tensor:
+    """Makes querying subsets of cells not out-of-distribution, by dropping & shuffling cells randomly at training-time. Call before `per_goal_loss`."""
+    inds = torch.multinomial(torch.arange(0, frame.shape[0], dtype=torch.float32), random.randint(1, frame.shape[0]), replacement=False)
+    return frame[inds]
 def augment(frame: torch.Tensor) -> torch.Tensor:
-    """Augments a frame, so that VAEs can be trained to minimize both dependence on input and cross-input dependence, and so that separating NN calls at unroll-time doesn't make them out-of-distribution, and so that we can sample even without knowing queries (for imagined trajectories).
+    """Augments a frame, so that VAEs can be trained to minimize both dependence on input and cross-input dependence, and so that we can sample even without knowing queries (for imagined trajectories).
 
-    In particular, this does cell dropout, then of the remaining ones, randomly decides whether to leave them or make them name-only or make them all-zeros."""
+    In particular, this randomly decides whether to make cells name-only or goal-group-only."""
     frame = detach(frame)
     cells = frame.shape[0]
-    keep_cells = torch.randint(0, cells-1, (random.randrange(1, cells),), dtype=torch.int32)
-    frame = frame[keep_cells]
     start, end = sum(cell_shape[:-2]), sum(cell_shape[:-1])
-    is_full, is_name = torch.rand(cells)*3 < 1, torch.rand(cells)*2 < 1
+    is_name = torch.rand(cells)*2 < 1
     name_only = torch.cat((frame[:, -cell_shape[-1]:], torch.zeros(cells, cell_shape[-1])), -1)
     group_only = cells_override(torch.zeros_like(frame), Sampler.goal_mask(frame), Sampler.analog_mask(frame), frame[:, start:end])
-    return torch.where(is_full, frame, torch.where(is_name, name_only, group_only))
+    return torch.where(is_name, name_only, group_only)
 def fill_in(target):
     """VAE integration: encode `target` and decode an alternative to it. If called in pre-`target` RNN state, produces target's info and alternative-target's info.
 
@@ -569,7 +574,7 @@ async def unroll():
                         # Learn to predict better, via `per_goal_loss`.
                         #   TODO: …This can actually do normal backprop at the same time, right? Even synthetic gradients… Just do `loss.backward()` when all params are .requires_grad_(True) and will give correct gradient, and don't step the `optim` ourselves so that DODGE updates are still valid…
                         with State.Episode(start_from_initial=False):
-                            loss, smudge, dist_pred, smudge_pred = per_goal_loss(frame, goals)
+                            loss, smudge, dist_pred, smudge_pred = per_goal_loss(cell_dropout(frame), goals)
                             loss_so_far = loss_so_far + loss
                             for _, _, _, _, smudges, dist_preds, smudge_preds, _ in goals.values(): # For `global_loss`.
                                 smudges.append(smudge)
