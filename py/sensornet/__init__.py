@@ -154,7 +154,6 @@ class Handler:
         if name is not None: name, type = _default_typing(name, type)
         if type is not None:
             assert hasattr(type, 'set')
-            for fn in self.modify_name: name = fn(name)
             return type.set(self, name, data, error)
         assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
 
@@ -195,7 +194,6 @@ class Handler:
         if type is not None and not isinstance(type, np.ndarray):
             assert hasattr(type, 'query')
             assert callback is None
-            for fn in self.modify_name: name = fn(name)
             return type.query(self, name)
         query = type
         assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
@@ -240,7 +238,6 @@ class Handler:
         if isinstance(name, str): name = (name,)
         if name is not None: name, type = _default_typing(name, type)
         if hasattr(type, 'get'):
-            for fn in self.modify_name: name = fn(name)
             return type.get(self, name)
         goal = Handler.Goal.goal
         async def query_loop(fb):
@@ -404,6 +401,7 @@ class Handler:
         def __repr__(self):
             return 'sn.Int(' + ','.join(repr(s) for s in [*self.shape, self.opts]) + ')'
         def set(self, sn, name, data, error):
+            for fn in sn.modify_name: name = fn(name)
             assert error is None, "Integers are precise"
             np = sn.backend
             data = np.array(data, dtype=np.int32, copy=False)
@@ -425,6 +423,7 @@ class Handler:
             cells = np.concatenate((names, data, zeros), -1)
             sn.set(None, cells)
         def query(self, sn, name):
+            for fn in sn.modify_name: name = fn(name)
             cpc = sn.info['choices_per_cell']
             from math import frexp;  bpc = frexp(cpc - 1)[1]
             shape = sn.cell_shape
@@ -461,7 +460,7 @@ class Handler:
             """`repack(sn, ints, from_opts, to_opts)→ints`: changes the base of `ints` digits, and thus its size. Importantly, `repack(sn, repack(sn, X, A, B), B, A) = X`."""
             assert isinstance(ints, int) or len(ints.shape) == 1
             np = sn.backend
-            from math import log, floor, ceil
+            from math import log, floor
             if from_opts > to_opts: # More `ints`: unpack.
                 mul = floor(log(from_opts, to_opts)) # Allow aliasing if source has too much capacity.
                 if isinstance(ints, int): return ints * mul
@@ -500,6 +499,7 @@ class Handler:
             return 'sn.RawFloat(' + ','.join(repr(s) for s in self.shape) + ')'
         def set(self, sn, name, data, error):
             # Zero-pad `data` and split it into cells, then pass it on.
+            for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
             data = np.array(data, dtype=np.float32, copy=False)
@@ -521,6 +521,7 @@ class Handler:
             sn.set(None, data, None, error)
         def query(self, sn, name):
             # Flatten feedback's cells and reshape it to our shape.
+            for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
 
