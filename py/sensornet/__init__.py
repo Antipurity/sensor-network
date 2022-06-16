@@ -151,7 +151,7 @@ class Handler:
         np = self.backend
         if isinstance(name, str): name = (name,)
 
-        type = _default_typing(type)
+        if name is not None: name, type = _default_typing(name, type)
         if type is not None:
             assert hasattr(type, 'set')
             for fn in self.modify_name: name = fn(name)
@@ -191,7 +191,7 @@ class Handler:
         assert callback is None or isinstance(callback, asyncio.Future) or callable(callback)
         if isinstance(name, str): name = (name,)
 
-        type = _default_typing(type)
+        if name is not None: name, type = _default_typing(name, type)
         if type is not None and not isinstance(type, np.ndarray):
             assert hasattr(type, 'query')
             assert callback is None
@@ -238,7 +238,7 @@ class Handler:
         Gets feedback, guaranteed. Never returns `None`, instead re-querying until a result is available.
         """
         if isinstance(name, str): name = (name,)
-        type = _default_typing(type)
+        if name is not None: name, type = _default_typing(name, type)
         if hasattr(type, 'get'):
             for fn in self.modify_name: name = fn(name)
             return type.get(self, name)
@@ -380,8 +380,8 @@ class Handler:
         """
         ```py
         8
-        (2,2, 8)
-        sn.Int(2,2, 8)
+        [8] * 15
+        sn.Int(15, 8)
         sn.Int(*[*shape, options])
         ```
 
@@ -545,8 +545,7 @@ class Handler:
         Datatype: a simple list of other datatypes. Name and data (and maybe error) must be per-type tuples/lists.
         """
         __slots__ = ('types',)
-        def __init__(self, *types):
-            self.types = tuple(_default_typing(t) for t in types)
+        def __init__(self, *types): self.types = types
         def __repr__(self):
             return 'sn.List(' + ','.join(repr(t) for t in self.types) + ')'
         def set(self, sn, name, data, error):
@@ -566,8 +565,7 @@ class Handler:
         """
         goal = False
         __slots__ = ('type',)
-        def __init__(self, type):
-            self.type = _default_typing(type)
+        def __init__(self, type): self.type = type
         def __repr__(self):
             return 'sn.Goal(' + repr(self.type) + ')'
         def set(self, sn, name, data, error):
@@ -757,11 +755,14 @@ def _shaped_names(sn, sz, cells, shape, goal, analog, name):
     progress = np.stack([goal, analog, *reversed(progress)], 1)
     full_name[:, :sn.cell_shape[0]] = _fill(np, progress, sn.cell_shape[0])
     return full_name
-def _default_typing(type):
-    if isinstance(type, int): return Handler.Int(type)
-    if isinstance(type, tuple): return Handler.Int(*type)
-    if isinstance(type, list): return Handler.List(*type)
-    return type
+def _default_typing(name, type):
+    if isinstance(type, int): return name, Handler.Int(type)
+    if isinstance(type, tuple) or isinstance(type, list):
+        assert len(type), "Can't be non-empty"
+        if isinstance(type[0], int) and all(t == type[0] for t in type):
+            return name, Handler.Int(len(type), type[0])
+        return (name,) * len(type), Handler.List(*type)
+    return name, type
 
 
 

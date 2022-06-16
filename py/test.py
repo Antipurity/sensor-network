@@ -76,10 +76,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Maybe, allow `sn.Int`s to have only `1` option, so that it's easy for users to dispatch "events" which can be set as goals. Maybe also turn no-data no-type `.set` calls into such events.
-#   …Or should we have a separate `sn.Event()`?
+#   …Or should we have a separate `sn.Event()`? Based on `sn.RawFloat(1)`?
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
 # TODO: Maybe make `sn.modify_name` called not on top-level calls but in `sn.Int` & `sn.RawFloat`, so that `sn.List`s can have their own name structure.
-# TODO: Maybe make `_default_typing` interpret `[8]*17` as `sn.Int(17,8)`, same with floats — and non-equal items become `sn.List`s — and treat lists & tuples the same.
+#   …But if list items will no longer have their own names, then, can't do this…
 
 
 
