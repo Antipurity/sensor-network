@@ -502,7 +502,7 @@ class Handler:
             for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
-            data = np.array([data] if isinstance(data, float) else data, dtype=np.float32, copy=False)
+            data = np.array(data, dtype=np.float32, copy=False)
             if isinstance(error, float):
                 error = np.full(data.shape, error, dtype=np.float32)
             assert data.shape == self.shape
@@ -534,7 +534,7 @@ class Handler:
                 if fb is None: return None
                 fb = fb[:, -shape[-1]:].flatten()
                 R = fb[:self.sz].reshape(self.shape)
-                return R if len(R.shape)>0 else R.item()
+                return R if len(R.shape) else R.item()
             return do_query(sn.query(None, names))
     class List:
         """
@@ -589,7 +589,48 @@ class Handler:
         def __repr__(self): return 'sn.Event()'
         def set(self, sn, name, data, error):
             assert data is None and error is None
-            return sn.set(name, 0., sn.RawFloat(1), error)
+            return sn.set(name, 0., sn.RawFloat(), error)
+    class Float:
+        """
+        `sn.Float(*shape, opts=..., mu=0, domain=(-1,1))`: datatype, representing digital floating-point numbers (for low-precision high-throughput analog numbers, use `sn.RawFloat` instead).
+
+        Each number is [μ-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) if requested, or linearly-encoded by default. By default, each number occupies 1 cell.
+        """
+        goal = False
+        __slots__ = ('shape', 'opts', 'mu', 'domain')
+        def __init__(self, *shape, opts=..., mu=0, domain=(-1, 1)):
+            self.shape, self.opts, self.mu, self.domain = shape, opts, mu, domain
+        def __repr__(self):
+            return 'sn.Float(' + ','.join(repr(s) for s in self.shape) + ',opts='+repr(self.opts) + ',mu='+repr(self.mu) + ',domain='+repr(self.domain) + ')'
+        def set(self, sn, name, data, error):
+            assert error is None, "Unimplemented"
+            opts = sn.info['choices_per_cell'] if self.opts is ... else self.opts
+            np = sn.backend
+            data = np.array(data, dtype=np.float32, copy=False)
+            min, max = self.domain
+            data = (2*data - min - max) / (max - min)
+            return sn.set(name, self.encode(np, data, opts, self.mu), sn.Int(*self.shape, opts))
+        def query(self, sn, name):
+            opts = sn.info['choices_per_cell'] if self.opts is ... else self.opts
+            np = sn.backend
+            async def mu_decode(fb):
+                fb = np.array(await fb, dtype=np.int32, copy=False)
+                fb = self.decode(np, fb, opts, self.mu)
+                min, max = self.domain
+                return ((fb if len(fb.shape) else fb.item()) * (max - min) + min + max) * .5
+            return mu_decode(sn.query(name, sn.Int(*self.shape, opts)))
+        @staticmethod
+        def encode(np, floats, opts, mu):
+            floats = np.clip(floats, -1, 1)
+            if mu:
+                floats = np.sign(floats) * np.log(1 + mu*np.absolute(floats)) / np.log(1 + mu)
+            return ((floats+1)*.5 * (opts-1)).astype(np.int32)
+        @staticmethod
+        def decode(np, ints, opts, mu):
+            floats = np.clip(ints.astype(np.float32) / (opts-1) * 2 - 1, -1, 1)
+            if mu:
+                floats = np.sign(floats) * ((1+mu) ** np.absolute(floats) - 1) / mu
+            return floats
 
 
 
@@ -802,6 +843,8 @@ Int = Handler.Int
 RawFloat = Handler.RawFloat
 List = Handler.List
 Goal = Handler.Goal
+Event = Handler.Event
+Float = Handler.Float
 run = Handler.run
 torch = Handler.torch
 Filter = Handler.Filter

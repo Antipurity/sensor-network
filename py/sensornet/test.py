@@ -310,8 +310,15 @@ async def test18():
     h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'choices_per_cell':2**4})
     h.set('important event occured')
     h.set('and another one', type=h.Event())
-    assert h.handle(None, None)[0].shape == (2, 96)
-    repr(h.Event())
+    h.set('and another one', .5, sn.Float())
+    h.set('and another one', [.5], sn.Float(1, mu=256, domain=(-5,5)))
+    L1 = h.query('survive', sn.Float(mu=256, domain=(-5, 5)))
+    L2 = h.query('or get your spine used to make furniture', sn.Float())
+    assert (await h.handle(None))[0].shape == (4, 96)
+    h.handle(np.ones((2, 96)), None)
+    assert (await L1) == 5.
+    assert (await L2) == 1.
+    repr(h.Event()), repr(h.Float())
 print('Tests OK')
 
 
