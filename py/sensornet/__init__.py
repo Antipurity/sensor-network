@@ -437,13 +437,13 @@ class Handler:
                 if fb is None: return None
                 start = -shape[-1]
                 fb = fb[:, start : start+bpc]
-                fb = sn.Int.decode_bits(sn, fb)
+                fb = sn.Int.decode_bits(sn, fb) % cpc
                 R = sn.Int.repack(sn, fb, cpc, self.opts)[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
             return do_query(sn.query(None, names) if cells else None)
         @staticmethod
         def encode_ints(sn, ints, bitcount):
-            """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1."""
+            """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1. Importantly, `choices_per_cell >= 2**bitcount`."""
             assert len(ints.shape) == 1
             np = sn.backend
             powers2 = 2 ** np.arange(bitcount-1, -1, -1, dtype=np.int32)
@@ -451,7 +451,7 @@ class Handler:
             return np.where(bits > 0, np.array(1., dtype=np.float32), np.array(-1., dtype=np.float32))
         @staticmethod
         def decode_bits(sn, bits):
-            """`sn.Int.decode_bits(sn, bits)→ints`: from `(N, bitcount)`-shape float32 to `(N,)`-shape int32."""
+            """`sn.Int.decode_bits(sn, bits)→ints`: from `(N, bitcount)`-shape float32 to `(N,)`-shape int32. Use `ints % options` or `sn.Int.repack(ints, choices_per_cell, options)` afterward."""
             assert len(bits.shape) == 2
             np = sn.backend
             powers2 = 2 ** np.arange(bits.shape[1]-1, -1, -1, dtype=np.int32)
@@ -463,7 +463,7 @@ class Handler:
             np = sn.backend
             from math import log, floor, ceil
             if from_opts > to_opts: # More `ints`: unpack.
-                mul = ceil(log(from_opts, to_opts)) # Prefer overallocating.
+                mul = floor(log(from_opts, to_opts)) # Allow aliasing if source has too much capacity.
                 if isinstance(ints, int): return ints * mul
                 powers = to_opts ** np.arange(mul-1, -1, -1, dtype=np.int32)
                 ints = np.expand_dims(ints, 1)

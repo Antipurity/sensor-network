@@ -79,7 +79,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   …Or should we have a separate `sn.Event()`? Based on `sn.RawFloat(1)`?
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
 # TODO: Maybe make `sn.modify_name` called not on top-level calls but in `sn.Int` & `sn.RawFloat`, so that `sn.List`s can have their own name structure.
-#   …But if list items will no longer have their own names, then, can't do this…
 
 
 
@@ -301,7 +300,7 @@ class Sampler:
         assert len(x.shape) == 2
         is_ana = Sampler.analog_mask(detach(x)).float()
         bits = detach(x)[:, self.start : self.start + self.bpc]
-        untabled = digital_table(sn.Int.decode_bits(sn, bits))
+        untabled = digital_table(sn.Int.decode_bits(sn, bits) % self.cpc)
         return is_ana * x + (1-is_ana) * torch.cat((x[:, :self.start], untabled), -1)
 
 
