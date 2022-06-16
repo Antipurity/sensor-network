@@ -62,13 +62,22 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Should we generate a few random-latent `src` cells every step with a special input structure (1s in the first number and 0s everywhere else; queries & setting are possible), and predict/autoencode themselves whenever the path has contained any dist-prediction errors (so, same as `dst`'s gating, but for the past instead for the future)? So that `dst` can strive toward non-input unreliably-reachable outcomes?
-#   …But I don't think that this is principled at all, AKA that this has any fixed-point (and I'm starting to feel like it should)…
-#   …Something more principled would be "Get an emb of where we are, locally-similar globally-distinct (possibly learnable with BYOL, AKA "predict the next frame's slow-changing emb by prev frame's emb, without gating"), and allow those embs to be used as goals"… Do we want this instead, maybe?…
-#     (At least BYOL-with-explicit-VAE-latents would not wash out randomness, but learn to generatively model it.)
-#   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
-#   TODO: POSSIBLY WANT `dst`-generation to be conditioned on whether it can only use `src`-cells, and compute separate dists & smudges for `src`-only learning, and have a hyperparam that makes only `src` cells generatable (envs can still specify input-space goals).
-#     TODO: If so, WANT an env that can only be solved with good exploration (a big maze with resetting), to give us the success criterion: the env works both with and without input-space goals.
+
+
+
+
+
+
+# TODO: …Maybe also add support for nucleus sampling (like zeroing out all probabilities that are less than 1/40 and re-normalizing), so that we don't very-rarely sample overly-low-probability discrete actions?…
+#   Only needs a change in `Sampler`, right?
+
+
+
+
+
+
+# TODO: …May want a hyperparam for what to do with digital inputs: leave as binary encodings, VS lookup in a learnable table, VS lookup in a fixed random table…
+#   (Crucial for good digital-actions, so, HAS to be implemented.)
 
 
 
@@ -78,20 +87,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
 #   …Maybe instead of BPTT with its periodic-stalling, we should do backprop-less DODGE online (even with `dodge_optimizes_params=1`, it should help quite a bit) with ≈1000-step-delayed one-step synth-grad learning following at a distance… Disabling DODGE before that and re-enabling it with the old direction afterward… Possibly even with Reptile or MAML, though [it may be superfluous with enough layers](https://arxiv.org/abs/2106.09017)…
 #   …Or maybe, synth-grad should generate a query-vector then take a value-vector and return its gradient…
-
-
-
-
-
-
-# TODO: …May want a hyperparam for what to do with digital inputs: leave as binary encodings, VS lookup in a learnable table, VS lookup in a fixed random table…
-
-
-
-
-
-
-# TODO: …Maybe also add support for nucleus sampling (like zeroing out all probabilities that are less than 1/40 and re-normalizing), so that we don't very-rarely sample overly-low-probability discrete actions?…
 
 
 
@@ -112,21 +107,21 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Maybe, allow `sn.Int`s to have only `1` option, so that it's easy for users to dispatch "events" which can be set as goals. Maybe also turn no-data no-type `.set` calls into such events.
-# TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… (If ints are not explicitly supported, provide at least some inefficient support of them.) (And, `sn.info['analog']` checks would probably be unnecessary with this.)
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
-# TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
-# TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 # TODO: Maybe make `sn.modify_name` called not on top-level calls but in `sn.Int` & `sn.RawFloat`, so that `sn.List`s can have their own name structure.
 # TODO: Maybe, make `_default_typing` interpret `[8]*17` as `sn.Int(17,8)`, same with floats — and non-equal items become `sn.List`s — and treat lists & tuples the same?
+
+# TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… (If ints are not explicitly supported, provide at least some inefficient support of them.) (And, `sn.info['analog']` checks would probably be unnecessary with this.)
+# TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
+# TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 # TODO: …What if we did make `sn.query` return double-`await`ables, so first `await` (fulfilled in either `.discard` or `._take_data`) would wait for submission and second `await` would actually give the data? (Then efficient piping is as simple as single-`await`ing in an infinite loop, and not just here but also wherever we want anything like a stream of data, such as dynamically-sized strings… And, no need to make `.set` `await`able, since it can just await queries. Overall, a good idea: usability is key. …Then again, we *could* hide the complexity of `sn.listeners` queues in our own classes…)
 
 
 
-
-# TODO: …Do we maybe also want a hyperparam for "how many actions to pick between at unroll-time"?… (…Which we can *technically* allow the model to modify, for better or worse — same as learning-rate and replays-per-step and max-replay-buffer-len… Though maybe it's better to just learn an "expected improvement with this action-count" NN/table.)
-
-
-
+# TODO: Compressed history as goals:
+#   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
+#   TODO: Have a hyperparam that makes `local_dist` only consider `src`-cells (non-inputs) for smudgings, and given an env that needs nothing but exploration, verify that only using `src`-cells still works.
+#   TODO: Find some way of compressing the past that works in these envs — some embedding that's influenced-by (predicts) the past. Likely: from `cells_override(zeros, 1, 0, group)`-input `src` cells, computed from the future, predict all past cells (prev frame's inputs and `src`s).
 
 
 
