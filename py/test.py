@@ -68,12 +68,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Maybe also add support for nucleus sampling (like zeroing out all probabilities that are less than 1/40 and re-normalizing), so that we don't very-rarely sample overly-low-probability discrete actions?…
-#   Only needs a change in `Sampler`, right?
-
-
-
-
 
 
 # TODO: …May want a hyperparam for what to do with digital inputs: leave as binary encodings, VS lookup in a learnable table, VS lookup in a fixed random table…
@@ -83,10 +77,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-
-# TODO: …Maybe, have per-SRWM-matrix synthetic gradients via making the synth-grad NNs (possibly even the main RNN) learning to output key & value vectors for each matrix (possibly more than 1 pair), the outer product of which is taken to be the gradient?…
-#   …Maybe instead of BPTT with its periodic-stalling, we should do backprop-less DODGE online (even with `dodge_optimizes_params=1`, it should help quite a bit) with ≈1000-step-delayed one-step synth-grad learning following at a distance… Disabling DODGE before that and re-enabling it with the old direction afterward… Possibly even with Reptile or MAML, though [it may be superfluous with enough layers](https://arxiv.org/abs/2106.09017)…
-#   …Or maybe, synth-grad should generate a query-vector then take a value-vector and return its gradient…
+# TODO: Maybe, allow `sn.Int`s to have only `1` option, so that it's easy for users to dispatch "events" which can be set as goals. Maybe also turn no-data no-type `.set` calls into such events.
+# TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
+# TODO: Maybe make `sn.modify_name` called not on top-level calls but in `sn.Int` & `sn.RawFloat`, so that `sn.List`s can have their own name structure.
+# TODO: Maybe make `_default_typing` interpret `[8]*17` as `sn.Int(17,8)`, same with floats — and non-equal items become `sn.List`s — and treat lists & tuples the same.
 
 
 
@@ -106,10 +100,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Maybe, allow `sn.Int`s to have only `1` option, so that it's easy for users to dispatch "events" which can be set as goals. Maybe also turn no-data no-type `.set` calls into such events.
-# TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
-# TODO: Maybe make `sn.modify_name` called not on top-level calls but in `sn.Int` & `sn.RawFloat`, so that `sn.List`s can have their own name structure.
-# TODO: Maybe, make `_default_typing` interpret `[8]*17` as `sn.Int(17,8)`, same with floats — and non-equal items become `sn.List`s — and treat lists & tuples the same?
+
+# TODO: After pure-DODGE fails to learn well:
+#   TODO: Figure out how to use `DODGE` simultaneously with regular backprop w.r.t. weights. And make at least `per_goal_loss` do regular backprop *in addition to* DODGE.
+#   TODO: Instead of simultaneous DODGE+backprop, make backprop follow at ≈1000 steps back, and make it aware of dist/smudge targets for `global_loss` if available.
+#   TODO: Do per-`State`-matrix-`W` synth-grad, via a neural net that takes `q` (a random query) and `q@W` (its value) and returns `q@W.grad`.
 
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… (If ints are not explicitly supported, provide at least some inefficient support of them.) (And, `sn.info['analog']` checks would probably be unnecessary with this.)
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
@@ -157,10 +152,12 @@ sn.shape(*cell_shape)
 
 state_sz = 256
 latent_sz = 32 # For VAE generation.
+choices_per_cell = 256
+
 slow_mode = .05 # Artificial delay per step.
 
-choices_per_cell = 256
 clamp = 1. # All inputs/outputs are clipped to `-clamp…clamp`.
+top_p = .99 # Nucleus sampling (`1` to disable), for discounting the unreliable probability tail for digital queries: https://arxiv.org/abs/1904.09751
 
 lr = 1e-3
 dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
@@ -232,11 +229,11 @@ class Sampler:
         self.fn, self.start, self.end = fn, start, end
         self.softmax = Softmax(-1)
     def __call__(self, query: torch.Tensor, query_names: np.ndarray, latent=...):
-        """.
+        """Does analog+digital sampling.
         
         Inputs: a full-size `query` (zero-pad names if needed, or `augment` frames), its name-only NumPy version (for `Sampler.sample_order`), and optionally `latent`.
 
-        The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to predict the action.
+        The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to predict the action (which would also push down probs of unlikely actions down, somewhat similarly to GANs or [Unlikelihood Training](https://arxiv.org/abs/1908.04319)).
 
         This will advance RNN `State`, so reset via `State.Episode` if that is unwanted."""
         assert len(query.shape) == len(query_names.shape) == 2 and query.shape[-1] == j
@@ -252,7 +249,7 @@ class Sampler:
             analog = name_and_logits[:, :j]
             with torch.no_grad():
                 digprob = self.softmax(detach(name_and_logits[:, i : i + self.cpc]))
-                indices = digprob.multinomial(1)[..., 0]
+                indices = Sampler.nucleus_sampling(digprob).multinomial(1)[..., 0]
                 bits = sn.Int.encode_ints(sn, indices, self.bpc)
                 digital = torch.cat((name, bits, torch.zeros(cells, j - self.bpc - i)), -1)
             action_part = (is_ana * analog + (1-is_ana) * digital).clamp(-clamp, clamp)
@@ -291,6 +288,13 @@ class Sampler:
         for i in range(max(x.shape[0] for x in inds)):
             group_inds = np.stack([x[i] for x in inds if i < x.shape[0]])
             yield group_inds
+    @staticmethod
+    def nucleus_sampling(p: torch.Tensor):
+        """Accept only the `top_p`-fraction of the probability mass: https://arxiv.org/abs/1904.09751"""
+        if top_p == 1: return p
+        vals, inds = p.sort(-1, descending=False)
+        accepted_vals = vals.cumsum(-1) >= (1-top_p) - 1e-8
+        return p.index_put(inds, torch.where(accepted_vals, p[inds], 0.))
 
 
 
