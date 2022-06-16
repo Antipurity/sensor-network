@@ -70,14 +70,13 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …May want a hyperparam for what to do with digital inputs: leave as binary encodings, VS lookup in a learnable table, VS lookup in a fixed random table…
-#   (Crucial for good digital-actions, so, HAS to be implemented.)
 
 
 
 
 
 # TODO: Maybe, allow `sn.Int`s to have only `1` option, so that it's easy for users to dispatch "events" which can be set as goals. Maybe also turn no-data no-type `.set` calls into such events.
+#   …Or should we have a separate `sn.Event()`?
 # TODO: Also support [mu-law-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) (and/or linearly-encoded) floats-in-ints. `IntFloat(*shape, opts=256, mu=mu, bounds=(min,max))`. `mu=0` should be special-cased to be linear.
 # TODO: Maybe make `sn.modify_name` called not on top-level calls but in `sn.Int` & `sn.RawFloat`, so that `sn.List`s can have their own name structure.
 # TODO: Maybe make `_default_typing` interpret `[8]*17` as `sn.Int(17,8)`, same with floats — and non-equal items become `sn.List`s — and treat lists & tuples the same.
@@ -116,7 +115,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Compressed history as goals:
 #   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
 #   TODO: Have a hyperparam that makes `local_dist` only consider `src`-cells (non-inputs) for smudgings, and given an env that needs nothing but exploration, verify that only using `src`-cells still works.
-#   TODO: Find some way of compressing the past that works in these envs — some embedding that's influenced-by (predicts) the past. Likely: from `cells_override(zeros, 1, 0, group)`-input `src` cells, computed from the future, predict all past cells (prev frame's inputs and `src`s).
+#   TODO: Find some way of compressing the past that works in these envs — some embedding that's influenced-by (predicts) the past. Likely: from `cells_override(ones, goal=False, analog=?, group)`-input `src` cells, computed from the future, predict all past cells (prev frame's inputs and `src`s).
 
 
 
@@ -158,6 +157,7 @@ slow_mode = .05 # Artificial delay per step.
 
 clamp = 1. # All inputs/outputs are clipped to `-clamp…clamp`.
 top_p = .99 # Nucleus sampling (`1` to disable), for discounting the unreliable probability tail for digital queries: https://arxiv.org/abs/1904.09751
+digital_embs = 'use' # 'no'|'use'|'learn': whether RNN-inputs will be binary-masks or random-vectors or learned-vectors, for digital cells.
 
 lr = 1e-3
 dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
@@ -295,6 +295,14 @@ class Sampler:
         vals, inds = p.sort(-1, descending=False)
         accepted_vals = vals.cumsum(-1) >= (1-top_p) - 1e-8
         return p.index_put(inds, torch.where(accepted_vals, p[inds], 0.))
+    def use_digital_table(self, x: torch.Tensor):
+        """Looks up the per-int vectors of digital-cells for RNN input, in accordance with `digital_embs`. These vectors may be easier for the RNN to learn to use than raw binary masks."""
+        if digital_embs == 'no': return x
+        assert len(x.shape) == 2
+        is_ana = Sampler.analog_mask(detach(x)).float()
+        bits = detach(x)[:, self.start : self.start + self.bpc]
+        untabled = digital_table(sn.Int.decode_bits(sn, bits))
+        return is_ana * x + (1-is_ana) * torch.cat((x[:, :self.start], untabled), -1)
 
 
 
@@ -313,9 +321,9 @@ def h(ins = state_sz, outs = ...): # A cross-cell transform.
     )
 try:
     if not save_load: raise FileNotFoundError()
-    transition = torch.load(save_load)
+    transition, digital_table = torch.load(save_load)
 except FileNotFoundError:
-    transition = nn.Sequential(
+    transition, digital_table = nn.Sequential(
         # `(frame, latent) → (name_and_logits_or_values, latent_mean_and_var_log, dist, smudge)`
         #   `frame` is goals and prev-actions and next-observations.
         #   `latent` is for VAEs: sampled from a normal distribution with learned mean & variance-logarithm.
@@ -323,11 +331,13 @@ except FileNotFoundError:
         h(state_sz, state_sz),
         h(state_sz, state_sz),
         h(state_sz, sum(cell_shape[:-1])+choices_per_cell + 2*latent_sz + 1 + 1),
-    )
+    ), nn.Embedding(choices_per_cell, cell_shape[-1])
+digital_table.requires_grad_(digital_embs == 'learn')
 def transition_(x, latent=...):
     """Wraps `transition` to return a tuple of `(name_and_logits, latent_info, distance, smudge)`. `name_and_logits` is for `Sampler`, `latent_info` is for `normal` and `make_normal`."""
     if latent is ...:
         latent = torch.randn(x.shape[0], latent_sz)
+    x = sample.use_digital_table(x)
     assert len(x.shape) == 2 and len(latent.shape) == 2 and x.shape[0] == latent.shape[0] and latent.shape[1] == latent_sz
     y = transition(torch.cat((x, latent), -1))
     lt = 2*latent_sz
@@ -624,6 +634,6 @@ async def unroll():
 
                         # Save. (Both replay-buffer and disk.)
                         if save_load and time % steps_per_save == 0:
-                            torch.save(transition, save_load)
+                            torch.save((transition, digital_table), save_load)
 
                         time += 1
