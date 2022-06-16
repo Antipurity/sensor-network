@@ -304,6 +304,14 @@ async def test17():
     assert ((await L2) == [15, 15]).all()
     assert (await L3) == [15, 15]
     assert repr(sn.Goal(sn.List(sn.Int(16), sn.RawFloat(15)))) == 'sn.Goal(sn.List(sn.Int(16),sn.RawFloat(15)))'
+@sn.run
+async def test18():
+    """Events."""
+    h = sn.Handler(8,8,8,8, 64, info={'analog':True, 'choices_per_cell':2**4})
+    h.set('important event occured')
+    h.set('and another one', type=h.Event())
+    assert h.handle(None, None)[0].shape == (2, 96)
+    repr(h.Event())
 print('Tests OK')
 
 

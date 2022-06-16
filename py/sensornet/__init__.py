@@ -502,7 +502,7 @@ class Handler:
             for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
-            data = np.array(data, dtype=np.float32, copy=False)
+            data = np.array([data] if isinstance(data, float) else data, dtype=np.float32, copy=False)
             if isinstance(error, float):
                 error = np.full(data.shape, error, dtype=np.float32)
             assert data.shape == self.shape
@@ -566,7 +566,7 @@ class Handler:
         """
         goal = False
         __slots__ = ('type',)
-        def __init__(self, type): self.type = type
+        def __init__(self, type=None): self.type = type
         def __repr__(self):
             return 'sn.Goal(' + repr(self.type) + ')'
         def set(self, sn, name, data, error):
@@ -581,6 +581,15 @@ class Handler:
             prev, Handler.Goal.goal = Handler.Goal.goal, True
             try: return sn.get(name, self.type)
             finally: Handler.Goal.goal = prev
+    class Event:
+        """
+        `None` or `sn.Event()`: a datatype with no data, which can be set at important points in a program, either as a notification like `sn.set(name)` or as a goal like `sn.set(name, type=sn.Goal())`.
+        """
+        __slots__ = ()
+        def __repr__(self): return 'sn.Event()'
+        def set(self, sn, name, data, error):
+            assert data is None and error is None
+            return sn.set(name, 0., sn.RawFloat(1), error)
 
 
 
@@ -757,6 +766,7 @@ def _shaped_names(sn, sz, cells, shape, goal, analog, name):
     full_name[:, :sn.cell_shape[0]] = _fill(np, progress, sn.cell_shape[0])
     return full_name
 def _default_typing(name, type):
+    if name is not None and type is None: return name, Handler.Event()
     if isinstance(type, int): return name, Handler.Int(type)
     if isinstance(type, tuple) or isinstance(type, list):
         assert len(type), "Can't be non-empty"
