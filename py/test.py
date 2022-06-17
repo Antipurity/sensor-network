@@ -225,8 +225,8 @@ class Sampler:
         The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to predict the action (which would also push down probs of unlikely actions down, somewhat similarly to GANs or [Unlikelihood Training](https://arxiv.org/abs/1908.04319)).
 
         This will advance RNN `State`, so reset via `State.Episode` if that is unwanted."""
-        assert len(query.shape) == len(query_names.shape) == 2 and query.shape[-1] == j
         i, j, cells = self.start, self.end, query.shape[0]
+        assert len(query.shape) == len(query_names.shape) == 2 and query.shape[-1] == j
         action = torch.zeros(cells, j)
         logits = torch.zeros(cells, i + self.cpc)
         for inds in Sampler.sample_order(query_names):
