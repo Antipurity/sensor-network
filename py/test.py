@@ -180,7 +180,7 @@ def prepare_env(path):
             return sensor(*a, **kw)
         finally:
             modify_name.ctx = None
-    sn.sensors.append(sensor_with_name)
+    sn.sensors.add(sensor_with_name)
     return mod
 def modify_name(name):
     # Remove inter-env collisions by adding the group ID to the end of their names.
