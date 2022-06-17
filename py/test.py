@@ -336,7 +336,7 @@ dodge = DODGE(transition, optim) # For forward-gradient-feedback potentially-ver
 sample = Sampler(transition_, choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
 # For debugging, print the param-count.
 pc = sum(x.numel() for x in transition.parameters())
-print(pc/1000000000+'B' if pc>1000000000 else pc/1000000+'M' if pc>1000000 else pc/1000+'K' if pc>1000 else pc, 'params')
+print(str(pc/1e9)+'G' if pc>1e9 else str(pc/1e6)+'M' if pc>1e6 else str(pc/1e3)+'K' if pc>1e3 else pc, 'params')
 
 
 
