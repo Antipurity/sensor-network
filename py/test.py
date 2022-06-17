@@ -389,9 +389,9 @@ def cells_override(based_on, goal_mask, analog_mask, goal_group):
     assert len(based_on.shape) == len(goal_mask.shape) == len(analog_mask.shape) == len(goal_group.shape) == 2
     assert goal_mask.shape[1] == analog_mask.shape[1] == 1
     start, end = sum(cell_shape[:-2]), sum(cell_shape[:-1])
-    goalness = goal_mask.float()*2-1
-    analogness = analog_mask.float()*2-1
-    tpl = (goalness, analogness, based_on[2:start], goal_group, based_on[end:])
+    goalness = goal_mask.float() if isinstance(goal_mask, torch.Tensor) else goal_mask.astype(np.float32)
+    analogness = analog_mask.float() if isinstance(analog_mask, torch.Tensor) else analog_mask.astype(np.float32)
+    tpl = (goalness*2-1, analogness*2-1, based_on[2:start], goal_group, based_on[end:])
     return torch.cat(tpl, -1) if isinstance(based_on, torch.Tensor) else np.concatenate(tpl, -1)
 def sample_goal(cells, goal_group, analog_prob=.5):
     """Samples a new goal. Advances RNN state."""
