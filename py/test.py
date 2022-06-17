@@ -555,8 +555,8 @@ async def unroll():
                             await asyncio.sleep(slow_mode)
 
                         obs_np, query_np, error_np = await sn.handle(sn.torch(torch, action))
-                        obs_np   = np.nan_to_num(  obs.clip(-clamp, clamp), copy=False)
-                        query_np = np.nan_to_num(query.clip(-clamp, clamp), copy=False)
+                        obs_np   = np.nan_to_num(  obs_np.clip(-clamp, clamp), copy=False)
+                        query_np = np.nan_to_num(query_np.clip(-clamp, clamp), copy=False)
                         #   (If getting out-of-memory, might want to chunk data/query processing.)
 
                         # Bookkeeping for later.
