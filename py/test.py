@@ -157,7 +157,7 @@ logging = True
 save_load = '' # A filename, if saving/loading occurs.
 steps_per_save = 1000
 
-sn.info = {
+sn.info = sn.default.info = {
     'docs': """TODO:
 
     We clip all inputs/outputs to -1…1.""",

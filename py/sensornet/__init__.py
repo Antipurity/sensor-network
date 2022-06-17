@@ -77,7 +77,7 @@ class Handler:
 
     Inputs:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
-    - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else.
+    - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else. To set global info on the `sn` module, do `sn.default.info = ...`.
     - `sensors`: `set` of functions that take this handler, to prepare data to handle.
     - `listeners`: `set` of functions that take handler & data & error, when data is ready to handle. `Filter` instances are good candidates for this.
     - `modify_name`: `list` of funcs from name to name, with singular strings already wrapped in a one-item tuple.
