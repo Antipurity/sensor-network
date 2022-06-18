@@ -238,8 +238,8 @@ class Sampler:
             analog = name_and_logits[:, :j]
             with torch.no_grad():
                 digprob = self.softmax(detach(name_and_logits[:, i : i + self.cpc]))
-                indices = Sampler.nucleus_sampling(digprob).multinomial(1)[..., 0]
-                bits = sn.Int.encode_ints(sn, indices, self.bpc)
+                indices = Sampler.nucleus_sampling(digprob).multinomial(1)
+                bits = sn.Int.encode_ints(torch, indices, self.bpc)
                 digital = torch.cat((name, bits, torch.zeros(cells, j - self.bpc - i)), -1)
             action_part = (is_ana * analog + (1-is_ana) * digital).clamp(-clamp, clamp)
             logits_part = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
@@ -247,7 +247,7 @@ class Sampler:
             action = action.index_put([inds], action_part)
             logits = logits.index_put([inds], logits_part)
         return action, logits
-    def target(self, act, one_hot=1):
+    def target(self, act: torch.Tensor, one_hot=1):
         """Converts a presumably-sampled `action` to its `logits`, which can be used to compute L2 loss."""
         # The representation: for analog, just the prediction as-is; for digital, name & the post-softmax probability distribution.
         #   (L2 loss on probabilities ends up copying the probabilities.)
@@ -257,7 +257,7 @@ class Sampler:
         with torch.no_grad():
             is_ana = Sampler.analog_mask(act).float()
             analog = torch.cat((act, torch.zeros(cells, self.cpc - j)), -1)
-            indices = sn.Int.decode_bits(sn, act[:, i : i + self.bpc]) % self.cpc
+            indices = sn.Int.decode_bits(torch, act[:, i : i + self.bpc]) % self.cpc
             digital = F.one_hot(indices, self.cpc).float() * one_hot
             return is_ana * analog + (1-is_ana) * digital
     @staticmethod
@@ -290,7 +290,7 @@ class Sampler:
         assert len(x.shape) == 2
         is_ana = Sampler.analog_mask(detach(x)).float()
         bits = detach(x)[:, self.start : self.start + self.bpc]
-        untabled = digital_table(sn.Int.decode_bits(sn, bits) % self.cpc)
+        untabled = digital_table(sn.Int.decode_bits(torch, bits) % self.cpc)
         return is_ana * x + (1-is_ana) * torch.cat((x[:, :self.start], untabled), -1)
 
 

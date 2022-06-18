@@ -89,7 +89,7 @@ async def test3():
     await h.handle(None)
     h.set('burn', 9, 10)
     data, query, error = await h.handle(np.zeros((2, 96)))
-    assert data.shape == (1,96) and h.Int.decode_bits(h, data[:, 32 : 32+16])[0] == 9000
+    assert data.shape == (1,96) and h.Int.decode_bits(h.backend, data[:, 32 : 32+16])[0] == 9000
     assert (await test) is not None
 @sn.run
 def test4():

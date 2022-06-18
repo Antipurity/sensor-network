@@ -418,7 +418,7 @@ class Handler:
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
             names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name)
             data = sn.Int.repack(sn, data, self.opts, cpc)
-            data = sn.Int.encode_ints(sn, data, bpc)
+            data = sn.Int.encode_ints(np, np.expand_dims(data, -1), bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
             cells = np.concatenate((names, data, zeros), -1)
             sn.set(None, cells)
@@ -436,23 +436,20 @@ class Handler:
                 if fb is None: return None
                 start = -shape[-1]
                 fb = fb[:, start : start+bpc]
-                fb = sn.Int.decode_bits(sn, fb) % cpc
+                fb = sn.Int.decode_bits(sn.backend, fb) % cpc
                 R = sn.Int.repack(sn, fb, cpc, self.opts)[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
             return do_query(sn.query(None, names) if cells else None)
         @staticmethod
-        def encode_ints(sn, ints, bitcount):
-            """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N,)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1. Importantly, `choices_per_cell >= 2**bitcount`."""
-            assert len(ints.shape) == 1
-            np = sn.backend
+        def encode_ints(np, ints, bitcount):
+            """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N, 1)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1. Importantly, `choices_per_cell >= 2**bitcount`."""
+            assert len(ints.shape) == 2 and ints.shape[-1] == 1
             powers2 = 2 ** np.arange(bitcount-1, -1, -1, dtype=np.int32)
-            bits = np.expand_dims(ints, 1) & powers2
-            return np.where(bits > 0, np.array(1., dtype=np.float32), np.array(-1., dtype=np.float32))
+            return np.where((ints & powers2) > 0, 1., -1.)
         @staticmethod
-        def decode_bits(sn, bits):
+        def decode_bits(np, bits):
             """`sn.Int.decode_bits(sn, bits)→ints`: from `(N, bitcount)`-shape float32 to `(N,)`-shape int32. Use `ints % options` or `sn.Int.repack(ints, choices_per_cell, options)` afterward."""
             assert len(bits.shape) == 2
-            np = sn.backend
             powers2 = 2 ** np.arange(bits.shape[1]-1, -1, -1, dtype=np.int32)
             return np.where(bits > 0, powers2, 0).sum(-1)
         @staticmethod
@@ -821,6 +818,7 @@ def _default_typing(name, type):
 # Make the module itself act exactly like an instance of `Handler`, and the other way around.
 Handler.Handler = Handler
 default = Handler()
+backend = default.backend
 sensors = default.sensors
 listeners = default.listeners
 modify_name = default.modify_name
