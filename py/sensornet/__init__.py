@@ -451,7 +451,7 @@ class Handler:
             """`sn.Int.decode_bits(sn, bits)→ints`: from `(N, bitcount)`-shape float32 to `(N,)`-shape int32. Use `ints % options` or `sn.Int.repack(ints, choices_per_cell, options)` afterward."""
             assert len(bits.shape) == 2
             powers2 = 2 ** np.arange(bits.shape[1]-1, -1, -1, dtype=np.int32)
-            return np.where(bits > 0, powers2, 0).sum(-1)
+            return np.where(bits > 0, powers2, np.full_like(powers2, 0)).sum(-1)
         @staticmethod
         def repack(sn, ints, from_opts, to_opts):
             """`repack(sn, ints, from_opts, to_opts)→ints`: changes the base of `ints` digits, and thus its size. Importantly, `repack(sn, repack(sn, X, A, B), B, A) = X`."""

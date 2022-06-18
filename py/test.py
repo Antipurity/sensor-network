@@ -76,6 +76,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
+#   TODO: Figure out why we have float64.
 
 # TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
 #   TODO: Also an env for out-of-distribution goals: expose a reward that caps off at 0 (reward of 'how close the image is to the non-goal target image' maybe), and always say that it must be 1.
