@@ -332,9 +332,8 @@ def transition_(x, latent=...):
     assert len(x.shape) == 2 and len(latent.shape) == 2 and x.shape[0] == latent.shape[0] and latent.shape[1] == latent_sz
     y = transition(torch.cat((x, latent), -1))
     lt = 2*latent_sz
-    return y[:, :-(lt+1)], y[:, -(lt+1) : -2], 2 ** y[:, -2:-1], 2 ** y[:, -1:] - 1
-optim = torch.optim.Adam(transition.parameters(), lr=lr)
-dodge = DODGE(transition, optim) # For forward-gradient-feedback potentially-very-long-unrolls RNN training.
+    return y[:, :-(lt+2)], y[:, -(lt+2) : -2], 2 ** y[:, -2:-1], 2 ** y[:, -1:] - 1
+dodge = DODGE(transition, lambda p: torch.optim.Adam(p, lr=lr)) # For forward-gradient-feedback potentially-very-long-unrolls RNN training.
 sample = Sampler(transition_, choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
 # For debugging, print the param-count.
 pc = sum(x.numel() for x in transition.parameters())
@@ -595,7 +594,7 @@ async def unroll():
                             update_direction()
 
                         # Learn to predict better, via `per_goal_loss`.
-                        #   TODO: …This can actually do normal backprop at the same time, right? Even synthetic gradients… Just do `loss.backward()` when all params are .requires_grad_(True) and will give correct gradient, and don't step the `optim` ourselves so that DODGE updates are still valid…
+                        #   TODO: …This can actually do normal backprop at the same time, right? Even synthetic gradients… Just do `loss.backward()` (without optimizer-steps) when all params are .requires_grad_(True) and will give correct gradient…
                         with State.Episode(start_from_initial=False):
                             loss, smudge, dist_pred, smudge_pred = per_goal_loss(*cell_dropout(frame, frame_names), goals)
                             loss_so_far = loss_so_far + loss
