@@ -327,6 +327,7 @@ def transition_(x, latent=...):
     """Wraps `transition` to return a tuple of `(name_and_logits, latent_info, distance, smudge)`. `name_and_logits` is for `Sampler`, `latent_info` is for `normal` and `make_normal`."""
     if latent is ...:
         latent = torch.randn(x.shape[0], latent_sz)
+    x = x.to(torch.float32)
     x = sample.use_digital_table(x)
     assert len(x.shape) == 2 and len(latent.shape) == 2 and x.shape[0] == latent.shape[0] and latent.shape[1] == latent_sz
     y = transition(torch.cat((x, latent), -1))
