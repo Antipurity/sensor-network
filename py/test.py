@@ -273,8 +273,8 @@ class Sampler:
     @staticmethod
     def sample_order(frame_names: np.ndarray):
         """Allows sampling `frame`s correctly, by iterating over these indices and sampling each index-group in sequence. In particular, analog cells are sampled all at once, then each goal group's digital cell is sampled autoregressively, because learning can't model joint probabilities otherwise, and because goal-groups are supposed to be independent and thus parallelizable."""
-        analog_mask = Sampler.analog_mask(frame_names)
-        yield analog_mask[:, 0]
+        analog_mask = Sampler.analog_mask(frame_names)[:, 0]
+        yield analog_mask
         frame_names = frame_names[~analog_mask, :]
         groups = goal_groups(frame_names)
         inds = [same_goal_group(frame_names, g)[:, 0].nonzero() for g in groups]
