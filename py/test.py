@@ -277,7 +277,7 @@ class Sampler:
         yield analog_mask
         frame_names = frame_names[~analog_mask, :]
         groups = goal_groups(frame_names)
-        inds = [same_goal_group(frame_names, g)[:, 0].nonzero() for g in groups]
+        inds = [same_goal_group(frame_names, g).nonzero()[0] for g in groups]
         for i in range(max(x.shape[0] for x in inds)):
             group_inds = np.stack([x[i] for x in inds if i < x.shape[0]])
             yield group_inds
@@ -352,9 +352,9 @@ print(str(pc/1e9)+'G' if pc>1e9 else str(pc/1e6)+'M' if pc>1e6 else str(pc/1e3)+
 def goal_groups(frame: np.ndarray) -> np.ndarray:
     """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
     return np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)
-def same_goal_group(frame: np.ndarray, group: np.ndarray) -> np.ndarray:
-    """Returns a bitmask shaped as `(cells, 1)`."""
-    return (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdims=True)
+def same_goal_group(frame, group):
+    """Returns a bitmask shaped as `(cells,)`."""
+    return (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1)
 def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
     """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
@@ -367,7 +367,7 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
     base, goal = detach(base), detach(goal)
     max_smudge = sn.cell_size
     with torch.no_grad():
-        same_group = same_goal_group(base, group)
+        same_group = torch.unsqueeze(same_goal_group(base, group), -1)
         base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge)
         cross_smudges = (.5*(base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2))).clamp(0., 1.).abs().sum(-1)
         return torch.where(same_group, cross_smudges, max_smudge).min(-2)[0].mean(-1)
