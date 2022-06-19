@@ -225,7 +225,7 @@ class Sampler:
         
         Inputs: a full-size `query` (zero-pad names if needed, or `augment` frames), its name-only NumPy version (for `Sampler.sample_order`), and optionally `latent`.
 
-        The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to predict the action (which would also push down probs of unlikely actions down, somewhat similarly to GANs or [Unlikelihood Training](https://arxiv.org/abs/1908.04319)).
+        The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to predict the action. (Which would also push down probs of unlikely actions down, more explicitly than cross-entropy loss, vaguely similarly to GANs or [Unlikelihood Training](https://arxiv.org/abs/1908.04319).)
 
         This will advance RNN `State`, so reset via `State.Episode` if that is unwanted."""
         i, j, cells = self.start, self.end, query.shape[0]
@@ -243,11 +243,11 @@ class Sampler:
                 digprob = self.softmax(name_and_logits[:, i : i + self.cpc])
                 indices = Sampler.nucleus_sampling(digprob).multinomial(1)
                 bits = sn.Int.encode_ints(torch, indices, self.bpc)
-                digital = torch.cat((name, bits, torch.zeros(cells, j - self.bpc - i)), -1)
+                digital = torch.cat((name, bits, torch.zeros(name.shape[0], j - self.bpc - i)), -1)
             action_part = (is_ana * analog + (1-is_ana) * digital).clamp(-clamp, clamp)
             logits_part = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
             self.fn(action_part, ... if latent is ... else latent[inds]) # Input what we sampled.
-            action = action.index_put([inds], action_part)
+            action = action.index_put([inds], action_part) # TODO: …`inds` is a NumPy array here, but `index_put` expects a real tensor… Convert explicitly, maybe?
             logits = logits.index_put([inds], logits_part)
         return action, logits
     def target(self, act: torch.Tensor, one_hot=1):
