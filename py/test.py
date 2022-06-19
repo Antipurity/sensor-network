@@ -96,9 +96,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: Do per-`State`-matrix-`W` synth-grad, via a neural net that takes `q` (a random query) and `q@W` (its value) and returns `q@W.grad`.
 
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `RawFloat` defer to `Float` when not `sn.info['analog']`.
-# TODO: Also support fixed-size strings (with tokenizers) and image-patches. (The most important 'convenience' datatypes.)
+# TODO: Also support fixed-size strings (with tokenizers) and image-patches (auto-fit patch size to cell size, and zero-pad the image for simplicity, and input dims should be max dims, not guaranteed dims; and in fact, can't all of this just be incorporated into `RawFloat`?). (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 # TODO: …What if we did make `sn.query` return double-`await`ables, so first `await` (fulfilled in either `.discard` or `._take_data`) would wait for submission and second `await` would actually give the data? (Then efficient piping is as simple as single-`await`ing in an infinite loop, and not just here but also wherever we want anything like a stream of data, such as dynamically-sized strings… And, no need to make `.set` `await`able, since it can just await queries. Overall, a good idea: usability is key. …Then again, we *could* hide the complexity of `sn.listeners` queues in our own classes…)
+# TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python datatypes to expose both inputs and outputs as data whenever the func is called, or when `None` is returned, requests output from `sn`… ("Mind uploading" for code, condensed to a single line of code.)
+#   TODO: Maybe, make `sn.List` add an additional dimension for `Int`/`RawFloat` to iterate over, instead of having unique names for each part.
 
 
 
@@ -238,7 +240,7 @@ class Sampler:
             name = name_and_logits[:, :i] # (Even for digital cells, names are VAE-generated.)
             analog = name_and_logits[:, :j]
             with torch.no_grad():
-                digprob = self.softmax(detach(name_and_logits[:, i : i + self.cpc]))
+                digprob = self.softmax(name_and_logits[:, i : i + self.cpc])
                 indices = Sampler.nucleus_sampling(digprob).multinomial(1)
                 bits = sn.Int.encode_ints(torch, indices, self.bpc)
                 digital = torch.cat((name, bits, torch.zeros(cells, j - self.bpc - i)), -1)
@@ -282,9 +284,16 @@ class Sampler:
     def nucleus_sampling(p: torch.Tensor):
         """Accept only the `top_p`-fraction of the probability mass: https://arxiv.org/abs/1904.09751"""
         if top_p == 1: return p
+        p = detach(p.clone())
         vals, inds = p.sort(-1, descending=False)
         accepted_vals = vals.cumsum(-1) >= (1-top_p) - 1e-8
-        return p.index_put(inds, torch.where(accepted_vals, p[inds], 0.))
+        print(accepted_vals.shape, p.shape, inds.shape, torch.gather(p, -1, inds).shape) # TODO: WHY IS THIS ERROR
+        # p[inds] = accepted_vals.float() * torch.gather(p, -1, inds) # TODO: WHY DOES THIS DO SHAPE MISMATCH TOO — …oh: indexing is unsuitable here…
+        print(accepted_vals) # TODO:
+        print(p.scatter(-1, inds, accepted_vals.float() * torch.gather(p, -1, inds))) # TODO: …I think this is the correct version, actually. TODO: …Wait, but why is none of it 0?
+        print(p.index_put([inds], accepted_vals.float() * torch.gather(p, -1, inds)).shape) # TODO: …How can there possibly be shape mismatch here if all args are of the same shape…
+        # TODO: …Is nucleus sampling non-differentiable, thus making us able to overwrite a copy of `p` in-place? Yes.
+        return p.index_put([inds], accepted_vals.float() * torch.gather(p, -1, inds)) # TODO:
     def use_digital_table(self, x: torch.Tensor):
         """Looks up the per-int vectors of digital-cells for RNN input, in accordance with `digital_embs`. These vectors may be easier for the RNN to learn to use than raw binary masks."""
         if digital_embs == 'no': return x
