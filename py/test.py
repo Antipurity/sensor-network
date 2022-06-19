@@ -354,7 +354,7 @@ def goal_groups(frame: np.ndarray) -> np.ndarray:
     return np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)
 def same_goal_group(frame: np.ndarray, group: np.ndarray) -> np.ndarray:
     """Returns a bitmask shaped as `(cells, 1)`."""
-    return (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdim=True)
+    return (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdims=True)
 def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
     """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
