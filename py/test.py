@@ -287,13 +287,7 @@ class Sampler:
         p = detach(p.clone())
         vals, inds = p.sort(-1, descending=False)
         accepted_vals = vals.cumsum(-1) >= (1-top_p) - 1e-8
-        print(accepted_vals.shape, p.shape, inds.shape, torch.gather(p, -1, inds).shape) # TODO: WHY IS THIS ERROR
-        # p[inds] = accepted_vals.float() * torch.gather(p, -1, inds) # TODO: WHY DOES THIS DO SHAPE MISMATCH TOO — …oh: indexing is unsuitable here…
-        print(accepted_vals) # TODO:
-        print(p.scatter(-1, inds, accepted_vals.float() * torch.gather(p, -1, inds))) # TODO: …I think this is the correct version, actually. TODO: …Wait, but why is none of it 0?
-        print(p.index_put([inds], accepted_vals.float() * torch.gather(p, -1, inds)).shape) # TODO: …How can there possibly be shape mismatch here if all args are of the same shape…
-        # TODO: …Is nucleus sampling non-differentiable, thus making us able to overwrite a copy of `p` in-place? Yes.
-        return p.index_put([inds], accepted_vals.float() * torch.gather(p, -1, inds)) # TODO:
+        return p.scatter_(-1, inds, accepted_vals.float() * p.gather(-1, inds))
     def use_digital_table(self, x: torch.Tensor):
         """Looks up the per-int vectors of digital-cells for RNN input, in accordance with `digital_embs`. These vectors may be easier for the RNN to learn to use than raw binary masks."""
         if digital_embs == 'no': return x
