@@ -413,7 +413,7 @@ def sample_goal(cells, goal_group, analog_prob=.5):
     z = torch.zeros(cells, sn.cell_size)
     z = cells_override(z, goal_mask, analog_mask, goal_group)
     z = sample(z, z_np)[0].clamp(-clamp, clamp)
-    return cells_override(z, goal_mask, analog_mask, goal_group), z_np
+    return cells_override(z, goal_mask, analog_mask, goal_group), z_np[:, :end]
 
 
 
