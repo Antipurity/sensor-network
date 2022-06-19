@@ -277,10 +277,11 @@ class Sampler:
         yield analog_mask
         frame_names = frame_names[~analog_mask, :]
         groups = goal_groups(frame_names)
-        inds = [same_goal_group(frame_names, g).nonzero()[0] for g in groups]
-        for i in range(max(x.shape[0] for x in inds)):
-            group_inds = np.stack([x[i] for x in inds if i < x.shape[0]])
-            yield group_inds
+        if groups.shape[0]:
+            inds = [same_goal_group(frame_names, g).nonzero()[0] for g in groups]
+            for i in range(max(x.shape[0] for x in inds)):
+                group_inds = np.stack([x[i] for x in inds if i < x.shape[0]])
+                yield group_inds
     @staticmethod
     def nucleus_sampling(p: torch.Tensor):
         """Accept only the `top_p`-fraction of the probability mass: https://arxiv.org/abs/1904.09751"""
@@ -350,7 +351,7 @@ print(str(pc/1e9)+'G' if pc>1e9 else str(pc/1e6)+'M' if pc>1e6 else str(pc/1e3)+
 # Our interface to multigroup combined-cells goals (OR/AND goals): the last name part is `group_id`, AKA user ID.
 #   Via careful engineering here, users can have entirely separate threads of experience that reach any goals in their group (but the NN can of course learn to share data between its threads).
 def goal_groups(frame: np.ndarray) -> np.ndarray:
-    """Returns the `set` of all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
+    """Returns all goal-group IDs contained in the `frame` (a 2D NumPy array), each a byte-objects, suitable for indexing a dictionary with."""
     return np.unique(frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])], axis=0)
 def same_goal_group(frame, group):
     """Returns a bitmask shaped as `(cells,)`."""
@@ -411,7 +412,7 @@ def sample_goal(cells, goal_group, analog_prob=.5):
     goal_group = torch.as_tensor(goal_group).expand(cells, end-start)
     z = torch.zeros(cells, sn.cell_size)
     z = cells_override(z, goal_mask, analog_mask, goal_group)
-    z = sample(z, z_np).clamp(-clamp, clamp)
+    z = sample(z, z_np)[0].clamp(-clamp, clamp)
     return cells_override(z, goal_mask, analog_mask, goal_group), z_np
 
 
