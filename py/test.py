@@ -262,7 +262,7 @@ class Sampler:
             is_ana = Sampler.analog_mask(act).float()
             analog = torch.cat((act, torch.zeros(cells, i+self.cpc - j)), -1)
             indices = sn.Int.decode_bits(torch, act[:, i : i + self.bpc]) % self.cpc
-            digital = F.one_hot(indices, self.cpc).float() * one_hot
+            digital = torch.cat((act[:, :i], F.one_hot(indices, self.cpc).float() * one_hot), -1)
             return is_ana * analog + (1-is_ana) * digital
     @staticmethod
     def goal_mask(frame):
