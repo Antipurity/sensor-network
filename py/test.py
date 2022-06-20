@@ -119,6 +119,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 import asyncio
+from audioop import avg
 import random
 import numpy as np
 import torch
@@ -555,6 +556,7 @@ async def unroll():
         dodge.restart(direction)
         loss_so_far = 0.
     def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
+        nonlocal loss_so_far, avg_time_to_goal
         if not len(smudge): return
         smudges = torch.stack(smudge)
         dist_preds = torch.stack(dist_pred)
