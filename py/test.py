@@ -369,7 +369,7 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> t
     max_smudge = sn.cell_size
     with torch.no_grad():
         same_group = torch.unsqueeze(same_goal_group(base, group), -1)
-        base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge) # TODO: Oh no: this is not a static method, nor can it be.
+        base_logits, goal_logits = sample.target(base, max_smudge), sample.target(goal, max_smudge)
         cross_smudges = (.5*(base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2))).clamp(0., 1.).abs().sum(-1)
         return torch.where(same_group, cross_smudges, max_smudge).min(-2)[0].mean(-1)
 def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: torch.Tensor):
