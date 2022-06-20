@@ -236,7 +236,7 @@ class Sampler:
             inds = torch.as_tensor(inds)
             query_part = query[inds]
             is_ana = Sampler.analog_mask(detach(query_part)).float()
-            name_and_logits = self.fn(query_part, ... if latent is ... else latent[inds])[0]
+            name_and_logits = self.fn(query_part, ... if latent is ... else Index.apply(latent, inds))[0]
             assert len(name_and_logits.shape) == 2 and name_and_logits.shape[1] == i + self.cpc
             name = name_and_logits[:, :i] # (Even for digital cells, names are VAE-generated.)
             analog = name_and_logits[:, :j]
@@ -247,7 +247,7 @@ class Sampler:
                 digital = torch.cat((name, bits, torch.zeros(name.shape[0], j - self.bpc - i)), -1)
             action_part = (is_ana * analog + (1-is_ana) * digital).clamp(-clamp, clamp)
             logits_part = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
-            self.fn(action_part, ... if latent is ... else latent[inds]) # Input what we sampled.
+            self.fn(action_part, ... if latent is ... else Index.apply(latent, inds)) # Input what we sampled.
             action = action.index_put([inds], action_part)
             logits = logits.index_put([inds], logits_part)
         return action, logits
