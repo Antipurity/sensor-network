@@ -419,11 +419,27 @@ def sample_goal(cells, goal_group, analog_prob=.5):
 
 
 
+# Forward-grad compatibility for older PyTorch versions.
+class Index(torch.autograd.Function):
+    """`x[inds]`"""
+    @staticmethod
+    def forward(ctx, x, inds):
+        ctx.save_for_backward(inds)
+        return x[inds]
+    @staticmethod
+    def jvp(ctx, dx, _):
+        inds, = ctx.to_save # Docs weren't clear whether this is the intended way.
+        return dx[inds]
+
+
+
+
+
 # Loss.
 def cell_dropout(frame: torch.Tensor, frame_names: np.ndarray):
     """Makes querying subsets of cells not out-of-distribution, by dropping & shuffling cells randomly at training-time. Call & destructure before `per_goal_loss`."""
     inds = np.random.choice(np.arange(0, frame.shape[0]), random.randint(1, frame.shape[0]), replace=False)
-    return frame[inds], frame_names[inds]
+    return Index.apply(frame, torch.as_tensor(inds).long()), frame_names[inds]
 def augment(frame: torch.Tensor) -> torch.Tensor:
     """Augments a frame, so that VAEs can be trained to minimize both dependence on input and cross-input dependence, and so that we can sample even without knowing queries (for imagined trajectories).
 
