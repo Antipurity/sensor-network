@@ -497,7 +497,7 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
     # Compute per-group means of predictions, then predict means and return means (which would be subject to `global_loss`).
     #   Also compute `local_dist`s.
     loss, dist_pred, smudge_pred = local_loss(frame, frame_names)
-    smudges, dist_preds, smudge_preds,  = [], [], [], 
+    smudges, dist_preds, smudge_preds = [], [], []
     for V in goals.values():
         group, goal = torch.as_tensor(V[0]), V[1]
         same_group = torch.unsqueeze(same_goal_group(detach(frame), group), -1).float()
@@ -619,10 +619,10 @@ async def unroll():
                         with State.Episode(start_from_initial=False):
                             loss, smudge, dist_pred, smudge_pred = per_goal_loss(*cell_dropout(frame, frame_names), goals)
                             loss_so_far = loss_so_far + loss
-                            for _, _, _, _, _, smudges, dist_preds, smudge_preds, _ in goals.values(): # For `global_loss`.
-                                smudges.append(smudge)
-                                dist_preds.append(dist_pred)
-                                smudge_preds.append(smudge_pred)
+                            for i, (_, _, _, _, _, smudges, dist_preds, smudge_preds, _) in enumerate(goals.values()): # For `global_loss`.
+                                smudges.append(smudge[i])
+                                dist_preds.append(dist_pred[i])
+                                smudge_preds.append(smudge_pred[i])
                         log_metrics()
 
                         # Give prev-action & next-observation, remember dist-to-goal estimates, and sample next action.
