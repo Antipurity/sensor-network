@@ -477,9 +477,9 @@ def local_loss(frame, frame_names):
     #   If non-goal cells: distance decreases.
     #   If goal cells: distance misprediction increases.
     min_dist_misprediction = 2
-    eventually_closer = frame_smudge <= pred_smudge+1
-    is_goal = Sampler.goal_mask(frame)
-    dist_is_better = torch.where(is_goal, frame_dist <= pred_dist, (frame_dist - pred_dist).abs() >= min_dist_misprediction)
+    eventually_closer = detach(frame_smudge) <= detach(pred_smudge)+1
+    is_goal = Sampler.goal_mask(detach(frame))
+    dist_is_better = torch.where(is_goal, detach(frame_dist) <= detach(pred_dist), (detach(frame_dist) - detach(pred_dist)).abs() >= min_dist_misprediction)
     imitate = (eventually_closer & dist_is_better).float()
 
     # Self-imitation (critic-regularized regression) (gated autoencoding).
