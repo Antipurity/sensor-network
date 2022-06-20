@@ -356,7 +356,7 @@ def goal_groups(frame: np.ndarray) -> np.ndarray:
 def same_goal_group(frame, group):
     """Returns a bitmask shaped as `(cells,)`."""
     return (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1)
-def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
+def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> torch.Tensor:
     """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
     Quadratic time complexity."""
@@ -369,7 +369,7 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group) -> torch.Tensor:
     max_smudge = sn.cell_size
     with torch.no_grad():
         same_group = torch.unsqueeze(same_goal_group(base, group), -1)
-        base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge)
+        base_logits, goal_logits = Sampler.target(base, max_smudge), Sampler.target(goal, max_smudge) # TODO: Oh no: this is not a static method, nor can it be.
         cross_smudges = (.5*(base_logits.unsqueeze(-3) - goal_logits.unsqueeze(-2))).clamp(0., 1.).abs().sum(-1)
         return torch.where(same_group, cross_smudges, max_smudge).min(-2)[0].mean(-1)
 def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: torch.Tensor):
@@ -490,7 +490,7 @@ def local_loss(frame, frame_names):
     log_metrics(imitated=imitate.mean(), reg_loss=reg_loss, predict_loss=predict_loss)
     return reg_loss + predict_loss, frame_dist, frame_smudge
 
-def per_goal_loss(frame, frame_names, goals):
+def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
     """`per_goal_loss(frame, frame_names, goals) → (loss, smudges, dist_preds, smudge_preds)`
 
     Wraps `local_loss` to compute all *per-goal* local metrics, which can later be `torch.stack`ed and put into `global_dists` and then into `global_loss`."""
@@ -499,8 +499,8 @@ def per_goal_loss(frame, frame_names, goals):
     loss, dist_pred, smudge_pred = local_loss(frame, frame_names)
     smudges, dist_preds, smudge_preds,  = [], [], [], 
     for V in goals.values():
-        group, goal = V[0], V[1]
-        same_group = (frame[:, sum(cell_shape[:-2]) : sum(cell_shape[:-1])] == group).all(-1, keepdim=True).float()
+        group, goal = torch.as_tensor(V[0]), V[1]
+        same_group = torch.unsqueeze(same_goal_group(detach(frame), group), -1).float()
         cell_count = same_group.sum()
         mean_dist_pred = (same_group * detach(dist_pred)).sum() / cell_count
         mean_smudge_pred = (same_group * detach(smudge_pred)).sum() / cell_count
