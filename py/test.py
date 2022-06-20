@@ -584,8 +584,8 @@ async def unroll():
                         # Bookkeeping for later.
                         obs, query = torch.tensor(obs_np), torch.tensor(query_np)
                         frame = torch.cat((action, obs), 0) if action is not None else obs
-                        frame_names = np.concatenate((prev_q, obs[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs_np[:, :query.shape[1]]
-                        prev_q = query
+                        frame_names = np.concatenate((prev_q, obs_np[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs_np[:, :query.shape[1]]
+                        prev_q = query_np
 
                         # Delete/update our `goals` when we think we've reached them.
                         #   When deleting a goal, minimize its `global_loss`.
