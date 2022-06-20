@@ -260,7 +260,7 @@ class Sampler:
         act = detach(act)
         with torch.no_grad():
             is_ana = Sampler.analog_mask(act).float()
-            analog = torch.cat((act, torch.zeros(cells, self.cpc - j)), -1)
+            analog = torch.cat((act, torch.zeros(cells, i+self.cpc - j)), -1)
             indices = sn.Int.decode_bits(torch, act[:, i : i + self.bpc]) % self.cpc
             digital = F.one_hot(indices, self.cpc).float() * one_hot
             return is_ana * analog + (1-is_ana) * digital
