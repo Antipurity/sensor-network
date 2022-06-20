@@ -447,8 +447,8 @@ def augment(frame: torch.Tensor) -> torch.Tensor:
     frame = detach(frame)
     cells = frame.shape[0]
     start, end = sum(cell_shape[:-2]), sum(cell_shape[:-1])
-    is_name = torch.rand(cells)*2 < 1
-    name_only = torch.cat((frame[:, -cell_shape[-1]:], torch.zeros(cells, cell_shape[-1])), -1)
+    is_name = torch.rand(cells, 1) * 2 < 1
+    name_only = torch.cat((frame[:, :-cell_shape[-1]], torch.zeros(cells, cell_shape[-1])), -1)
     group_only = cells_override(torch.zeros_like(frame), Sampler.goal_mask(frame), Sampler.analog_mask(frame), frame[:, start:end])
     return torch.where(is_name, name_only, group_only)
 def fill_in(target, target_names):
