@@ -552,7 +552,8 @@ async def unroll():
         nonlocal direction, loss_so_far
         p = dodge_optimizes_params / dodge.sz
         direction = torch.where(torch.rand(dodge.sz) < p, torch.randn(dodge.sz), torch.zeros(dodge.sz))
-        if loss_so_far != 0.: dodge.minimize(loss_so_far)
+        if not isinstance(loss_so_far, float):
+            dodge.minimize(loss_so_far)
         dodge.restart(direction)
         loss_so_far = 0.
     def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
