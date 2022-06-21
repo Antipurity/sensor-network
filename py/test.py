@@ -563,7 +563,7 @@ async def unroll():
         smudge_preds = torch.stack(smudge_pred)
         smudge.clear();  dist_pred.clear();  smudge_pred.clear()
         smudge_target, dist_target = global_dists(smudges, dist_preds, smudge_preds)
-        loss_so_far = loss_so_far + global_loss(dist_pred, smudge_pred, dist_target, smudge_target)
+        loss_so_far = loss_so_far + global_loss(dist_preds, smudge_preds, dist_target, smudge_target)
         if start_time is not None:
             avg_time_to_goal = avg_time_to_goal_momentum*avg_time_to_goal + (1-avg_time_to_goal_momentum) * (time - start_time)
     with fw.dual_level():
