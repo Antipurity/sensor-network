@@ -77,6 +77,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
 #   TODO: Figure out why we have float64.
+#   TODO: How can we find out why we don't learn?
+#     TODO: Should we first try to visualize everything related to dist/smudge targets & predictions, and in particular, print them?
+#       (Should at least remove the obscuring `reg_loss` and `predict_loss`.)
 
 # TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
 #   TODO: Also an env for out-of-distribution goals: expose a reward that caps off at 0 (reward of 'how close the image is to the non-goal target image' maybe), and always say that it must be 1.
@@ -487,8 +490,11 @@ def local_loss(frame, frame_names):
     reg_loss = (imitate * reg_loss).sum()
     predict_loss = (imitate * (frame_logits - pred_logits).square()).sum()
 
+    reg_loss = 0 # TODO:
+    predict_loss = 0 # TODO:
+
     # Log and return.
-    log_metrics(imitated=imitate.mean(), reg_loss=reg_loss, predict_loss=predict_loss)
+    # log_metrics(imitated=imitate.mean(), reg_loss=reg_loss, predict_loss=predict_loss) # TODO:
     return reg_loss + predict_loss, frame_dist, frame_smudge
 
 def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
@@ -519,6 +525,10 @@ def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     dist_loss = (dist_pred.log2() - dist_target.log2()).square().sum()
     smudge_loss = ((smudge_pred+1).log2() - (smudge_target+1).log2()).square().sum()
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
+    print(dist_loss, smudge_loss) # TODO: …Where's forward-grad? (This must be our bug.) (Should have a func that asserts the presence of forward-grad.)
+    #   TODO: …And why is it `nan` rarely (`dist_target` must be 0)?
+    #   TODO: …And why is `smudge_loss` of dtype float64?
+    #     How would we track this down? Should we have a func that asserts non-float64-ness?
     return dist_loss + smudge_loss
 
 def log_metrics(**kw):
