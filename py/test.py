@@ -375,7 +375,8 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> t
         same_group = torch.unsqueeze(same_goal_group(base, group), -1)
         base_logits, goal_logits = sample.target(base, max_smudge), sample.target(goal, max_smudge)
         cross_smudges = (.5*(base_logits.unsqueeze(-2) - goal_logits.unsqueeze(-3))).clamp(0., 1.).abs().sum(-1)
-        return torch.where(same_group, cross_smudges, float(max_smudge)).min(-2)[0].mean(-1)
+        ms = torch.full_like(cross_smudges, max_smudge, dtype=torch.float32)
+        return torch.where(same_group, cross_smudges, ms).min(-2)[0].mean(-1)
 def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: torch.Tensor):
     """`global_dists(smudges, dists_pred, smudges_pred) → (smudge, dists)`
 
@@ -527,8 +528,6 @@ def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
     print(dist_loss, smudge_loss) # TODO: …Where's forward-grad? (This must be our bug.) (Should have a func that asserts the presence of forward-grad.)
     #   TODO: …And why is it `nan` rarely (`dist_target` must be 0)?
-    #   TODO: …And why is `smudge_loss` of dtype float64?
-    #     How would we track this down? Should we have a func that asserts non-float64-ness?
     return dist_loss + smudge_loss
 
 def log_metrics(**kw):

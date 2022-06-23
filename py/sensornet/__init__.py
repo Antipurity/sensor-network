@@ -445,7 +445,7 @@ class Handler:
             """`sn.Int.encode_ints(sn, ints, bitcount)→bits`: turns an `(N, 1)`-shaped int32 array into a `(N, bitcount)`-shaped float32 array of -1|1. Importantly, `choices_per_cell >= 2**bitcount`."""
             assert len(ints.shape) == 2 and ints.shape[-1] == 1
             powers2 = 2 ** np.arange(bitcount-1, -1, -1, dtype=np.int32)
-            return np.where((ints & powers2) > 0, 1., -1.)
+            return np.where((ints & powers2) > 0, np.full_like(powers2, 1., dtype=np.float32), np.full_like(powers2, -1., dtype=np.float32))
         @staticmethod
         def decode_bits(np, bits):
             """`sn.Int.decode_bits(sn, bits)→ints`: from `(N, bitcount)`-shape float32 to `(N,)`-shape int32. Use `ints % options` or `sn.Int.repack(ints, choices_per_cell, options)` afterward."""
