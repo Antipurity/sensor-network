@@ -510,12 +510,12 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
         group, goal = torch.as_tensor(V[0]), V[1]
         same_group = torch.unsqueeze(same_goal_group(detach(frame), group), -1).float()
         cell_count = same_group.sum()
-        mean_dist_pred = (same_group * detach(dist_pred)).sum() / cell_count
-        mean_smudge_pred = (same_group * detach(smudge_pred)).sum() / cell_count
+        mean_dist_pred = (same_group * dist_pred).sum() / cell_count
+        mean_smudge_pred = (same_group * smudge_pred).sum() / cell_count
         dist_preds.append(mean_dist_pred)
         smudge_preds.append(mean_smudge_pred)
-        loss = loss + (same_group * (dist_pred - mean_dist_pred).square()).sum()
-        loss = loss + (same_group * (smudge_pred - mean_smudge_pred).square()).sum()
+        loss = loss + (same_group * (dist_pred - detach(mean_dist_pred)).square()).sum()
+        loss = loss + (same_group * (smudge_pred - detach(mean_smudge_pred)).square()).sum()
         smudges.append(local_dist(frame, goal, group)) # (`same_group` is recomputed inside.)
     return loss, smudges, dist_preds, smudge_preds
 
@@ -523,11 +523,10 @@ def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     """Learns what to gate the autoencoding by. Returns the loss."""
     dist_target = detach(dist_target.min(dist_pred + optimism) if optimism is not None else dist_target)
     smudge_target = detach(smudge_target.min(smudge_pred + optimism) if optimism is not None else smudge_target)
-    dist_loss = (dist_pred.log2() - dist_target.log2()).square().sum()
+    dist_loss = (dist_pred.log2() - (dist_target+1e-8).log2()).square().sum()
     smudge_loss = ((smudge_pred+1).log2() - (smudge_target+1).log2()).square().sum()
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
-    print(dist_loss, smudge_loss) # TODO: …Where's forward-grad? (This must be our bug.) (Should have a func that asserts the presence of forward-grad.)
-    #   TODO: …And why is it `nan` rarely (`dist_target` must be 0)?
+    print(dist_loss, smudge_loss, fw.unpack_dual(dist_pred)[1]) # TODO: …Where's forward-grad? (This must be our bug.)
     return dist_loss + smudge_loss
 
 def log_metrics(**kw):
@@ -569,7 +568,7 @@ async def unroll():
         nonlocal loss_so_far, avg_time_to_goal
         if not len(smudge): return
         smudges = torch.stack(smudge)
-        dist_preds = torch.stack(dist_pred)
+        dist_preds = torch.stack(dist_pred) # TODO: …Forward AD doesn't support it with our PT version… Should we have the `Stack` Function, which simply stacks forward-gradient?
         smudge_preds = torch.stack(smudge_pred)
         smudge.clear();  dist_pred.clear();  smudge_pred.clear()
         smudge_target, dist_target = global_dists(smudges, dist_preds, smudge_preds)
