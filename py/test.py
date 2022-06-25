@@ -232,6 +232,7 @@ class Sampler:
         The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to copy the target. (Might also want to discourage generated-but-unseen targets, similarly to GANs or [Unlikelihood Training](https://arxiv.org/abs/1908.04319).)
 
         This will advance RNN `State`, so reset via `State.Episode` if that is unwanted."""
+        # TODO: (…Also, since actual `sample`ing is not responsible for giving inputs, there's no point in giving analog-query-results as input before digital-queries; thereby saving computation. So, move analog-queries to the end, and don't give the last result as input in `Sampler.__call__`.)
         i, j, cells = self.start, self.end, query.shape[0]
         assert len(query.shape) == len(query_names.shape) == 2 and query.shape[-1] == j
         action = torch.zeros(cells, j)
@@ -435,6 +436,14 @@ class Index(torch.autograd.Function):
     def jvp(ctx, dx, _):
         inds, = ctx.to_save # Docs weren't clear whether this is the intended way.
         return dx[inds]
+class Stack(torch.autograd.Function):
+    """`Stack.apply(*xs): torch.stack(xs, 0)`"""
+    @staticmethod
+    def forward(ctx, *xs):
+        return torch.stack(xs)
+    @staticmethod
+    def jvp(ctx, *dxs):
+        return torch.stack(dxs)
 
 
 
@@ -521,8 +530,11 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
 
 def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     """Learns what to gate the autoencoding by. Returns the loss."""
-    dist_target = detach(dist_target.min(dist_pred + optimism) if optimism is not None else dist_target)
-    smudge_target = detach(smudge_target.min(smudge_pred + optimism) if optimism is not None else smudge_target)
+    print('A', dist_target, dist_pred, optimism) # TODO:
+    print('B', dist_pred + optimism) # TODO:
+    print('C', dist_target.min(dist_pred + optimism)) # TODO: Why "expected scalar type double but found float"?
+    dist_target = detach(dist_target.min(dist_pred + optimism)) if optimism is not None else dist_target
+    smudge_target = detach(smudge_target.min(smudge_pred + optimism)) if optimism is not None else smudge_target
     dist_loss = (dist_pred.log2() - (dist_target+1e-8).log2()).square().sum()
     smudge_loss = ((smudge_pred+1).log2() - (smudge_target+1).log2()).square().sum()
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
@@ -567,9 +579,9 @@ async def unroll():
     def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
         nonlocal loss_so_far, avg_time_to_goal
         if not len(smudge): return
-        smudges = torch.stack(smudge)
-        dist_preds = torch.stack(dist_pred) # TODO: …Forward AD doesn't support it with our PT version… Should we have the `Stack` Function, which simply stacks forward-gradient?
-        smudge_preds = torch.stack(smudge_pred)
+        smudges = Stack.apply(*smudge)
+        dist_preds = Stack.apply(*dist_pred)
+        smudge_preds = Stack.apply(*smudge_pred)
         smudge.clear();  dist_pred.clear();  smudge_pred.clear()
         smudge_target, dist_target = global_dists(smudges, dist_preds, smudge_preds)
         loss_so_far = loss_so_far + global_loss(dist_preds, smudge_preds, dist_target, smudge_target)
