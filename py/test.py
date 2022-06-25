@@ -173,12 +173,12 @@ top_p = .99 # Nucleus sampling (`1` to disable), for discounting the unreliable 
 digital_embs = 'use' # 'no'|'use'|'learn': whether RNN-inputs will be binary-masks or random-vectors or learned-vectors, for digital cells.
 
 lr = 1e-3
+episode_len = 1. # Each (BPTT-like) learning episode will run for `episode_len` multiplied by the average steps-to-reach-goal.
 # TODO: Also the hyperparam `dodge_episodes = True`; when `False`, use BPTT.
 #   …How do we implement this, exactly?… Don't we need to reset RNN state too, and `detach` it…
 #   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
 optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targets are clamped to be at most pred-plus-`optimism`.
 dodge_optimizes_params = 1000000 # `DODGE` is more precise with small direction-vectors (but slower).
-dodge_len = 1. # `DODGE` is BPTT-like, and each learning episode will run for `dodge_len` multiplied by the average steps-to-reach-goal. # TODO: Rename to `episode_len`.
 
 logging = True
 save_load = '' # A filename, if saving/loading occurs.
@@ -658,7 +658,7 @@ async def unroll():
                             frame = torch.cat([*extra_cells, frame], 0)
                             frame_names = np.concatenate([*extra_names, frame_names], 0)
                         # Delimit DODGE-episode boundaries, changing its projection direction sometimes.
-                        if dodge_len * random.random() < 1 / (avg_time_to_goal+.5): # (Close enough to what `dodge_len` says.)
+                        if episode_len * random.random() < 1 / (avg_time_to_goal+.5): # (Close enough to what `episode_len` says.)
                             for _, _, _, _, _, smudges, dist_preds, smudge_preds, start_time in goals.values():
                                 finish_computing_loss(smudges, dist_preds, smudge_preds)
                             update_direction()
