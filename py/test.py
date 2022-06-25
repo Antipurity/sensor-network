@@ -75,8 +75,16 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+
+# TODO: …Should the RNN's distance refer not to prev-timestep but next-timestep, which would allow `fill_in` to not do 2 extra RNN-calls — and also make `fill_in`/`local_loss` compare not with a same-latents actions, but a same-latent autoencoded action (from autoencoding, get the dist) with a random-latent action (with its dist)?…
+#   If we're autoencoding anyway, then how much computation do we save, really?
+#   …Also, if we're not autoencoding every possible action but only good actions, then won't most actions be out-of-distribution with this…
+#     …Wait, is this the same problem that our current `fill_in` faces, just, we haven't thought of it before now… Pretty sure it is, since the alt-action is based on in-policy latents, which aren't always autoencoded…
+#     And, if we have loss on the dist, then it's not exactly out-of-distribution, nor does it conflict with the VAE since it can just make latents very-large…
+
+
+
 # TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
-#   TODO: Figure out why we have float64.
 #   TODO: How can we find out why we don't learn?
 #     TODO: Should we first try to visualize everything related to dist/smudge targets & predictions, and in particular, print them?
 #       (Should at least remove the obscuring `reg_loss` and `predict_loss`.)
@@ -122,7 +130,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 import asyncio
-from audioop import avg
 import random
 import numpy as np
 import torch
@@ -156,9 +163,11 @@ top_p = .99 # Nucleus sampling (`1` to disable), for discounting the unreliable 
 digital_embs = 'use' # 'no'|'use'|'learn': whether RNN-inputs will be binary-masks or random-vectors or learned-vectors, for digital cells.
 
 lr = 1e-3
-dodge_optimizes_params = 1000 # `DODGE` performs better with small direction-vectors.
-dodge_len = 1. # `DODGE` is BPTT-like, and each learning episode will run for `dodge_len` multiplied by the average steps-to-reach-goal.
+# TODO: Also the hyperparam `dodge_episodes = True`; when `False`, use BPTT.
+#   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
 optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targets are clamped to be at most pred-plus-`optimism`.
+dodge_optimizes_params = 1000000 # `DODGE` is more precise with small direction-vectors (but slower).
+dodge_len = 1. # `DODGE` is BPTT-like, and each learning episode will run for `dodge_len` multiplied by the average steps-to-reach-goal. # TODO: Rename to `episode_len`.
 
 logging = True
 save_load = '' # A filename, if saving/loading occurs.
@@ -232,13 +241,15 @@ class Sampler:
         The result is `(action, logits)`. Use `action` to act; use L2 loss between `logits` and `.target(target_action)` to copy the target. (Might also want to discourage generated-but-unseen targets, similarly to GANs or [Unlikelihood Training](https://arxiv.org/abs/1908.04319).)
 
         This will advance RNN `State`, so reset via `State.Episode` if that is unwanted."""
-        # TODO: (…Also, since actual `sample`ing is not responsible for giving inputs, there's no point in giving analog-query-results as input before digital-queries; thereby saving computation. So, move analog-queries to the end, and don't give the last result as input in `Sampler.__call__`.)
         i, j, cells = self.start, self.end, query.shape[0]
         assert len(query.shape) == len(query_names.shape) == 2 and query.shape[-1] == j
         action = torch.zeros(cells, j)
         logits = torch.zeros(cells, i + self.cpc)
-        for inds in Sampler.sample_order(query_names):
-            inds = torch.as_tensor(inds)
+        action_part = None
+        for inds_np in Sampler.sample_order(query_names):
+            if action_part is not None: # Input what we've sampled at the end of the step, unless it's the last step.
+                self.fn(action_part, ... if latent is ... else Index.apply(latent, inds))
+            inds = torch.as_tensor(inds_np)
             query_part = query[inds]
             is_ana = Sampler.analog_mask(detach(query_part)).float()
             name_and_logits = self.fn(query_part, ... if latent is ... else Index.apply(latent, inds))[0]
@@ -252,7 +263,6 @@ class Sampler:
                 digital = torch.cat((name, bits, torch.zeros(name.shape[0], j - self.bpc - i)), -1)
             action_part = (is_ana * analog + (1-is_ana) * digital).clamp(-clamp, clamp)
             logits_part = is_ana * name_and_logits + (1-is_ana) * torch.cat((name, digprob), -1)
-            self.fn(action_part, ... if latent is ... else Index.apply(latent, inds)) # Input what we sampled.
             action = action.index_put([inds], action_part)
             logits = logits.index_put([inds], logits_part)
         return action, logits
@@ -279,7 +289,7 @@ class Sampler:
     def sample_order(frame_names: np.ndarray):
         """Allows sampling `frame`s correctly, by iterating over these indices and sampling each index-group in sequence. In particular, analog cells are sampled all at once, then each goal group's digital cell is sampled autoregressively, because learning can't model joint probabilities otherwise, and because goal-groups are supposed to be independent and thus parallelizable."""
         analog_mask = Sampler.analog_mask(frame_names)[:, 0]
-        yield analog_mask
+        analog_inds = analog_mask.nonzero()[0]
         frame_names = frame_names[~analog_mask, :]
         groups = goal_groups(frame_names)
         if groups.shape[0]:
@@ -287,6 +297,8 @@ class Sampler:
             for i in range(max(x.shape[0] for x in inds)):
                 group_inds = np.stack([x[i] for x in inds if i < x.shape[0]])
                 yield group_inds
+        if analog_inds.shape[0]:
+            yield analog_inds
     @staticmethod
     def nucleus_sampling(p: torch.Tensor):
         """Accept only the `top_p`-fraction of the probability mass: https://arxiv.org/abs/1904.09751"""
@@ -528,17 +540,20 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
         smudges.append(local_dist(frame, goal, group)) # (`same_group` is recomputed inside.)
     return loss, smudges, dist_preds, smudge_preds
 
+# TODO: Why are we apparently achieving the goal almost every time? Isn't it very suspicious? …How do we fix this…
+#   …Do we want another env, like the continuous-control env…
+# TODO: …Why is loss variance slowly going up…
 def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     """Learns what to gate the autoencoding by. Returns the loss."""
-    print('A', smudge_target, smudge_pred) # TODO: …How can `smudge_target` ever be negative?
-    print('C', smudge_target.min(detach(smudge_pred + optimism))) # TODO:
-    print('D', dist_pred, '=', dist_target) # TODO:
-    dist_target = dist_target.min(detach(dist_pred + optimism)) if optimism is not None else dist_target
-    smudge_target = smudge_target.min(detach(smudge_pred + optimism)) if optimism is not None else smudge_target
+    if optimism is not None:
+        dist_target = dist_target.min(detach(dist_pred + optimism))
+        smudge_target = smudge_target.min(detach(smudge_pred + optimism))
     dist_loss = (dist_pred.log2() - (dist_target+1e-8).log2()).square().sum()
     smudge_loss = ((smudge_pred+1).log2() - (smudge_target+1).log2()).square().sum()
+    # print('A', smudge_pred, '=', smudge_target) # TODO:
+    # print('D', dist_pred, '=', dist_target) # TODO:
+    # print('L', dist_loss, smudge_loss) # TODO:
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
-    print(dist_loss, smudge_loss, fw.unpack_dual(dist_pred)[1]) # TODO: …Why is `smudge_loss` always 0 in the beginning, and then, rarely .4?
     return dist_loss + smudge_loss
 
 def log_metrics(**kw):
