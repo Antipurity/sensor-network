@@ -174,20 +174,21 @@ digital_embs = 'use' # 'no'|'use'|'learn': whether RNN-inputs will be binary-mas
 
 lr = 1e-3
 episode_len = 1. # Each (BPTT-like) learning episode will run for `episode_len` multiplied by the average steps-to-reach-goal.
-# TODO: Also the hyperparam `dodge_episodes = True`; when `False`, use BPTT.
-#   …How do we implement this, exactly?… Don't we need to reset RNN state too, and `detach` it…
-#   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
 optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targets are clamped to be at most pred-plus-`optimism`.
-dodge_optimizes_params = 1000000 # `DODGE` is more precise with small direction-vectors (but slower).
+dodge_optimizes_params = 0 # `DODGE` is more precise with small direction-vectors (but slower).
+#   If 0, BPTT is used instead (introducing stalls and potential out-of-memory errors).
+#   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
 
 logging = True
 save_load = '' # A filename, if saving/loading occurs.
 steps_per_save = 1000
 
 sn.info = sn.default.info = {
-    'docs': """TODO:
+    'docs': """Reproduces goal-conditioned observations/actions.
 
-    We clip all inputs/outputs to -1…1.""",
+Provide actions as observations to copy/suggest behavior; query actions to generate random/good behavior.
+
+We clip all inputs/outputs to -1…1.""",
     'analog': True,
     'choices_per_cell': choices_per_cell,
 }
@@ -594,14 +595,6 @@ async def unroll():
     direction = None
     loss_so_far = 0.
     avg_time_to_goal, avg_time_to_goal_momentum = 0., .99
-    def update_direction():
-        nonlocal direction, loss_so_far
-        p = dodge_optimizes_params / dodge.sz
-        direction = torch.where(torch.rand(dodge.sz) < p, torch.randn(dodge.sz), torch.zeros(dodge.sz))
-        if not isinstance(loss_so_far, float):
-            dodge.minimize(loss_so_far)
-        dodge.restart(direction)
-        loss_so_far = 0.
     def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
         nonlocal loss_so_far, avg_time_to_goal
         if not len(smudge): return
@@ -615,8 +608,21 @@ async def unroll():
             avg_time_to_goal = avg_time_to_goal_momentum*avg_time_to_goal + (1-avg_time_to_goal_momentum) * (time - start_time)
     with fw.dual_level():
         with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
-            update_direction()
             with State.Episode() as life:
+                def update_direction():
+                    nonlocal direction, loss_so_far
+                    if dodge_optimizes_params:
+                        p = dodge_optimizes_params / dodge.sz
+                        direction = torch.where(torch.rand(dodge.sz) < p, torch.randn(dodge.sz), torch.zeros(dodge.sz))
+                        if not isinstance(loss_so_far, float):
+                            dodge.minimize(loss_so_far)
+                        dodge.restart(direction)
+                    else:
+                        if not isinstance(loss_so_far, float):
+                            loss_so_far.backward()
+                    life.update(lambda _, x: detach(x))
+                    loss_so_far = 0.
+                update_direction()
                 with torch.no_grad(): # TODO: This shouldn't apply to the delayed synth-grad-aware backprop-train. (After we have that, I mean.)
                     prev_q, action, frame = None, None, None
                     goals = {} # goal_group_id → (group, goal, goal_names, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds, start_time)
