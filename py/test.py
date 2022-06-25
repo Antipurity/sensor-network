@@ -76,14 +76,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Should the RNN's distance refer not to prev-timestep but next-timestep, which would allow `fill_in` to not do 2 extra RNN-calls — and also make `fill_in`/`local_loss` compare not with a same-latents actions, but a same-latent autoencoded action (from autoencoding, get the dist) with a random-latent action (with its dist)?…
-#   If we're autoencoding anyway, then how much computation do we save, really?
-#   …Also, if we're not autoencoding every possible action but only good actions, then won't most actions be out-of-distribution with this…
-#     …Wait, is this the same problem that our current `fill_in` faces, just, we haven't thought of it before now… Pretty sure it is, since the alt-action is based on in-policy latents, which aren't always autoencoded…
-#     And, if we have loss on the dist, then it's not exactly out-of-distribution, nor does it conflict with the VAE since it can just make latents very-large…
-
-
-
 # TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
 #   TODO: How can we find out why we don't learn?
 #     TODO: Should we first try to visualize everything related to dist/smudge targets & predictions, and in particular, print them?
@@ -119,6 +111,24 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
 #   TODO: Have a hyperparam that makes `local_dist` only consider `src`-cells (non-inputs) for smudgings, and given an env that needs nothing but exploration, verify that only using `src`-cells still works.
 #   TODO: Find some way of compressing the past that works in these envs — some embedding that's influenced-by (predicts) the past. Likely: from `cells_override(ones, goal=False, analog=?, group)`-input `src` cells, computed from the future, predict all past cells (prev frame's inputs and `src`s).
+
+
+
+# TODO: …Maybe, to reduce the variance introduced by sampling actions at each step, [only sample once per trajectory, as in PGPE](https://people.idsia.ch//~juergen/nn2010.pdf):
+#   ("Path=goal": this would also make our "full-RNN-history goals" goal automatically mostly-fulfilled, via us already being able to pick the history to go to, rather learning to go: those sampled-once-per-path params *are* (the description of) the full history. Though technically, *our* paths are not global but are conditioned on the starting point.)
+#   TODO: Remove per-cell latents & autoencoding, so that `transition_` & `Sampler` are deterministic. (OR, just set `latent_sz` to 0, to facilitate comparisons.)
+#   TODO: Do whole-history autoencoding, via a single per-goal-group special cell (0s to get latents, and input those to get goals back):
+#     TODO: Gated losses:
+#       TODO: L2-predict every single obs/act (with a per-goal loss).
+#       TODO: When the goal changes, end the episode (backprop the loss and all) and re-query our goals (with that special-cell emb) and autoencode (L2-predict the beginning's emb by the end's emb, and regularize).
+#         TODO: (Maybe, autodetect when env-provided goals change, and end the episode and re-sample the path/goal if changed.)
+#         TODO: Embs should not be normalized, so that trajectories don't just change over time; instead, on goal-change, double-`transition` and only (gated-)regularize the first `transition`.
+#     TODO: Only minimize *the whole episode*'s loss if distance is lower than expected (…and smudging is less) (per-goal).
+#       TODO: …Wait, what about separate "dist is lower" for obs/act and "dist error is higher" for goals? Should we gate obs/act L2-prediction and goal-autoencoding differently? …But doesn't PGPE function differently…
+#         Pretty sure that PGPE only does trajectory-reinforcing, not goal-setting… Still, differences are quite big… (In PGPE, gradient is gradient-of-probability-of-sampling times return/advantage. Whereas we autoencode if advantage is 0+, AKA if error is higher. …Still, PGPE has nothing about L2-predicting everything on the way — nor about non-sampled learnable params, for that matter…)
+#         …Are our troubles here caused by us not differentiating between histories and goals?…
+#           …Should we have completely different params/generators for goals and histories/weights that would reach them?…
+#       …Also, since our VAE would output means & variances anyway, can't we use PGPE's formulas for gradients of mean & variance?… The only whole-episode gradient would be the potential L2-prediction of obs/act, if we even care…
 
 
 
@@ -164,6 +174,7 @@ digital_embs = 'use' # 'no'|'use'|'learn': whether RNN-inputs will be binary-mas
 
 lr = 1e-3
 # TODO: Also the hyperparam `dodge_episodes = True`; when `False`, use BPTT.
+#   …How do we implement this, exactly?… Don't we need to reset RNN state too, and `detach` it…
 #   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
 optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targets are clamped to be at most pred-plus-`optimism`.
 dodge_optimizes_params = 1000000 # `DODGE` is more precise with small direction-vectors (but slower).
