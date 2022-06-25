@@ -530,15 +530,15 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
 
 def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     """Learns what to gate the autoencoding by. Returns the loss."""
-    print('A', dist_target, dist_pred, optimism) # TODO:
-    print('B', dist_pred + optimism) # TODO:
-    print('C', dist_target.min(dist_pred + optimism)) # TODO: Why "expected scalar type double but found float"?
-    dist_target = detach(dist_target.min(dist_pred + optimism)) if optimism is not None else dist_target
-    smudge_target = detach(smudge_target.min(smudge_pred + optimism)) if optimism is not None else smudge_target
+    print('A', smudge_target, smudge_pred) # TODO: …How can `smudge_target` ever be negative?
+    print('C', smudge_target.min(detach(smudge_pred + optimism))) # TODO:
+    print('D', dist_pred, '=', dist_target) # TODO:
+    dist_target = dist_target.min(detach(dist_pred + optimism)) if optimism is not None else dist_target
+    smudge_target = smudge_target.min(detach(smudge_pred + optimism)) if optimism is not None else smudge_target
     dist_loss = (dist_pred.log2() - (dist_target+1e-8).log2()).square().sum()
     smudge_loss = ((smudge_pred+1).log2() - (smudge_target+1).log2()).square().sum()
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
-    print(dist_loss, smudge_loss, fw.unpack_dual(dist_pred)[1]) # TODO: …Where's forward-grad? (This must be our bug.)
+    print(dist_loss, smudge_loss, fw.unpack_dual(dist_pred)[1]) # TODO: …Why is `smudge_loss` always 0 in the beginning, and then, rarely .4?
     return dist_loss + smudge_loss
 
 def log_metrics(**kw):
