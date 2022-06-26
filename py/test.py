@@ -645,6 +645,9 @@ async def unroll():
                             dodge.minimize()
                     if action is not None: action = detach(action)
                     life.update(lambda _, x: detach(x))
+                    # TODO: …Wait: do `goals` contain differentiable tensors?… …Yes: `goal` there is very much differentiable… But how do we fix this?
+                    #   Would making the `goal` `detach`ed from the start break anything?… …Eh, if we need to, we can just re-compute it in a copied `life`. (Besides, making the goal non-differentiable would actually make prediction targets stable.)
+                    #   TODO: Why is there *sometimes* an in-place modification of a differentiable variable?…
                     loss_so_far = 0.
                 update_direction()
                 with torch.no_grad() if dodge_optimizes_params else NoContext():
@@ -675,8 +678,10 @@ async def unroll():
                         for group in goal_groups(frame_names):
                             hash = group.tobytes()
                             if hash not in goals:
-                                with State.Episode(start_from_initial=False):
-                                    goal, goal_names = sample_goal(random.randint(1, obs.shape[0] or 1), group)
+                                with torch.no_grad():
+                                    with State.Episode(start_from_initial=False):
+                                        goal, goal_names = sample_goal(random.randint(1, obs.shape[0] or 1), group)
+                                        goal = detach(goal) # No gradient, here.
                                 expiration_cpu = torch.tensor(time+10000, device='cpu', dtype=torch.int64)
                                 expiration_gpu = torch.tensor(time+10000, dtype=torch.int64)
                                 smudges, dist_preds, smudge_preds = [], [], []
