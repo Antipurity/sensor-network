@@ -609,6 +609,7 @@ def log_metrics(**kw):
 # The main loop.
 @sn.run
 async def unroll():
+    action = None
     direction = None
     loss_so_far = 0.
     avg_time_to_goal, avg_time_to_goal_momentum = 0., .99
@@ -630,7 +631,7 @@ async def unroll():
         with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
             with State.Episode() as life:
                 def update_direction():
-                    nonlocal direction, loss_so_far
+                    nonlocal action, direction, loss_so_far
                     if dodge_optimizes_params:
                         p = dodge_optimizes_params / dodge.sz
                         direction = torch.where(torch.rand(dodge.sz) < p, torch.randn(dodge.sz), torch.zeros(dodge.sz))
@@ -642,11 +643,12 @@ async def unroll():
                             print(loss_so_far) # TODO:
                             loss_so_far.backward()
                             dodge.minimize()
+                    if action is not None: action = detach(action)
                     life.update(lambda _, x: detach(x))
                     loss_so_far = 0.
                 update_direction()
                 with torch.no_grad() if dodge_optimizes_params else NoContext():
-                    prev_q, action, frame = None, None, None
+                    prev_q = None
                     goals = {} # goal_group_id → (group, goal, goal_names, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds, start_time)
                     time = 0 # If this gets unreasonably high, goal-switching will have problems.
                     while True:
