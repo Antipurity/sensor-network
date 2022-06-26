@@ -102,8 +102,10 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: Maybe, for efficiency, instead of full `transition_` for each new int, only do a global `transition_` once (with outputs being not logits-sized but cell-sized embs), and have a small RNN from prev-picked-cell and emb to logits.
 
+# TODO: Maybe rename `RawFloat` and `Float` to `Float` and `IntFloat`.
+# TODO: Make `RawFloat` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
+# TODO: Also support fixed-size strings with tokenizers.
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `RawFloat` defer to `Float` when not `sn.info['analog']`.
-# TODO: Also support fixed-size strings (with tokenizers) and image-patches (auto-fit patch size to cell size, and zero-pad the image for simplicity, and input dims should be max dims, not guaranteed dims; and in fact, can't all of this just be incorporated into `RawFloat`?). (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 # TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
 # TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
@@ -134,7 +136,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #         …Are our troubles here caused by us not differentiating between histories and goals?…
 #           …Should we have completely different params/generators for goals and histories/weights that would reach them?…
 #       …Also, since our VAE would output means & variances anyway, can't we use PGPE's formulas for gradients of mean & variance?… The only whole-episode gradient would be the potential L2-prediction of obs/act, if we even care…
-#       …Would it mean that even int-picking should be deterministic, somehow (possibly via nearest-neighbors), to really reduce that variance?…
+#       …Would it mean that even int-picking should be deterministic, somehow (possibly via nearest-neighbors), to really reduce that variance?… (Certainly good for sampling-speed, but might not be good for exploration…)
 
 
 
@@ -185,6 +187,7 @@ dodge_optimizes_params = 0 # `DODGE` is more precise with small direction-vector
 #   If 0, BPTT is used instead (introducing stalls and potential out-of-memory errors).
 #   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
 #     TODO: …Why are we trying to backward through the graph twice?… Which tensors didn't get detached?…
+#       …How would we even find out…
 
 logging = True
 save_load = '' # A filename, if saving/loading occurs.
