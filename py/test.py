@@ -100,10 +100,13 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: For efficiency, instead of iterating over goal-groups and computing the `same_goal_group` mask each time, pre-sort all cells by goal-group and slice instead of masking.
 
+# TODO: Maybe, for efficiency, instead of full `transition_` for each new int, only do a global `transition_` once (with outputs being not logits-sized but cell-sized embs), and have a small RNN from prev-picked-cell and emb to logits.
+
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `RawFloat` defer to `Float` when not `sn.info['analog']`.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches (auto-fit patch size to cell size, and zero-pad the image for simplicity, and input dims should be max dims, not guaranteed dims; and in fact, can't all of this just be incorporated into `RawFloat`?). (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 # TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
+# TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
 # TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python type annotations (`fn.__annotations__['return']` and such) to expose both inputs and outputs as data whenever the func is called — or when `None` is returned (or a flag in `sn` is set), requests output from `sn`. ("Mind uploading" for code, condensed to a single line of code.)
 #   TODO: Make `sn.List` add an additional dimension for `Int`/`RawFloat` to iterate over via global-variables, instead of having unique names for each part.
 
@@ -131,6 +134,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #         …Are our troubles here caused by us not differentiating between histories and goals?…
 #           …Should we have completely different params/generators for goals and histories/weights that would reach them?…
 #       …Also, since our VAE would output means & variances anyway, can't we use PGPE's formulas for gradients of mean & variance?… The only whole-episode gradient would be the potential L2-prediction of obs/act, if we even care…
+#       …Would it mean that even int-picking should be deterministic, somehow (possibly via nearest-neighbors), to really reduce that variance?…
 
 
 
@@ -180,6 +184,7 @@ optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targe
 dodge_optimizes_params = 0 # `DODGE` is more precise with small direction-vectors (but slower).
 #   If 0, BPTT is used instead (introducing stalls and potential out-of-memory errors).
 #   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
+#     TODO: …Why are we trying to backward through the graph twice?… Which tensors didn't get detached?…
 
 logging = True
 save_load = '' # A filename, if saving/loading occurs.
@@ -456,13 +461,16 @@ class Index(torch.autograd.Function):
     """`x[inds]`"""
     @staticmethod
     def forward(ctx, x, inds):
-        ctx.save_for_backward(inds)
+        ctx.save_for_backward(x, inds)
         return x[inds]
     @staticmethod
     def jvp(ctx, dx, _):
-        inds, = ctx.to_save # Docs weren't clear whether this is the intended way.
+        x, inds = ctx.to_save # `ctx.save_for_forward(inds)` is an extra line, so, too much.
         return dx[inds]
-    # TODO: Implement either backward or vjp for these funcs.
+    @staticmethod
+    def vjp(ctx, dout):
+        x, inds = ctx.saved_tensors
+        return torch.zeros_like(x).index_put([inds], dout), None
 class Stack(torch.autograd.Function):
     """`Stack.apply(*xs): torch.stack(xs, 0)`"""
     @staticmethod
@@ -471,6 +479,9 @@ class Stack(torch.autograd.Function):
     @staticmethod
     def jvp(ctx, *dxs):
         return torch.stack(dxs)
+    @staticmethod
+    def vjp(ctx, dout):
+        return torch.unbind(dout)
 
 
 
