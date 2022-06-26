@@ -127,7 +127,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: Do whole-history autoencoding, via a single per-goal-group special cell (0s to get latents, and input those to get goals back):
 #     TODO: Gated losses:
 #       TODO: L2-predict every single obs/act (with a per-goal loss).
-#       TODO: When the goal changes, end the episode (backprop the loss and all) and re-query our goals (with that special-cell emb) and autoencode (L2-predict the beginning's emb by the end's emb, and regularize).
+#       TODO: When the goal changes, end the episode (backprop the loss and all) and re-query our goals (with that special-cell emb) and autoencode (L2-predict the beginning's emb by each step's emb, and regularize) and predict dists/smudgings (at each step except the final one).
 #         TODO: (Maybe, autodetect when env-provided goals change, and end the episode and re-sample the path/goal if changed.)
 #         TODO: Embs should not be normalized, so that trajectories don't just change over time; instead, on goal-change, double-`transition` and only (gated-)regularize the first `transition`.
 #     TODO: Only minimize *the whole episode*'s loss if distance is lower than expected (…and smudging is less) (per-goal).
@@ -190,7 +190,7 @@ dodge_optimizes_params = 0 # `DODGE` is more precise with small direction-vector
 #       …How would we even find out…
 
 logging = True
-save_load = '' # A filename, if saving/loading occurs.
+save_load = '' # A filename, if saving/loading occurs, else an empty string.
 steps_per_save = 1000
 
 sn.info = sn.default.info = {
@@ -641,6 +641,7 @@ async def unroll():
                         if not isinstance(loss_so_far, float):
                             print(loss_so_far) # TODO:
                             loss_so_far.backward()
+                            dodge.minimize()
                     life.update(lambda _, x: detach(x))
                     loss_so_far = 0.
                 update_direction()

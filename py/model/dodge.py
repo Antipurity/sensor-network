@@ -67,18 +67,20 @@ class DODGE:
                     setattr(mod, name, fw.make_dual(param, tangent))
                 n += param.numel()
         return self
-    def minimize(self, loss):
+    def minimize(self, loss=None):
         # Given the scalar feedback `loss_tangent`, finalizes the pre-decided direction's contribution.
-        _, loss_tangent = fw.unpack_dual(fw_unnan(loss))
-        assert loss_tangent is not None, "The computation doesn't use learnable params, so we can't optimize it"
-        with torch.no_grad():
-            for mod, ps in self.responsibility:
-                for name, param in ps:
-                    dual = mod[name] if isinstance(mod, dict) else getattr(mod, name)
-                    _, d = fw.unpack_dual(dual)
-                    assert d is not None, "DODGE optimization is not enabled; `.restart()` it"
-                    grad = d * loss_tangent
-                    param.grad = grad if param.grad is None else param.grad + grad
+        # Given nothing, steps the optimizer.
+        if loss is not None:
+            _, loss_tangent = fw.unpack_dual(fw_unnan(loss))
+            assert loss_tangent is not None, "The computation doesn't use learnable params, so we can't optimize it"
+            with torch.no_grad():
+                for mod, ps in self.responsibility:
+                    for name, param in ps:
+                        dual = mod[name] if isinstance(mod, dict) else getattr(mod, name)
+                        _, d = fw.unpack_dual(dual)
+                        assert d is not None, "DODGE optimization is not enabled; `.restart()` it"
+                        grad = d * loss_tangent
+                        param.grad = grad if param.grad is None else param.grad + grad
         if self.optim:
             self.optim.step()
             self.optim.zero_grad(True)
