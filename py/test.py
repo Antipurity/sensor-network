@@ -157,7 +157,7 @@ import torch.autograd.forward_ad as fw
 torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
 from model.recurrency import State, SRWM
-from model.dodge import DODGE, LayerNorm, Softmax, ReLU, detach
+from model.dodge import DODGE, detach, LayerNorm, Softmax, ReLU
 from model.vae import make_normal, normal
 
 import sensornet as sn
@@ -219,7 +219,7 @@ def prepare_env(path):
         finally:
             modify_name.ctx = None
     sn.sensors.add(sensor_with_name)
-    return mod
+    return sensor
 def modify_name(name):
     # Remove inter-env collisions by adding the group ID to the end of their names.
     #   (`sn.RawFloat` and `sn.Int` prepend a name-part, so `res` contains one less.)
@@ -326,6 +326,7 @@ class Sampler:
         """Accept only the `top_p`-fraction of the probability mass: https://arxiv.org/abs/1904.09751"""
         if top_p == 1: return p
         p = detach(p.clone())
+        assert p.grad_fn is None
         vals, inds = p.sort(-1, descending=False)
         accepted_vals = vals.cumsum(-1) >= (1-top_p) - 1e-8
         return p.scatter_(-1, inds, accepted_vals.float() * p.gather(-1, inds))
@@ -571,7 +572,7 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
 
 # TODO: Why are we apparently achieving the goal almost every time? Isn't it very suspicious? …How do we fix this…
 #   …Do we want another env, like the continuous-control env…
-# TODO: …Why is loss variance slowly going up…
+# TODO: …Why is loss variance slowly going up… …Because DODGE betrayed us…
 def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     """Learns what to gate the autoencoding by. Returns the loss."""
     if optimism is not None:
@@ -609,7 +610,7 @@ def log_metrics(**kw):
 # The main loop.
 @sn.run
 async def unroll():
-    action = None
+    prev_action, prev_query_np = None, None
     direction = None
     loss_so_far = 0.
     avg_time_to_goal, avg_time_to_goal_momentum = 0., .99
@@ -617,6 +618,7 @@ async def unroll():
         def __enter__(self): ...
         def __exit__(self, type, value, traceback): ...
     def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
+        """Finalizes distances and adds them to loss."""
         nonlocal loss_so_far, avg_time_to_goal
         if not len(smudge): return
         smudges = Stack.apply(*smudge)
@@ -631,7 +633,8 @@ async def unroll():
         with State.Setter(lambda state, to: state.initial*.001 + .999*to): # Soft-reset.
             with State.Episode() as life:
                 def update_direction():
-                    nonlocal action, direction, loss_so_far
+                    """Ends a TBPTT/DODGE episode, and begins a new one."""
+                    nonlocal prev_action, direction, loss_so_far
                     if dodge_optimizes_params:
                         p = dodge_optimizes_params / dodge.sz
                         direction = torch.where(torch.rand(dodge.sz) < p, torch.randn(dodge.sz), torch.zeros(dodge.sz))
@@ -640,34 +643,34 @@ async def unroll():
                         dodge.restart(direction)
                     else:
                         if not isinstance(loss_so_far, float):
-                            print(loss_so_far) # TODO:
                             loss_so_far.backward()
                             dodge.minimize()
-                    if action is not None: action = detach(action)
+                    if prev_action is not None: prev_action = detach(prev_action)
                     life.update(lambda _, x: detach(x))
-                    # TODO: …Wait: do `goals` contain differentiable tensors?… …Yes: `goal` there is very much differentiable… But how do we fix this?
-                    #   Would making the `goal` `detach`ed from the start break anything?… …Eh, if we need to, we can just re-compute it in a copied `life`. (Besides, making the goal non-differentiable would actually make prediction targets stable.)
-                    #   TODO: Why is there *sometimes* an in-place modification of a differentiable variable?…
                     loss_so_far = 0.
                 update_direction()
                 with torch.no_grad() if dodge_optimizes_params else NoContext():
-                    prev_q = None
                     goals = {} # goal_group_id → (group, goal, goal_names, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds, start_time)
                     time = 0 # If this gets unreasonably high, goal-switching will have problems.
                     while True:
                         if slow_mode > 0:
                             await asyncio.sleep(slow_mode)
 
-                        obs_np, query_np, error_np = await sn.handle(sn.torch(torch, action))
+                        # Delimit DODGE-episode boundaries, changing its projection direction sometimes.
+                        if episode_len * random.random() < 1 / (avg_time_to_goal+.5): # (Close enough to what `episode_len` says.)
+                            for _, _, _, _, _, smudges, dist_preds, smudge_preds, start_time in goals.values():
+                                finish_computing_loss(smudges, dist_preds, smudge_preds)
+                            update_direction()
+
+                        obs_np, query_np, error_np = await sn.handle(sn.torch(torch, prev_action))
                         obs_np   = np.nan_to_num(  obs_np.clip(-clamp, clamp), copy=False)
                         query_np = np.nan_to_num(query_np.clip(-clamp, clamp), copy=False)
                         #   (If getting out-of-memory, might want to chunk data/query processing.)
 
                         # Bookkeeping for later.
                         obs, query = torch.tensor(obs_np), torch.tensor(query_np)
-                        frame = torch.cat((action, obs), 0) if action is not None else obs
-                        frame_names = np.concatenate((prev_q, obs_np[:, :prev_q.shape[1]]), 0) if prev_q is not None else obs_np[:, :query.shape[1]]
-                        prev_q = query_np
+                        frame = torch.cat((prev_action, obs), 0) if prev_action is not None else obs
+                        frame_names = np.concatenate((prev_query_np, obs_np[:, :query.shape[1]]), 0) if prev_query_np is not None else obs_np[:, :query.shape[1]]
 
                         # Delete/update our `goals` when we think we've reached them.
                         #   When deleting a goal, minimize its `global_loss`.
@@ -692,17 +695,12 @@ async def unroll():
                             extra_names = [goal_names for (_, _, goal_names, _, _, _, _, _, _) in goals.values()]
                             frame = torch.cat([*extra_cells, frame], 0)
                             frame_names = np.concatenate([*extra_names, frame_names], 0)
-                        # Delimit DODGE-episode boundaries, changing its projection direction sometimes.
-                        if episode_len * random.random() < 1 / (avg_time_to_goal+.5): # (Close enough to what `episode_len` says.)
-                            for _, _, _, _, _, smudges, dist_preds, smudge_preds, start_time in goals.values():
-                                finish_computing_loss(smudges, dist_preds, smudge_preds)
-                            update_direction()
 
                         # Learn to predict better, via `per_goal_loss`.
-                        #   TODO: …This can actually do normal backprop at the same time, right? Even synthetic gradients… Just do `loss.backward()` (without optimizer-steps) when all params are .requires_grad_(True) and will give correct gradient…
                         with State.Episode(start_from_initial=False):
                             loss, smudge, dist_pred, smudge_pred = per_goal_loss(*cell_dropout(frame, frame_names), goals)
                             loss_so_far = loss_so_far + loss
+                            if goals: log_metrics(smudge = smudge[0]) # TODO: Look at this. …Why is it 0 so frequently?…
                             for i, (_, _, _, _, _, smudges, dist_preds, smudge_preds, _) in enumerate(goals.values()): # For `global_loss`.
                                 smudges.append(smudge[i])
                                 dist_preds.append(dist_pred[i])
@@ -715,7 +713,7 @@ async def unroll():
                         for group, (group, goal, _, expiration_cpu, expiration_gpu, _, _, _, _) in goals.items():
                             # (If we do better than expected, we leave early.)
                             if goal.shape[0] > 0:
-                                group_dist = (time + dist.detach()[n : n+goal.shape[0], -1].mean() + 1).int().min(expiration_gpu)
+                                group_dist = (time + detach(dist)[n : n+goal.shape[0], -1].mean() + 1).int().min(detach(expiration_gpu))
                                 expiration_cpu.copy_(group_dist, non_blocking=True)
                                 expiration_gpu.copy_(group_dist)
                             else:
@@ -723,7 +721,8 @@ async def unroll():
                             n += goal.shape[0]
                         with State.Episode(start_from_initial=False):
                             zeros = torch.zeros(query.shape[0], cell_shape[-1])
-                            action, _ = sample(torch.cat((query, zeros), -1), query_np)
+                            prev_action, _ = sample(torch.cat((query, zeros), -1), query_np)
+                            prev_query_np = query_np
                             #   (Can also do safe exploration / simple planning, by `sample`ing several actions and only using the lowest-dist-sum (inside `with State.Episode(False): ...`) of those.)
                             #     (Could even plot the regret of sampling-one vs sampling-many, by generating N and having a regret-plot for each (should go to 0 with sufficiently-big N), and see if/when it's worth it.)
 

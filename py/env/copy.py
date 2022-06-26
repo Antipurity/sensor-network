@@ -30,4 +30,4 @@ class Env:
                 self.reward_metric = self.reward_metric * .99 + .01 * self.reward
             sn.run(callback, sn.query('recall', 2))
     def metric(self):
-        return {'reward': self.reward_metric}
+        return {'return': self.reward_metric}
