@@ -98,12 +98,14 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #   TODO: Instead of simultaneous DODGE+backprop, make backprop follow at ≈1000 steps back, and make it aware of dist/smudge targets for `global_loss` if available.
 #   TODO: Do per-`State`-matrix-`W` synth-grad, via a neural net that takes `q` (a random query) and `q@W` (its value) and returns `q@W.grad`.
 
+# TODO: For efficiency, instead of iterating over goal-groups and computing the `same_goal_group` mask each time, pre-sort all cells by goal-group and slice instead of masking.
+
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `RawFloat` defer to `Float` when not `sn.info['analog']`.
 # TODO: Also support fixed-size strings (with tokenizers) and image-patches (auto-fit patch size to cell size, and zero-pad the image for simplicity, and input dims should be max dims, not guaranteed dims; and in fact, can't all of this just be incorporated into `RawFloat`?). (The most important 'convenience' datatypes.)
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
-# TODO: …What if we did make `sn.query` return double-`await`ables, so first `await` (fulfilled in either `.discard` or `._take_data`) would wait for submission and second `await` would actually give the data? (Then efficient piping is as simple as single-`await`ing in an infinite loop, and not just here but also wherever we want anything like a stream of data, such as dynamically-sized strings… And, no need to make `.set` `await`able, since it can just await queries. Overall, a good idea: usability is key. …Then again, we *could* hide the complexity of `sn.listeners` queues in our own classes…)
-# TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python datatypes to expose both inputs and outputs as data whenever the func is called, or when `None` is returned, requests output from `sn`… ("Mind uploading" for code, condensed to a single line of code.)
-#   TODO: Maybe, make `sn.List` add an additional dimension for `Int`/`RawFloat` to iterate over, instead of having unique names for each part.
+# TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
+# TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python type annotations (`fn.__annotations__['return']` and such) to expose both inputs and outputs as data whenever the func is called — or when `None` is returned (or a flag in `sn` is set), requests output from `sn`. ("Mind uploading" for code, condensed to a single line of code.)
+#   TODO: Make `sn.List` add an additional dimension for `Int`/`RawFloat` to iterate over via global-variables, instead of having unique names for each part.
 
 
 
@@ -186,7 +188,7 @@ steps_per_save = 1000
 sn.info = sn.default.info = {
     'docs': """Reproduces goal-conditioned observations/actions.
 
-Provide actions as observations to copy/suggest behavior; query actions to generate random/good behavior.
+Provide actions as observations to copy/suggest behavior; query actions to generate random/good behavior. Provide goals to pathfind to them.
 
 We clip all inputs/outputs to -1…1.""",
     'analog': True,
@@ -460,6 +462,7 @@ class Index(torch.autograd.Function):
     def jvp(ctx, dx, _):
         inds, = ctx.to_save # Docs weren't clear whether this is the intended way.
         return dx[inds]
+    # TODO: Implement either backward or vjp for these funcs.
 class Stack(torch.autograd.Function):
     """`Stack.apply(*xs): torch.stack(xs, 0)`"""
     @staticmethod
@@ -595,6 +598,9 @@ async def unroll():
     direction = None
     loss_so_far = 0.
     avg_time_to_goal, avg_time_to_goal_momentum = 0., .99
+    class NoContext:
+        def __enter__(self): ...
+        def __exit__(self, type, value, traceback): ...
     def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
         nonlocal loss_so_far, avg_time_to_goal
         if not len(smudge): return
@@ -619,11 +625,12 @@ async def unroll():
                         dodge.restart(direction)
                     else:
                         if not isinstance(loss_so_far, float):
+                            print(loss_so_far) # TODO:
                             loss_so_far.backward()
                     life.update(lambda _, x: detach(x))
                     loss_so_far = 0.
                 update_direction()
-                with torch.no_grad(): # TODO: This shouldn't apply to the delayed synth-grad-aware backprop-train. (After we have that, I mean.)
+                with torch.no_grad() if dodge_optimizes_params else NoContext():
                     prev_q, action, frame = None, None, None
                     goals = {} # goal_group_id → (group, goal, goal_names, expiration_time_cpu, expiration_time_gpu, smudges, dist_preds, smudge_preds, start_time)
                     time = 0 # If this gets unreasonably high, goal-switching will have problems.
