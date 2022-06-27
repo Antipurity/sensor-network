@@ -181,9 +181,6 @@ episode_len = 1. # Each (BPTT-like) learning episode will run for `episode_len` 
 optimism = .5 # If None, average of dist&smudging is learned; if >=0, pred-targets are clamped to be at most pred-plus-`optimism`.
 dodge_optimizes_params = 0 # `DODGE` is more precise with small direction-vectors (but slower).
 #   If 0, BPTT is used instead (introducing stalls and potential out-of-memory errors).
-#   TODO: Try learning distances with BPTT. If it fails to learn, something is wrong elsewhere.
-#     TODO: …Why are we trying to backward through the graph twice?… Which tensors didn't get detached?…
-#       …How would we even find out…
 
 logging = True
 save_load = '' # A filename, if saving/loading occurs, else an empty string.
@@ -375,6 +372,7 @@ def transition_(x, latent=...):
     lt = 2*latent_sz
     return y[:, :-(lt+2)], y[:, -(lt+2) : -2], 2 ** y[:, -2:-1], 2 ** y[:, -1:] - 1
 dodge = DODGE(transition, lambda p: torch.optim.Adam(p, lr=lr)) # For forward-gradient-feedback potentially-very-long-unrolls RNN training.
+#   TODO: Also optimize `digital_table`, if differentiable.
 sample = Sampler(transition_, choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
 # For debugging, print the param-count.
 pc = sum(x.numel() for x in transition.parameters())
@@ -420,12 +418,12 @@ def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: 
     with torch.no_grad():
         are_we_claiming_to_have_arrived = (dists_pred < smudges.shape[-1]).any(-1, keepdim=True)
         smudge = smudges.min(-1, keepdim=True)[0]
-        smudge = smudge.min(smudges_pred[..., -1:] + (~are_we_claiming_to_have_arrived).float())
+        smudge = smudge.min(smudges_pred[..., -1:].clamp(0.) + (~are_we_claiming_to_have_arrived).float())
         reached = smudges <= smudge+1
         next_of_reached = torch.cat((torch.zeros(*reached.shape[:-1], 1), reached[..., :-1].float()), -1)
-        dists = dists_pred[..., -1:] + torch.arange(1, reached.shape[-1]+1) # Count-out. # TODO: Should really lower-bound predictions to be at least 1, so that we don't have less-than-1-dist targets.
+        dists = dists_pred.clamp(1.)[..., -1:] + torch.arange(1, reached.shape[-1]+1) # Count-out.
         left_scan = ((dists - 1) * next_of_reached).cummax(-1)[0]
-        dists = (dists - left_scan).flip(-1) # TODO: Also, I guess, CPU-check `dists` to ensure that nothing is <0.
+        dists = (dists - left_scan).flip(-1)
         return (smudge, dists)
 def cells_override(based_on, goal_mask, analog_mask, goal_group):
     """`cells_override(based_on, analog_mask, goal_group) → based_on_2`
@@ -558,9 +556,12 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
     for V in goals.values():
         group, goal = torch.as_tensor(V[0]), V[1]
         same_group = torch.unsqueeze(same_goal_group(detach(frame), group), -1).float()
-        cell_count = same_group.sum()
+        cell_count = same_group.sum() # Could be 0.
+        cell_count = torch.where(cell_count > 0, cell_count, torch.ones_like(cell_count))
         mean_dist_pred = (same_group * dist_pred).sum() / cell_count
+        mean_dist_pred = torch.where(cell_count > 0, mean_dist_pred, torch.ones_like(mean_dist_pred))
         mean_smudge_pred = (same_group * smudge_pred).sum() / cell_count
+        mean_smudge_pred = torch.where(cell_count > 0, mean_smudge_pred, torch.ones_like(mean_smudge_pred))
         dist_preds.append(mean_dist_pred)
         smudge_preds.append(mean_smudge_pred)
         loss = loss + (same_group * (dist_pred - detach(mean_dist_pred)).square()).sum()
@@ -568,15 +569,12 @@ def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
         smudges.append(local_dist(frame, goal, group)) # (`same_group` is recomputed inside.)
     return loss, smudges, dist_preds, smudge_preds
 
-# TODO: Why are we apparently achieving the goal almost every time? Isn't it very suspicious? …How do we fix this…
-#   …Do we want another env, like the continuous-control env…
-# TODO: …Why is loss variance slowly going up… …Because DODGE betrayed us…
 def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
     """Learns what to gate the autoencoding by. Returns the loss."""
     if optimism is not None:
         dist_target = dist_target.min(detach(dist_pred + optimism))
         smudge_target = smudge_target.min(detach(smudge_pred + optimism))
-    dist_loss = (dist_pred.log2() - (dist_target+1e-8).log2()).square().sum()
+    dist_loss = ((dist_pred+1e-2).log2() - (dist_target+1e-2).log2()).square().sum()
     smudge_loss = ((smudge_pred+1).log2() - (smudge_target+1).log2()).square().sum()
     # print('A', smudge_pred, '=', smudge_target) # TODO:
     # print('D', dist_pred, '=', dist_target) # TODO:
@@ -616,7 +614,7 @@ async def unroll():
         def __enter__(self): ...
         def __exit__(self, type, value, traceback): ...
     def finish_computing_loss(smudge, dist_pred, smudge_pred, start_time=None):
-        """Finalizes distances and adds them to loss."""
+        """Finalizes distances (and clears the arrays that hold them) and adds them to loss."""
         nonlocal loss_so_far, avg_time_to_goal
         if not len(smudge): return
         smudges = Stack.apply(*smudge)
@@ -698,9 +696,7 @@ async def unroll():
                         with State.Episode(start_from_initial=False):
                             loss, smudge, dist_pred, smudge_pred = per_goal_loss(*cell_dropout(frame, frame_names), goals)
                             loss_so_far = loss_so_far + loss
-                            if goals: log_metrics(unsmudge = 1 / (1+smudge[0])) # TODO: Look at this. …Why is it 100% so frequently?… It should be very rare at best…
-                            #   TODO: How do we figure out why we're severely overestimating reachability?
-                            #     …Maybe at least look at `local_dist`…
+                            if goals: log_metrics(unsmudge = 1 / (1+smudge[0]))
                             for i, (_, _, _, _, _, smudges, dist_preds, smudge_preds, _) in enumerate(goals.values()): # For `global_loss`.
                                 smudges.append(smudge[i])
                                 dist_preds.append(dist_pred[i])
