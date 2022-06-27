@@ -93,11 +93,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: After pure-DODGE fails to learn well:
-#   TODO: Figure out how to use `DODGE` simultaneously with regular backprop w.r.t. weights. And make at least `per_goal_loss` do regular backprop *in addition to* DODGE.
-#   TODO: Instead of simultaneous DODGE+backprop, make backprop follow at ≈1000 steps back, and make it aware of dist/smudge targets for `global_loss` if available.
-#   TODO: Do per-`State`-matrix-`W` synth-grad, via a neural net that takes `q` (a random query) and `q@W` (its value) and returns `q@W.grad`.
-
 # TODO: For efficiency, instead of iterating over goal-groups and computing the `same_goal_group` mask each time, pre-sort all cells by goal-group and slice instead of masking.
 
 # TODO: Maybe, for efficiency, instead of full `transition_` for each new int, only do a global `transition_` once (with outputs being not logits-sized but cell-sized embs), and have a small RNN from prev-picked-cell and emb to logits.
@@ -136,7 +131,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #         …Are our troubles here caused by us not differentiating between histories and goals?…
 #           …Should we have completely different params/generators for goals and histories/weights that would reach them?…
 #       …Also, since our VAE would output means & variances anyway, can't we use PGPE's formulas for gradients of mean & variance?… The only whole-episode gradient would be the potential L2-prediction of obs/act, if we even care…
-#       …Would it mean that even int-picking should be deterministic, somehow (possibly via nearest-neighbors), to really reduce that variance?… (Certainly good for sampling-speed, but might not be good for exploration…)
+#       …Would it mean that even int-picking should be deterministic, somehow (possibly via nearest-neighbors; or better yet, via max, and turning targets into one-hot encodings), to really reduce that variance?… (Certainly good for sampling-speed, but might not be good for exploration…)
+#       (The main difficulty of training this is that target-embeddings are not immediately available, and the best we can do is either predict them & the path, or do a second unroll later.)
 
 
 
@@ -400,6 +396,9 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> t
     """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
     Quadratic time complexity."""
+    # TODO: …Are goals present in `base`? Should we explicitly filter them out?
+    #   …They're absolutely present.
+    #   TODO: How to filter out goals-in-`base`, or rather, not consider their contributions?
     assert len(base.shape) == len(goal.shape) == 2 and base.shape[-1] == goal.shape[-1] == sn.cell_size
     if not base.numel(): # We have nothing that could have reached the goal.
         return torch.ones(()) * goal.numel()
@@ -410,8 +409,9 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> t
     with torch.no_grad():
         same_group = torch.unsqueeze(same_goal_group(base, group), -1)
         base_logits, goal_logits = sample.target(base, max_smudge), sample.target(goal, max_smudge)
-        cross_smudges = (.5*(base_logits.unsqueeze(-2) - goal_logits.unsqueeze(-3))).clamp(0., 1.).abs().sum(-1)
+        cross_smudges = (.5*(base_logits.unsqueeze(-2) - goal_logits.unsqueeze(-3))).abs().clamp(0., 1.).sum(-1)
         ms = torch.full_like(cross_smudges, max_smudge, dtype=torch.float32)
+        print(torch.where(same_group, cross_smudges, ms).detach().cpu().numpy(), torch.where(same_group, cross_smudges, ms).min(-2)[0].mean(-1).detach().cpu().numpy(), tuple(cross_smudges.shape)) # TODO: …Almost-always 100% same-group… # TODO: …Wait, why are we 0 so frequently, even still… Why are we able to just find matches like it's nothing? Are goals leaking into `base` or something?…
         return torch.where(same_group, cross_smudges, ms).min(-2)[0].mean(-1)
 def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: torch.Tensor):
     """`global_dists(smudges, dists_pred, smudges_pred) → (smudge, dists)`
@@ -425,9 +425,9 @@ def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: 
         smudge = smudge.min(smudges_pred[..., -1:] + (~are_we_claiming_to_have_arrived).float())
         reached = smudges <= smudge+1
         next_of_reached = torch.cat((torch.zeros(*reached.shape[:-1], 1), reached[..., :-1].float()), -1)
-        dists = dists_pred[..., -1:] + torch.arange(1, reached.shape[-1]+1) # Count-out.
+        dists = dists_pred[..., -1:] + torch.arange(1, reached.shape[-1]+1) # Count-out. # TODO: Should really lower-bound predictions to be at least 1, so that we don't have less-than-1-dist targets.
         left_scan = ((dists - 1) * next_of_reached).cummax(-1)[0]
-        dists = (dists - left_scan).flip(-1)
+        dists = (dists - left_scan).flip(-1) # TODO: Also, I guess, CPU-check `dists` to ensure that nothing is <0.
         return (smudge, dists)
 def cells_override(based_on, goal_mask, analog_mask, goal_group):
     """`cells_override(based_on, analog_mask, goal_group) → based_on_2`
@@ -700,7 +700,9 @@ async def unroll():
                         with State.Episode(start_from_initial=False):
                             loss, smudge, dist_pred, smudge_pred = per_goal_loss(*cell_dropout(frame, frame_names), goals)
                             loss_so_far = loss_so_far + loss
-                            if goals: log_metrics(smudge = smudge[0]) # TODO: Look at this. …Why is it 0 so frequently?…
+                            if goals: log_metrics(unsmudge = 1 / (1+smudge[0])) # TODO: Look at this. …Why is it 100% so frequently?… It should be very rare at best…
+                            #   TODO: How do we figure out why we're severely overestimating reachability?
+                            #     …Maybe at least look at `local_dist`…
                             for i, (_, _, _, _, _, smudges, dist_preds, smudge_preds, _) in enumerate(goals.values()): # For `global_loss`.
                                 smudges.append(smudge[i])
                                 dist_preds.append(dist_pred[i])
