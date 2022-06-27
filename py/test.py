@@ -396,9 +396,6 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> t
     """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
     Quadratic time complexity."""
-    # TODO: …Are goals present in `base`? Should we explicitly filter them out?
-    #   …They're absolutely present.
-    #   TODO: How to filter out goals-in-`base`, or rather, not consider their contributions?
     assert len(base.shape) == len(goal.shape) == 2 and base.shape[-1] == goal.shape[-1] == sn.cell_size
     if not base.numel(): # We have nothing that could have reached the goal.
         return torch.ones(()) * goal.numel()
@@ -407,11 +404,12 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> t
     base, goal = detach(base), detach(goal)
     max_smudge = sn.cell_size
     with torch.no_grad():
+        # (The goal-bit always mismatches, so smudge is never exactly 0, but it's not the end of the world.)
         same_group = torch.unsqueeze(same_goal_group(base, group), -1)
+        same_group = same_group & ~Sampler.goal_mask(base)
         base_logits, goal_logits = sample.target(base, max_smudge), sample.target(goal, max_smudge)
         cross_smudges = (.5*(base_logits.unsqueeze(-2) - goal_logits.unsqueeze(-3))).abs().clamp(0., 1.).sum(-1)
         ms = torch.full_like(cross_smudges, max_smudge, dtype=torch.float32)
-        print(torch.where(same_group, cross_smudges, ms).detach().cpu().numpy(), torch.where(same_group, cross_smudges, ms).min(-2)[0].mean(-1).detach().cpu().numpy(), tuple(cross_smudges.shape)) # TODO: …Almost-always 100% same-group… # TODO: …Wait, why are we 0 so frequently, even still… Why are we able to just find matches like it's nothing? Are goals leaking into `base` or something?…
         return torch.where(same_group, cross_smudges, ms).min(-2)[0].mean(-1)
 def global_dists(smudges: torch.Tensor, dists_pred: torch.Tensor, smudges_pred: torch.Tensor):
     """`global_dists(smudges, dists_pred, smudges_pred) → (smudge, dists)`
