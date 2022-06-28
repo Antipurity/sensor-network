@@ -226,7 +226,7 @@ def floyd(d, *a):
 
 
 # For debugging.
-def pos_histogram(plt, label):
+def pos_histogram(plt, label, *_):
     """That replay buffer contains lots of past positions. This func plots those as a 2D histogram, in addition to arrows indicating which action to take to get from anywhere to a random position."""
     with torch.no_grad():
         states = []

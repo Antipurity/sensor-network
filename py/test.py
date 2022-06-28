@@ -75,6 +75,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+# TODO: …Have envs for 2D board wandering and for 2D continuous control. (Don't be limited to just one little env without any visualization tools.)
 
 # TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
 #   TODO: How can we find out why we don't learn?
@@ -217,6 +218,7 @@ def modify_name(name):
     # Remove inter-env collisions by adding the group ID to the end of their names.
     #   (`sn.RawFloat` and `sn.Int` prepend a name-part, so `res` contains one less.)
     assert modify_name.ctx is not None, "Sending data not in an env's sensor; don't send it in callbacks of queries, instead remember to send it on the next step"
+    # TODO: Maybe also warn if len(name) > len(cell_shape)-2.
     res = [name[i] if i < len(name) else None for i in range(len(cell_shape) - 2)]
     assert not isinstance(res[-1], tuple), "The group-id shouldn't be a tuple (to make our lives easier)"
     res[-1] = modify_name.ctx if res[-1] is None else (modify_name.ctx + '.' + res[-1])

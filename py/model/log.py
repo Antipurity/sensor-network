@@ -64,7 +64,7 @@ def log(subplot=0, do_print=True, torch=None, **metrics):
 
     Install `matplotlib` to see those plots.
 
-    Instead of a numeric value, can log a function such as `lambda plt, key: plt.imshow(x)`."""
+    Instead of a numeric value, can log a function such as `lambda plt, key, *_: plt.imshow(x)`, or `lambda plt, key, plot_length: plt.imshow(x, extent(0, plot_length('other_metric'), 0, 16))`."""
     assert isinstance(subplot, int) and (subplot == 0 or (subplot-1) in _subplots)
     strings = []
     if subplot not in _subplots: _subplots[subplot] = set()
@@ -94,6 +94,9 @@ def log(subplot=0, do_print=True, torch=None, **metrics):
         _allow_printing_at = start + dur*19 # 19 = 100%/5% - 1
     if plt is not None:
         plt.pause(.0001)
+def plot_length(k):
+    """Returns how many numbers are currently displayed in a plot, or 0."""
+    return len(_past[k]) if k in _past and isinstance(_past[k], list) else 0
 
 def finish(final = True):
     """Updates the plots, and allows users to inspect it for as long as they want."""
@@ -104,7 +107,7 @@ def finish(final = True):
         plt.cla()
         for k in ks:
             if not callable(_past[k]): plt.plot(_past[k], label=k)
-            else: _past[k](plt, k)
+            else: _past[k](plt, k, plot_length)
         if any(not callable(_past[k]) for k in ks): plt.legend()
     plt.pause(.001)
     if final: plt.show()

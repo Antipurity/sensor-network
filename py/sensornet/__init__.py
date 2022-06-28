@@ -384,7 +384,7 @@ class Handler:
 
         Datatype: a sequence of integers, each `0…options-1`.
 
-        For efficiency, if possible, request many `Int`s via `shape`, rather than requesting many one-by-one.
+        For efficiency, where possible, request many `Int`s via `shape`, and request powers-of-2 `options`. (We favor modularity over mathematically-optimal allocation.)
 
         `sn.Int` is typically much slower but much more precise, compared to `sn.RawFloat`. Modeling-wise: enumerating `options` allows handlers to model the probability of each and sample from prob distributions when queried, *however*, correctly sampling more than one choice requires autoregressivity, AKA sampling choices one-by-one and feeding back the choice each time. So, same trade-offs as digital vs analog.
 

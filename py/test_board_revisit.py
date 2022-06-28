@@ -174,7 +174,7 @@ opt = torch.optim.Adam([*embed.parameters(), *act.parameters()], lr=1e-3)
 
 
 
-def show_dist_and_act(plt, key):
+def show_dist_and_act(plt, key, *_):
     """An image of the *learned* distance (0…+∞) and actions (0|1|2|3)."""
     with torch.no_grad():
         src = torch.eye(N*N, N*N, device=device)
