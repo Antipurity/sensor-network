@@ -75,18 +75,14 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
-#   TODO: How can we find out why we don't learn?
-#     TODO: Should we first try to visualize everything related to dist/smudge targets & predictions, and in particular, print them?
-#       (Should at least remove the obscuring `reg_loss` and `predict_loss`.)
+# TODO: When this file is called without args, instead of providing a default env, print a help-message, which includes all `env`s that can be imported.
 
-# TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
-#   TODO: Also an env for out-of-distribution goals: expose a reward that caps off at 0 (reward of 'how close the image is to the non-goal target image' maybe), and always say that it must be 1.
-#   …Does `env.simple_guidance` count as "an env with both analog actions and analog goals"?
+# TODO: Run & fix the copy-task in `env/simple_copy.py`, to test our implementation.
+#   TODO: How can we find out why we don't learn?
 
 # TODO: Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
 
-# TODO: Make `graphenv` work not globally but in a class.
+# TODO: Make `graphenv` work not globally but in a class. With our new env-framework, `class Env: def __call__(self, sn): ...`.
 
 
 
@@ -96,8 +92,14 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: For efficiency, instead of iterating over goal-groups and computing the `same_goal_group` mask each time, pre-sort all cells by goal-group and slice instead of masking.
 
 # TODO: Maybe, for efficiency, instead of full `transition_` for each new int, only do a global `transition_` once (with outputs being not logits-sized but cell-sized embs), and have a small RNN from prev-picked-cell and emb to logits.
+#   (…Then again, we *might* soon be moving to a different impl, which would only ever require 1 transition per step (or 2, to handle queries)…)
+
+
 
 # TODO: Maybe rename `RawFloat` and `Float` to `Float` and `IntFloat`.
+# TODO: …Maybe, have `sn.forked(modify_name:name→name)→sn2` which creates an instance with the exact same attributes (so it pushes messages to the same queue and all) but different `.modify_names`.
+#   (Maybe even make `sn.handle` & `sn.discard` throw if we have any name-mod depth, so that only the base can handle, and we can actually have communication-only interfaces; and make `modify_name` a non-hyperparam.)
+#   TODO: Use that here, to lift the "only do messages in the sensor" restriction.
 # TODO: Make `RawFloat` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
 # TODO: Also support fixed-size strings with tokenizers.
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `RawFloat` defer to `Float` when not `sn.info['analog']`.
@@ -133,6 +135,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #       …Also, since our VAE would output means & variances anyway, can't we use PGPE's formulas for gradients of mean & variance?… The only whole-episode gradient would be the potential L2-prediction of obs/act, if we even care…
 #       …Would it mean that even int-picking should be deterministic, somehow (possibly via nearest-neighbors; or better yet, via max, and turning targets into one-hot encodings), to really reduce that variance?… (Certainly good for sampling-speed, but might not be good for exploration…)
 #       (The main difficulty of training this is that target-embeddings are not immediately available, and the best we can do is either predict them & the path, or do a second unroll later.)
+#   TODO: …Maybe, coalesce & implement this, since my intuition is telling me that it would be next-to-impossible to learn good generative models with `test.py`'s implementation (generate least-smudging most-error goals, and least-smudging least-dist paths to goals)?…
 
 
 
@@ -372,8 +375,8 @@ def transition_(x, latent=...):
     y = transition(torch.cat((x, latent), -1))
     lt = 2*latent_sz
     return y[:, :-(lt+2)], y[:, -(lt+2) : -2], 2 ** y[:, -2:-1], 2 ** y[:, -1:] - 1
-dodge = DODGE(transition, lambda p: torch.optim.Adam(p, lr=lr)) # For forward-gradient-feedback potentially-very-long-unrolls RNN training.
-#   TODO: Also optimize `digital_table`, if differentiable.
+optim = torch.optim.Adam([*transition.parameters(), *digital_table.parameters()], lr=lr)
+dodge = DODGE(transition, optim) # For forward-gradient-feedback potentially-very-long-unrolls RNN training.
 sample = Sampler(transition_, choices_per_cell, sum(cell_shape[:-1]), sum(cell_shape))
 # For debugging, print the param-count.
 pc = sum(x.numel() for x in transition.parameters())
@@ -539,11 +542,8 @@ def local_loss(frame, frame_names):
     reg_loss = (imitate * reg_loss).sum()
     predict_loss = (imitate * (frame_logits - pred_logits).square()).sum()
 
-    reg_loss = 0 # TODO:
-    predict_loss = 0 # TODO:
-
     # Log and return.
-    # log_metrics(imitated=imitate.mean(), reg_loss=reg_loss, predict_loss=predict_loss) # TODO:
+    log_metrics(imitated=imitate.mean(), reg_loss=reg_loss, predict_loss=predict_loss)
     return reg_loss + predict_loss, frame_dist, frame_smudge
 
 def per_goal_loss(frame: torch.Tensor, frame_names: np.ndarray, goals):
@@ -577,9 +577,6 @@ def global_loss(dist_pred, smudge_pred, dist_target, smudge_target):
         smudge_target = smudge_target.min(detach(smudge_pred + optimism))
     dist_loss = ((dist_pred+1e-2).log2() - (dist_target+1e-2).log2()).square().sum()
     smudge_loss = ((smudge_pred+1).log2() - (smudge_target+1).log2()).square().sum()
-    # print('A', smudge_pred, '=', smudge_target) # TODO:
-    # print('D', dist_pred, '=', dist_target) # TODO:
-    # print('L', dist_loss, smudge_loss) # TODO:
     log_metrics(dist_loss=dist_loss, smudge_loss=smudge_loss)
     return dist_loss + smudge_loss
 
