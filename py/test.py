@@ -75,7 +75,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: When this file is called without args, instead of providing a default env, print a help-message, which includes all `env`s that can be imported.
+# TODO: Make `model.recurrency.State` use PyTorch buffers, rather than simple attributes. (Then saving/loading won't even need dedicated functions.)
 
 # TODO: Run & fix the copy-task in `env/simple_copy.py`, to test our implementation.
 #   TODO: How can we find out why we don't learn?
@@ -201,13 +201,21 @@ We clip all inputs/outputs to -1…1.""",
 
 
 
+# TODO: Extract this into the `model/cmd_line_envs.py` file, for future reuse.
+#   TODO: …What about this dirty modify_name business? Don't we need proper sn forking first?
 # Environments, from the command line.
+import ast
 import sys
 import importlib
-def prepare_env(path):
+def prepare_env(path: str):
+    argstart = path.find('(')
+    path, args = (path[:argstart], path[argstart:]) if argstart >= 0 else (path, '()')
+    assert args[0] == '(' and args[-1] == ')'
+    pairs = [pair.partition('=') for pair in args[1:-1].split(',')]
+    args = { k: ast.literal_eval(v) for k,_,v in pairs if k }
     mod = importlib.import_module('env.' + path)
     assert hasattr(mod, 'Env')
-    sensor = mod.Env()
+    sensor = mod.Env(**args)
     def sensor_with_name(*a, **kw):
         try:
             modify_name.ctx = path
@@ -226,8 +234,31 @@ def modify_name(name):
     res[-1] = modify_name.ctx if res[-1] is None else (modify_name.ctx + '.' + res[-1])
     return tuple(res)
 sn.modify_name.append(modify_name)
-envs = ['graphenv'] if len(sys.argv) < 2 else sys.argv[1:]
-envs = { e: prepare_env(e) for e in envs }
+argv = sys.argv
+if len(argv) < 2:
+    # Print the help message. Has the side-effect of importing all envs.
+    import os
+    at = os.path.join(os.path.dirname(os.path.abspath(argv[0])), 'env')
+    print("""Also pass in the environments to act in, such as:""")
+    for dirpath, dirnames, filenames in os.walk(at):
+        if dirpath[:len(at)] == at:
+            path = dirpath[len(at):].split(os.sep)[1:]
+            for filename in filenames:
+                if filename[-3:] == '.py':
+                    import_path = '.'.join([*path, filename[:-3]])
+                    print()
+                    print('→ ', import_path)
+                    mod = importlib.import_module('env.' + import_path)
+                    if hasattr(mod.Env, '__init__'):
+                        f = mod.Env.__init__
+                        if hasattr(f, '__code__') and f.__defaults__:
+                            assert len(f.__code__.co_varnames) == 1 + len(f.__defaults__), "All args must have defaults"
+                            args = ','.join(k+'='+repr(v) for k,v in zip(f.__code__.co_varnames[1:], f.__defaults__))
+                            print(' ·', import_path + '(' + args + ')')
+                    print(' ·  ', mod.Env.__doc__.strip().partition('\n')[0].strip())
+    sys.exit()
+else:
+    envs = { e: prepare_env(e) for e in argv[1:] }
 
 
 

@@ -8,7 +8,7 @@ class Env:
     """
     bit = 0
     reward = 0
-    reward_metric = 0.
+    reward_metric = .5
     def __call__(self, sn):
         p = random.random()
 
@@ -30,4 +30,4 @@ class Env:
                 self.reward_metric = self.reward_metric * .99 + .01 * self.reward
             sn.run(callback, sn.query('recall', 2))
     def metric(self):
-        return {'↑ return': self.reward_metric}
+        return {'return ↑': self.reward_metric}

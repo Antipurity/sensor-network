@@ -63,7 +63,7 @@ class Env:
         dy = min(abs(y1 - y2 - 1), abs(y1 - y2), abs(y1 - y2 + 1))
         return dx + dy
     def metric(self):
-        return {'↓ dist': self.dist(self.xy, self.goal_xy), 'history': self.plot_history}
+        return {'dist ↓': self.dist(self.xy, self.goal_xy), 'history': self.plot_history}
     def plot_history(self, plt, key, plot_length):
         """The most-recent trajectory, as a projection onto a 2D plane."""
         assert key == 'history'
