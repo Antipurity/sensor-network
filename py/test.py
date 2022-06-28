@@ -75,8 +75,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Make `model.recurrency.State` use PyTorch buffers, rather than simple attributes. (Then saving/loading won't even need dedicated functions.)
-
 # TODO: Run & fix the copy-task in `env/simple_copy.py`, to test our implementation.
 #   TODO: How can we find out why we don't learn?
 

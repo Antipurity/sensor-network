@@ -14,19 +14,18 @@ import torch.nn as nn
 class State(nn.Module):
     """`State(shape, device=None)`
 
-    Manages RNN state: `s(s() * 2)` doubles the currently-stored value.
+    Manages RNN state: for example, `s(s() * 2)` doubles the currently-stored value.
 
     RNN state could be a simple variable, but separating it into a class allows easily managing arbitrarily-many variables at once.
 
     In addition:
     - `.initial`: the value for new episodes to start from.
     - `State.loss(…)`: handles an episode's loss in one place.
-    - `with State.Episode():` for starting a new unroll, with the `.initial` value. (Which is differentiable; what else would you reasonably reset to? Either a frozen tensor or a frozen past state, none of which allow for efficient learning.)
+    - `with State.Episode(...):` for starting a new unroll. Starts at `.initial` values by default, for learning a good initialization.
     - `with State.Setter(lambda state, to: to):` modifies state modifications; see the class for usage examples.
-    - To save/load: `torch.save`/`torch.load`, on models that contain `State`s, and/or episodes. Saving models within an episode would make their current values top-level (episode-less).
-      - Advanced: to save/load via `model.state_dict()`/`model.load_state_dict(d)` (episodes are not supported), have to manually reset `.current` values. Hard-resetting like `with State.Setter(lambda s,_: s.initial+0): model()` should do the trick. (Not handling this was a design choice made for efficiency.)
+    - Saving/loading is typical: `torch.save(model, file)` and `model = torch.load(file)`; or `torch.save(model.state_dict(), file)` and `model.load_state_dict(torch.load(file))`. Saving models within an episode would make their current values top-level (episode-less).
 
-    (What's the difference between RNN states and NN weights, after all? Only a pre-programmed optimizer for the latter, and a learned one (if any) for the former. And PyTorch already makes NN weights hidden parameters.)
+    (What's the difference between RNN states and NN weights, after all? Only a pre-programmed optimizer for the latter, and a learned one (if any) for the former. PyTorch already makes NN weights hidden parameters; `State` merely does the same.)
     """
     # __slots__ = ('id', 'initial', 'current')
     #   `torch.load` complains if we follow these best practices, since it gives us the props of `nn.Module`s.
@@ -39,7 +38,7 @@ class State(nn.Module):
         x = shape if isinstance(shape, torch.Tensor) else torch.randn(shape, device=device) * scale
         self.id = id(self) # Might expose OS-level details. And might collide between processes.
         self.initial = nn.parameter.Parameter(x, requires_grad=True)
-        self.current = self.initial+0 # `+0`: no duplicate `Parameter` here.
+        self.register_buffer('current', self.initial+0) # `+0`: no duplicate `Parameter` here.
     def __getstate__(self):
         """Custom pickling, for about ≈400-byte savings."""
         return self.id, self.initial, self.current.detach()
@@ -225,7 +224,7 @@ class DeltaNet(nn.Module):
     [DeltaNet](https://arxiv.org/abs/2102.11174): a linear-time RNN-like alternative to self-attention, with some meta-learning built-in.
     - `ins`, `outs`: sizes of input & output vectors.
     - `heads`: splits inputs into this many sub-tensors, operates on each independently, then reassembles.
-    - `device`: important to pass in; `model.to(device)` won't work due to `State`.
+    - `device`
 
     Use this in [Transformer](https://arxiv.org/abs/1706.03762) layers.    
     (The sequence of input vectors has to be presented not in parallel, but one-by-one. Inputs should be tensors shaped either as `(1, ins)` or `(batch_size, update_count, ins)`; `update_count` can be used to perform many updates at once at the cost of correctness.)
@@ -388,10 +387,12 @@ if __name__ == '__main__': # pragma: no cover
         with ep:
             s(s() + 1)
             s(s() + 2)
-            torch.save(s, file)
+            torch.save(s.state_dict(), file)
+            # torch.save(s, file)
         # print(file.getbuffer().nbytes, 'bytes')
         file.seek(0)
-        s = torch.load(file)
+        s.load_state_dict(torch.load(file))
+        # s = torch.load(file)
         s(s() + 3)
         assert (s() == torch.tensor([[6.]])).all()
     @run
