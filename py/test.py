@@ -75,8 +75,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: …Have envs for 2D board wandering and for 2D continuous control. (Don't be limited to just one little env without any visualization tools.)
-
 # TODO: Run & fix the copy-task in `env/copy.py`, to test our implementation.
 #   TODO: How can we find out why we don't learn?
 #     TODO: Should we first try to visualize everything related to dist/smudge targets & predictions, and in particular, print them?
@@ -84,6 +82,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 # TODO: An env that has both analog actions and analog goals: make the goal a random image (plus the "at the final-state" bit), then get like 3 images (exposing "NOT at the final-state"), then expose the sum of those actions and the fact that this is the final-state.
 #   TODO: Also an env for out-of-distribution goals: expose a reward that caps off at 0 (reward of 'how close the image is to the non-goal target image' maybe), and always say that it must be 1.
+#   …Does `env.simple_guidance` count as "an env with both analog actions and analog goals"?
 
 # TODO: Might want to do the simplest meta-RL env like in https://openreview.net/pdf?id=TuK6agbdt27 to make goal-generation much easier and make goal-reachability tracked — with a set of pre-generated graphs to test generalization…
 
