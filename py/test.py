@@ -94,10 +94,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Copy the read-me.
-# TODO: Have `sn.fork(modify_name:name→name)→sn2` which creates an instance with the exact same attributes (so it pushes messages to the same queue and all) but different `.modify_names`.
-#   (Maybe even make `sn.handle` & `sn.discard` throw if we have any name-mod depth, so that only the base can handle, and we can actually have communication-only interfaces; and make `modify_name` a non-hyperparam.)
-#   TODO: Use that here, to lift the "only do messages in the sensor" restriction.
+# TODO: Copy the read-me. …Has `sn` evolved a bit past the "only the basic communication protocol"?
+# TODO: Use `sn.fork(lambda name: name)` here, to lift the "only do messages in the sensor" restriction.
 # TODO: Make `Float` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
 # TODO: Also support fixed-size strings with tokenizers.
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `Float` defer to `IntFloat` when not `sn.info['analog']`.

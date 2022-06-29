@@ -67,7 +67,7 @@ class Handler:
     """
     ```python
     Handler(8,8,8, 64)
-    Handler(*cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024)
+    Handler(*cell_shape, info=None, sensors=None, listeners=None, backend=numpy, name_cache_size=1024)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -79,16 +79,14 @@ class Handler:
     - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else. To set global info on the `sn` module, do `sn.default.info = ...`.
     - `sensors`: `set` of functions that take this handler, to prepare data to handle.
     - `listeners`: `set` of functions that take handler & data & error, when data is ready to handle. `Filter` instances are good candidates for this.
-    - `modify_name`: `list` of funcs from name to name, with singular strings already wrapped in a one-item tuple.
     - `backend`: the NumPy object.
     - `name_cache_size`: info that is associated with names is cached for speed.
 
-    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
     __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'listeners', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats')
-    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024):
+    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, backend=numpy, name_cache_size=1024):
         from builtins import set
-        assert modify_name is None or isinstance(modify_name, list)
         import json;  json.dumps(info) # Just for error-checking.
         sensors = set(sensors) if sensors is not None else set()
         listeners = set(listeners) if listeners is not None else set()
@@ -106,9 +104,20 @@ class Handler:
         self.listeners = listeners
         self.backend = backend
         self.name_cache_size = name_cache_size
-        self.modify_name = modify_name if modify_name is not None else []
+        self.modify_name = ()
         self._str_to_floats = functools.lru_cache(name_cache_size)(functools.partial(_str_to_floats, backend))
         self.cell_shape = cell_shape
+    def fork(self, modify_name):
+        """`sn.fork(lambda name: tuple(['sub-env-name', *name]))`
+
+        Creates an interface, usable for communicating data in a separate sub-'thread' denoted by different names. Data must still be handled by the non-forked version. Data is shared among all forked versions, so use `sn.Handler(…)` to not share data."""
+        assert callable(modify_name)
+        h = self.Handler.__new__(self.Handler)
+        for k in h.__slots__:
+            setattr(h, k, getattr(self, k))
+        h.modify_name = tuple([*self.modify_name, modify_name])
+        return h
+
     def name(self, name):
         """`sn.name(name)`
 
@@ -280,6 +289,7 @@ class Handler:
         - Extract analog (`sn.Float`) cells: `data[data[:, 1] > 0]`
         - Extract digital (`sn.Int`) cells: `data[data[:, 1] <= 0]`
         """
+        assert not len(self.modify_name), "Only non-forked handlers can handle data"
         self._maybe_default()
         np = self.backend
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
@@ -322,6 +332,7 @@ class Handler:
             return self._wait_then_take_data(max_simultaneous_steps)
     def commit(self):
         """`sn.commit()`: actually copies the provided data/queries, allowing their NumPy arrays to be written-to elsewhere."""
+        assert not len(self.modify_name), "Only non-forked handlers can handle data"
         np, s = self.backend, self._s
         if len(self._data) == 1 and len(self._query) == 1: return
         values = s.cell_shape[-1] if len(s.cell_shape) else 0
@@ -334,6 +345,7 @@ class Handler:
         self._error.clear();  self._error.append(error)
     def discard(self):
         """Clears all scheduled-to-be-sent data."""
+        assert not len(self.modify_name), "Only non-forked handlers can handle data"
         try:
             _feedback(self._next_fb, None)
         finally:

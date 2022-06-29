@@ -237,8 +237,9 @@ async def test12():
 @sn.run
 async def test13():
     """Modifying names."""
-    h = sn.Handler(8,8,8,8, 64, modify_name = [lambda name: ('z',)])
-    h.set(name='btgrnonets', data=[1., 2.], type=sn.Float(2))
+    h = sn.Handler(8,8,8,8, 64)
+    fork = h.fork(lambda name: ('z',))
+    fork.set(name='btgrnonets', data=[1., 2.], type=sn.Float(2))
     data, query, error = await h.handle()
     assert sn.Filter((None, 'z'))(h, data).sum() == 1
 @sn.run
