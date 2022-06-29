@@ -95,14 +95,25 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-def blocks(x, cpc, shape, dims=1):
-    patch_dim = int(cpc ** (1/dims)) # patch_dim ** dims <= cpc
-    0
-    # TODO: First, how to determine `shape`-items-per-cell?…
-    #   …Wait, if each patch's dimension is specifically picked to best fit `cpc` (math.floor(cpc**(1/dims))?), would we really have more than one patch per cell?…
-    # TODO: How to do zero-padding and block-flattening?…
-    # TODO: How to do the reshaping and transposition that are involved in block-flattening?…
-    # In 2D: B×M×N → B × M/m×m × N/n×n → B × M/m × N/n × m×n → …×m×n
+def blocks(np, x, shape, cpc, dims=1): # TODO: …How do we integrate this into `sn.Float`… …To support `query`, don't we need an x-shape-only variant…
+    #   TODO: How exactly does `shaped_names` work, so that we may integrate with it properly?
+    assert isinstance(dims, int) and dims >= 1
+    while len(x.shape) < len(shape): x = np.expand_dims(x, 0)
+    assert isinstance(shape, tuple) and len(x.shape) == len(shape) and len(shape) >= dims
+    assert all(x.shape[i] <= shape[i] for i in range(len(x.shape)))
+    d = int(cpc ** (1/dims)) # patch_dim ** dims <= cpc: one square/hypercubic patch per cell.
+    # Zero-pad to make all of `dims` divisible by `d`.
+    y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
+    # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
+    y = y.reshape(*x.shape[:-dims], *[d if i%2 else y.shape[-(i//2)-1] // d for i in range(2*dims)])
+    tr = list(range(len(y.shape)))
+    for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+    y = y.transpose(*tr)
+    # Flatten all patches, and zero-pad.
+    y = y.reshape(*y.shape[:-dims], d**dims)
+    return y if d**dims == cpc else np.concatenate((y, np.zeros((*y.shape[:-1], cpc - d**dims))), -1)
+    # TODO: …Then, compute names with 0s as 0% and `shape` as 100%.
+    # TODO: …Then, concat with names and reshape into a 2D array and return.
 
 
 

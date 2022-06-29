@@ -147,7 +147,22 @@ class Handler:
         s.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
         # Also create the cached Python-name-to-NumPy-name method.
         s.name = functools.lru_cache(self.name_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
-        s.shaped_names = functools.lru_cache(self.name_cache_size)(functools.partial(_shaped_names, self))
+        def shaped_names(sn, sz, cells, shape, prefix, name):
+            # Prepend `(*prefix, *shape_progress)` numbers to `name`s.
+            np, s = sn.backend, sn._s
+            name_sz = (s.cell_size - s.cell_shape[-1]) if len(s.cell_shape) else 0
+            if cells == 0 or not s.cell_size: # pragma: no cover
+                return np.zeros((cells, name_sz), dtype=np.float32)
+            full_name = np.resize(np.nan_to_num(sn.name(tuple([None, *name]))), (cells, name_sz))
+
+            n, progress = np.linspace(0, sz, cells, dtype=np.float32), []
+            for max in reversed(shape):
+                progress.append((n % max) / max * 2 - 1)
+                n = np.floor_divide(n, max)
+            progress = np.stack([np.full((cells,), 1. if p is True else -1. if p is False else p) for p in prefix] + [*reversed(progress)], 1)
+            full_name[:, :s.cell_shape[0]] = _fill(np, progress, s.cell_shape[0])
+            return full_name
+        s.shaped_names = functools.lru_cache(self.name_cache_size)(functools.partial(shaped_names, self))
 
     def set(self, name=None, data=None, type=None, error=None):
         """
@@ -446,7 +461,7 @@ class Handler:
             if not len(shape): return
             assert shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
-            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name)
+            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, False), name)
             data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(np, np.expand_dims(data, -1), bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
@@ -459,7 +474,7 @@ class Handler:
             shape = sn._s.cell_shape
             assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape) else 0
-            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name) if cells else None
+            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, False), name) if cells else None
             async def do_query(fb):
                 if not cells: return
                 fb = await fb
@@ -540,7 +555,7 @@ class Handler:
             shape = sn._s.cell_shape
             if not len(shape): return
             cells = -(-self.sz // shape[-1])
-            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name)
+            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, True), name) # TODO:
             z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
             data = np.concatenate((data, z))
             error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
@@ -554,7 +569,7 @@ class Handler:
 
             shape = sn._s.cell_shape
             cells = -(-self.sz // shape[-1]) if len(shape) else 0
-            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name) if cells else np.zeros((0,0))
+            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
@@ -816,23 +831,6 @@ def _name_template(np, str_to_floats, cell_shape, name):
             raise TypeError("Names must consist of strings, `None`, and tuples of either numbers or `None`s")
         at += sz
     return template
-def _shaped_names(sn, sz, cells, shape, goal, analog, name):
-    # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
-    np, s = sn.backend, sn._s
-    name_sz = (s.cell_size - s.cell_shape[-1]) if len(s.cell_shape) else 0
-    if cells == 0 or not s.cell_size: # pragma: no cover
-        return np.zeros((cells, name_sz), dtype=np.float32)
-    full_name = np.resize(np.nan_to_num(sn.name(tuple([None, *name]))), (cells, name_sz))
-
-    n, progress = np.linspace(0, sz, cells, dtype=np.float32), []
-    for max in reversed(shape):
-        progress.append((n % max) / max * 2 - 1)
-        n = np.floor_divide(n, max)
-    goal = np.full((cells,), 1. if goal else -1., dtype=np.float32)
-    analog = np.full((cells,), 1. if analog else -1., dtype=np.float32)
-    progress = np.stack([goal, analog, *reversed(progress)], 1)
-    full_name[:, :s.cell_shape[0]] = _fill(np, progress, s.cell_shape[0])
-    return full_name
 def _default_typing(name, type):
     if name is not None and type is None: return name, Handler.Event()
     if isinstance(type, int): return name, Handler.Int(type)
