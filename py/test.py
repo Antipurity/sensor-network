@@ -94,18 +94,18 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Maybe rename `RawFloat` and `Float` to `Float` and `IntFloat`.
-# TODO: …Maybe, have `sn.forked(modify_name:name→name)→sn2` which creates an instance with the exact same attributes (so it pushes messages to the same queue and all) but different `.modify_names`.
+# TODO: Copy the read-me.
+# TODO: Have `sn.fork(modify_name:name→name)→sn2` which creates an instance with the exact same attributes (so it pushes messages to the same queue and all) but different `.modify_names`.
 #   (Maybe even make `sn.handle` & `sn.discard` throw if we have any name-mod depth, so that only the base can handle, and we can actually have communication-only interfaces; and make `modify_name` a non-hyperparam.)
 #   TODO: Use that here, to lift the "only do messages in the sensor" restriction.
-# TODO: Make `RawFloat` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
+# TODO: Make `Float` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
 # TODO: Also support fixed-size strings with tokenizers.
-# TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `RawFloat` defer to `Float` when not `sn.info['analog']`.
+# TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `Float` defer to `IntFloat` when not `sn.info['analog']`.
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
 # TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
 # TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
 # TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python type annotations (`fn.__annotations__['return']` and such) to expose both inputs and outputs as data whenever the func is called — or when `None` is returned (or a flag in `sn` is set), requests output from `sn`. ("Mind uploading" for code, condensed to a single line of code.)
-#   TODO: Make `sn.List` add an additional dimension for `Int`/`RawFloat` to iterate over via global-variables, instead of having unique names for each part.
+#   TODO: Make `sn.List` add an additional dimension for `Int`/`Float` to iterate over via global-variables, instead of having unique names for each part.
 
 
 
@@ -224,7 +224,7 @@ def prepare_env(path: str):
     return sensor
 def modify_name(name):
     # Remove inter-env collisions by adding the group ID to the end of their names.
-    #   (`sn.RawFloat` and `sn.Int` prepend a name-part, so `res` contains one less.)
+    #   (`sn.Float` and `sn.Int` prepend a name-part, so `res` contains one less.)
     assert modify_name.ctx is not None, "Sending data not in an env's sensor; don't send it in callbacks of queries, instead remember to send it on the next step"
     # TODO: Maybe also warn if len(name) > len(cell_shape)-2.
     res = [name[i] if i < len(name) else None for i in range(len(cell_shape) - 2)]

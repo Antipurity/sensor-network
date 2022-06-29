@@ -39,9 +39,9 @@ class Env:
         self.goal_xy = tuple([0]*dims)
     def __call__(self, sn):
         self.update(self.accel)
-        sn.set('xy', self.xy, sn.RawFloat(self.D))
-        sn.set('xy', self.goal_xy, sn.Goal(sn.RawFloat(self.D)))
-        sn.run(self.handle_feedback, sn.query('act', sn.RawFloat(self.D)))
+        sn.set('xy', self.xy, sn.Float(self.D))
+        sn.set('xy', self.goal_xy, sn.Goal(sn.Float(self.D)))
+        sn.run(self.handle_feedback, sn.query('act', sn.Float(self.D)))
 
         if random.random() < 1 / 32 / self.D: # Switch goals sometimes.
             self.goal_xy = tuple([random.random() for _ in range(self.D)])

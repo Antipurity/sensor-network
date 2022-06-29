@@ -17,20 +17,20 @@ First, initialize the handler:
 import sensornet as sn
 import numpy as np
 
-h = sn.Handler(8,8,8,8, 64) # First name-parts, then data, in a cell.
+sn = sn.Handler(8,8,8,8, 64) # Cell-shape: first name-parts, then data.
 # OR, simply use the global `sn` as if it's a handler:
-h = sn.shape(8,8,8,8, 64)
+sn.cell_shape = (8,8,8,8, 64)
 ```
 
 Then send/receive data:
 
 ```python
 async def get():
-    h.set('sensor', 13, 32)
-    assert (await h.get('action', 32)) in range(32)
+    sn.set('sensor', 13, 32)
+    assert (await sn.get('action', 32)) in range(32)
 ```
 
-(Simple integer sending/receiving is shown here, but floats are also available by replacing `32` with `h.RawFloat(*shape)`.)
+(Simple integer sending/receiving is shown here, but floats are also available by replacing `32` with `sn.Float(*shape)`.)
 
 And handle it:
 
@@ -39,7 +39,7 @@ And handle it:
 async def main():
     fb = None
     while True:
-        data, query, error = await h.handle(fb)
+        data, query, error = await sn.handle(fb)
         fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
@@ -51,7 +51,7 @@ This module implements this basic discrete+analog protocol, and does not include
 
 ## Integrations
 
-- PyTorch: given `import torch`, `sn.torch(torch, tensor)` should be used as the argument to `h.handle(...)`.
+- PyTorch: given `import torch`, `sn.torch(torch, tensor)` should be used as the argument to `sn.handle(...)`.
 """
 
 
@@ -66,7 +66,6 @@ import functools
 class Handler:
     """
     ```python
-    Handler().shape(8,8,8, 64)
     Handler(8,8,8, 64)
     Handler(*cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024)
     ```
@@ -76,7 +75,7 @@ class Handler:
     All data is split into fixed-size cells, each of which has numeric name parts (`cell_shape[:-1]`) and data (`cell_shape[-1]`). Handlers (AI models) should be position-invariant.
 
     Inputs:
-    - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts. In particular, each string in a name would take up 1 part.
+    - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts; see `.name`. Can read/write `.cell_shape` as a property, whenever.
     - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else. To set global info on the `sn` module, do `sn.default.info = ...`.
     - `sensors`: `set` of functions that take this handler, to prepare data to handle.
     - `listeners`: `set` of functions that take handler & data & error, when data is ready to handle. `Filter` instances are good candidates for this.
@@ -86,55 +85,58 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners` or `.modify_name`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    __slots__ = ('_query_cell', '_data', '_query', '_error', '_prev_fb', '_next_fb', '_wait_for_requests', 'info', 'sensors', 'listeners', 'cell_shape', 'cell_size', 'n', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_name', '_shaped_names')
+    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'listeners', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats')
     def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, modify_name=None, backend=numpy, name_cache_size=1024):
         from builtins import set
         assert modify_name is None or isinstance(modify_name, list)
         import json;  json.dumps(info) # Just for error-checking.
         sensors = set(sensors) if sensors is not None else set()
         listeners = set(listeners) if listeners is not None else set()
-        self._query_cell = 0
+        s = self._s = _S()
+        s.cell_shape, s.cell_size, s.n = (), 0, 0
+        s.wait_for_requests = None # asyncio.Future()
+        s.name = None
+        s.shaped_names = None
+        s.query_cell = 0
         self._data, self._query, self._error = [], [], []
         self._prev_fb = [] # […, [prev_feedback, _next_fb, cell_count, cell_size], …]
         self._next_fb = [] # […, (on_feedback, start_cell, end_cell), …]
-        self._wait_for_requests = None # asyncio.Future()
         self.info = info
         self.sensors = sensors
         self.listeners = listeners
-        self.cell_shape, self.cell_size, self.n = (), 0, 0
         self.backend = backend
         self.name_cache_size = name_cache_size
         self.modify_name = modify_name if modify_name is not None else []
         self._str_to_floats = functools.lru_cache(name_cache_size)(functools.partial(_str_to_floats, backend))
-        self._name = None
-        self._shaped_names = None
-        if len(cell_shape):
-            self.shape(*cell_shape)
+        self.cell_shape = cell_shape
     def name(self, name):
         """`sn.name(name)`
 
         Converts a Python name such as `('image', (.25, .5))` to a NumPy template, of shape `(sum(cell_shape[:-1]),)`, with `nan`s wherever the value doesn't matter.
 
-        Names are tuples of either strings (which are MD5-hashed with the 16 bytes converted to -1…1 numbers), `None`s, and/or tuples of either numbers or `None`s."""
+        Names are tuples of either strings (which are MD5-hashed with the 16 bytes converted to -1…1 numbers), `None`s, and/or tuples of either numbers or `None`s.
+
+        All of these top-level name-parts take up 1 part each, so `cell_shape=(8,8,8,8,64)` can have up to 4 name-parts (or 3, since datatypes monopolize 1 name part), 8 numbers each."""
         assert isinstance(name, tuple)
-        return self._name(name)
-    def shape(self, *cell_shape):
-        """`sn.shape(*cell_shape)`
-
-        Changes the current shape, where the last number is data, the rest split the name into parts. Safe to call whenever.
-
-        Returns the `sn` handler for convenience."""
+        return self._s.name(name)
+    @property
+    def cell_size(self): return self._s.cell_size
+    @property
+    def cell_shape(self): return self._s.cell_shape
+    @cell_shape.setter
+    def cell_shape(self, cell_shape):
         _shape_ok(cell_shape)
-        if self.cell_shape == cell_shape:
+        s = self._s
+        if s.cell_shape == cell_shape:
             return self
         self.discard()
-        self.cell_shape = cell_shape
-        self.cell_size = sum(cell_shape)
-        self.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
+        s.cell_shape = cell_shape
+        s.cell_size = sum(cell_shape)
+        s.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
         # Also create the cached Python-name-to-NumPy-name method.
-        self._name = functools.lru_cache(self.name_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
-        self._shaped_names = functools.lru_cache(self.name_cache_size)(functools.partial(_shaped_names, self))
-        return self
+        s.name = functools.lru_cache(self.name_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
+        s.shaped_names = functools.lru_cache(self.name_cache_size)(functools.partial(_shaped_names, self))
+
     def set(self, name=None, data=None, type=None, error=None):
         """
         `sn.set(name, data, type=None, error=None)`
@@ -148,7 +150,8 @@ class Handler:
             - Implicit types: `8 → sn.Int(8)`; `(2,3) → sn.Int(2,3)`.
         - `error = None`: `data` transmission error: `None` or a `(cells, cell_shape[-1])`-shaped float32 array of `max abs(true_data - data)`.
         """
-        np = self.backend
+        self._maybe_default()
+        np, s = self.backend, self._s
         if isinstance(name, str): name = (name,)
 
         if name is not None: name, type = _default_typing(name, type)
@@ -158,19 +161,19 @@ class Handler:
         assert name is None, "Either forgot the type, or meant to pass in unnamed 2D data"
 
         assert isinstance(data, np.ndarray)
-        assert len(data.shape) == 2 and data.shape[-1] == self.cell_size
+        assert len(data.shape) == 2 and data.shape[-1] == s.cell_size
         if isinstance(error, float):
-            error = np.full((data.shape[0], self.cell_shape[-1]), error, dtype=np.float32)
+            error = np.full((data.shape[0], s.cell_shape[-1]), error, dtype=np.float32)
         assert error is None or isinstance(error, np.ndarray) and data.shape[0] == error.shape[0]
 
-        if not self.cell_size: return
-        assert error is None or error.shape[1] == self.cell_shape[-1]
+        if not s.cell_size: return
+        assert error is None or error.shape[1] == s.cell_shape[-1]
 
         self._data.append(data)
         self._error.append(error)
-        if self._wait_for_requests is not None:
-            self._wait_for_requests.set_result(None)
-            self._wait_for_requests = None
+        if s.wait_for_requests is not None:
+            s.wait_for_requests.set_result(None)
+            s.wait_for_requests = None
     def query(self, name=None, type=None, callback=None):
         """
         ```python
@@ -186,7 +189,8 @@ class Handler:
         - `callback = None`: if `await` has too much overhead, this could be a function that is given the feedback.
             - `.query` calls impose a global ordering, and feedback only arrives in that order, delayed. So to reduce memory allocations, could reuse the same function and use queues.
         """
-        np = self.backend
+        self._maybe_default()
+        np, s = self.backend, self._s
         assert callback is None or isinstance(callback, asyncio.Future) or callable(callback)
         if isinstance(name, str): name = (name,)
 
@@ -202,21 +206,21 @@ class Handler:
 
         assert isinstance(query, np.ndarray) and len(query.shape) == 2
 
-        if not self.cell_size:
+        if not s.cell_size:
             if callable(callback):
                 return callback(None)
             else:
                 callback.set_result(None)
                 return callback
-        assert query.shape[-1] == self.cell_size-self.cell_shape[-1]
+        assert query.shape[-1] == s.cell_size-s.cell_shape[-1]
 
         self._query.append(query)
         cells = query.shape[0]
-        self._next_fb.append((callback, self._query_cell, self._query_cell + cells))
-        self._query_cell += cells
-        if self._wait_for_requests is not None:
-            self._wait_for_requests.set_result(None)
-            self._wait_for_requests = None
+        self._next_fb.append((callback, s.query_cell, s.query_cell + cells))
+        s.query_cell += cells
+        if s.wait_for_requests is not None:
+            s.wait_for_requests.set_result(None)
+            s.wait_for_requests = None
         if isinstance(callback, asyncio.Future):
             return callback
     def pipe(self, data, query, error, callback=None):
@@ -227,6 +231,7 @@ class Handler:
 
         (To both preserve packet boundaries and to not stall the pipeline, extra work has to be performed, namely, have a queue of `sn.handle(…)` results, and in `other_handler.sensors`, have a function that pops from that queue via `.pipe`, waiting for data when the queue is empty.)
         """
+        self._maybe_default()
         if data is not None: self.set(None, data, None, error)
         if query is not None: return self.query(None, query, callback)
     def get(self, name, type):
@@ -235,6 +240,7 @@ class Handler:
 
         Gets feedback, guaranteed. Never returns `None`, instead re-querying until a result is available.
         """
+        self._maybe_default()
         if isinstance(name, str): name = (name,)
         if name is not None: name, type = _default_typing(name, type)
         if hasattr(type, 'get'):
@@ -271,9 +277,10 @@ class Handler:
         - Be ready for data from untrusted sources: `data = numpy.clip(numpy.nan_to_num(data), -1., 1.)`.
         - Blur out the precision that was lost during transmission: `if error is not None: data[:, -sn.cell_shape[-1]:] += error * (numpy.random.rand(*error.shape)*2-1)`
         - Extract goal-cells: `data[data[:, 0] > 0]`
-        - Extract analog (`sn.RawFloat`) cells: `data[data[:, 1] > 0]`
+        - Extract analog (`sn.Float`) cells: `data[data[:, 1] > 0]`
         - Extract digital (`sn.Int`) cells: `data[data[:, 1] <= 0]`
         """
+        self._maybe_default()
         np = self.backend
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.create_task(prev_feedback) if hasattr(asyncio, 'create_task') else asyncio.ensure_future(prev_feedback)
@@ -315,10 +322,10 @@ class Handler:
             return self._wait_then_take_data(max_simultaneous_steps)
     def commit(self):
         """`sn.commit()`: actually copies the provided data/queries, allowing their NumPy arrays to be written-to elsewhere."""
-        np = self.backend
+        np, s = self.backend, self._s
         if len(self._data) == 1 and len(self._query) == 1: return
-        values = self.cell_shape[-1] if len(self.cell_shape) else 0
-        L1, L2 = self.cell_size, self.cell_size - values
+        values = s.cell_shape[-1] if len(s.cell_shape) else 0
+        L1, L2 = s.cell_size, s.cell_size - values
         data = np.concatenate(self._data, 0) if len(self._data) else np.zeros((0, L1), dtype=np.float32)
         query = np.concatenate(self._query, 0) if len(self._query) else np.zeros((0, L2), dtype=np.float32)
         error = _concat_error(self._data, self._error, values, np)
@@ -330,7 +337,7 @@ class Handler:
         try:
             _feedback(self._next_fb, None)
         finally:
-            self._query_cell = 0
+            self._s.query_cell = 0
             self._data.clear()
             self._query.clear()
             self._error.clear()
@@ -341,7 +348,7 @@ class Handler:
         data = self._data[0];  self._data.clear()
         query = self._query[0];  self._query.clear()
         error = self._error[0];  self._error.clear()
-        self._prev_fb.append([False, self._next_fb, query.shape[0], self.cell_size])
+        self._prev_fb.append([False, self._next_fb, query.shape[0], self._s.cell_size])
         self._next_fb = []
         self.discard()
         for l in self.listeners: l(self, data)
@@ -353,12 +360,13 @@ class Handler:
         Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
         """
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
+        s = self._s
         if not len(self._data) and not len(self._query):
-            self._wait_for_requests = asyncio.Future()
-            await self._wait_for_requests
-        self.n += 1
-        if self.n >= max_simultaneous_steps: self.n = 0
-        if self.n == 0:
+            s.wait_for_requests = asyncio.Future()
+            await s.wait_for_requests
+        s.n += 1
+        if s.n >= max_simultaneous_steps: s.n = 0
+        if s.n == 0:
             await asyncio.sleep(0)
         if len(self._prev_fb) > max_simultaneous_steps:
             fb = self._prev_fb[0][0] # The oldest feedback, must be done.
@@ -372,6 +380,12 @@ class Handler:
                         break
                     await asyncio.sleep(.003)
         return self._take_data()
+    def _maybe_default(self):
+        """If we're the top-level sensor, we have to react to changes in the global `cell_shape`."""
+        global cell_shape, cell_size
+        if self is default:
+            self.cell_shape = cell_shape
+            cell_shape, cell_size = self._s.cell_shape, self._s.cell_size
 
     class Int:
         """
@@ -384,11 +398,11 @@ class Handler:
 
         Datatype: a sequence of integers, each `0…options-1`.
 
+        To use this, `Handler`s need to specify `info={'choices_per_cell': opts}`. This datatype will take care of conversions.
+
         For efficiency, where possible, request many `Int`s via `shape`, and request powers-of-2 `options`. (We favor modularity over mathematically-optimal allocation.)
 
-        `sn.Int` is typically much slower but much more precise, compared to `sn.RawFloat`. Modeling-wise: enumerating `options` allows handlers to model the probability of each and sample from prob distributions when queried, *however*, correctly sampling more than one choice requires autoregressivity, AKA sampling choices one-by-one and feeding back the choice each time. So, same trade-offs as digital vs analog.
-
-        To use this, `Handler`s need to specify `info={'choices_per_cell': opts}`. This datatype will take care of conversions.
+        `sn.Int` and `sn.IntFloat` are less efficient but more precise than `sn.Float` (due to representation and how handlers can model data), same as digital vs analog signals.
         """
         __slots__ = ('sz', 'shape', 'opts')
         def __init__(self, *shape):
@@ -412,11 +426,11 @@ class Handler:
             # Assemble & set cells.
             cpc = sn.info['choices_per_cell']
             from math import frexp;  bpc = frexp(cpc - 1)[1]
-            shape = sn.cell_shape
+            shape = sn._s.cell_shape
             if not len(shape): return
             assert shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
-            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name)
+            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name)
             data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(np, np.expand_dims(data, -1), bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
@@ -426,10 +440,10 @@ class Handler:
             for fn in sn.modify_name: name = fn(name)
             cpc = sn.info['choices_per_cell']
             from math import frexp;  bpc = frexp(cpc - 1)[1]
-            shape = sn.cell_shape
+            shape = sn._s.cell_shape
             assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape) else 0
-            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name) if cells else None
+            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, False, name) if cells else None
             async def do_query(fb):
                 if not cells: return
                 fb = await fb
@@ -474,17 +488,17 @@ class Handler:
                 return (ints * powers).sum(-1)
             else:
                 return ints
-    class RawFloat:
+    class Float:
         """
-        `sn.RawFloat(*shape)`
+        `sn.Float(*shape)`
 
         Datatype: a sequence of floating-point numbers.
 
-        Compared to `sn.Int`:
-        - This is much more likely to be sampled in parallel, which allows for lower latency.
-        - This is analog, as opposed to `sn.Int`'s digital choices. Due to the size of the space of possibilities, explicit probabilities are not available, so generative models have to be used to learn diverse acting policies (i.e. GANs/DDPGs, VAEs, diffusion models).
-
         To use this, `Handler`s need `info={'analog':True}`.
+
+        Compared to `sn.Int` or `sn.IntFloat`:
+        - This is much more space-efficient, but may be much harder to generate precisely.
+        - Models differ. Ints have to be sampled either autoregressively ([GPT](https://arxiv.org/abs/2005.14165)-like, materializing explicit probabilities cell-by-cell; very slow) or deterministically (sample the history-embedding, then simply unroll the model). Floats have to be sampled via i.e. GANs/DDPGs, VAEs, diffusion models.
         """
         __slots__ = ('sz', 'shape')
         def __init__(self, *shape):
@@ -493,7 +507,7 @@ class Handler:
             sz = functools.reduce(mul, shape, 1)
             self.sz, self.shape = sz, shape
         def __repr__(self):
-            return 'sn.RawFloat(' + ','.join(repr(s) for s in self.shape) + ')'
+            return 'sn.Float(' + ','.join(repr(s) for s in self.shape) + ')'
         def set(self, sn, name, data, error):
             # Zero-pad `data` and split it into cells, then pass it on.
             for fn in sn.modify_name: name = fn(name)
@@ -507,10 +521,10 @@ class Handler:
             data = data.reshape(self.sz)
             error = error.reshape(self.sz) if error is not None else None
 
-            shape = sn.cell_shape
+            shape = sn._s.cell_shape
             if not len(shape): return
             cells = -(-self.sz // shape[-1])
-            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name)
+            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name)
             z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
             data = np.concatenate((data, z))
             error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
@@ -522,9 +536,9 @@ class Handler:
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
 
-            shape = sn.cell_shape
+            shape = sn._s.cell_shape
             cells = -(-self.sz // shape[-1]) if len(shape) else 0
-            names = sn._shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name) if cells else np.zeros((0,0))
+            names = sn._s.shaped_names(self.sz, cells, self.shape, Handler.Goal.goal, True, name) if cells else np.zeros((0,0))
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
@@ -586,10 +600,10 @@ class Handler:
         def __repr__(self): return 'sn.Event()'
         def set(self, sn, name, data, error):
             assert data is None and error is None
-            return sn.set(name, 0., sn.RawFloat(), error)
-    class Float:
+            return sn.set(name, 0., sn.Float(), error)
+    class IntFloat:
         """
-        `sn.Float(*shape, opts=..., mu=0, domain=(-1,1))`: datatype, representing digital floating-point numbers (for low-precision high-throughput analog numbers, use `sn.RawFloat` instead).
+        `sn.IntFloat(*shape, opts=..., mu=0, domain=(-1,1))`: datatype, representing discretized floating-point numbers; for low-precision high-throughput analog numbers, use `sn.Float` instead.
 
         Each number is [μ-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) if requested, or linearly-encoded by default. By default, each number occupies 1 cell.
         """
@@ -598,7 +612,7 @@ class Handler:
         def __init__(self, *shape, opts=..., mu=0, domain=(-1, 1)):
             self.shape, self.opts, self.mu, self.domain = shape, opts, mu, domain
         def __repr__(self):
-            return 'sn.Float(' + ','.join(repr(s) for s in self.shape) + ',opts='+repr(self.opts) + ',mu='+repr(self.mu) + ',domain='+repr(self.domain) + ')'
+            return 'sn.IntFloat(' + ','.join(repr(s) for s in self.shape) + ',opts='+repr(self.opts) + ',mu='+repr(self.mu) + ',domain='+repr(self.domain) + ')'
         def set(self, sn, name, data, error):
             assert error is None, "Unimplemented"
             opts = sn.info['choices_per_cell'] if self.opts is ... else self.opts
@@ -689,7 +703,7 @@ class Handler:
         - `None`: a call will simply return a per-cell bit-mask of whether the name fits; can also pass `invert=True` to invert that mask.
         - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
 
-        Be aware that `sn.Int` and `sn.RawFloat` (so, all datatypes) prepend a hidden name-part, so here, `name` should begin with `None`."""
+        Be aware that `sn.Int` and `sn.Float` and datatypes that use them (so, all datatypes) prepend a hidden name-part, so here, `name` should begin with `None`."""
         __slots__ = ('name', 'func')
         def __init__(self, name, func = None):
             assert func is None or callable(func)
@@ -698,12 +712,12 @@ class Handler:
             self.name = name
             self.func = func
         def __call__(self, sn, data, *, invert=False):
-            cell_shape = sn.cell_shape
+            cell_shape = sn._s.cell_shape
             assert len(cell_shape), 'Specify the cell-shape too'
             np = sn.backend
             # Match.
             template = sn.name(self.name)
-            name_sz = sum(cell_shape) - cell_shape[-1]
+            name_sz = sn._s.cell_size - cell_shape[-1]
             matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= 1e-5)
             matches = matches.all(-1) if not invert else ~(matches.all(-1))
             if self.func is None:
@@ -720,7 +734,7 @@ class Handler:
 def _shape_ok(cell_shape: tuple):
     assert isinstance(cell_shape, tuple)
     assert all(isinstance(s, int) and s>=0 for s in cell_shape)
-    assert cell_shape[-1] > 0
+    assert not cell_shape or cell_shape[-1] > 0
 def _str_to_floats(np, string: str):
     hash = hashlib.md5(string.encode('utf-8')).digest()
     return np.array(np.frombuffer(hash, dtype=np.uint8), np.float32)/255.*2. - 1.
@@ -788,9 +802,9 @@ def _name_template(np, str_to_floats, cell_shape, name):
     return template
 def _shaped_names(sn, sz, cells, shape, goal, analog, name):
     # Prepend `(is_goal, is_analog, *shape_progress)` numbers to `name`s.
-    np = sn.backend
-    name_sz = (sn.cell_size - sn.cell_shape[-1]) if len(sn.cell_shape) else 0
-    if cells == 0 or not sn.cell_size: # pragma: no cover
+    np, s = sn.backend, sn._s
+    name_sz = (s.cell_size - s.cell_shape[-1]) if len(s.cell_shape) else 0
+    if cells == 0 or not s.cell_size: # pragma: no cover
         return np.zeros((cells, name_sz), dtype=np.float32)
     full_name = np.resize(np.nan_to_num(sn.name(tuple([None, *name]))), (cells, name_sz))
 
@@ -801,7 +815,7 @@ def _shaped_names(sn, sz, cells, shape, goal, analog, name):
     goal = np.full((cells,), 1. if goal else -1., dtype=np.float32)
     analog = np.full((cells,), 1. if analog else -1., dtype=np.float32)
     progress = np.stack([goal, analog, *reversed(progress)], 1)
-    full_name[:, :sn.cell_shape[0]] = _fill(np, progress, sn.cell_shape[0])
+    full_name[:, :s.cell_shape[0]] = _fill(np, progress, s.cell_shape[0])
     return full_name
 def _default_typing(name, type):
     if name is not None and type is None: return name, Handler.Event()
@@ -815,6 +829,12 @@ def _default_typing(name, type):
 
 
 
+class _S:
+    """Holds dynamically-changing-pointer `Handler` state, so that these changes can be shared among `Handler` instances."""
+    __slots__ = ('cell_shape', 'cell_size', 'n', 'wait_for_requests', 'name', 'shaped_names', 'query_cell')
+
+
+
 # Make the module itself act exactly like an instance of `Handler`, and the other way around.
 Handler.Handler = Handler
 default = Handler()
@@ -822,14 +842,8 @@ backend = default.backend
 sensors = default.sensors
 listeners = default.listeners
 modify_name = default.modify_name
-cell_shape, cell_size = default.cell_shape, default.cell_size
+cell_shape, cell_size = default._s.cell_shape, default._s.cell_size
 info = None
-def shape(*k, **kw):
-    global cell_shape, cell_size
-    r = default.shape(*k, **kw)
-    cell_shape, cell_size = default.cell_shape, default.cell_size
-    return r
-shape.__doc__ = Handler.shape.__doc__
 set = default.set
 query = default.query
 pipe = default.pipe
@@ -838,11 +852,11 @@ handle = default.handle
 commit = default.commit
 discard = default.discard
 Int = Handler.Int
-RawFloat = Handler.RawFloat
+Float = Handler.Float
 List = Handler.List
 Goal = Handler.Goal
 Event = Handler.Event
-Float = Handler.Float
+IntFloat = Handler.IntFloat
 run = Handler.run
 torch = Handler.torch
 Filter = Handler.Filter
