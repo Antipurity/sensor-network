@@ -14,7 +14,7 @@ To reach goals most efficiently, the agent should build a map of that graph of p
 `act`ing can actually be exactly the same as next-frame prediction, if actions are included in next-frame observations; then it's easy for human and AI actions to be treated exactly the same. But we do want shortest/best paths and not just any paths, so our prediction has to be [critic-](https://arxiv.org/abs/2006.15134)[regularized](https://arxiv.org/abs/1806.05635); if `obs` are stochastic, the model may become overly optimistic instead of averaging/smudging the predictions.
 
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with everything scheduled synchronously and impossible-to-collide naming and `.metric()` for logging a dict.)
+# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with impossible-to-collide naming and `.metric()` for logging a dict.)
 
 # Relation to self-supervised learning
 
@@ -95,7 +95,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 # TODO: Copy the read-me. …Has `sn` evolved a bit past the "only the basic communication protocol"?
-# TODO: Use `sn.fork(lambda name: name)` here, to lift the "only do messages in the sensor" restriction.
 # TODO: Make `Float` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
 # TODO: Also support fixed-size strings with tokenizers.
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `Float` defer to `IntFloat` when not `sn.info['analog']`.
@@ -104,6 +103,7 @@ Further, the ability to reproduce [the human ability to learn useful representat
 # TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
 # TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python type annotations (`fn.__annotations__['return']` and such) to expose both inputs and outputs as data whenever the func is called — or when `None` is returned (or a flag in `sn` is set), requests output from `sn`. ("Mind uploading" for code, condensed to a single line of code.)
 #   TODO: Make `sn.List` add an additional dimension for `Int`/`Float` to iterate over via global-variables, instead of having unique names for each part.
+#   TODO: Make `sn.List` and `sn.Int` and `sn.Float` able to have near-end data just not specified.
 
 
 
@@ -162,8 +162,8 @@ from model.log import log, clear
 
 
 # Hyperparameters.
-cell_shape = (8,8,8,8, 256)
-sn.shape(*cell_shape)
+cell_shape = sn.cell_shape = (8,8,8,8, 256)
+cell_size = sum(cell_shape)
 
 state_sz = 256
 latent_sz = 32 # For VAE generation.
@@ -197,12 +197,21 @@ We clip all inputs/outputs to -1…1.""",
 
 
 
-# TODO: Extract this into the `model/cmd_line_envs.py` file, for future reuse.
-#   TODO: …What about this dirty modify_name business? Don't we need proper sn forking first?
+# TODO: Extract this into the `model/cmd_line_envs.py` file, for future reuse. …Should importing it be enough? Will we ever want non-`sn` non-`sys.argv` usage? …Nah, globals-only is fine.
 # Environments, from the command line.
 import ast
 import sys
 import importlib
+def name_modifier(ctx_name):
+    def modify_name(name):
+        """Remove inter-env collisions by adding the group ID to the end of their names. (`sn.Float` and `sn.Int` prepend a name-part, so `name` contains one less.)"""
+        i = len(cell_shape) - 3 # (8,8,8,8,64) has 3 usable name-parts, so `i=2`.
+        res = list(name)
+        while len(res) <= i: res.append(None)
+        assert not isinstance(res[i], tuple), "The group-id shouldn't be a tuple (to make our lives easier)"
+        res[i] = ctx_name if res[i] is None else (ctx_name + '.' + res[i])
+        return tuple(res)
+    return modify_name
 def prepare_env(path: str):
     argstart = path.find('(')
     path, args = (path[:argstart], path[argstart:]) if argstart >= 0 else (path, '()')
@@ -212,27 +221,15 @@ def prepare_env(path: str):
     mod = importlib.import_module('env.' + path)
     assert hasattr(mod, 'Env')
     sensor = mod.Env(**args)
-    def sensor_with_name(*a, **kw):
-        try:
-            modify_name.ctx = path
-            return sensor(*a, **kw)
-        finally:
-            modify_name.ctx = None
+    fork = sn.fork(name_modifier(path))
+    def sensor_with_name(_):
+        return sensor(fork)
     sn.sensors.add(sensor_with_name)
     return sensor
-def modify_name(name):
-    # Remove inter-env collisions by adding the group ID to the end of their names.
-    #   (`sn.Float` and `sn.Int` prepend a name-part, so `res` contains one less.)
-    assert modify_name.ctx is not None, "Sending data not in an env's sensor; don't send it in callbacks of queries, instead remember to send it on the next step"
-    # TODO: Maybe also warn if len(name) > len(cell_shape)-2.
-    res = [name[i] if i < len(name) else None for i in range(len(cell_shape) - 2)]
-    assert not isinstance(res[-1], tuple), "The group-id shouldn't be a tuple (to make our lives easier)"
-    res[-1] = modify_name.ctx if res[-1] is None else (modify_name.ctx + '.' + res[-1])
-    return tuple(res)
-sn.modify_name.append(modify_name)
 argv = sys.argv
 if len(argv) < 2:
     # Print the help message. Has the side-effect of importing all envs.
+    #   (No point in not importing, since just using the env would import it anyway.)
     import os
     at = os.path.join(os.path.dirname(os.path.abspath(argv[0])), 'env')
     print("""Also pass in the environments to act in, such as:""")
@@ -425,13 +422,13 @@ def local_dist(base: torch.Tensor, goal: torch.Tensor, group: torch.Tensor) -> t
     """`local_dist(base, goal, group) → smudge`: a single goal's smudging, AKA final local-distance, AKA how close we've come to the goal.
 
     Quadratic time complexity."""
-    assert len(base.shape) == len(goal.shape) == 2 and base.shape[-1] == goal.shape[-1] == sn.cell_size
+    assert len(base.shape) == len(goal.shape) == 2 and base.shape[-1] == goal.shape[-1] == cell_size
     if not base.numel(): # We have nothing that could have reached the goal.
         return torch.ones(()) * goal.numel()
     if not goal.numel(): # If no goal-cells, then we've already reached the goal.
         return torch.zeros(())
     base, goal = detach(base), detach(goal)
-    max_smudge = sn.cell_size
+    max_smudge = cell_size
     with torch.no_grad():
         # (The goal-bit always mismatches, so smudge is never exactly 0, but it's not the end of the world.)
         same_group = torch.unsqueeze(same_goal_group(base, group), -1)
@@ -473,12 +470,12 @@ def sample_goal(cells, goal_group, analog_prob=.5):
     goal_mask_np = np.full((cells, 1), True)
     analog_mask_np = np.random.rand(cells, 1) < analog_prob
     goal_group_np = np.resize(goal_group, (cells, end-start))
-    z_np = np.zeros((cells, sn.cell_size), dtype=np.float32)
+    z_np = np.zeros((cells, cell_size), dtype=np.float32)
     z_np = cells_override(z_np, goal_mask_np, analog_mask_np, goal_group_np)
     goal_mask = torch.full((cells, 1), True)
     analog_mask = torch.as_tensor(analog_mask_np)
     goal_group = torch.as_tensor(goal_group).expand(cells, end-start)
-    z = torch.zeros(cells, sn.cell_size)
+    z = torch.zeros(cells, cell_size)
     z = cells_override(z, goal_mask, analog_mask, goal_group)
     z = sample(z, z_np)[0].clamp(-clamp, clamp)
     return cells_override(z, goal_mask, analog_mask, goal_group), z_np[:, :end]

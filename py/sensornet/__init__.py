@@ -84,8 +84,8 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'listeners', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats')
-    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, backend=numpy, name_cache_size=1024):
+    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'listeners', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_default')
+    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, backend=numpy, name_cache_size=1024, _default=False):
         from builtins import set
         import json;  json.dumps(info) # Just for error-checking.
         sensors = set(sensors) if sensors is not None else set()
@@ -106,11 +106,14 @@ class Handler:
         self.name_cache_size = name_cache_size
         self.modify_name = ()
         self._str_to_floats = functools.lru_cache(name_cache_size)(functools.partial(_str_to_floats, backend))
+        self._default = _default
         self.cell_shape = cell_shape
     def fork(self, modify_name):
         """`sn.fork(lambda name: tuple(['sub-env-name', *name]))`
 
-        Creates an interface, usable for communicating data in a separate sub-'thread' denoted by different names. Data must still be handled by the non-forked version. Data is shared among all forked versions, so use `sn.Handler(…)` to not share data."""
+        Creates an interface, usable for communicating data in a separate sub-'thread' denoted by different names. Data must still be handled by the non-forked version. Data is shared among all forked versions, so use `sn.Handler(…)` to not share data.
+
+        `name` is a tuple, and does not include the extra name-part that `sn.Int` and `sn.Float` prepend."""
         assert callable(modify_name)
         h = self.Handler.__new__(self.Handler)
         for k in h.__slots__:
@@ -394,10 +397,11 @@ class Handler:
         return self._take_data()
     def _maybe_default(self):
         """If we're the top-level sensor, we have to react to changes in the global `cell_shape`."""
-        global cell_shape, cell_size
-        if self is default:
-            self.cell_shape = cell_shape
-            cell_shape, cell_size = self._s.cell_shape, self._s.cell_size
+        global cell_shape, cell_size, info
+        if self._default:
+            self.cell_shape = cell_shape # global → us
+            cell_shape, cell_size = self._s.cell_shape, self._s.cell_size # us → global
+            self.info = info # global → us
 
     class Int:
         """
@@ -849,13 +853,14 @@ class _S:
 
 # Make the module itself act exactly like an instance of `Handler`, and the other way around.
 Handler.Handler = Handler
-default = Handler()
+default = Handler(_default=True)
 backend = default.backend
 sensors = default.sensors
 listeners = default.listeners
 modify_name = default.modify_name
-cell_shape, cell_size = default._s.cell_shape, default._s.cell_size
-info = None
+cell_shape, cell_size, info = default._s.cell_shape, default._s.cell_size, default.info
+fork = default.fork
+name = default.name
 set = default.set
 query = default.query
 pipe = default.pipe
