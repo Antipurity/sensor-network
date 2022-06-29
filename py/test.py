@@ -1,4 +1,6 @@
 """
+Simply run this file, and you will be told how to use it on different environments.
+
 # The model that we implement in this file
 
 Goal-directed generative model of the world.
@@ -14,7 +16,6 @@ To reach goals most efficiently, the agent should build a map of that graph of p
 `act`ing can actually be exactly the same as next-frame prediction, if actions are included in next-frame observations; then it's easy for human and AI actions to be treated exactly the same. But we do want shortest/best paths and not just any paths, so our prediction has to be [critic-](https://arxiv.org/abs/2006.15134)[regularized](https://arxiv.org/abs/1806.05635); if `obs` are stochastic, the model may become overly optimistic instead of averaging/smudging the predictions.
 
 # (TODO: Mention that we require PyTorch 1.10+ because we use forward-mode AD.)
-# (TODO: Document how to use command-line args to import envs, and `module.Env()(sensornet)` with impossible-to-collide naming and `.metric()` for logging a dict.)
 
 # Relation to self-supervised learning
 
@@ -94,8 +95,20 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
+def blocks(x, cpc, shape, dims=1):
+    patch_dim = int(cpc ** (1/dims)) # patch_dim ** dims <= cpc
+    0
+    # TODO: First, how to determine `shape`-items-per-cell?…
+    #   …Wait, if each patch's dimension is specifically picked to best fit `cpc` (math.floor(cpc**(1/dims))?), would we really have more than one patch per cell?…
+    # TODO: How to do zero-padding and block-flattening?…
+    # TODO: How to do the reshaping and transposition that are involved in block-flattening?…
+    # In 2D: B×M×N → B × M/m×m × N/n×n → B × M/m × N/n × m×n → …×m×n
+
+
+
 # TODO: Copy the read-me. …Has `sn` evolved a bit past the "only the basic communication protocol"?
 # TODO: Make `Float` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
+#   …How do we do this, exactly?
 # TODO: Also support fixed-size strings with tokenizers.
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `Float` defer to `IntFloat` when not `sn.info['analog']`.
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
@@ -197,61 +210,9 @@ We clip all inputs/outputs to -1…1.""",
 
 
 
-# TODO: Extract this into the `model/cmd_line_envs.py` file, for future reuse. …Should importing it be enough? Will we ever want non-`sn` non-`sys.argv` usage? …Nah, globals-only is fine.
-# Environments, from the command line.
-import ast
-import sys
-import importlib
-def name_modifier(ctx_name):
-    def modify_name(name):
-        """Remove inter-env collisions by adding the group ID to the end of their names. (`sn.Float` and `sn.Int` prepend a name-part, so `name` contains one less.)"""
-        i = len(cell_shape) - 3 # (8,8,8,8,64) has 3 usable name-parts, so `i=2`.
-        res = list(name)
-        while len(res) <= i: res.append(None)
-        assert not isinstance(res[i], tuple), "The group-id shouldn't be a tuple (to make our lives easier)"
-        res[i] = ctx_name if res[i] is None else (ctx_name + '.' + res[i])
-        return tuple(res)
-    return modify_name
-def prepare_env(path: str):
-    argstart = path.find('(')
-    path, args = (path[:argstart], path[argstart:]) if argstart >= 0 else (path, '()')
-    assert args[0] == '(' and args[-1] == ')'
-    pairs = [pair.partition('=') for pair in args[1:-1].split(',')]
-    args = { k: ast.literal_eval(v) for k,_,v in pairs if k }
-    mod = importlib.import_module('env.' + path)
-    assert hasattr(mod, 'Env')
-    sensor = mod.Env(**args)
-    fork = sn.fork(name_modifier(path))
-    def sensor_with_name(_):
-        return sensor(fork)
-    sn.sensors.add(sensor_with_name)
-    return sensor
-argv = sys.argv
-if len(argv) < 2:
-    # Print the help message. Has the side-effect of importing all envs.
-    #   (No point in not importing, since just using the env would import it anyway.)
-    import os
-    at = os.path.join(os.path.dirname(os.path.abspath(argv[0])), 'env')
-    print("""Also pass in the environments to act in, such as:""")
-    for dirpath, dirnames, filenames in os.walk(at):
-        if dirpath[:len(at)] == at:
-            path = dirpath[len(at):].split(os.sep)[1:]
-            for filename in filenames:
-                if filename[-3:] == '.py':
-                    import_path = '.'.join([*path, filename[:-3]])
-                    print()
-                    print('→ ', import_path)
-                    mod = importlib.import_module('env.' + import_path)
-                    if hasattr(mod.Env, '__init__'):
-                        f = mod.Env.__init__
-                        if hasattr(f, '__code__') and f.__defaults__:
-                            assert len(f.__code__.co_varnames) == 1 + len(f.__defaults__), "All args must have defaults"
-                            args = ','.join(k+'='+repr(v) for k,v in zip(f.__code__.co_varnames[1:], f.__defaults__))
-                            print(' ·', import_path + '(' + args + ')')
-                    print(' ·  ', mod.Env.__doc__.strip().partition('\n')[0].strip())
-    sys.exit()
-else:
-    envs = { e: prepare_env(e) for e in argv[1:] }
+# Import user-specified environments.
+from model.cmd_line_envs import run
+envs = run(sn)
 
 
 
