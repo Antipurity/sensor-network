@@ -95,13 +95,12 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-def blocks(np, x, shape, cpc, dims=1): # TODO: …How do we integrate this into `sn.Float`… …To support `query`, don't we need an x-shape-only variant…
-    #   TODO: How exactly does `shaped_names` work, so that we may integrate with it properly?
+def blocks(np, x, in_cell, dims=1): # TODO:
     assert isinstance(dims, int) and dims >= 1
-    while len(x.shape) < len(shape): x = np.expand_dims(x, 0)
-    assert isinstance(shape, tuple) and len(x.shape) == len(shape) and len(shape) >= dims
-    assert all(x.shape[i] <= shape[i] for i in range(len(x.shape)))
-    d = int(cpc ** (1/dims)) # patch_dim ** dims <= cpc: one square/hypercubic patch per cell.
+    assert len(x.shape if not isinstance(x, tuple) else x) >= dims
+    d = int(in_cell ** (1/dims)) # patch_dim ** dims <= cell: one square/hypercubic patch per cell.
+    if isinstance(x, tuple): # Shape-only.
+        return tuple([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)]), in_cell])
     # Zero-pad to make all of `dims` divisible by `d`.
     y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
     # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
@@ -110,24 +109,26 @@ def blocks(np, x, shape, cpc, dims=1): # TODO: …How do we integrate this into 
     for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
     y = y.transpose(*tr)
     # Flatten all patches, and zero-pad.
-    y = y.reshape(*y.shape[:-dims], d**dims)
-    return y if d**dims == cpc else np.concatenate((y, np.zeros((*y.shape[:-1], cpc - d**dims))), -1)
-    # TODO: …Then, compute names with 0s as 0% and `shape` as 100%.
-    # TODO: …Then, concat with names and reshape into a 2D array and return.
+    y = y.reshape(np.prod(y.shape[:-dims]), d**dims)
+    return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims))), -1)
+# TODO: Have `unblocks(???)` for the queries.
 
 
 
 # TODO: Copy the read-me. …Has `sn` evolved a bit past the "only the basic communication protocol"?
 # TODO: Make `Float` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
 #   …How do we do this, exactly?
+#   TODO: From docs, remove mentions of no-datatype communication. Only Int and Float should be the base types.
 # TODO: Also support fixed-size strings with tokenizers.
 # TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `Float` defer to `IntFloat` when not `sn.info['analog']`.
-# TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds).
+#   …Or would throwing errors be more appropriate, so that users aren't unexpectedly forced to send hundreds of megabytes to send a single image?…
+# TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds) and efficiency (0…1).
+#   TODO: Make `sn.set`/`.query` have `efficiency=1`. Make `sn.Int` and `sn.Float` compute efficiency by as `np.prod(original_data.shape) / np.prod(sent_data.shape)`.
 # TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
 # TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
 # TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python type annotations (`fn.__annotations__['return']` and such) to expose both inputs and outputs as data whenever the func is called — or when `None` is returned (or a flag in `sn` is set), requests output from `sn`. ("Mind uploading" for code, condensed to a single line of code.)
 #   TODO: Make `sn.List` add an additional dimension for `Int`/`Float` to iterate over via global-variables, instead of having unique names for each part.
-#   TODO: Make `sn.List` and `sn.Int` and `sn.Float` able to have near-end data just not specified.
+#   TODO: Make `sn.List` and `sn.Int` and `sn.Float` able to have near-end data just not specified. (`sn.Int` in particular should measure data.shape[i]/self.shape[i] before any transformations, and pass that to `self.shaped_names`.)
 
 
 

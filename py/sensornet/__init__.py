@@ -147,22 +147,25 @@ class Handler:
         s.n = 0 # For `.wait(…)`, to ensure that the handling loop yields at least sometimes, without the overhead of doing it every time.
         # Also create the cached Python-name-to-NumPy-name method.
         s.name = functools.lru_cache(self.name_cache_size)(functools.partial(_name_template, self.backend, self._str_to_floats, cell_shape))
-        def shaped_names(sn, sz, cells, shape, prefix, name):
+        @functools.lru_cache(self.name_cache_size)
+        def shaped_names(cells, shape, shape_max, prefix, name):
             # Prepend `(*prefix, *shape_progress)` numbers to `name`s.
-            np, s = sn.backend, sn._s
+            #   `shape_progress[i]` goes from `0` to `shape_max[i]`.
+            np, s = self.backend, self._s
             name_sz = (s.cell_size - s.cell_shape[-1]) if len(s.cell_shape) else 0
             if cells == 0 or not s.cell_size: # pragma: no cover
                 return np.zeros((cells, name_sz), dtype=np.float32)
-            full_name = np.resize(np.nan_to_num(sn.name(tuple([None, *name]))), (cells, name_sz))
-
+            full_name = np.resize(np.nan_to_num(self.name(tuple([None, *name]))), (cells, name_sz))
+            # Progress in `cells`-space is linearly-dependent on progress in `shape`-space.
+            sz = np.prod(shape)
             n, progress = np.linspace(0, sz, cells, dtype=np.float32), []
-            for max in reversed(shape):
-                progress.append((n % max) / max * 2 - 1)
-                n = np.floor_divide(n, max)
-            progress = np.stack([np.full((cells,), 1. if p is True else -1. if p is False else p) for p in prefix] + [*reversed(progress)], 1)
+            for N, max in reversed(zip(shape, shape_max)):
+                progress.append((n % N) / N * max * 2 - 1)
+                n = np.floor_divide(n, N)
+            progress = np.stack([np.full((cells,), 1. if p is True else -1. if p is False else p, dtype=np.float32) for p in prefix] + [*reversed(progress)], 1)
             full_name[:, :s.cell_shape[0]] = _fill(np, progress, s.cell_shape[0])
             return full_name
-        s.shaped_names = functools.lru_cache(self.name_cache_size)(functools.partial(shaped_names, self))
+        s.shaped_names = shaped_names
 
     def set(self, name=None, data=None, type=None, error=None):
         """
@@ -461,7 +464,7 @@ class Handler:
             if not len(shape): return
             assert shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
-            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, False), name)
+            names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, False), name)
             data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(np, np.expand_dims(data, -1), bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
@@ -474,7 +477,7 @@ class Handler:
             shape = sn._s.cell_shape
             assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape) else 0
-            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, False), name) if cells else None
+            names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, False), name) if cells else None
             async def do_query(fb):
                 if not cells: return
                 fb = await fb
@@ -521,9 +524,10 @@ class Handler:
                 return ints
     class Float:
         """
-        `sn.Float(*shape)`
+        `sn.Float(*shape)` # TODO: dims=1
 
         Datatype: a sequence of floating-point numbers.
+        - TODO: `shape` can now be bigger than the actual input, and `dims=2` can now be used to split into patches (need links to VIT and MLPMixer here).
 
         To use this, `Handler`s need `info={'analog':True}`.
 
@@ -531,37 +535,75 @@ class Handler:
         - This is much more space-efficient, but may be much harder to generate precisely.
         - Models differ. Ints have to be sampled either autoregressively ([GPT](https://arxiv.org/abs/2005.14165)-like, materializing explicit probabilities cell-by-cell; very slow) or deterministically (sample the history-embedding, then simply unroll the model). Floats have to be sampled via i.e. GANs/DDPGs, VAEs, diffusion models.
         """
-        __slots__ = ('sz', 'shape')
-        def __init__(self, *shape):
-            assert isinstance(shape, tuple) and all(isinstance(n, int) and n>0 for n in shape)
+        __slots__ = ('sz', 'shape', 'dims')
+        def __init__(self, *shape, dims=1):
+            assert isinstance(dims, int) and dims >= 1
+            assert isinstance(shape, tuple) and all(isinstance(n, int) and n>0 for n in shape) and len(shape) >= dims
             from operator import mul
             sz = functools.reduce(mul, shape, 1)
-            self.sz, self.shape = sz, shape
+            self.sz, self.shape, self.dims = sz, shape, dims
         def __repr__(self):
-            return 'sn.Float(' + ','.join(repr(s) for s in self.shape) + ')'
+            d = '' if self.dims == 1 else 'dims='+str(self.dims)
+            d = d if not d or not len(self.shape) else ','+d
+            return 'sn.Float(' + ','.join(repr(s) for s in self.shape) + d + ')'
+        # def set(self, sn, name, data, error): # TODO:
+        #     # Zero-pad `data` and split it into cells, then pass it on.
+        #     for fn in sn.modify_name: name = fn(name)
+        #     assert sn.info is None or sn.info['analog'] is True
+        #     np = sn.backend
+        #     data = np.array(data, dtype=np.float32, copy=False)
+        #     if isinstance(error, float):
+        #         error = np.full(data.shape, error, dtype=np.float32)
+        #     assert data.shape == self.shape
+        #     assert error is None or isinstance(error, np.ndarray) and error.shape == self.shape
+        #     data = data.reshape(self.sz)
+        #     error = error.reshape(self.sz) if error is not None else None
+
+        #     shape = sn._s.cell_shape
+        #     if not len(shape): return
+        #     cells = -(-self.sz // shape[-1])
+        #     names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, True), name)
+        #     z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
+        #     data = np.concatenate((data, z))
+        #     error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
+        #     data = np.concatenate((names, data.reshape(cells, shape[-1])), -1)
+        #     sn.set(None, data, None, error)
+        # def query(self, sn, name): # TODO:
+        #     # Flatten feedback's cells and reshape it to our shape.
+        #     for fn in sn.modify_name: name = fn(name)
+        #     assert sn.info is None or sn.info['analog'] is True
+        #     np = sn.backend
+
+        #     shape = sn._s.cell_shape
+        #     cells = -(-self.sz // shape[-1]) if len(shape) else 0
+        #     names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
+        #     async def do_query(fb):
+        #         if not len(shape): return
+        #         fb = await fb
+        #         if fb is None: return None
+        #         fb = fb[:, -shape[-1]:].flatten()
+        #         R = fb[:self.sz].reshape(self.shape)
+        #         return R if len(R.shape) else R.item()
+        #     return do_query(sn.query(None, names))
         def set(self, sn, name, data, error):
-            # Zero-pad `data` and split it into cells, then pass it on.
             for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
             data = np.array(data, dtype=np.float32, copy=False)
             if isinstance(error, float):
                 error = np.full(data.shape, error, dtype=np.float32)
-            assert data.shape == self.shape
-            assert error is None or isinstance(error, np.ndarray) and error.shape == self.shape
-            data = data.reshape(self.sz)
-            error = error.reshape(self.sz) if error is not None else None
+            assert error is None or isinstance(error, np.ndarray) and error.shape == data.shape
+            data = sn.Float.expand_shape(np, data, self.shape)
+            shape_max = [got / allowed for got, allowed in zip(data.shape, self.shape)]
 
             shape = sn._s.cell_shape
             if not len(shape): return
-            cells = -(-self.sz // shape[-1])
-            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, True), name) # TODO:
-            z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
-            data = np.concatenate((data, z))
-            error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
-            data = np.concatenate((names, data.reshape(cells, shape[-1])), -1)
-            sn.set(None, data, None, error)
-        def query(self, sn, name):
+            data = sn.Float.blocks(np, data, sn._s.cell_shape[-1], self.dims)
+            error = sn.Float.blocks(np, error, sn._s.cell_shape[-1], self.dims) if error is not None else None
+
+            names = sn._s.shaped_names(data.shape[0], self.shape, shape_max, (Handler.Goal.goal, True), name)
+            sn.set(None, np.concatenate((names, data), -1), None, error)
+        def query(self, sn, name): # TODO: …Use `sn.Float.unblocks`… …How to implement it though?…
             # Flatten feedback's cells and reshape it to our shape.
             for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
@@ -569,7 +611,7 @@ class Handler:
 
             shape = sn._s.cell_shape
             cells = -(-self.sz // shape[-1]) if len(shape) else 0
-            names = sn._s.shaped_names(self.sz, cells, self.shape, (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
+            names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
@@ -578,6 +620,29 @@ class Handler:
                 R = fb[:self.sz].reshape(self.shape)
                 return R if len(R.shape) else R.item()
             return do_query(sn.query(None, names))
+        @staticmethod
+        def expand_shape(np, x, shape):
+            while len(x.shape) < len(shape): x = np.expand_dims(x, 0)
+            assert isinstance(shape, tuple) and len(x.shape) == len(shape)
+            assert all(x.shape[i] <= shape[i] for i in range(len(x.shape)))
+            return x
+        @staticmethod
+        def blocks(np, x, in_cell, dims=1):
+            assert len(x.shape if not isinstance(x, tuple) else x) >= dims
+            d = int(in_cell ** (1/dims)) # patch_dim ** dims <= cell: one square/hypercubic patch per cell.
+            if isinstance(x, tuple): # Shape-only.
+                return tuple([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)]), in_cell])
+            # Zero-pad to make all of `dims` divisible by `d`.
+            y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
+            # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
+            y = y.reshape(*x.shape[:-dims], *[d if i%2 else y.shape[-(i//2)-1] // d for i in range(2*dims)])
+            tr = list(range(len(y.shape)))
+            for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+            y = y.transpose(*tr)
+            # Flatten all patches, and zero-pad.
+            y = y.reshape(np.prod(y.shape[:-dims]), d**dims)
+            return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims))), -1)
+        # TODO: Also have `unblocks`.
     class List:
         """
         ```py
@@ -823,7 +888,7 @@ def _name_template(np, str_to_floats, cell_shape, name):
         elif isinstance(part, tuple):
             if len(part) > sz:
                 import warnings
-                warnings.warn("A tuple is longer than fits in a name part: " + str(part))
+                warnings.warn("A tuple is longer than fits in a name part: " + str(part) + "; simplify types or names")
             template[at : at + sz] = _fill(np, np.array(part, dtype=np.float32), sz)
         elif isinstance(part, float) or isinstance(part, int):
             raise TypeError("A part of the name is a number; wrap it in a tuple")
