@@ -524,10 +524,12 @@ class Handler:
                 return ints
     class Float:
         """
-        `sn.Float(*shape)` # TODO: dims=1
+        `sn.Float(*shape, dims=1)`
 
-        Datatype: a sequence of floating-point numbers.
-        - TODO: `shape` can now be bigger than the actual input, and `dims=2` can now be used to split into patches (need links to VIT and MLPMixer here).
+        Datatype: an array of floating-point numbers. For example, `sn.Float(256)` is a simple array of up-to 256 numbers, while `sn.Float(32, 32, dims=2)` is a grayscale image.
+        - `shape`: the maximum sizes of data, per-dimension. This allows handlers to learn the relative positions of all cells when `sn.set`ting, even when data is underspecified.
+        - `dims`: how many dimensions to create per-cell patches over. In particular, using `dims=2` and image-shapes like `(3,256,256)` recreates the popular machine-learning technique of [splitting images ](https://arxiv.org/abs/2010.11929)[into patches.](https://arxiv.org/abs/2105.01601)
+            - For efficiency, `sn.cell_shape[-1] ** (1/dims)` should be an integer. For 2d images, 64 or 256 work well.
 
         To use this, `Handler`s need `info={'analog':True}`.
 
@@ -601,24 +603,24 @@ class Handler:
             data = sn.Float.blocks(np, data, sn._s.cell_shape[-1], self.dims)
             error = sn.Float.blocks(np, error, sn._s.cell_shape[-1], self.dims) if error is not None else None
 
-            names = sn._s.shaped_names(data.shape[0], self.shape, shape_max, (Handler.Goal.goal, True), name)
+            prefix = (Handler.Goal.goal, True)
+            names = sn._s.shaped_names(data.shape[0], self.shape, shape_max, prefix, name)
             sn.set(None, np.concatenate((names, data), -1), None, error)
-        def query(self, sn, name): # TODO: …Use `sn.Float.unblocks`… …How to implement it though?…
+        def query(self, sn, name):
             # Flatten feedback's cells and reshape it to our shape.
             for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
 
             shape = sn._s.cell_shape
-            cells = -(-self.sz // shape[-1]) if len(shape) else 0
-            names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
+            fb_shape = sn.Float.blocks(np, self.shape, shape[-1], self.dims) if len(shape) else (0,0)
+            prefix = (Handler.Goal.goal, True)
+            names = sn._s.shaped_names(fb_shape[0], self.shape, [1.]*len(self.shape), prefix, name) if fb_shape[0] else np.zeros(fb_shape)
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
                 if fb is None: return None
-                fb = fb[:, -shape[-1]:].flatten()
-                R = fb[:self.sz].reshape(self.shape)
-                return R if len(R.shape) else R.item()
+                return sn.Float.unblocks(fb, self.shape, self.dims)
             return do_query(sn.query(None, names))
         @staticmethod
         def expand_shape(np, x, shape):
@@ -631,7 +633,7 @@ class Handler:
             assert len(x.shape if not isinstance(x, tuple) else x) >= dims
             d = int(in_cell ** (1/dims)) # patch_dim ** dims <= cell: one square/hypercubic patch per cell.
             if isinstance(x, tuple): # Shape-only.
-                return tuple([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)]), in_cell])
+                return tuple([np.prod([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)])]), in_cell])
             # Zero-pad to make all of `dims` divisible by `d`.
             y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
             # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
@@ -642,7 +644,20 @@ class Handler:
             # Flatten all patches, and zero-pad.
             y = y.reshape(np.prod(y.shape[:-dims]), d**dims)
             return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims))), -1)
-        # TODO: Also have `unblocks`.
+        @staticmethod
+        def unblocks(y, shape, dims=1):
+            # Reverse `blocks`.
+            assert len(y.shape) == 2
+            in_cell = y.shape[-1]
+            d = int(in_cell ** (1/dims))
+            # Un-zero-pad and un-flatten patches.
+            x = y[:, :d**dims].reshape(*shape[:-dims], *reversed([-(-shape[-i-1] // d) for i in range(dims)]), *([d] * dims))
+            # Un-transpose patches and reshape them back, and un-zero-pad.
+            tr = list(range(len(x.shape)))
+            for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+            x = x.transpose(*tr)
+            x = x.reshape(*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]])
+            return x[tuple(slice(0,s) for s in shape)]
     class List:
         """
         ```py
@@ -650,7 +665,7 @@ class Handler:
         sn.List(*types)
         ```
 
-        Datatype: a simple list of other datatypes. Name and data (and maybe error) must be per-type tuples/lists.
+        Datatype: a simple list of other datatypes. Name and data (and error if specified) must be per-type tuples/lists.
         """
         __slots__ = ('types',)
         def __init__(self, *types): self.types = types

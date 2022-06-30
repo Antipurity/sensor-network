@@ -95,33 +95,16 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-def blocks(np, x, in_cell, dims=1): # TODO:
-    assert isinstance(dims, int) and dims >= 1
-    assert len(x.shape if not isinstance(x, tuple) else x) >= dims
-    d = int(in_cell ** (1/dims)) # patch_dim ** dims <= cell: one square/hypercubic patch per cell.
-    if isinstance(x, tuple): # Shape-only.
-        return tuple([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)]), in_cell])
-    # Zero-pad to make all of `dims` divisible by `d`.
-    y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
-    # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
-    y = y.reshape(*x.shape[:-dims], *[d if i%2 else y.shape[-(i//2)-1] // d for i in range(2*dims)])
-    tr = list(range(len(y.shape)))
-    for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
-    y = y.transpose(*tr)
-    # Flatten all patches, and zero-pad.
-    y = y.reshape(np.prod(y.shape[:-dims]), d**dims)
-    return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims))), -1)
-# TODO: Have `unblocks(???)` for the queries.
 
 
 
-# TODO: Copy the read-me. …Has `sn` evolved a bit past the "only the basic communication protocol"?
+# TODO: Copy the read-me. …Has `sn` evolved a bit past the "only the basic communication protocol"? If `Float` supports `dims=2`, I think it might have, so we'd need to re-read and update it…
 # TODO: Make `Float` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
-#   …How do we do this, exactly?
+#   TODO: Add a test for `sn.Float(..., dims=2)`.
+#     TODO: Test & benchmark our new Float-with-dims impl. If we're slower than before, try making `blocks` and `unblocks` special-case the `dims==1` case.
 #   TODO: From docs, remove mentions of no-datatype communication. Only Int and Float should be the base types.
 # TODO: Also support fixed-size strings with tokenizers.
-# TODO: Maybe, if `choices_per_cell` is not defined in `sn.info`, it should be treated as `sn.cell_shape[-1]`, and `sn.Int`'s query should get argmax — possibly set as one-hot encodings too… And, could probably polyfill analog support too, by making `Float` defer to `IntFloat` when not `sn.info['analog']`.
-#   …Or would throwing errors be more appropriate, so that users aren't unexpectedly forced to send hundreds of megabytes to send a single image?…
+#   …How would tokenizers be implemented though?
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds) and efficiency (0…1).
 #   TODO: Make `sn.set`/`.query` have `efficiency=1`. Make `sn.Int` and `sn.Float` compute efficiency by as `np.prod(original_data.shape) / np.prod(sent_data.shape)`.
 # TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
