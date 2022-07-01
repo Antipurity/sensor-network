@@ -178,9 +178,8 @@ class Handler:
         Args:
         - `name`: see `.name`.
         - `data`: what to send.
-        - `type`: how the data is interpreted, such as `sn.Int(8)`. If name and type are `None`, `data` is raw: a `(cells, sum(cell_shape))`-shaped array; either don't modify it in-place after this call, or do `sn.commit()`.
-            - Implicit types: `8 → sn.Int(8)`; `(2,3) → sn.Int(2,3)`.
-        - `error = None`: `data` transmission error: `None` or a `(cells, cell_shape[-1])`-shaped float32 array of `max abs(true_data - data)`.
+        - `type`: how the data is interpreted, such as `sn.Int(8)`. Some types have implicit forms here for brevity, such as `8` which becomes `sn.Int(8)`; see docs of types.
+        - `error = None`: `data` transmission error: `None` or numbers with the meaning `max abs(true_data - data)`. `sn.Int` cannot have error; `sn.Float` can.
         """
         self._maybe_default()
         np, s = self.backend, self._s
@@ -354,7 +353,7 @@ class Handler:
         else:
             return self._wait_then_take_data(max_simultaneous_steps)
     def commit(self):
-        """`sn.commit()`: actually copies the provided data/queries, allowing their NumPy arrays to be written-to elsewhere."""
+        """`sn.commit()`: actually copies the provided data, allowing raw NumPy arrays to be written-to. Irrelevant if such overwriting never happens, or if raw-mode (`sn.set(data=rand(cells,sum(cell_shape)))` or `sn.query(type=rand(cells,cell_shape[-1]))` or `sn.pipe`) is not used."""
         assert not len(self.modify_name), "Only non-forked handlers can handle data"
         np, s = self.backend, self._s
         if len(self._data) == 1 and len(self._query) == 1: return
@@ -596,11 +595,10 @@ class Handler:
             # Shape-only `blocks`. Exists so that `query` can know how much to query.
             assert len(x) >= dims
             d = int(in_cell ** (1/dims))
-            if isinstance(x, tuple):
-                cells = 1
-                for i in range(len(x)-dims): cells *= x[i]
-                for i in range(dims): cells *= -(-x[-i-1] // d)
-                return (cells, in_cell)
+            cells = 1
+            for i in range(len(x)-dims): cells *= x[i]
+            for i in range(dims): cells *= -(-x[-i-1] // d)
+            return (cells, in_cell)
         @staticmethod
         def blocks(np, x, in_cell, dims=1):
             assert len(x.shape) >= dims
@@ -635,10 +633,9 @@ class Handler:
             x = y[:, :d**dims].reshape(*shape[:-dims], *reversed([-(-shape[-i-1] // d) for i in range(dims)]), *([d] * dims))
             # Un-transpose patches and reshape them back, and un-zero-pad.
             almost_final_shape = [*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]]]
-            if dims > 1:
-                tr = list(range(len(x.shape)))
-                for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
-                x = x.transpose(*tr)
+            tr = list(range(len(x.shape)))
+            for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+            x = x.transpose(*tr)
             return x.reshape(*almost_final_shape)[tuple(slice(0,s) for s in shape)]
     class List:
         """

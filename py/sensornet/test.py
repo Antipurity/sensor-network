@@ -35,7 +35,9 @@ coverage html
 
 - You think `import numpy as np` in a module is a good way to use other modules in Python? No, it's a global name. Passing it through local variables everywhere is twice as fast. (However, caching locally-defined functions in default args has no effect on performance.)
 
-- Constructing `sn.Float` without keyword args in its `__init__` is essentially free, with with `dims=1`, it's slightly noticeable.
+- Constructing `sn.Float` without keyword args in its `__init__` is essentially free, with with `dims=1`, it's slightly noticeable. So `sn.Int(...)` can be freely constructed at-use, whereas `sn.Float(...)` should be pre-constructed.
+
+- `np.prod(shape)` is slower than `p=1;  for i in shape: p*=i`.
 """
 
 

@@ -98,22 +98,18 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Copy the read-me. …Has `sn` evolved a bit past the "only the basic communication protocol"? If `Float` supports `dims=2`, I think it might have, so we'd need to re-read and update it…
-# TODO: Make `Float` accept `dims=1`, and make it split its input/output into roughly-square zero-padded patches, one patch per cell; dims beyond `dims` multiply the patch-count. And, allow actual input sizes to be less than we expect, so that we only specify "max" sizes at init. (`dims=2` would then allow giving 2D images as input very easily, so this is the most important convenience feature.)
-#   TODO: Add a test for `sn.Float(..., dims=2)`.
-#     TODO: Test & benchmark our new Float-with-dims impl. If we're slower than before, try making `blocks` and `unblocks` special-case the `dims==1` case.
-#   TODO: From docs, remove mentions of no-datatype communication. Only Int and Float should be the base types.
+# TODO: Make `sn.List` add an additional dimension for `Int`/`Float` to iterate over via global-variable (`sn.Float.extra_prefix = []`), instead of having unique names for each part.
+# TODO: Make `sn.List` and `sn.Int` able to have near-end data just not specified. And, make `sn.List` not send `None`s either. (`sn.Int` should measure data.shape[i]/self.shape[i] before any transformations, and pass that to `self.shaped_names`. And demand not equality but <=.)
+# TODO: Update the read-me (`sn` has evolved a bit past the "only the basic communication protocol", with `sn.Float(dims=2)`) and copy it.
+# TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds) and efficiency (0…1).
 #   TODO: Make `sn.set`/`.query` have `efficiency=1`. Make `sn.Int` and `sn.Float` compute efficiency by as `np.prod(original_data.shape) / np.prod(sent_data.shape)`.
-# TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
 # TODO: Also support fixed-size strings with tokenizers.
 #   …How would tokenizers be implemented though?
 #     Wouldn't it be a good idea to register one global tokenizer, so that users don't have to bother each time?
 # TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
 # TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python type annotations (`fn.__annotations__['return']` and such) to expose both inputs and outputs as data whenever the func is called — or when `None` is returned (or a flag in `sn` is set), requests output from `sn`. ("Mind uploading" for code, condensed to a single line of code.)
-#   TODO: …Do we want `sn.Dict` for that?…
-#   TODO: Make `sn.List` add an additional dimension for `Int`/`Float` to iterate over via global-variable (`sn.Float.extra_prefix = []`), instead of having unique names for each part.
-#   TODO: Make `sn.List` and `sn.Int` and `sn.Float` able to have near-end data just not specified. And, make `sn.List` not send `None`s either. (`sn.Int` in particular should measure data.shape[i]/self.shape[i] before any transformations, and pass that to `self.shaped_names`.)
+#   TODO: …Do we want `sn.Dict` for that?… …But what about part-list part-dict args…
 
 
 
