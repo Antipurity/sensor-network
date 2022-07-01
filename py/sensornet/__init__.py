@@ -485,7 +485,7 @@ class Handler:
                 fb = await fb
                 if fb is None: return None
                 start = -shape[-1]
-                fb = fb[:, start : start+bpc]
+                fb = fb[:, start : start+bpc] # Returned names are ignored.
                 fb = sn.Int.decode_bits(sn.backend, fb) % cpc
                 R = sn.Int.repack(sn, fb, cpc, self.opts)[:self.sz].reshape(self.shape)
                 return R if len(R.shape)>0 else R.item()
@@ -611,6 +611,7 @@ class Handler:
             sn.set(None, np.concatenate((names, data), -1), None, error)
         def query(self, sn, name):
             # Flatten feedback's cells and reshape it to our shape.
+            #   The returned names are ignored.
             for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
             np = sn.backend
@@ -623,7 +624,7 @@ class Handler:
                 if not len(shape): return
                 fb = await fb
                 if fb is None: return None
-                return sn.Float.unblocks(fb, self.shape, self.dims)
+                return sn.Float.unblocks(fb[:, -shape[-1]:], self.shape, self.dims)
             return do_query(sn.query(None, names))
         @staticmethod
         def expand_shape(np, x, shape):
@@ -634,7 +635,8 @@ class Handler:
         @staticmethod
         def blocks(np, x, in_cell, dims=1):
             assert len(x.shape if not isinstance(x, tuple) else x) >= dims
-            d = int(in_cell ** (1/dims)) # patch_dim ** dims <= cell: one square/hypercubic patch per cell.
+            d = int(in_cell ** (1/dims)) # One square/hypercubic patch per cell.
+            assert d**dims <= in_cell <= (d+1)**dims
             if isinstance(x, tuple): # Shape-only.
                 return tuple([np.prod([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)])]), in_cell])
             # Zero-pad to make all of `dims` divisible by `d`.
@@ -659,6 +661,7 @@ class Handler:
             tr = list(range(len(x.shape)))
             for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
             x = x.transpose(*tr)
+            print('x', shape, [*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]]], d, in_cell, dims) # TODO:
             x = x.reshape(*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]])
             return x[tuple(slice(0,s) for s in shape)]
     class List:
