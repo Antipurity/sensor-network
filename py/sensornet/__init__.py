@@ -84,7 +84,7 @@ class Handler:
 
     If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'listeners', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_default')
+    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'listeners', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_default', '_wait_until_submit')
     def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, backend=numpy, name_cache_size=1024, _default=False):
         from builtins import set
         import json;  json.dumps(info) # Just for error-checking.
@@ -107,6 +107,7 @@ class Handler:
         self.modify_name = ()
         self._str_to_floats = functools.lru_cache(name_cache_size)(functools.partial(_str_to_floats, backend))
         self._default = _default
+        self._wait_until_submit = []
         self.cell_shape = cell_shape
     def fork(self, modify_name):
         """`sn.fork(lambda name: tuple(['sub-env-name', *name]))`
@@ -253,17 +254,6 @@ class Handler:
             s.wait_for_requests = None
         if isinstance(callback, asyncio.Future):
             return callback
-    def pipe(self, data, query, error, callback=None):
-        """
-        `prev_feedback = await other_handler.pipe(*sn.handle(prev_feedback))`
-
-        Makes another handler handle this packet. Useful if NumPy arrays have to be transferred manually, such as over the Internet.
-
-        (To both preserve packet boundaries and to not stall the pipeline, extra work has to be performed, namely, have a queue of `sn.handle(…)` results, and in `other_handler.sensors`, have a function that pops from that queue via `.pipe`, waiting for data when the queue is empty.)
-        """
-        self._maybe_default()
-        if data is not None: self.set(None, data, None, error)
-        if query is not None: return self.query(None, query, callback)
     def get(self, name, type):
         """
         `await sn.get(name, type)`
@@ -284,6 +274,22 @@ class Handler:
                 try: fb = self.query(name, type)
                 finally: Handler.Goal.goal = prev
         return query_until_not_none(self.query(name, type))
+    def pipe(self, data, query, error, callback=None):
+        """
+        `prev_feedback = await other_handler.pipe(*sn.handle(prev_feedback))`
+
+        Makes another handler handle this packet. Useful if NumPy arrays have to be transferred manually, such as over the Internet.
+
+        A note on efficiency: don't `await h.pipe(…)` but do `await sn.submit()` after piping; to send back the feedback without stalling, do `sn.run(async_func, h.pipe(…))`.
+        """
+        self._maybe_default()
+        if data is not None: self.set(None, data, None, error)
+        if query is not None: return self.query(None, query, callback)
+    def submit(self):
+        """`await sn.submit()`: waits until the current data packet is submitted (which happens when `sn.handle` returns). Use this to set/query streams of data without stalling."""
+        ft = asyncio.Future()
+        self._wait_until_submit.append(ft)
+        return ft
     def handle(self, prev_feedback=None, max_simultaneous_steps=16):
         """
         ```python
@@ -385,13 +391,11 @@ class Handler:
         self._next_fb = []
         self.discard()
         for l in self.listeners: l(self, data)
+        for ft in self._wait_until_submit: ft.set_result(None)
+        self._wait_until_submit.clear()
         return data, query, error
     async def _wait_then_take_data(self, max_simultaneous_steps = 16):
-        """
-        Limits how many steps can be done at once, yielding if necessary (if no data and no queries, or if it's been too long since the last yield).
-
-        Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out).
-        """
+        """Limits how many steps can be done at once, yielding if necessary (if no data and no queries, or if it's been too long since the last yield). Particularly important for async feedback: if the handling loop never yields to other tasks, then they cannot proceed, and a deadlock occurs (and memory eventually runs out)."""
         assert isinstance(max_simultaneous_steps, int) and max_simultaneous_steps > 0
         s = self._s
         if not len(self._data) and not len(self._query):
@@ -975,8 +979,9 @@ fork = default.fork
 name = default.name
 set = default.set
 query = default.query
-pipe = default.pipe
 get = default.get
+pipe = default.pipe
+submit = default.submit
 handle = default.handle
 commit = default.commit
 discard = default.discard

@@ -344,7 +344,9 @@ async def test20():
     h.set('…', {'a': np.random.rand(5), 'b': None}, T)
     L1 = h.query('…', T)
     L2 = h.get('…', T)
+    W = h.submit()
     assert (await h.handle())[0].shape == (1, 96)
+    await W
     h.set('…')
     assert (await h.handle(np.random.rand(6, 96)))[0].shape == (1, 96)
     assert isinstance(await L1, dict)
