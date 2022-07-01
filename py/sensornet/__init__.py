@@ -660,9 +660,9 @@ class Handler:
             # Un-transpose patches and reshape them back, and un-zero-pad.
             tr = list(range(len(x.shape)))
             for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+            almost_final_shape = [*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]]]
             x = x.transpose(*tr)
-            print('x', shape, [*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]]], d, in_cell, dims) # TODO:
-            x = x.reshape(*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]])
+            x = x.reshape(*almost_final_shape)
             return x[tuple(slice(0,s) for s in shape)]
     class List:
         """

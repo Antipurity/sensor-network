@@ -329,10 +329,9 @@ async def test19():
     img = h.query('not even images existed anymore', sn.Float(16, 16, dims=2))
     assert (await h.handle())[0].shape == (3*(256/8)**2, 96)
     h.set('no event happened, not even this one')
-    fb = np.random.randn(4, 96)
+    fb = np.random.rand(4, 96)
     assert (await h.handle(fb))[0].shape == (1, 96)
-    print((await img).shape) # TODO: …Why does `unblocks` fail?…
-    # assert (await img == fb).all() # TODO: …No, shapes are different… Should we just check the shape, not the contents?
+    assert (await img).shape == (16, 16)
 print('Tests OK')
 
 
