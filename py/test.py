@@ -95,16 +95,6 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-
-
-
-# TODO: Update the read-me (`sn` has evolved a bit past the "only the basic communication protocol", with `sn.Float(dims=2)`) and copy it.
-# TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds) and efficiency (0…1).
-#   TODO: Make `sn.set`/`.query` have `efficiency=1`. Make `sn.Int` and `sn.Float` compute efficiency as `np.prod(original_data.shape) / np.prod(sent_data.shape)`.
-#   …Then again: do we *really* care enough?… Especially since metric-keeping is likely to slow down the benchmarks a bit…
-
-
-
 # TODO: Compressed history as goals:
 #   TODO: NEED an env that consists of many buttons, which have to be pushed in a password-sequence that changes rarely, with a bit-indicator for "was the last button correct". With enough buttons, state-based exploration should discover nothing, whereas proper full-past exploration *should* discover the sequence eventually.
 #   TODO: Have a hyperparam that makes `local_dist` only consider `src`-cells (non-inputs) for smudgings, and given an env that needs nothing but exploration, verify that only using `src`-cells still works.

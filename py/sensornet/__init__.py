@@ -1,15 +1,25 @@
 """
 Bidirectional-sensor networks for ML: each gathers named numeric data and queries from anywhere, and in a loop, handles that.
 
-This is the core protocol: as flexible as you can imagine, [as fast as you need](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py), [as small as is reasonable](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/__init__.py), and [as well-tested as you can measure](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py).
+Perfectly flexible, [efficient](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py), [tiny](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/__init__.py), and [with 100% test coverage](https://github.com/Antipurity/sensor-network/tree/master/py/sensornet/test.py).
 
-Position-invariant and numeric, nothing is fixed: these constraints free AI models from all concerns about data formats. With only a couple lines of code, you can: learn in completely arbitrary environments, combine tasks at runtime, and perform cross-dataset meta-learning and multimodal learning and multi-objective reinforcement learning and lifelong learning and model distillation.
+Position-invariant and numeric: these constraints free AI models from all concerns about data formats. With only a couple lines of code, you can: learn in completely arbitrary environments, combine digital and analog inputs/outputs, combine tasks at runtime, and perform any machine-learning tasks with a single model (multimodal learning and reinforcement learning and meta-learning and lifelong learning and model distillation; though need a *flawless* implementation that easily handles everything `sn` can bring to bear).
 
-Python 3.5 or newer (for `asyncio` with `await`).
+Needs Python 3.5 or newer (mainly for `asyncio` with `await`).
 
----
+## Installation
 
-Usage is simple.
+```bash
+pip install sensornet (TODO: Publish to PyPi.)
+```
+
+Or, like, copy this directory, and import it.
+
+Or `pip install -ve .` here, see where your `easy-install.pth` lives, and edit that file to remove the last directory in the path to here.
+
+## Usage
+
+Simple.
 
 First, initialize the handler:
 
@@ -30,7 +40,7 @@ async def get():
     assert (await sn.get('action', 32)) in range(32)
 ```
 
-(Simple integer sending/receiving is shown here, but floats are also available by replacing `32` with `sn.Float(*shape)`.)
+(Simple integer sending/receiving is shown here, but other datatypes are also available.)
 
 And handle it:
 
@@ -43,15 +53,13 @@ async def main():
         fb = np.random.rand(query.shape[0], data.shape[1])*2-1
 ```
 
-This module implements this basic discrete+analog protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string/image handling or file storage or multiprocessing or Internet communication or integration with ML-libraries.
+This module implements this basic discrete+analog protocol, and does not include anything [else](https://github.com/Antipurity/sensor-network/tree/master/docs/ROADMAP.md) by default, such as string handling or file storage or Internet communication or multiprocessing or integration with ML-libraries apart from PyTorch.
 
 (Implementing a controllable programming language with forking and/or listenable-to data is left as an exercise to the reader.)
 
 ---
 
-## Integrations
-
-- PyTorch: given `import torch`, `sn.torch(torch, tensor)` should be used as the argument to `sn.handle(...)`.
+TODO: A small tour of the datatypes (`sn` just doesn't sound attractive otherwise), hopefully including `@sn.func   async def fn(img: sn.Float(28, 28, dims=2)) -> 10: ...` and/or `sn.Goal()`. And hopefully using an actual ML model to learn.
 """
 
 
@@ -67,7 +75,7 @@ class Handler:
     """
     ```python
     Handler(8,8,8, 64)
-    Handler(*cell_shape, info=None, sensors=None, backend=numpy, name_cache_size=1024)
+    Handler(*cell_shape, info=None, sensors=None, on_feedback=None, backend=numpy, name_cache_size=1024)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -78,13 +86,14 @@ class Handler:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts; see `.name`. Can read/write `.cell_shape` as a property, whenever.
     - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else. To set global info on the `sn` module, do `sn.default.info = ...`.
     - `sensors`: `set` of functions that take this handler, to prepare data to handle via `sn.set(…)` and/or `sn.query(…)`.
+    - `on_feedback`: allows easily transforming `.handle`'s feedback. In particular, to integrate with PyTorch, pass in `on_feedback = lambda x: sn.torch(torch, x)`.
     - `backend`: the NumPy object.
     - `name_cache_size`: info that is associated with names is cached for speed.
 
-    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors`, wherever the handler object is available. These values might change between sending and receiving feedback.
+    If needed, wherever the handler object is available, read `.cell_shape` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors`. These values might change between sending and receiving feedback.
     """
-    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_default', '_wait_until_submit')
-    def __init__(self, *cell_shape, info=None, sensors=None, backend=numpy, name_cache_size=1024, _default=False):
+    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_default', '_wait_until_submit', 'on_feedback')
+    def __init__(self, *cell_shape, info=None, sensors=None, on_feedback=None, backend=numpy, name_cache_size=1024, _default=False):
         from builtins import set
         import json;  json.dumps(info) # Just for error-checking.
         sensors = set(sensors) if sensors is not None else set()
@@ -105,6 +114,7 @@ class Handler:
         self._str_to_floats = functools.lru_cache(name_cache_size)(functools.partial(_str_to_floats, backend))
         self._default = _default
         self._wait_until_submit = []
+        self.on_feedback = on_feedback
         self.cell_shape = cell_shape
     def fork(self, modify_name):
         """`sn.fork(lambda name: tuple(['sub-env-name', *name]))`
@@ -311,11 +321,12 @@ class Handler:
         - Blur out the precision that was lost during transmission: `if error is not None: data[:, -sn.cell_shape[-1]:] += error * (numpy.random.rand(*error.shape)*2-1)`
         - Extract goal-cells: `data[data[:, 0] > 0]`
         - Extract analog (`sn.Float`) cells: `data[data[:, 1] > 0]`
-        - Extract digital (`sn.Int`) cells: `data[data[:, 1] <= 0]`
+        - Extract digital (`sn.Int`) cells: `data[~(data[:, 1] > 0)]`
         """
         assert not len(self.modify_name), "Only non-forked handlers can handle data"
         self._maybe_default()
         np = self.backend
+        prev_feedback = self.on_feedback(prev_feedback) if callable(self.on_feedback) else prev_feedback
         if asyncio.iscoroutine(prev_feedback) and not isinstance(prev_feedback, asyncio.Future):
             prev_feedback = asyncio.create_task(prev_feedback) if hasattr(asyncio, 'create_task') else asyncio.ensure_future(prev_feedback)
         assert prev_feedback is None or isinstance(prev_feedback, np.ndarray) or isinstance(prev_feedback, asyncio.Future) or callable(prev_feedback)
