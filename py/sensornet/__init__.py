@@ -539,14 +539,12 @@ class Handler:
         - This is much more space-efficient, but may be much harder to generate precisely.
         - Models differ. Ints have to be sampled either autoregressively ([GPT](https://arxiv.org/abs/2005.14165)-like, materializing explicit probabilities cell-by-cell; very slow) or deterministically (sample the history-embedding, then simply unroll the model). Floats have to be sampled via i.e. GANs/DDPGs, VAEs, diffusion models.
         """
-        __slots__ = ('sz', 'shape', 'dims')
+        __slots__ = ('shape', 'dims')
         def __init__(self, *shape, dims=1):
             assert isinstance(dims, int) and dims >= 1
             assert shape, "Shape cannot be empty"
             assert isinstance(shape, tuple) and all(isinstance(n, int) and n>0 for n in shape) and len(shape) >= dims
-            from operator import mul
-            sz = functools.reduce(mul, shape, 1)
-            self.sz, self.shape, self.dims = sz, shape, dims
+            self.shape, self.dims = shape, dims
         def __repr__(self):
             d = '' if self.dims == 1 else 'dims='+str(self.dims)
             d = d if not d or not len(self.shape) else ','+d
@@ -559,7 +557,6 @@ class Handler:
             if isinstance(error, float):
                 error = np.full(data.shape, error, dtype=np.float32)
             assert error is None or isinstance(error, np.ndarray) and error.shape == data.shape
-            # TODO: How can we speed this up any more?… Isn't more-or-less the only difference from before `shape_max`, and possibly `prefix`, and possibly going through `sn.Float.expand_shape|.blocks`?…
             data = sn.Float.expand_shape(np, data, self.shape)
             shape_max = tuple(got / allowed for got, allowed in zip(data.shape, self.shape))
 
@@ -579,7 +576,7 @@ class Handler:
             np = sn.backend
 
             shape = sn._s.cell_shape
-            fb_shape = sn.Float.blocks(np, self.shape, shape[-1], self.dims) if len(shape) else (0,0)
+            fb_shape = sn.Float.blocks_shape(self.shape, shape[-1], self.dims) if len(shape) else (0,0)
             prefix = (Handler.Goal.goal, True)
             names = sn._s.shaped_names(fb_shape[0], self.shape, (1.,)*len(self.shape), prefix, name) if fb_shape[0] else np.zeros(fb_shape, dtype=np.float32)
             async def do_query(fb):
@@ -595,18 +592,25 @@ class Handler:
             assert all(x.shape[i] <= shape[i] for i in range(len(x.shape)))
             return x
         @staticmethod
-        def blocks(np, x, in_cell, dims=1):
-            assert len(x.shape if not isinstance(x, tuple) else x) >= dims
-            d = int(in_cell ** (1/dims)) # One square/hypercubic patch per cell.
-            assert d**dims <= in_cell <= (d+1)**dims
-            if isinstance(x, tuple): # Shape-only. Exists so that `query` can know how much to query.
+        def blocks_shape(x, in_cell, dims=1):
+            # Shape-only `blocks`. Exists so that `query` can know how much to query.
+            assert len(x) >= dims
+            d = int(in_cell ** (1/dims))
+            if isinstance(x, tuple):
                 cells = 1
                 for i in range(len(x)-dims): cells *= x[i]
                 for i in range(dims): cells *= -(-x[-i-1] // d)
                 return (cells, in_cell)
-            if dims == 1: # Special-case this for efficiency; `d == in_cell`.
+        @staticmethod
+        def blocks(np, x, in_cell, dims=1):
+            assert len(x.shape) >= dims
+            d = int(in_cell ** (1/dims)) # One square/hypercubic patch per cell.
+            assert d**dims <= in_cell <= (d+1)**dims
+            if dims == 1: # Special-case this for efficiency; `d == in_cell` here.
                 y = np.concatenate((x, np.zeros([*x.shape[:-1], (-x.shape[-1]) % d], dtype=np.float32)), -1) if x.shape[-1] % d else x
-                return y.reshape(np.prod(y.shape) // d, d)
+                p = 1
+                for i in y.shape: p *= i # Quite a lot faster than `np.prod(y.shape)`.
+                return y.reshape(p // d, d)
             # Zero-pad to make all of `dims` divisible by `d`.
             y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
             # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
@@ -615,7 +619,9 @@ class Handler:
             for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
             y = y.transpose(*tr)
             # Flatten all patches, and zero-pad.
-            y = y.reshape(np.prod(y.shape[:-dims]) if len(y.shape)>dims else 1, d**dims)
+            p = 1
+            for i in y.shape[:-dims]: p *= i
+            y = y.reshape(p, d**dims)
             return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims), dtype=np.float32)), -1)
         @staticmethod
         def unblocks(y, shape, dims=1):

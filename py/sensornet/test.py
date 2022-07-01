@@ -34,6 +34,8 @@ coverage html
 # Lessons learned
 
 - You think `import numpy as np` in a module is a good way to use other modules in Python? No, it's a global name. Passing it through local variables everywhere is twice as fast. (However, caching locally-defined functions in default args has no effect on performance.)
+
+- Constructing `sn.Float` without keyword args in its `__init__` is essentially free, with with `dims=1`, it's slightly noticeable.
 """
 
 
@@ -345,9 +347,10 @@ async def benchmark(N=64*10):
     start, duration = time.monotonic(), 10.
     name = ('benchmark',)
     f32 = h.backend.float32
+    set_type, query_type = sn.Float(N), sn.Float(256)
     while time.monotonic() - start < duration:
-        h.set(name, data=send_data, type=sn.Float(N))
-        h.query(name, sn.Float(256)).close()
+        h.set(name, data=send_data, type=set_type)
+        h.query(name, query_type).close()
         data, query, error = await h.handle(feedback)
         feedback = h.backend.full((query.shape[0], data.shape[1]), .2, dtype=f32) if data is not None else None
         iterations += 1
