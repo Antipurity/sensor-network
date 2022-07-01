@@ -98,8 +98,8 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Make `sn.List` add an additional dimension for `Int`/`Float` to iterate over via global-variable (`sn.Float.extra_prefix = []`), instead of having unique names for each part.
-# TODO: Make `sn.List` and `sn.Int` able to have near-end data just not specified. And, make `sn.List` not send `None`s either. (`sn.Int` should measure data.shape[i]/self.shape[i] before any transformations, and pass that to `self.shaped_names`. And demand not equality but <=.)
+# TODO: Make `sn.Int` able to have near-end data just not specified. (`sn.Int` should measure data.shape[i]/self.shape[i] before any transformations, and pass that to `self.shaped_names`. And demand not equality but <=.)
+# TODO: Have `sn.Dict(**types)`, which adds the entry's key to the end of the dict-name for each non-`None`-value entry.
 # TODO: Update the read-me (`sn` has evolved a bit past the "only the basic communication protocol", with `sn.Float(dims=2)`) and copy it.
 # TODO: Have `await sn.submit()`, so that we can do piping without stalling, and have things like dynamically-sized strings.
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds) and efficiency (0…1).
@@ -109,7 +109,9 @@ Further, the ability to reproduce [the human ability to learn useful representat
 #     Wouldn't it be a good idea to register one global tokenizer, so that users don't have to bother each time?
 # TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
 # TODO: …Possibly, have the `sn.func(name, sn=sn)` async-func decorator that integrates with Python type annotations (`fn.__annotations__['return']` and such) to expose both inputs and outputs as data whenever the func is called — or when `None` is returned (or a flag in `sn` is set), requests output from `sn`. ("Mind uploading" for code, condensed to a single line of code.)
-#   TODO: …Do we want `sn.Dict` for that?… …But what about part-list part-dict args…
+#   TODO: …Do we want `sn.Dict` for that?… …But what about part-list part-dict args… …Won't signatures still be able to assign per-arg values/types, though…
+#     So what's wrong with adding this datatype, which will now be even simpler than `sn.List`?
+#     …If `sn.func` will directly use `sn.Dict` with `return` being an entry, then we can potentially even do things like infer inputs given output… Possibly via the 'advanced technique' `fn(**{'return': 15})`.
 
 
 

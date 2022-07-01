@@ -277,14 +277,14 @@ class Handler:
         if hasattr(type, 'get'):
             return type.get(self, name)
         goal = Handler.Goal.goal
-        async def query_loop(fb):
+        async def query_until_not_none(fb):
             while True: # Minimize re-requests at the cost of latency.
                 fb = await fb
                 if fb is not None: return fb
                 prev, Handler.Goal.goal = Handler.Goal.goal, goal
                 try: fb = self.query(name, type)
                 finally: Handler.Goal.goal = prev
-        return query_loop(self.query(name, type))
+        return query_until_not_none(self.query(name, type))
     def handle(self, prev_feedback=None, max_simultaneous_steps=16):
         """
         ```python
@@ -452,6 +452,7 @@ class Handler:
         def set(self, sn, name, data, error):
             for fn in sn.modify_name: name = fn(name)
             assert error is None, "Integers are precise"
+            assert not isinstance(data, list) and not isinstance(data, tuple) or all(x is not None for x in data), "`sn.List` does not support `None`s, so create an `sn.List` explicitly"
             np = sn.backend
             data = np.array(data, dtype=np.int32, copy=False)
             assert data.shape == self.shape
@@ -465,7 +466,7 @@ class Handler:
             if not len(shape): return
             assert shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
-            names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, False), name)
+            names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, False, *sn.List.extra_prefix), name)
             data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(np, np.expand_dims(data, -1), bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
@@ -478,7 +479,7 @@ class Handler:
             shape = sn._s.cell_shape
             assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape) else 0
-            names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, False), name) if cells else None
+            names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, False, *sn.List.extra_prefix), name) if cells else None
             async def do_query(fb):
                 if not cells: return
                 fb = await fb
@@ -564,7 +565,7 @@ class Handler:
             data = sn.Float.blocks(np, data, sn._s.cell_shape[-1], self.dims)
             error = sn.Float.blocks(np, error, sn._s.cell_shape[-1], self.dims) if error is not None else None
 
-            prefix = (Handler.Goal.goal, True)
+            prefix = (Handler.Goal.goal, True, *sn.List.extra_prefix)
             names = sn._s.shaped_names(data.shape[0], self.shape, shape_max, prefix, name)
             sn.set(None, np.concatenate((names, data), -1), None, error)
         def query(self, sn, name):
@@ -576,7 +577,7 @@ class Handler:
 
             shape = sn._s.cell_shape
             fb_shape = sn.Float.blocks_shape(self.shape, shape[-1], self.dims) if len(shape) else (0,0)
-            prefix = (Handler.Goal.goal, True)
+            prefix = (Handler.Goal.goal, True, *sn.List.extra_prefix)
             names = sn._s.shaped_names(fb_shape[0], self.shape, (1.,)*len(self.shape), prefix, name) if fb_shape[0] else np.zeros(fb_shape, dtype=np.float32)
             async def do_query(fb):
                 if not len(shape): return
@@ -644,23 +645,41 @@ class Handler:
         sn.List(*types)
         ```
 
-        Datatype: a simple list of other datatypes. Name and data (and error if specified) must be per-type tuples/lists.
+        Datatype: a simple list of other datatypes. Data and error (if specified) must be per-type tuples/lists.
+
+        List items share the name, but differ in the index. When `sn.set`ting, `None`s in data are ignored.
         """
+        extra_prefix = []
         __slots__ = ('types',)
         def __init__(self, *types): self.types = types
         def __repr__(self):
             return 'sn.List(' + ','.join(repr(t) for t in self.types) + ')'
         def set(self, sn, name, data, error):
-            assert len(name) == len(data) == len(self.types)
+            T = self.types
+            assert len(data) <= len(T)
             assert error is None or len(data) == len(error)
-            for i in range(len(data)):
-                sn.set(name[i], data[i], self.types[i], None if error is None else error[i])
+            with List._ExtraPrefix() as extra:
+                for i in range(len(data)):
+                    if data[i] is not None:
+                        sn.set(extra(name, i, T), data[i], T[i], None if error is None else error[i])
         def query(self, sn, name):
-            assert len(name) == len(self.types)
-            return asyncio.gather(*[sn.query(name[i], self.types[i]) for i in range(len(name))])
+            T = self.types
+            with List._ExtraPrefix() as extra:
+                return asyncio.gather(*[sn.query(extra(name, i, T), T[i]) for i in range(len(T))])
         def get(self, sn, name):
-            assert len(name) == len(self.types)
-            return asyncio.gather(*[sn.get(name[i], self.types[i]) for i in range(len(name))])
+            T = self.types
+            with List._ExtraPrefix() as extra:
+                return asyncio.gather(*[sn.get(extra(name, i, T), T[i]) for i in range(len(T))])
+        class _ExtraPrefix: # For adding one number to the extra name-part that `Int`|`Float` prepend.
+            def __enter__(self):
+                List.extra_prefix.append(0.)
+                return self.extra_prefix
+            def __exit__(self, type, value, traceback):
+                List.extra_prefix.pop()
+            @staticmethod
+            def extra_prefix(name, i, T):
+                List.extra_prefix[-1] = i / (len(T)-1) * 2 - 1 if len(T)>1 else -1.
+                return name
     class Goal:
         """
         `sn.Goal(type)`: datatype, where the wrapped `type` will mark all its cells as to-be-sought-out.
@@ -897,7 +916,7 @@ def _default_typing(name, type):
         assert len(type), "Can't be non-empty"
         if isinstance(type[0], int) and all(t == type[0] for t in type):
             return name, Handler.Int(len(type), type[0])
-        return (name,) * len(type), Handler.List(*type)
+        return name, Handler.List(*type)
     return name, type
 
 

@@ -298,13 +298,13 @@ async def test16():
 async def test17():
     """Lists and goals."""
     h = sn.Handler(8,8,8,8, 64, info={'choices_per_cell':2**4})
-    h.set(('miew', 'fmemor'), [1, 6], sn.List(16, 15))
-    h.set(('miew', 'fmemor'), [1, 6], sn.Goal([16, 16]))
-    L1 = h.get(('hgtngege', 'nveerna'), [16, 14])
-    L2 = h.get(('hgtngegu', 'nveerny'), sn.Goal([16, 16]))
-    L3 = h.query(('hgtngegu', 'nveerny'), sn.Goal(sn.List(16, 16)))
+    h.set('miew', [1, None], sn.List(16, 15))
+    h.set('fmemor', [1, 6], sn.Goal([16, 16]))
+    L1 = h.get('hgtngege', [16, 14])
+    L2 = h.get('nveerny', sn.Goal([16, 16]))
+    L3 = h.query('nveerny', sn.Goal(sn.List(16, 16)))
     data, query, error = await h.handle(None)
-    assert data.shape == (4, 96) and query.shape == (6, 32) and error is None
+    assert data.shape == (3, 96) and query.shape == (6, 32) and error is None
     h.handle(np.ones((6, 96)), None)
     assert (await L1) == [15, 1] # 15%14 == 1
     assert ((await L2) == [15, 15]).all()
