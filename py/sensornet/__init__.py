@@ -429,7 +429,8 @@ class Handler:
         def __repr__(self): return 'sn.Event()'
         def set(self, sn, name, data, error):
             assert data is None and error is None
-            return sn.set(name, [0.], sn.Float(1), error)
+            has_floats = sn.info is None or 'analog' in sn.info and sn.info['analog']
+            return sn.set(name, [0.], sn.Float(1)) if has_floats else sn.set(name, 0, sn.Int(2))
     class Int:
         """
         ```py
@@ -799,12 +800,12 @@ class Handler:
 
         Note that the `sn` in `sn.func` is another argument, and could be any `Handler`. `sn.func` doesn't support sync execution, because `sn` was built to support async execution.
 
-        To stop calling `async_fn` and start requesting results from `sn`, do `result.query = True`. To disable `sn`, do `result.set = False`. To do either of those globally, do `sn.func.query = True` or `sn.func.set = False` at program-start.
+        To stop calling `async_fn` and start requesting results from `sn`, do `result.query = True`. To disable `sn`, do `result.set = False`. To do either of those globally, do `sn.Handler.func.query = True` and/or `sn.Handler.func.set = False` at program-start.
         """
         from inspect import signature, iscoroutinefunction
         assert callable(fn) and iscoroutinefunction(fn)
         name, sgn = fn.__name__, signature(fn)
-        in_type = self.Dict(**{k: p.annotation() if p.annotation() is not sgn.empty else None for k,p in sgn.parameters.items()})
+        in_type = self.Dict(**{k: p.annotation if p.annotation is not sgn.empty else None for k,p in sgn.parameters.items()})
         out_type = self.Dict(**{'return': sgn.return_annotation if sgn.return_annotation is not sgn.empty else None})
 
         def on_call(*args, **kwargs):
@@ -815,13 +816,13 @@ class Handler:
                 R = await R
                 if not q:
                     if s: self.set(name, {'return': R}, out_type)
-                elif R is not None:
+                else: # `R` is never `None`, because `sn.Dict` prefers to return `{'return': None}`.
                     R = R['return']
                 return R
             return on_result(fn(*args, **kwargs) if not q else self.query(name, out_type))
 
-        if not hasattr(self.func, 'set'): default.func.set = True
-        if not hasattr(self.func, 'query'): default.func.query = False
+        if not hasattr(self.func, 'set'): default.Handler.func.set = True
+        if not hasattr(self.func, 'query'): default.Handler.func.query = False
         on_call.set = self.func.set
         on_call.query = self.func.query
         return on_call

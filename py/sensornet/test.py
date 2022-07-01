@@ -224,7 +224,7 @@ async def test11():
     assert (await h.handle())[1].shape == (1, 32)
 @sn.run
 async def test12():
-    """`Filter`ing data, for remote debugging, AKA spying on good people. [REDACTED]"""
+    """`Filter`ing data, for remote debugging & instrumentation, AKA for spying on good people. [REDACTED]"""
 @sn.run
 async def test13():
     """Modifying names."""
@@ -340,6 +340,25 @@ async def test20():
     assert isinstance(await L1, dict)
     assert isinstance(await L2, dict)
     assert repr(sn.Dict(a=5, b=6)) == 'sn.Dict(a=sn.Int(5),b=sn.Int(6))'
+@sn.run
+async def test21():
+    """AI eats software, one `sn.func` at a time."""
+    # First 'learn'.
+    h = sn.Handler(8,8,8,8, 64, info={'choices_per_cell':16})
+    @h.func
+    async def fn(a: h.Int(16)) -> h.Int(16): return (a+4) % 16
+    assert (await fn(5)) == 9
+    assert (await h.handle())[0].shape == (2, 96)
+    # Then 'predict'.
+    fn.query = True
+    ft1 = fn(12)
+    assert (await h.handle())[0].shape == (1, 96)
+    ft2 = fn(1)
+    await h.handle(-np.ones((1, 96)))
+    h.set('die')
+    await h.handle()
+    assert (await ft1) == 0
+    assert (await ft2) is None
 print('Tests OK')
 
 
