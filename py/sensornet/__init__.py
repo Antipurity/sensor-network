@@ -581,7 +581,7 @@ class Handler:
 
         #     shape = sn._s.cell_shape
         #     cells = -(-self.sz // shape[-1]) if len(shape) else 0
-        #     names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
+        #     names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0), dtype=np.float32)
         #     async def do_query(fb):
         #         if not len(shape): return
         #         fb = await fb
@@ -619,7 +619,7 @@ class Handler:
             shape = sn._s.cell_shape
             fb_shape = sn.Float.blocks(np, self.shape, shape[-1], self.dims) if len(shape) else (0,0)
             prefix = (Handler.Goal.goal, True)
-            names = sn._s.shaped_names(fb_shape[0], self.shape, (1.,)*len(self.shape), prefix, name) if fb_shape[0] else np.zeros(fb_shape)
+            names = sn._s.shaped_names(fb_shape[0], self.shape, (1.,)*len(self.shape), prefix, name) if fb_shape[0] else np.zeros(fb_shape, dtype=np.float32)
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
@@ -633,22 +633,26 @@ class Handler:
             assert all(x.shape[i] <= shape[i] for i in range(len(x.shape)))
             return x
         @staticmethod
-        def blocks(np, x, in_cell, dims=1):
+        def blocks(np, x, in_cell, dims=1): # TODO: How can we speed this up in common cases, `dims==1` in particular?…
             assert len(x.shape if not isinstance(x, tuple) else x) >= dims
             d = int(in_cell ** (1/dims)) # One square/hypercubic patch per cell.
             assert d**dims <= in_cell <= (d+1)**dims
             if isinstance(x, tuple): # Shape-only.
                 return tuple([np.prod([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)])]), in_cell])
             # Zero-pad to make all of `dims` divisible by `d`.
-            y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
+            if dims > 1:
+                y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
+            else: # A special-case for efficiency.
+                y = np.concatenate((x, np.zeros([*x.shape[:-1], (-x.shape[-1]) % d], dtype=np.float32)), -1) if x.shape[-1] % d else x
             # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
             y = y.reshape(*x.shape[:-dims], *[d if i%2 else y.shape[-(i//2)-1] // d for i in range(2*dims)])
-            tr = list(range(len(y.shape)))
-            for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
-            y = y.transpose(*tr)
+            if dims > 1:
+                tr = list(range(len(y.shape)))
+                for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+                y = y.transpose(*tr)
             # Flatten all patches, and zero-pad.
             y = y.reshape(np.prod(y.shape[:-dims]), d**dims)
-            return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims))), -1)
+            return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims), dtype=np.float32)), -1)
         @staticmethod
         def unblocks(y, shape, dims=1):
             # Reverse `blocks`.
@@ -658,12 +662,12 @@ class Handler:
             # Un-zero-pad and un-flatten patches.
             x = y[:, :d**dims].reshape(*shape[:-dims], *reversed([-(-shape[-i-1] // d) for i in range(dims)]), *([d] * dims))
             # Un-transpose patches and reshape them back, and un-zero-pad.
-            tr = list(range(len(x.shape)))
-            for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
             almost_final_shape = [*shape[:-dims], *[x*d for x in x.shape[-dims-dims : -dims]]]
-            x = x.transpose(*tr)
-            x = x.reshape(*almost_final_shape)
-            return x[tuple(slice(0,s) for s in shape)]
+            if dims > 1:
+                tr = list(range(len(x.shape)))
+                for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+                x = x.transpose(*tr)
+            return x.reshape(*almost_final_shape)[tuple(slice(0,s) for s in shape)]
     class List:
         """
         ```py
