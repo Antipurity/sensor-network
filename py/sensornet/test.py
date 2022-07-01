@@ -210,7 +210,7 @@ async def test11():
     h = sn.Handler(8,8,8,8, 64)
     async def data_later():
         await asyncio.sleep(.2)
-        h.set('hey listen', np.zeros(128), sn.Float(128))
+        h.set('hey listen', np.zeros(128), sn.Float(2, 128))
     async def query_later():
         await asyncio.sleep(.2)
         assert (await h.query('forces of evil gather', sn.Float(16))) is None

@@ -158,7 +158,7 @@ class Handler:
                 return np.zeros((cells, name_sz), dtype=np.float32)
             full_name = np.resize(np.nan_to_num(self.name(tuple([None, *name]))), (cells, name_sz))
             # Progress in `cells`-space is linearly-dependent on progress in `shape`-space.
-            sz = np.prod(shape)
+            sz = np.prod(shape) if len(shape) else 1
             n, progress = np.linspace(0, sz, cells, dtype=np.float32), []
             for i in reversed(range(len(shape))):
                 N, max = shape[i], shape_max[i]
@@ -551,45 +551,6 @@ class Handler:
             d = '' if self.dims == 1 else 'dims='+str(self.dims)
             d = d if not d or not len(self.shape) else ','+d
             return 'sn.Float(' + ','.join(repr(s) for s in self.shape) + d + ')'
-        # def set(self, sn, name, data, error): # TODO:
-        #     # Zero-pad `data` and split it into cells, then pass it on.
-        #     for fn in sn.modify_name: name = fn(name)
-        #     assert sn.info is None or sn.info['analog'] is True
-        #     np = sn.backend
-        #     data = np.array(data, dtype=np.float32, copy=False)
-        #     if isinstance(error, float):
-        #         error = np.full(data.shape, error, dtype=np.float32)
-        #     assert data.shape == self.shape
-        #     assert error is None or isinstance(error, np.ndarray) and error.shape == self.shape
-        #     data = data.reshape(self.sz)
-        #     error = error.reshape(self.sz) if error is not None else None
-
-        #     shape = sn._s.cell_shape
-        #     if not len(shape): return
-        #     cells = -(-self.sz // shape[-1])
-        #     names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, True), name)
-        #     z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
-        #     data = np.concatenate((data, z))
-        #     error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
-        #     data = np.concatenate((names, data.reshape(cells, shape[-1])), -1)
-        #     sn.set(None, data, None, error)
-        # def query(self, sn, name): # TODO:
-        #     # Flatten feedback's cells and reshape it to our shape.
-        #     for fn in sn.modify_name: name = fn(name)
-        #     assert sn.info is None or sn.info['analog'] is True
-        #     np = sn.backend
-
-        #     shape = sn._s.cell_shape
-        #     cells = -(-self.sz // shape[-1]) if len(shape) else 0
-        #     names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0), dtype=np.float32)
-        #     async def do_query(fb):
-        #         if not len(shape): return
-        #         fb = await fb
-        #         if fb is None: return None
-        #         fb = fb[:, -shape[-1]:].flatten()
-        #         R = fb[:self.sz].reshape(self.shape)
-        #         return R if len(R.shape) else R.item()
-        #     return do_query(sn.query(None, names))
         def set(self, sn, name, data, error):
             for fn in sn.modify_name: name = fn(name)
             assert sn.info is None or sn.info['analog'] is True
@@ -598,6 +559,7 @@ class Handler:
             if isinstance(error, float):
                 error = np.full(data.shape, error, dtype=np.float32)
             assert error is None or isinstance(error, np.ndarray) and error.shape == data.shape
+            # TODO: How can we speed this up any more?… Isn't more-or-less the only difference from before `shape_max`, and possibly `prefix`, and possibly going through `sn.Float.expand_shape|.blocks`?…
             data = sn.Float.expand_shape(np, data, self.shape)
             shape_max = tuple(got / allowed for got, allowed in zip(data.shape, self.shape))
 
@@ -633,25 +595,27 @@ class Handler:
             assert all(x.shape[i] <= shape[i] for i in range(len(x.shape)))
             return x
         @staticmethod
-        def blocks(np, x, in_cell, dims=1): # TODO: How can we speed this up in common cases, `dims==1` in particular?…
+        def blocks(np, x, in_cell, dims=1):
             assert len(x.shape if not isinstance(x, tuple) else x) >= dims
             d = int(in_cell ** (1/dims)) # One square/hypercubic patch per cell.
             assert d**dims <= in_cell <= (d+1)**dims
-            if isinstance(x, tuple): # Shape-only.
-                return tuple([np.prod([*x[:-dims], *reversed([-(-x[-i-1] // d) for i in range(dims)])]), in_cell])
-            # Zero-pad to make all of `dims` divisible by `d`.
-            if dims > 1:
-                y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
-            else: # A special-case for efficiency.
+            if isinstance(x, tuple): # Shape-only. Exists so that `query` can know how much to query.
+                cells = 1
+                for i in range(len(x)-dims): cells *= x[i]
+                for i in range(dims): cells *= -(-x[-i-1] // d)
+                return (cells, in_cell)
+            if dims == 1: # Special-case this for efficiency; `d == in_cell`.
                 y = np.concatenate((x, np.zeros([*x.shape[:-1], (-x.shape[-1]) % d], dtype=np.float32)), -1) if x.shape[-1] % d else x
+                return y.reshape(np.prod(y.shape) // d, d)
+            # Zero-pad to make all of `dims` divisible by `d`.
+            y = np.pad(x, list(reversed([(0, (-x.shape[-i-1]) % d if i < dims else 0) for i in range(len(x.shape))])))
             # Reshape all of `dims` to be `N/d × d`, then transpose such that all `d`s are at the end.
             y = y.reshape(*x.shape[:-dims], *[d if i%2 else y.shape[-(i//2)-1] // d for i in range(2*dims)])
-            if dims > 1:
-                tr = list(range(len(y.shape)))
-                for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
-                y = y.transpose(*tr)
+            tr = list(range(len(y.shape)))
+            for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
+            y = y.transpose(*tr)
             # Flatten all patches, and zero-pad.
-            y = y.reshape(np.prod(y.shape[:-dims]), d**dims)
+            y = y.reshape(np.prod(y.shape[:-dims]) if len(y.shape)>dims else 1, d**dims)
             return y if d**dims == in_cell else np.concatenate((y, np.zeros((y.shape[0], in_cell - d**dims), dtype=np.float32)), -1)
         @staticmethod
         def unblocks(y, shape, dims=1):
@@ -659,6 +623,8 @@ class Handler:
             assert len(y.shape) == 2
             in_cell = y.shape[-1]
             d = int(in_cell ** (1/dims))
+            if dims == 1: # Special-case this for efficiency.
+                return y.reshape(*shape[:-1], shape[-1] + (-shape[-1]) % d)[..., :shape[-1]]
             # Un-zero-pad and un-flatten patches.
             x = y[:, :d**dims].reshape(*shape[:-dims], *reversed([-(-shape[-i-1] // d) for i in range(dims)]), *([d] * dims))
             # Un-transpose patches and reshape them back, and un-zero-pad.
