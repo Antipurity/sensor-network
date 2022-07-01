@@ -184,7 +184,7 @@ class Handler:
         np, s = self.backend, self._s
         if isinstance(name, str): name = (name,)
 
-        if name is not None: name, type = _default_typing(name, type)
+        if name is not None: type = _default_typing(type)
         if type is not None:
             assert hasattr(type, 'set')
             return type.set(self, name, data, error)
@@ -224,7 +224,7 @@ class Handler:
         assert callback is None or isinstance(callback, asyncio.Future) or callable(callback)
         if isinstance(name, str): name = (name,)
 
-        if name is not None: name, type = _default_typing(name, type)
+        if name is not None: type = _default_typing(type)
         if type is not None and not isinstance(type, np.ndarray):
             assert hasattr(type, 'query')
             assert callback is None
@@ -272,7 +272,7 @@ class Handler:
         """
         self._maybe_default()
         if isinstance(name, str): name = (name,)
-        if name is not None: name, type = _default_typing(name, type)
+        if name is not None: type = _default_typing(type)
         if hasattr(type, 'get'):
             return type.get(self, name)
         goal = Handler.Goal.goal
@@ -649,16 +649,16 @@ class Handler:
 
         Datatype: a simple list of other datatypes. Data and error (if specified) must be per-type tuples/lists.
 
-        List items share the name, but differ in the index. When `sn.set`ting, `None`s in data are ignored.
+        List items share the name, but differ in the index. Can `sn.set` subsets: `None`s in data are ignored.
         """
         extra_prefix = []
         __slots__ = ('types',)
-        def __init__(self, *types): self.types = types
+        def __init__(self, *types): self.types = [_default_typing(t) for t in types]
         def __repr__(self):
             return 'sn.List(' + ','.join(repr(t) for t in self.types) + ')'
         def set(self, sn, name, data, error):
             T = self.types
-            assert len(data) <= len(T)
+            assert isinstance(data, list) and len(data) <= len(T)
             assert error is None or len(data) == len(error)
             with List._ExtraPrefix() as extra:
                 for i in range(len(data)):
@@ -682,13 +682,45 @@ class Handler:
             def extra_prefix(name, i, T):
                 List.extra_prefix[-1] = i / (len(T)-1) * 2 - 1 if len(T)>1 else -1.
                 return name
+    class Dict:
+        """
+        ```py
+        {**types}
+        sn.Dict(**types)
+        ```
+
+        Datatype: a simple dict of other datatypes.
+
+        Each entry's key gets appended to the dict's name. Can `sn.set` subsets: `None`s and missing `types` are ignored.
+        """
+        extra_prefix = []
+        __slots__ = ('types',)
+        def __init__(self, **types):
+            assert all(isinstance(s, str) for s in types.keys())
+            self.types = {k: _default_typing(v) for k,v in types.items()}
+        def __repr__(self):
+            return 'sn.Dict(' + ','.join(k+'='+repr(v) for k,v in self.types.items()) + ')'
+        def set(self, sn, name, data, error):
+            assert isinstance(data, dict)
+            assert error is None or isinstance(error, dict)
+            for k, v in data.items():
+                if v is not None:
+                    sn.set(tuple([*name, k]), v, self.types[k], None if error is None else error[k])
+        def query(self, sn, name):
+            async def finish(fb):
+                return {k:v for k,v in zip(self.types.keys(), await fb)}
+            return finish(asyncio.gather(*[sn.query(tuple([*name, k]), v) for k, v in self.types.items()]))
+        def get(self, sn, name):
+            async def finish(fb):
+                return {k:v for k,v in zip(self.types.keys(), await fb)}
+            return finish(asyncio.gather(*[sn.get(tuple([*name, k]), v) for k, v in self.types.items()]))
     class Goal:
         """
         `sn.Goal(type)`: datatype, where the wrapped `type` will mark all its cells as to-be-sought-out.
         """
         goal = False
         __slots__ = ('type',)
-        def __init__(self, type=None): self.type = type
+        def __init__(self, type=None): self.type = _default_typing(type)
         def __repr__(self):
             return 'sn.Goal(' + repr(self.type) + ')'
         def set(self, sn, name, data, error):
@@ -911,15 +943,17 @@ def _name_template(np, str_to_floats, cell_shape, name):
             raise TypeError("Names must consist of strings, `None`, and tuples of either numbers or `None`s")
         at += sz
     return template
-def _default_typing(name, type):
-    if name is not None and type is None: return name, Handler.Event()
-    if isinstance(type, int): return name, Handler.Int(type)
+def _default_typing(type):
+    """Implicit types, computed when `name is not None`. Convenience."""
+    if type is None: return Handler.Event()
+    if isinstance(type, int): return Handler.Int(type)
+    if isinstance(type, dict): return Handler.Dict(**type)
     if isinstance(type, tuple) or isinstance(type, list):
         assert len(type), "Can't be non-empty"
         if isinstance(type[0], int) and all(t == type[0] for t in type):
-            return name, Handler.Int(len(type), type[0])
-        return name, Handler.List(*type)
-    return name, type
+            return Handler.Int(len(type), type[0])
+        return Handler.List(*type)
+    return type
 
 
 
@@ -949,6 +983,7 @@ discard = default.discard
 Int = Handler.Int
 Float = Handler.Float
 List = Handler.List
+Dict = Handler.Dict
 Goal = Handler.Goal
 Event = Handler.Event
 IntFloat = Handler.IntFloat

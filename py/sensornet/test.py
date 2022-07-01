@@ -336,6 +336,20 @@ async def test19():
     fb = np.random.rand(4, 96)
     assert (await h.handle(fb))[0].shape == (1, 96)
     assert (await img).shape == (16, 16)
+@sn.run
+async def test20():
+    """Dicts."""
+    h = sn.Handler(8,8,8,8, 64, info={'analog':True})
+    T = {'a': sn.Float(10), 'b': sn.Float(10), 'c': sn.Float(10)}
+    h.set('…', {'a': np.random.rand(5), 'b': None}, T)
+    L1 = h.query('…', T)
+    L2 = h.get('…', T)
+    assert (await h.handle())[0].shape == (1, 96)
+    h.set('…')
+    assert (await h.handle(np.random.rand(6, 96)))[0].shape == (1, 96)
+    assert isinstance(await L1, dict)
+    assert isinstance(await L2, dict)
+    assert repr(sn.Dict(a=5, b=6)) == 'sn.Dict(a=sn.Int(5),b=sn.Int(6))'
 print('Tests OK')
 
 
