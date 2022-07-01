@@ -321,6 +321,18 @@ async def test18():
     assert (await L1) == 5.
     assert (await L2) == 1.
     repr(h.Event()), repr(h.IntFloat())
+@sn.run
+async def test19():
+    """2D images."""
+    h = sn.Handler(8,8,8,8, 64, info={'analog':True})
+    h.set('in the end, only silence was left', np.random.rand(3, 256, 256), sn.Float(512, 512, dims=2))
+    img = h.query('not even images existed anymore', sn.Float(16, 16, dims=2))
+    assert (await h.handle())[0].shape == (1024, 96)
+    h.set('no event happened, not even this one')
+    fb = np.random.randn(4, 96)
+    assert (await h.handle(fb))[0].shape == (1, 96)
+    print((await img).shape) # TODO:
+    # assert (await img == fb).all() # TODO: …No, shapes are different…
 print('Tests OK')
 
 

@@ -151,6 +151,7 @@ class Handler:
         def shaped_names(cells, shape, shape_max, prefix, name):
             # Prepend `(*prefix, *shape_progress)` numbers to `name`s.
             #   `shape_progress[i]` goes from `0` to `shape_max[i]`.
+            assert len(shape) == len(shape_max)
             np, s = self.backend, self._s
             name_sz = (s.cell_size - s.cell_shape[-1]) if len(s.cell_shape) else 0
             if cells == 0 or not s.cell_size: # pragma: no cover
@@ -159,7 +160,8 @@ class Handler:
             # Progress in `cells`-space is linearly-dependent on progress in `shape`-space.
             sz = np.prod(shape)
             n, progress = np.linspace(0, sz, cells, dtype=np.float32), []
-            for N, max in reversed(zip(shape, shape_max)):
+            for i in reversed(range(len(shape))):
+                N, max = shape[i], shape_max[i]
                 progress.append((n % N) / N * max * 2 - 1)
                 n = np.floor_divide(n, N)
             progress = np.stack([np.full((cells,), 1. if p is True else -1. if p is False else p, dtype=np.float32) for p in prefix] + [*reversed(progress)], 1)
@@ -464,7 +466,7 @@ class Handler:
             if not len(shape): return
             assert shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc)
-            names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, False), name)
+            names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, False), name)
             data = sn.Int.repack(sn, data, self.opts, cpc)
             data = sn.Int.encode_ints(np, np.expand_dims(data, -1), bpc)
             zeros = np.zeros((cells, shape[-1] - bpc), dtype=np.float32)
@@ -477,7 +479,7 @@ class Handler:
             shape = sn._s.cell_shape
             assert not len(shape) or shape[-1] >= bpc
             cells = sn.Int.repack(sn, self.sz, self.opts, cpc) if len(shape) else 0
-            names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, False), name) if cells else None
+            names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, False), name) if cells else None
             async def do_query(fb):
                 if not cells: return
                 fb = await fb
@@ -564,7 +566,7 @@ class Handler:
         #     shape = sn._s.cell_shape
         #     if not len(shape): return
         #     cells = -(-self.sz // shape[-1])
-        #     names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, True), name)
+        #     names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, True), name)
         #     z = np.zeros((cells * shape[-1] - self.sz,), dtype=np.float32)
         #     data = np.concatenate((data, z))
         #     error = np.concatenate((error, z)).reshape(cells, shape[-1]) if error is not None else None
@@ -578,7 +580,7 @@ class Handler:
 
         #     shape = sn._s.cell_shape
         #     cells = -(-self.sz // shape[-1]) if len(shape) else 0
-        #     names = sn._s.shaped_names(cells, self.shape, [1.]*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
+        #     names = sn._s.shaped_names(cells, self.shape, (1.,)*len(self.shape), (Handler.Goal.goal, True), name) if cells else np.zeros((0,0))
         #     async def do_query(fb):
         #         if not len(shape): return
         #         fb = await fb
@@ -596,7 +598,7 @@ class Handler:
                 error = np.full(data.shape, error, dtype=np.float32)
             assert error is None or isinstance(error, np.ndarray) and error.shape == data.shape
             data = sn.Float.expand_shape(np, data, self.shape)
-            shape_max = [got / allowed for got, allowed in zip(data.shape, self.shape)]
+            shape_max = tuple(got / allowed for got, allowed in zip(data.shape, self.shape))
 
             shape = sn._s.cell_shape
             if not len(shape): return
@@ -615,7 +617,7 @@ class Handler:
             shape = sn._s.cell_shape
             fb_shape = sn.Float.blocks(np, self.shape, shape[-1], self.dims) if len(shape) else (0,0)
             prefix = (Handler.Goal.goal, True)
-            names = sn._s.shaped_names(fb_shape[0], self.shape, [1.]*len(self.shape), prefix, name) if fb_shape[0] else np.zeros(fb_shape)
+            names = sn._s.shaped_names(fb_shape[0], self.shape, (1.,)*len(self.shape), prefix, name) if fb_shape[0] else np.zeros(fb_shape)
             async def do_query(fb):
                 if not len(shape): return
                 fb = await fb
