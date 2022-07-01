@@ -628,7 +628,7 @@ class Handler:
         @staticmethod
         def expand_shape(np, x, shape):
             while len(x.shape) < len(shape): x = np.expand_dims(x, 0)
-            assert isinstance(shape, tuple) and len(x.shape) == len(shape)
+            assert len(x.shape) == len(shape), "Add max batch dimension sizes to the datatype too"
             assert all(x.shape[i] <= shape[i] for i in range(len(x.shape)))
             return x
         @staticmethod
