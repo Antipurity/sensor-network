@@ -124,11 +124,11 @@ async def test5():
 async def test6():
     """Non-1D data and feedback."""
     h = sn.Handler(8,8,8,8, 64)
-    h.set(name=('test',), data=np.zeros((2,3,4)), type=sn.Float(2,3,4), error=.6)
+    h.set(name=('test',), data=np.random.rand(2,3,4), type=sn.Float(2,3,4), error=.6)
     test = h.query(name=('test',), type=sn.Float(2,3,4))
     data, query, error = h.handle(None, None)
-    assert data.shape == (1,96) and query.shape == (1,32)
-    h.handle(np.zeros((1,96)), None)
+    assert data.shape == (6,96) and query.shape == (6,32) # 2*3 cells of 4 values and 60 zeros.
+    h.handle(np.zeros((6,96)), None)
     assert (await test).shape == (2,3,4)
 @sn.run
 def test7():

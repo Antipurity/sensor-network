@@ -542,6 +542,7 @@ class Handler:
         __slots__ = ('sz', 'shape', 'dims')
         def __init__(self, *shape, dims=1):
             assert isinstance(dims, int) and dims >= 1
+            assert shape, "Shape cannot be empty"
             assert isinstance(shape, tuple) and all(isinstance(n, int) and n>0 for n in shape) and len(shape) >= dims
             from operator import mul
             sz = functools.reduce(mul, shape, 1)
@@ -713,7 +714,7 @@ class Handler:
         def __repr__(self): return 'sn.Event()'
         def set(self, sn, name, data, error):
             assert data is None and error is None
-            return sn.set(name, 0., sn.Float(), error)
+            return sn.set(name, [0.], sn.Float(1), error)
     class IntFloat:
         """
         `sn.IntFloat(*shape, opts=..., mu=0, domain=(-1,1))`: datatype, representing discretized floating-point numbers; for low-precision high-throughput analog numbers, use `sn.Float` instead.
