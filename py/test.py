@@ -98,15 +98,11 @@ Further, the ability to reproduce [the human ability to learn useful representat
 
 
 
-# TODO: Have the `sn.Func(fn, sn=sn)` async-func decorator that integrates with Python type annotations (with the name `fn.__name__`) (`fn.__annotations__['return']` and such) (built on top of `sn.Dict`) (to infer inputs from outputs, allow the advanced technique `fn(**{'return': 15})` to return full dicts) to expose both inputs (and output once available) as data whenever the func is called — or request from `sn` when `None` is returned (or a flag in `sn` is set). (Modular "mind uploading" for code, condensed to a single line of code.)
+# TODO: A test for `sn.func`.
 # TODO: Update the read-me (`sn` has evolved a bit past the "only the basic communication protocol", with `sn.Float(dims=2)`) and copy it.
 # TODO: Maybe, have `.metrics()` on handlers, and have two metrics: cells-per-second (exponentially-moving average) (which doesn't count the time spent on waiting for data) and latency (EMA too) (time from a `.handle` call to when its `feedback` is actually available to us, in seconds) and efficiency (0…1).
 #   TODO: Make `sn.set`/`.query` have `efficiency=1`. Make `sn.Int` and `sn.Float` compute efficiency as `np.prod(original_data.shape) / np.prod(sent_data.shape)`.
-# TODO: Possibly remove (not feeling the need for those datatypes):
-#   TODO: Also support fixed-size strings with tokenizers.
-#     …How would tokenizers be implemented though?
-#       Wouldn't it be a good idea to register one global tokenizer, so that users don't have to bother each time?
-#   TODO: Classes for infinite-`int` and infinite-`str`, based on infinite-`bytes` (or infinite-`sn.Int`). To not introduce an extra choice for end-of-sequence and cause misalignment, first do 0→11 and 1→1X.
+#   …Then again: do we *really* care enough?… Especially since metric-keeping is likely to slow down the benchmarks a bit…
 
 
 

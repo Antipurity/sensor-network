@@ -224,20 +224,7 @@ async def test11():
     assert (await h.handle())[1].shape == (1, 32)
 @sn.run
 async def test12():
-    """`Filter`ing data for specifically-named cells."""
-    def good(h, data):
-        good.b = True
-        assert (data[:, -64:].flatten()[:3] == np.array([.1, .2, .3], dtype=np.float32)).all()
-    def bad(h, data): # pragma: no cover
-        assert False
-    h = sn.Handler(8,8,8,8, 64, listeners=[sn.Filter((None, None, 'this one'), good), sn.Filter('no', bad)])
-    h.set(name=('mm not this one',), data=np.array([1., 2., 3.]), type=sn.Float(3))
-    h.set(name=('yes', 'this one'), data=np.array([.1, .2, .3]), type=sn.Float(3))
-    h.set(name=('this one', 'does not match'), data=np.array([.1, .2, .5]), type=sn.Float(3))
-    data, query, error = await h.handle()
-    assert good.b
-    assert sn.Filter((None, 'this one'))(h, data).sum() == 1
-    h.listeners.copy().pop()(h, data)
+    """`Filter`ing data, for remote debugging, AKA spying on good people. [REDACTED]"""
 @sn.run
 async def test13():
     """Modifying names."""
@@ -245,7 +232,8 @@ async def test13():
     fork = h.fork(lambda name: ('z',))
     fork.set(name='btgrnonets', data=[1., 2.], type=sn.Float(2))
     data, query, error = await h.handle()
-    assert sn.Filter((None, 'z'))(h, data).sum() == 1
+    template = sn._name_template(np, lambda p: sn._str_to_floats(np, p), h.cell_shape, (None, 'z'))
+    assert ((template != template) | (data[0, :template.shape[-1]] == template)).all()
 @sn.run
 def test14():
     """Errors thrown by `callback` are re-thrown."""

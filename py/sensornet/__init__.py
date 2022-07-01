@@ -67,7 +67,7 @@ class Handler:
     """
     ```python
     Handler(8,8,8, 64)
-    Handler(*cell_shape, info=None, sensors=None, listeners=None, backend=numpy, name_cache_size=1024)
+    Handler(*cell_shape, info=None, sensors=None, backend=numpy, name_cache_size=1024)
     ```
 
     A bidirectional sensor network: gathers numeric data from anywhere, and in a loop, handles it, responding to queries with feedback.
@@ -77,19 +77,17 @@ class Handler:
     Inputs:
     - `cell_shape`: a tuple, where the last number is how many data-numbers there are per cell, and the rest splits the name into parts; see `.name`. Can read/write `.cell_shape` as a property, whenever.
     - `info`: JSON-serializable immutable human-readable info about the used AI model and how to use it properly, and whatever else. To set global info on the `sn` module, do `sn.default.info = ...`.
-    - `sensors`: `set` of functions that take this handler, to prepare data to handle.
-    - `listeners`: `set` of functions that take handler & data & error, when data is ready to handle. `Filter` instances are good candidates for this.
+    - `sensors`: `set` of functions that take this handler, to prepare data to handle via `sn.set(…)` and/or `sn.query(…)`.
     - `backend`: the NumPy object.
     - `name_cache_size`: info that is associated with names is cached for speed.
 
-    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors` or `.listeners`, wherever the handler object is available. These values might change between sending and receiving feedback.
+    If needed, read `.cell_shape` or `.cell_size` or `.backend`, or read/[modify](https://docs.python.org/3/library/stdtypes.html#set) `.sensors`, wherever the handler object is available. These values might change between sending and receiving feedback.
     """
-    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'listeners', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_default', '_wait_until_submit')
-    def __init__(self, *cell_shape, info=None, sensors=None, listeners=None, backend=numpy, name_cache_size=1024, _default=False):
+    __slots__ = ('_s', '_data', '_query', '_error', '_prev_fb', '_next_fb', 'info', 'sensors', 'backend', 'name_cache_size', 'modify_name', '_str_to_floats', '_default', '_wait_until_submit')
+    def __init__(self, *cell_shape, info=None, sensors=None, backend=numpy, name_cache_size=1024, _default=False):
         from builtins import set
         import json;  json.dumps(info) # Just for error-checking.
         sensors = set(sensors) if sensors is not None else set()
-        listeners = set(listeners) if listeners is not None else set()
         s = self._s = _S()
         s.cell_shape, s.cell_size, s.n = (), 0, 0
         s.wait_for_requests = None # asyncio.Future()
@@ -101,7 +99,6 @@ class Handler:
         self._next_fb = [] # […, (on_feedback, start_cell, end_cell), …]
         self.info = info
         self.sensors = sensors
-        self.listeners = listeners
         self.backend = backend
         self.name_cache_size = name_cache_size
         self.modify_name = ()
@@ -390,7 +387,6 @@ class Handler:
         self._prev_fb.append([False, self._next_fb, query.shape[0], self._s.cell_size])
         self._next_fb = []
         self.discard()
-        for l in self.listeners: l(self, data)
         for ft in self._wait_until_submit: ft.set_result(None)
         self._wait_until_submit.clear()
         return data, query, error
@@ -425,6 +421,15 @@ class Handler:
             cell_shape, cell_size = self._s.cell_shape, self._s.cell_size # us → global
             self.info = info # global → us
 
+    class Event:
+        """
+        `None` or `sn.Event()`: a datatype with no data, which can be set at important points in a program, either as a notification like `sn.set(name)` or as a goal like `sn.set(name, type=sn.Goal())`.
+        """
+        __slots__ = ()
+        def __repr__(self): return 'sn.Event()'
+        def set(self, sn, name, data, error):
+            assert data is None and error is None
+            return sn.set(name, [0.], sn.Float(1), error)
     class Int:
         """
         ```py
@@ -644,6 +649,70 @@ class Handler:
             for i in range(dims): tr[-i-1], tr[-i-i-1] = tr[-i-i-1], tr[-i-1]
             x = x.transpose(*tr)
             return x.reshape(*almost_final_shape)[tuple(slice(0,s) for s in shape)]
+    class IntFloat:
+        """
+        `sn.IntFloat(*shape, opts=..., mu=0, domain=(-1,1))`: datatype, representing discretized floating-point numbers; for low-precision high-throughput analog numbers, use `sn.Float` instead.
+
+        Each number is [μ-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) if requested, or linearly-encoded by default. By default, each number occupies 1 cell.
+        """
+        goal = False
+        __slots__ = ('shape', 'opts', 'mu', 'domain')
+        def __init__(self, *shape, opts=..., mu=0, domain=(-1, 1)):
+            self.shape, self.opts, self.mu, self.domain = shape, opts, mu, domain
+        def __repr__(self):
+            return 'sn.IntFloat(' + ','.join(repr(s) for s in self.shape) + ',opts='+repr(self.opts) + ',mu='+repr(self.mu) + ',domain='+repr(self.domain) + ')'
+        def set(self, sn, name, data, error):
+            assert error is None, "Unimplemented"
+            opts = sn.info['choices_per_cell'] if self.opts is ... else self.opts
+            np = sn.backend
+            data = np.array(data, dtype=np.float32, copy=False)
+            min, max = self.domain
+            data = (2*data - min - max) / (max - min)
+            return sn.set(name, self.encode(np, data, opts, self.mu), sn.Int(*self.shape, opts))
+        def query(self, sn, name):
+            opts = sn.info['choices_per_cell'] if self.opts is ... else self.opts
+            np = sn.backend
+            async def mu_decode(fb):
+                fb = np.array(await fb, dtype=np.int32, copy=False)
+                fb = self.decode(np, fb, opts, self.mu)
+                min, max = self.domain
+                return ((fb if len(fb.shape) else fb.item()) * (max - min) + min + max) * .5
+            return mu_decode(sn.query(name, sn.Int(*self.shape, opts)))
+        @staticmethod
+        def encode(np, floats, opts, mu):
+            floats = np.clip(floats, -1, 1)
+            if mu:
+                floats = np.sign(floats) * np.log(1 + mu*np.absolute(floats)) / np.log(1 + mu)
+            return ((floats+1)*.5 * (opts-1)).astype(np.int32)
+        @staticmethod
+        def decode(np, ints, opts, mu):
+            floats = np.clip(ints.astype(np.float32) / (opts-1) * 2 - 1, -1, 1)
+            if mu:
+                floats = np.sign(floats) * ((1+mu) ** np.absolute(floats) - 1) / mu
+            return floats
+    class Goal:
+        """
+        `sn.Goal(type)`: datatype, where the wrapped `type` will mark all its cells as to-be-sought-out. See `sn.handle` for how to detect those.
+
+        There are generally two ways to specify goals of optimizers: as one number (the "return" in reinforcement learning) or as a tensor (the "prediction target" in supervised learning, or the "goal" in goal-conditioned RL). `sn.Goal` uses the latter, though in general, each way can be implemented using the other so there's no difference.
+        """
+        goal = False
+        __slots__ = ('type',)
+        def __init__(self, type=None): self.type = _default_typing(type)
+        def __repr__(self):
+            return 'sn.Goal(' + repr(self.type) + ')'
+        def set(self, sn, name, data, error):
+            prev, Handler.Goal.goal = Handler.Goal.goal, True
+            try: return sn.set(name, data, self.type, error)
+            finally: Handler.Goal.goal = prev
+        def query(self, sn, name):
+            prev, Handler.Goal.goal = Handler.Goal.goal, True
+            try: return sn.query(name, self.type)
+            finally: Handler.Goal.goal = prev
+        def get(self, sn, name):
+            prev, Handler.Goal.goal = Handler.Goal.goal, True
+            try: return sn.get(name, self.type)
+            finally: Handler.Goal.goal = prev
     class List:
         """
         ```py
@@ -718,77 +787,44 @@ class Handler:
             async def finish(fb):
                 return {k:v for k,v in zip(self.types.keys(), await fb)}
             return finish(asyncio.gather(*[sn.get(tuple([*name, k]), v) for k, v in self.types.items()]))
-    class Goal:
-        """
-        `sn.Goal(type)`: datatype, where the wrapped `type` will mark all its cells as to-be-sought-out.
-        """
-        goal = False
-        __slots__ = ('type',)
-        def __init__(self, type=None): self.type = _default_typing(type)
-        def __repr__(self):
-            return 'sn.Goal(' + repr(self.type) + ')'
-        def set(self, sn, name, data, error):
-            prev, Handler.Goal.goal = Handler.Goal.goal, True
-            try: return sn.set(name, data, self.type, error)
-            finally: Handler.Goal.goal = prev
-        def query(self, sn, name):
-            prev, Handler.Goal.goal = Handler.Goal.goal, True
-            try: return sn.query(name, self.type)
-            finally: Handler.Goal.goal = prev
-        def get(self, sn, name):
-            prev, Handler.Goal.goal = Handler.Goal.goal, True
-            try: return sn.get(name, self.type)
-            finally: Handler.Goal.goal = prev
-    class Event:
-        """
-        `None` or `sn.Event()`: a datatype with no data, which can be set at important points in a program, either as a notification like `sn.set(name)` or as a goal like `sn.set(name, type=sn.Goal())`.
-        """
-        __slots__ = ()
-        def __repr__(self): return 'sn.Event()'
-        def set(self, sn, name, data, error):
-            assert data is None and error is None
-            return sn.set(name, [0.], sn.Float(1), error)
-    class IntFloat:
-        """
-        `sn.IntFloat(*shape, opts=..., mu=0, domain=(-1,1))`: datatype, representing discretized floating-point numbers; for low-precision high-throughput analog numbers, use `sn.Float` instead.
 
-        Each number is [μ-encoded](https://en.wikipedia.org/wiki/%CE%9C-law_algorithm) if requested, or linearly-encoded by default. By default, each number occupies 1 cell.
+    def func(self, fn):
         """
-        goal = False
-        __slots__ = ('shape', 'opts', 'mu', 'domain')
-        def __init__(self, *shape, opts=..., mu=0, domain=(-1, 1)):
-            self.shape, self.opts, self.mu, self.domain = shape, opts, mu, domain
-        def __repr__(self):
-            return 'sn.IntFloat(' + ','.join(repr(s) for s in self.shape) + ',opts='+repr(self.opts) + ',mu='+repr(self.mu) + ',domain='+repr(self.domain) + ')'
-        def set(self, sn, name, data, error):
-            assert error is None, "Unimplemented"
-            opts = sn.info['choices_per_cell'] if self.opts is ... else self.opts
-            np = sn.backend
-            data = np.array(data, dtype=np.float32, copy=False)
-            min, max = self.domain
-            data = (2*data - min - max) / (max - min)
-            return sn.set(name, self.encode(np, data, opts, self.mu), sn.Int(*self.shape, opts))
-        def query(self, sn, name):
-            opts = sn.info['choices_per_cell'] if self.opts is ... else self.opts
-            np = sn.backend
-            async def mu_decode(fb):
-                fb = np.array(await fb, dtype=np.int32, copy=False)
-                fb = self.decode(np, fb, opts, self.mu)
-                min, max = self.domain
-                return ((fb if len(fb.shape) else fb.item()) * (max - min) + min + max) * .5
-            return mu_decode(sn.query(name, sn.Int(*self.shape, opts)))
-        @staticmethod
-        def encode(np, floats, opts, mu):
-            floats = np.clip(floats, -1, 1)
-            if mu:
-                floats = np.sign(floats) * np.log(1 + mu*np.absolute(floats)) / np.log(1 + mu)
-            return ((floats+1)*.5 * (opts-1)).astype(np.int32)
-        @staticmethod
-        def decode(np, ints, opts, mu):
-            floats = np.clip(ints.astype(np.float32) / (opts-1) * 2 - 1, -1, 1)
-            if mu:
-                floats = np.sign(floats) * ((1+mu) ** np.absolute(floats) - 1) / mu
-            return floats
+        ```py
+        @sn.func
+        async def async_fn(img: sn.Float(28, 28, dims=2)) -> sn.Int(10): return 4
+        ```
+
+        Modular, seamless [behavior ](https://arxiv.org/abs/1805.01954)[clon](https://stable-baselines.readthedocs.io/en/master/guide/pretrain.html)[ing.](https://en.wikipedia.org/wiki/Mind_uploading)
+
+        Note that the `sn` in `sn.func` is another argument, and could be any `Handler`. `sn.func` doesn't support sync execution, because `sn` was built to support async execution.
+
+        To stop calling `async_fn` and start requesting results from `sn`, do `result.query = True`. To disable `sn`, do `result.set = False`. To do either of those globally, do `sn.func.query = True` or `sn.func.set = False` at program-start.
+        """
+        from inspect import signature, iscoroutinefunction
+        assert callable(fn) and iscoroutinefunction(fn)
+        name, sgn = fn.__name__, signature(fn)
+        in_type = self.Dict(**{k: p.annotation() if p.annotation() is not sgn.empty else None for k,p in sgn.parameters.items()})
+        out_type = self.Dict(**{'return': sgn.return_annotation if sgn.return_annotation is not sgn.empty else None})
+
+        def on_call(*args, **kwargs):
+            a, s, q = sgn.bind(*args, **kwargs), on_call.set, on_call.query
+            a.apply_defaults()
+            if s: self.set(name, a.arguments, in_type)
+            async def on_result(R):
+                R = await R
+                if not q:
+                    if s: self.set(name, {'return': R}, out_type)
+                elif R is not None:
+                    R = R['return']
+                return R
+            return on_result(fn(*args, **kwargs) if not q else self.query(name, out_type))
+
+        if not hasattr(self.func, 'set'): default.func.set = True
+        if not hasattr(self.func, 'query'): default.func.query = False
+        on_call.set = self.func.set
+        on_call.query = self.func.query
+        return on_call
 
 
 
@@ -836,45 +872,6 @@ class Handler:
                         if event.query(): return result.numpy()
                         await asyncio.sleep(.003)
                 return busyquery()
-
-
-
-    class Filter:
-        """`Filter(name, func=None)`
-
-        Wraps a `func(sn, data)` such that it only sees the cells with numeric-names matching the `name`. The recommended way to specify `Handler().listeners`.
-
-        Example uses: getting a global reward from the env; debugging/reversing sensors with known code (i.e. showing the env's images).
-
-        `func`:
-        - `None`: a call will simply return a per-cell bit-mask of whether the name fits; can also pass `invert=True` to invert that mask.
-        - A function: not called if there are no matches, but otherwise, defers to `func` with `data` and `error` 2D arrays already lexicographically-sorted. But, they must be split/flattened/batched/gathered manually, for example via `data[:, -cell_shape[-1]:].flatten()[:your_max_size]`.
-
-        Be aware that `sn.Int` and `sn.Float` and datatypes that use them (so, all datatypes) prepend a hidden name-part, so here, `name` should begin with `None`."""
-        __slots__ = ('name', 'func')
-        def __init__(self, name, func = None):
-            assert func is None or callable(func)
-            if isinstance(name, str): name = (name,)
-            assert isinstance(name, tuple)
-            self.name = name
-            self.func = func
-        def __call__(self, sn, data, *, invert=False):
-            cell_shape = sn._s.cell_shape
-            assert len(cell_shape), 'Specify the cell-shape too'
-            np = sn.backend
-            # Match.
-            template = sn.name(self.name)
-            name_sz = sn._s.cell_size - cell_shape[-1]
-            matches = (template != template) | (np.abs(data[:, :name_sz] - template) <= 1e-5)
-            matches = matches.all(-1) if not invert else ~(matches.all(-1))
-            if self.func is None:
-                return matches
-            data = data[matches]
-            inds = np.lexsort(data.T[::-1])
-            data = data[inds]
-            # Call.
-            if data.size > 0:
-                return self.func(sn, data)
 
 
 
@@ -972,7 +969,6 @@ Handler.Handler = Handler
 default = Handler(_default=True)
 backend = default.backend
 sensors = default.sensors
-listeners = default.listeners
 modify_name = default.modify_name
 cell_shape, cell_size, info = default._s.cell_shape, default._s.cell_size, default.info
 fork = default.fork
@@ -985,13 +981,13 @@ submit = default.submit
 handle = default.handle
 commit = default.commit
 discard = default.discard
+Event = Handler.Event
 Int = Handler.Int
 Float = Handler.Float
+IntFloat = Handler.IntFloat
+Goal = Handler.Goal
 List = Handler.List
 Dict = Handler.Dict
-Goal = Handler.Goal
-Event = Handler.Event
-IntFloat = Handler.IntFloat
+func = Handler.func
 run = Handler.run
 torch = Handler.torch
-Filter = Handler.Filter
